@@ -1,0 +1,28 @@
+# ==============================================================
+# requirements.txt  (5-C)
+# GitHub Actions / ローカル実行 用 依存パッケージ
+# ==============================================================
+
+# データ取得
+yfinance>=0.2.40
+requests>=2.31.0
+feedparser>=6.0.11
+
+# データ処理
+pandas>=2.0.0
+numpy>=1.26.0
+scipy>=1.11.0
+openpyxl>=3.1.0
+
+# 可視化・UI
+streamlit>=1.32.0
+plotly>=5.20.0
+matplotlib>=3.8.0
+
+# スケジューラー
+schedule>=1.2.0
+
+# Google Drive / Sheets（Colab 用。GitHub Actions では未使用）
+gspread>=6.0.0
+google-auth>=2.28.0
+google-auth-oauthlib>=1.2.0

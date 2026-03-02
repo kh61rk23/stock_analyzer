@@ -1,0 +1,126 @@
+# ==============================================================
+# .github/workflows/daily_run.yml  (5-C)
+# GitHub Actions 自律実行ワークフロー
+# ==============================================================
+# 【スケジュール】
+#   デイリー : 毎日 08:00 JST (= UTC 23:00 前日)
+#   ウィークリー: 毎週月曜 08:00 JST (= UTC 日曜 23:00)
+#
+# 【手動実行】
+#   GitHub の Actions タブ → "Run workflow" でも実行可能
+#   mode を daily / weekly / all から選択できる
+#
+# 【必要な GitHub Secrets 設定箇所】
+#   リポジトリ Settings > Secrets and variables > Actions > New repository secret
+#   ─────────────────────────────────────────────────────
+#   ALERT_GMAIL_FROM      送信元 Gmail アドレス
+#   ALERT_GMAIL_PASSWORD  Gmail App Password（16桁）
+#   ALERT_GMAIL_TO        送信先アドレス（同じアドレスでも可）
+#   ALERT_LINE_TOKEN      LINE Messaging API チャネルアクセストークン（任意）
+#   ALERT_LINE_USER_ID    通知先 LINE ユーザーID（任意）
+#   EDINET_API_KEY        EDINET API キー（任意）
+#   POLICY_FRED_API_KEY   FRED API キー（任意）
+# ==============================================================
+
+name: 📊 Stock Analyzer 自律実行
+
+on:
+  # ── デイリー: 毎日 08:00 JST ──────────────────────────────
+  schedule:
+    - cron: "0 23 * * *"      # UTC 23:00 = JST 08:00（デイリー）
+    - cron: "0 23 * * 0"      # UTC 日曜 23:00 = JST 月曜 08:00（ウィークリー）
+
+  # ── 手動実行 ──────────────────────────────────────────────
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "実行モード"
+        required: true
+        default: "daily"
+        type: choice
+        options:
+          - daily
+          - weekly
+          - all
+
+# 同時実行を防止（前回が終わっていない場合はキャンセル）
+concurrency:
+  group: stock-analyzer
+  cancel-in-progress: false
+
+jobs:
+  run-analyzer:
+    name: 📈 アナライザー実行
+    runs-on: ubuntu-latest
+    timeout-minutes: 60   # タイムアウト 60分
+
+    steps:
+      # ── 1. リポジトリのチェックアウト ─────────────────────
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      # ── 2. Python セットアップ ────────────────────────────
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      # ── 3. 依存パッケージインストール ─────────────────────
+      - name: 📦 Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── 4. 実行モード決定 ─────────────────────────────────
+      #   手動実行 → inputs.mode を使用
+      #   スケジュール実行 → 曜日で自動判定
+      - name: 🎯 Set execution mode
+        id: set-mode
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "mode=${{ github.event.inputs.mode }}" >> $GITHUB_OUTPUT
+          elif [ "$(date -u +%u)" = "7" ]; then
+            # 日曜 UTC = 月曜 JST → weekly
+            echo "mode=weekly" >> $GITHUB_OUTPUT
+          else
+            echo "mode=daily" >> $GITHUB_OUTPUT
+          fi
+          echo "▶ 実行モード: $(cat $GITHUB_OUTPUT | grep mode | cut -d= -f2)"
+
+      # ── 5. アナライザー実行 ───────────────────────────────
+      - name: 🚀 Run analyzer
+        env:
+          STOCK_ANALYZER_MODE:  ${{ steps.set-mode.outputs.mode }}
+          STOCK_ANALYZER_BASE:  ${{ github.workspace }}/stock_data
+          ALERT_GMAIL_FROM:     ${{ secrets.ALERT_GMAIL_FROM }}
+          ALERT_GMAIL_PASSWORD: ${{ secrets.ALERT_GMAIL_PASSWORD }}
+          ALERT_GMAIL_TO:       ${{ secrets.ALERT_GMAIL_TO }}
+          ALERT_LINE_TOKEN:     ${{ secrets.ALERT_LINE_TOKEN }}
+          ALERT_LINE_USER_ID:   ${{ secrets.ALERT_LINE_USER_ID }}
+          EDINET_API_KEY:       ${{ secrets.EDINET_API_KEY }}
+          POLICY_FRED_API_KEY:  ${{ secrets.POLICY_FRED_API_KEY }}
+        run: |
+          python run_headless.py --mode ${{ steps.set-mode.outputs.mode }}
+
+      # ── 6. 結果を Artifacts として保存（7日間保持）──────
+      - name: 📁 Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: analyzer-results-${{ github.run_number }}
+          path: |
+            stock_data/insights/
+            stock_data/logs/
+          retention-days: 7
+
+      # ── 7. 失敗時のサマリー出力 ───────────────────────────
+      - name: 📋 Output summary
+        if: always()
+        run: |
+          echo "## 📊 Stock Analyzer 実行結果" >> $GITHUB_STEP_SUMMARY
+          echo "- **モード**: ${{ steps.set-mode.outputs.mode }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **実行日時**: $(date -u '+%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
+          if [ -d "stock_data/insights" ]; then
+            FILE_COUNT=$(find stock_data/insights -name "*.md" | wc -l)
+            echo "- **生成レポート数**: ${FILE_COUNT} ファイル" >> $GITHUB_STEP_SUMMARY
+          fi
