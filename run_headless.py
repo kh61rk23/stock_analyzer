@@ -246,22 +246,31 @@ def main():
     # 実行
     print(f"\n  ▶ run_all_tasks(mode='{args.mode}') 開始...")
     try:
+        # main処理の実行
         results = main_mod.run_all_tasks(mode=args.mode)
         n_sectors = len(results.get("sectors", {}))
         n_alerts  = results.get("alerts", {}).get("alerts_sent", 0)
         print(f"\n  ✅ 完了: sectors={n_sectors} alerts={n_alerts}")
-        # Google Driveに結果を保存
-        gdrive_creds  = os.environ.get("GOOGLE_DRIVE_CREDENTIALS", "")
-        gdrive_folder = os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "")
-        if gdrive_creds and gdrive_folder:
-            print("\n  📤 Google Drive にアップロード中...")
-            try:
-                _upload_to_gdrive(gdrive_creds, gdrive_folder,
-                                  cfg_mod.INSIGHT_DIR, cfg_mod.LOG_DIR)
-            except Exception as e:
-                print(f"  ⚠️  Google Drive アップロードエラー: {e}")
 
-        sys.exit(0)
+    except Exception as e:
+        print(f"\n  ❌ main_mod でエラーが発生しました: {e}")
+        sys.exit(1) # 異常終了コードを返す
+
+    # Google Drive処理（メイン処理とは独立させる）
+    gdrive_creds  = os.environ.get("GOOGLE_DRIVE_CREDENTIALS")
+    gdrive_folder = os.environ.get("GOOGLE_DRIVE_FOLDER_ID")
+    
+    if gdrive_creds and gdrive_folder:
+        print("\n  📤 Google Drive にアップロード中...")
+        try:
+            _upload_to_gdrive(gdrive_creds, gdrive_folder, cfg_mod.INSIGHT_DIR, cfg_mod.LOG_DIR)
+            print("  ✅ アップロード成功")
+        except Exception as e:
+            print(f"  ⚠️  Google Drive アップロードエラー: {e}")
+    else:
+        print("\n  ℹ️  環境変数が不足しているため、Google Driveへのアップロードをスキップします。")
+
+    sys.exit(0)
     except Exception as e:
         print(f"\n  ❌ 実行エラー: {e}")
         import traceback
