@@ -89,7 +89,7 @@ jobs:
 
       # ── 5. アナライザー実行 ───────────────────────────────
       - name: 🚀 Run analyzer
-　　　　　env:
+        env:
           STOCK_ANALYZER_MODE:  ${{ steps.set-mode.outputs.mode }}
           STOCK_ANALYZER_BASE:  ${{ github.workspace }}/stock_data
           ALERT_GMAIL_FROM:     ${{ secrets.ALERT_GMAIL_FROM }}
@@ -102,7 +102,7 @@ jobs:
           GOOGLE_DRIVE_CREDENTIALS: ${{ secrets.GOOGLE_DRIVE_CREDENTIALS }}
           GOOGLE_DRIVE_FOLDER_ID:   ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
         run: |
-          python run_headless.py --mode ${{ steps.set-mode.outputs.mode }} 2>&1
+          python run_headless.py --mode ${{ steps.set-mode.outputs.mode }}
 
       # ── 6. 結果を Artifacts として保存（7日間保持）──────
       - name: 📁 Upload results
