@@ -360,21 +360,27 @@ def run_sector_analysis(sector_code: str, macro_snapshot: dict) -> dict:
 #   ・config 参照に統一
 
 def _load_local_module(name: str, local_path: str, drive_path: Path):
-    """Drive → /content にコピーして importlib でロードする共通処理"""
+    """モジュールをロードする（GitHub Actions / Colab 両対応）"""
     import importlib.util
-    path = Path(local_path)
-    if not path.exists():
-        if drive_path.exists():
-            shutil.copy(drive_path, path)
-        else:
-            # GitHub Actions 用: スクリプトと同じフォルダを探す
-            repo_path = Path(__file__).parent / f"{name}.py"
-            if repo_path.exists():
-                path = repo_path
-            else:
-                return None
+
+    # 候補パスを順番に探す
+    candidates = [
+        Path(local_path),                        # /content/xxx.py（Colab）
+        drive_path,                               # Google Drive パス
+        Path(__file__).parent / f"{name}.py",    # リポジトリ直下（GitHub Actions）
+    ]
+
+    found = None
+    for p in candidates:
+        if p.exists():
+            found = p
+            break
+
+    if found is None:
+        return None
+
     try:
-        spec = importlib.util.spec_from_file_location(name, str(path))
+        spec = importlib.util.spec_from_file_location(name, str(found))
         mod  = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         return mod
