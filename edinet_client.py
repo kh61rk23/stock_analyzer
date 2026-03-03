@@ -77,7 +77,7 @@ def search_annual_report(
     base    = "https://disclosure.edinet-api.go.jp/api/v2/documents.json"
 
     # 直近 lookback_days 日を 5 日刻みで検索（全日取得すると時間がかかる）
-    for days_ago in range(0, lookback_days, 5):
+    for days_ago in range(0, lookback_days, 1):
         target_date = (datetime.now() - timedelta(days=days_ago)).strftime("%Y-%m-%d")
         params = {"date": target_date, "type": "2"}
         if api_key:
