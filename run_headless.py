@@ -67,7 +67,7 @@ ENV_MAP = {
         # API キー
         "EDINET_API_KEY":        "EDINET_API_KEY",
         "POLICY_FRED_API_KEY":   "POLICY_FRED_API_KEY",
-        # Google Drive（追加）
+        # Google Drive (追加)
         "GOOGLE_DRIVE_CREDENTIALS": "GOOGLE_DRIVE_CREDENTIALS",
         "GOOGLE_DRIVE_FOLDER_ID":   "GOOGLE_DRIVE_FOLDER_ID",
     }
