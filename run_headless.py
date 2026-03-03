@@ -270,13 +270,8 @@ def main():
     else:
         print("\n  ℹ️  環境変数が不足しているため、Google Driveへのアップロードをスキップします。")
 
+    # 全ての処理が正常に完了
     sys.exit(0)
-    except Exception as e:
-        print(f"\n  ❌ 実行エラー: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
-
 
 if __name__ == "__main__":
     main()
