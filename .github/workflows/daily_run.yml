@@ -102,7 +102,7 @@ jobs:
           GOOGLE_DRIVE_CREDENTIALS: ${{ secrets.GOOGLE_DRIVE_CREDENTIALS }}
           GOOGLE_DRIVE_FOLDER_ID:   ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
         run: |
-          python run_headless.py --mode ${{ steps.set-mode.outputs.mode }}
+          python run_headless.py --mode ${{ steps.set-mode.outputs.mode }} 2>&1
 
       # ── 6. 結果を Artifacts として保存（7日間保持）──────
       - name: 📁 Upload results
