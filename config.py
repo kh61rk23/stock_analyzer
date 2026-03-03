@@ -60,7 +60,7 @@ RUN_SCHEDULE_MINUTE = 0
 ENABLE_GOV_PIPELINE = True
 ENABLE_ARXIV        = True
 ENABLE_SECTOR       = True   # 2-A 完了: 6業種エージェント実装済み
-ENABLE_MACRO        = False  # Step 2 以降で True に変更
+ENABLE_MACRO        = True  # Step 2 以降で True に変更
 
 LOG_MAX_ENTRIES = 500
 LOG_FILENAME    = "run_history.json"
