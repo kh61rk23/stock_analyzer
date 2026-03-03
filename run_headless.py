@@ -57,7 +57,7 @@ def apply_env_overrides(cfg):
 
     適用順: config.py のデフォルト値 → 環境変数
     """
-ENV_MAP = {
+    ENV_MAP = {
         # アラート通知
         "ALERT_GMAIL_FROM":      "ALERT_GMAIL_FROM",
         "ALERT_GMAIL_PASSWORD":  "ALERT_GMAIL_PASSWORD",
