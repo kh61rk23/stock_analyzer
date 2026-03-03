@@ -510,6 +510,7 @@ GOV_VEGPRICE_API = "https://api.cultivationdata.net/yasai_kakaku?div=all&type=cs
 
 EDINET_API_KEY: str = ""   # ここは金融庁のEDINETなのでもう使わない
 EDINETDB_API_KEY: str = "REDACTED_EDINETDB"　# ここは民間のEDINETDBなので使う
+ESTAT_API_KEY: str = "REDACTED_ESTAT_API_KEY"
 
 # 有報の検索期間（日）: 直近 60 日以内の有報を検索（60回/社の検索）
 EDINET_LOOKBACK_DAYS = 60
