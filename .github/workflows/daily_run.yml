@@ -89,7 +89,7 @@ jobs:
 
       # ── 5. アナライザー実行 ───────────────────────────────
       - name: 🚀 Run analyzer
-        env:
+　　　　　env:
           STOCK_ANALYZER_MODE:  ${{ steps.set-mode.outputs.mode }}
           STOCK_ANALYZER_BASE:  ${{ github.workspace }}/stock_data
           ALERT_GMAIL_FROM:     ${{ secrets.ALERT_GMAIL_FROM }}
@@ -99,6 +99,8 @@ jobs:
           ALERT_LINE_USER_ID:   ${{ secrets.ALERT_LINE_USER_ID }}
           EDINET_API_KEY:       ${{ secrets.EDINET_API_KEY }}
           POLICY_FRED_API_KEY:  ${{ secrets.POLICY_FRED_API_KEY }}
+          GOOGLE_DRIVE_CREDENTIALS: ${{ secrets.GOOGLE_DRIVE_CREDENTIALS }}
+          GOOGLE_DRIVE_FOLDER_ID:   ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
         run: |
           python run_headless.py --mode ${{ steps.set-mode.outputs.mode }}
 
