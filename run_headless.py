@@ -57,7 +57,7 @@ def apply_env_overrides(cfg):
 
     適用順: config.py のデフォルト値 → 環境変数
     """
-    ENV_MAP = {
+ENV_MAP = {
         # アラート通知
         "ALERT_GMAIL_FROM":      "ALERT_GMAIL_FROM",
         "ALERT_GMAIL_PASSWORD":  "ALERT_GMAIL_PASSWORD",
@@ -67,6 +67,9 @@ def apply_env_overrides(cfg):
         # API キー
         "EDINET_API_KEY":        "EDINET_API_KEY",
         "POLICY_FRED_API_KEY":   "POLICY_FRED_API_KEY",
+        # Google Drive（追加）
+        "GOOGLE_DRIVE_CREDENTIALS": "GOOGLE_DRIVE_CREDENTIALS",
+        "GOOGLE_DRIVE_FOLDER_ID":   "GOOGLE_DRIVE_FOLDER_ID",
     }
     overridden = []
     for attr, env_key in ENV_MAP.items():
@@ -98,6 +101,88 @@ def apply_env_overrides(cfg):
     print(f"  📁 BASE_DIR: {base}")
     return cfg
 
+def _upload_to_gdrive(creds_json: str, folder_id: str,
+                      insight_dir, log_dir):
+    """
+    実行結果をGoogle Driveの指定フォルダに保存する。
+    既存ファイルは上書き、新規ファイルは追加。
+    """
+    import json, tempfile
+    from pathlib import Path
+
+    try:
+        from google.oauth2.service_account import Credentials
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaFileUpload
+    except ImportError:
+        import subprocess, sys
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q",
+                        "google-api-python-client",
+                        "google-auth-httplib2",
+                        "google-auth-oauthlib"], capture_output=True)
+        from google.oauth2.service_account import Credentials
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaFileUpload
+
+    # 認証
+    creds_dict = json.loads(creds_json)
+    creds = Credentials.from_service_account_info(
+        creds_dict,
+        scopes=["https://www.googleapis.com/auth/drive"]
+    )
+    service = build("drive", "v3", credentials=creds)
+
+    def _get_or_create_folder(name: str, parent_id: str) -> str:
+        """フォルダが存在すればIDを返し、なければ作成して返す"""
+        q = (f"name='{name}' and mimeType='application/vnd.google-apps.folder'"
+             f" and '{parent_id}' in parents and trashed=false")
+        res = service.files().list(q=q, fields="files(id)").execute()
+        files = res.get("files", [])
+        if files:
+            return files[0]["id"]
+        meta = {"name": name, "mimeType": "application/vnd.google-apps.folder",
+                "parents": [parent_id]}
+        f = service.files().create(body=meta, fields="id").execute()
+        return f["id"]
+
+    def _upload_file(local_path: Path, parent_id: str):
+        """ファイルをアップロード（既存なら上書き）"""
+        name = local_path.name
+        q = f"name='{name}' and '{parent_id}' in parents and trashed=false"
+        res = service.files().list(q=q, fields="files(id)").execute()
+        files = res.get("files", [])
+        media = MediaFileUpload(str(local_path))
+        if files:
+            service.files().update(
+                fileId=files[0]["id"], media_body=media).execute()
+        else:
+            meta = {"name": name, "parents": [parent_id]}
+            service.files().create(
+                body=meta, media_body=media, fields="id").execute()
+
+    # アップロード対象フォルダ
+    upload_targets = [
+        (insight_dir, "insights"),
+        (log_dir,     "logs"),
+    ]
+
+    total = 0
+    for local_base, remote_name in upload_targets:
+        if not Path(local_base).exists():
+            continue
+        remote_base_id = _get_or_create_folder(remote_name, folder_id)
+        for f in Path(local_base).rglob("*"):
+            if not f.is_file():
+                continue
+            # サブフォルダ構造を再現
+            rel = f.relative_to(local_base)
+            parent_id = remote_base_id
+            for part in rel.parts[:-1]:
+                parent_id = _get_or_create_folder(part, parent_id)
+            _upload_file(f, parent_id)
+            total += 1
+
+    print(f"  ✅ Google Drive アップロード完了: {total} ファイル")
 
 def main():
     parser = argparse.ArgumentParser(
@@ -165,6 +250,17 @@ def main():
         n_sectors = len(results.get("sectors", {}))
         n_alerts  = results.get("alerts", {}).get("alerts_sent", 0)
         print(f"\n  ✅ 完了: sectors={n_sectors} alerts={n_alerts}")
+        # Google Driveに結果を保存
+        gdrive_creds  = os.environ.get("GOOGLE_DRIVE_CREDENTIALS", "")
+        gdrive_folder = os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "")
+        if gdrive_creds and gdrive_folder:
+            print("\n  📤 Google Drive にアップロード中...")
+            try:
+                _upload_to_gdrive(gdrive_creds, gdrive_folder,
+                                  cfg_mod.INSIGHT_DIR, cfg_mod.LOG_DIR)
+            except Exception as e:
+                print(f"  ⚠️  Google Drive アップロードエラー: {e}")
+
         sys.exit(0)
     except Exception as e:
         print(f"\n  ❌ 実行エラー: {e}")
