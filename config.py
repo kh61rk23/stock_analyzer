@@ -508,7 +508,8 @@ GOV_VEGPRICE_API = "https://api.cultivationdata.net/yasai_kakaku?div=all&type=cs
 # ★ 空文字のままにしておくと EDINET 取得をスキップして
 #   他の分析には影響を与えない（エラーにならない）
 
-EDINET_API_KEY = "REDACTED_EDINETDB"   # ← ここに取得したAPIキーを入力
+EDINET_API_KEY = ""   # ここは金融庁のEDINETなのでもう使わない
+EDINETDB_API_KEY = "REDACTED_EDINETDB"　# ここは民間のEDINETDBなので使う
 
 # 有報の検索期間（日）: 直近 60 日以内の有報を検索（60回/社の検索）
 EDINET_LOOKBACK_DAYS = 60
@@ -517,7 +518,7 @@ EDINET_LOOKBACK_DAYS = 60
 EDINET_MAX_RISK_ITEMS = 5
 
 # EDINET 取得対象の上位企業数（業種あたり。多すぎると実行時間が増える）
-EDINET_MAX_COMPANIES = 1
+EDINET_MAX_COMPANIES = 2
 
 # EDINET キャッシュ有効期間（日）: この日数以内に取得済みなら再取得しない
 EDINET_CACHE_DAYS = 100
