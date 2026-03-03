@@ -51,10 +51,18 @@ from scipy import stats
 # ==============================================================
 
 # Google Drive のベースディレクトリ
-DRIVE_BASE   = Path("/content/drive/MyDrive/stock_analyzer")
+# 実行環境に応じてパスを切り替え
+import os as _os
+if _os.environ.get("STOCK_ANALYZER_BASE"):
+    # GitHub Actions: run_headless.py が設定した環境変数を使用
+    DRIVE_BASE  = Path(_os.environ["STOCK_ANALYZER_BASE"])
+else:
+    # Colab: 従来のパス
+    DRIVE_BASE  = Path("/content/drive/MyDrive/stock_analyzer")
+
 DATA_DIR     = DRIVE_BASE / "data"
 RESULT_DIR   = DRIVE_BASE / "results"
-INSIGHT_DIR  = DRIVE_BASE / "insights"   # Markdown知見蓄積フォルダ
+INSIGHT_DIR  = DRIVE_BASE / "insights"
 
 # 野菜価格API（農水省データを非公式APIで提供、無料・無認証）
 VEGPRICE_API_ALL = "https://api.cultivationdata.net/yasai_kakaku?div=all&type=csv"
@@ -97,8 +105,13 @@ def setup_drive():
     except Exception:
         print("⚠️  Colab 以外で実行中（Drive マウントスキップ）")
 
+    # GitHub Actions では DRIVE_BASE 配下は既に run_headless.py が作成済み
+    # Colab では従来通り作成
     for d in [DATA_DIR, RESULT_DIR, INSIGHT_DIR]:
-        d.mkdir(parents=True, exist_ok=True)
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            pass  # GitHub Actions では /content/ へのアクセス不可のためスキップ
     print(f"✅ フォルダ準備完了: {DRIVE_BASE}")
 
 
