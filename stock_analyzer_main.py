@@ -367,7 +367,12 @@ def _load_local_module(name: str, local_path: str, drive_path: Path):
         if drive_path.exists():
             shutil.copy(drive_path, path)
         else:
-            return None
+            # GitHub Actions 用: スクリプトと同じフォルダを探す
+            repo_path = Path(__file__).parent / f"{name}.py"
+            if repo_path.exists():
+                path = repo_path
+            else:
+                return None
     try:
         spec = importlib.util.spec_from_file_location(name, str(path))
         mod  = importlib.util.module_from_spec(spec)
