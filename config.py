@@ -520,7 +520,7 @@ EDINET_MAX_RISK_ITEMS = 5
 EDINET_MAX_COMPANIES = 2
 
 # EDINET キャッシュ有効期間（日）: この日数以内に取得済みなら再取得しない
-EDINET_CACHE_DAYS = 30
+EDINET_CACHE_DAYS = 90
 
 # EDINET を有効化するフラグ（APIキーが設定されていれば自動的に有効）
 ENABLE_EDINET: bool = True  # APIキー設定後に True に変更
