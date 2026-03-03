@@ -535,7 +535,7 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ ArXiv 監視: スキップ（config.ENABLE_ARXIV=False）")
 
-if cfg.ENABLE_MACRO and _in_mode("macro"):
+    if cfg.ENABLE_MACRO and _in_mode("macro"):
         print("\n  📈 マクロ分析を実行中...")
         snapshot = fetch_macro_snapshot()
         signals  = evaluate_macro_signals(snapshot)
@@ -545,7 +545,7 @@ if cfg.ENABLE_MACRO and _in_mode("macro"):
         print("  ⏩ マクロ分析: スキップ（config.ENABLE_MACRO=False / Step 2 で有効化）")
 
     # ── セクター分析（2-A 追加）─────────────────────────────────
-if cfg.ENABLE_SECTOR and cfg.IMPLEMENTED_AGENTS and _in_mode("sector"):
+    if cfg.ENABLE_SECTOR and cfg.IMPLEMENTED_AGENTS and _in_mode("sector"):
         print(f"\n  🏭 セクター分析を実行中（{len(cfg.IMPLEMENTED_AGENTS)} 業種）...")
         macro_snapshot_for_sector = results.get("macro_snapshot", {})
         sector_results = {}
@@ -568,7 +568,7 @@ if cfg.ENABLE_SECTOR and cfg.IMPLEMENTED_AGENTS and _in_mode("sector"):
             print("  ⏩ セクター分析: スキップ（実装済みエージェントなし）")
 
     # ── タイムライン分析（3-A 追加）───────────────────────────
-if getattr(cfg, "ENABLE_TIMELINE", False) and _in_mode("timeline"):
+    if getattr(cfg, "ENABLE_TIMELINE", False) and _in_mode("timeline"):
         print("\n  ⏳ タイムライン分析を実行中...")
         try:
             _tm = _load_local_module(
@@ -595,7 +595,7 @@ if getattr(cfg, "ENABLE_TIMELINE", False) and _in_mode("timeline"):
         print("  ⏩ タイムライン分析: スキップ（config.ENABLE_TIMELINE=False）")
 
     # ── 政策金利トラッカー（3-C 追加）────────────────────────
-if getattr(cfg, "ENABLE_POLICY_TRACKER", False) and _in_mode("policy"):
+    if getattr(cfg, "ENABLE_POLICY_TRACKER", False) and _in_mode("policy"):
         print("\n  🏦 政策金利トラッカーを実行中...")
         try:
             _pt = _load_local_module(
@@ -1892,21 +1892,12 @@ def start_scheduler():
 if __name__ == "__main__":
     setup_dirs()
 
-    # --mode daily|weekly|all を受け付ける（run_headless.py / GitHub Actions 用）
-    _mode = "all"
-    for _i, _a in enumerate(sys.argv):
-        if _a == "--mode" and _i + 1 < len(sys.argv):
-            _mode = sys.argv[_i + 1]
-
     if "--ui" in sys.argv:
         run_streamlit_ui()
     elif "--schedule" in sys.argv:
         import threading
         t = threading.Thread(target=start_scheduler, daemon=True)
         t.start()
-        run_all_tasks(mode=_mode)
-    elif "--ci" in sys.argv or "--headless" in sys.argv:
-        # GitHub Actions / run_headless.py からの呼び出し
-        run_all_tasks(mode=_mode)
+        run_all_tasks()
     else:
-        run_all_tasks(mode=_mode)
+        run_all_tasks()
