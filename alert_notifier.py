@@ -90,7 +90,11 @@ def extract_alerts(cfg, results: dict) -> list:
         dead   = lt.get("dead_cross_sectors",   [])
 
         if golden:
-            names = [s.get("sector_name", s.get("sector_code", "")) for s in golden]
+           names = [
+               s if isinstance(s, str)
+               else s.get("sector_name", s.get("sector_code", str(s)))
+               for s in golden
+           ]
             alerts.append({
                 "trigger":  "golden_cross",
                 "title":    f"📈 ゴールデンクロス {len(golden)}業種",
@@ -98,7 +102,11 @@ def extract_alerts(cfg, results: dict) -> list:
                 "severity": "medium",
             })
         if dead:
-            names = [s.get("sector_name", s.get("sector_code", "")) for s in dead]
+           names = [
+               s if isinstance(s, str)
+               else s.get("sector_name", s.get("sector_code", str(s)))
+               for s in dead
+           ]
             alerts.append({
                 "trigger":  "dead_cross",
                 "title":    f"📉 デッドクロス {len(dead)}業種",
