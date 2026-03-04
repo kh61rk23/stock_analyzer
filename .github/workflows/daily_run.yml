@@ -99,8 +99,12 @@ jobs:
           ALERT_LINE_USER_ID:   ${{ secrets.ALERT_LINE_USER_ID }}
           EDINET_API_KEY:       ${{ secrets.EDINET_API_KEY }}
           POLICY_FRED_API_KEY:  ${{ secrets.POLICY_FRED_API_KEY }}
-          GOOGLE_DRIVE_CREDENTIALS: ${{ secrets.GOOGLE_DRIVE_CREDENTIALS }}
-          GOOGLE_DRIVE_FOLDER_ID:   ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+          GOOGLE_OAUTH_CLIENT_ID:     ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          GOOGLE_DRIVE_FOLDER_ID:     ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+          ESTAT_API_KEY:              ${{ secrets.ESTAT_API_KEY }}
+          EDINETDB_API_KEY:           ${{ secrets.EDINETDB_API_KEY }}
         run: |
           python -u run_headless.py --mode ${{ steps.set-mode.outputs.mode }} 2>&1
 
