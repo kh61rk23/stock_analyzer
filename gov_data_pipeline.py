@@ -1,12 +1,14 @@
 # ==============================================================
-# gov_data_pipeline.py  v4.0  (e-Stat 動的ID検索・堅牢版)
+# gov_data_pipeline.py  v5.0
 # ==============================================================
-# 【v3.0 → v4.0 改善点（Gemini提案を反映）】
-#   1. getStatsList に cycle=3（月次）を追加し検索精度を向上
-#   2. 結果を更新日時（@updated）で降順ソートし最新IDを選択
-#   3. 統計コード（statsCode 8桁）とcycleの組み合わせで絞り込み
-#      → 「似た統計が大量ヒット」問題を解消
-#   4. Colabマウントのログを抑制（GitHub Actionsでの不要出力を削除）
+# 【v4.0 → v5.0 修正点】
+#   ① statsCode の誤り修正
+#      00200521（国勢調査）→ 00200573（消費者物価指数）
+#      00100409（国民経済計算）→ 00100401（機械受注統計調査）
+#   ② cycle=3 指定によるヒット0件問題を解消
+#      「cycle=3で検索→0件なら cycle なしで再試行」のフォールバック追加
+#   ③ @updated フィールドが "?" になる問題修正
+#      TABLE_INF の実際のキー（OPEN_DATE / TABLE_NAME）を優先して使用
 # ==============================================================
 
 import json
@@ -21,110 +23,98 @@ ESTAT_DATA_URL = "https://api.e-stat.go.jp/rest/3.0/app/json/getStatsData"
 
 
 # ==============================================================
-# BLOCK 0: 統計定義
+# BLOCK 0: 統計定義（statsCode 修正済み）
 # ==============================================================
-# statsCode: 政府統計コード8桁
-# searchWord: 絞り込みキーワード（statsCode + cycle=3 + これで一意に特定）
-# cycle: 3=月次、4=四半期、5=年次（今回は月次統計のみ）
-#
-#   statsCode → 主管省庁
-#   00200521 = 消費者物価指数（総務省）
-#   00550300 = 鉱工業指数（経産省）
-#   00450071 = 毎月勤労統計（厚労省）
+# statsCode 正引き表（確認済み）:
+#   00200573 = 消費者物価指数（総務省）※ 00200521は国勢調査なので注意
+#   00550300 = 鉱工業生産・出荷・在庫指数（経産省）
+#   00450071 = 毎月勤労統計調査（厚労省）
 #   00200561 = 家計調査（総務省）
 #   00200531 = 労働力調査（総務省）
 #   00600220 = 建設工事着工統計（国交省）
-#   00100409 = 機械受注（内閣府）
-#   00350300 = 貿易統計（財務省）
+#   00100401 = 機械受注統計調査（内閣府）※ 00100409は国民経済計算なので注意
+#   00350300 = 普通貿易統計（財務省）
 
 STAT_DEFINITIONS = [
     {
         "id":         "cpi",
         "name":       "消費者物価指数（CPI）",
-        "statsCode":  "00200521",
+        "statsCode":  "00200573",   # ← 修正: 00200521(国勢調査)→00200573(CPI)
         "searchWord": "消費者物価指数 総合",
-        "cycle":      "3",   # 月次
         "unit":       "（2020年=100）",
         "direction":  "higher_is_bad",
         "sectors":    ["1027", "1033", "1019", "1004"],
-        "description":"物価上昇は購買力を下げ、小売・外食・生活用品に逆風",
+        "description": "物価上昇は購買力を下げ、小売・外食・生活用品に逆風",
     },
     {
         "id":         "industrial_production",
         "name":       "鉱工業生産指数",
-        "statsCode":  "00550300",
+        "statsCode":  "00550300",   # 経産省 鉱工業生産・出荷・在庫指数（確認済み）
         "searchWord": "鉱工業指数 生産",
-        "cycle":      "3",
         "unit":       "（2015年=100）",
         "direction":  "higher_is_good",
         "sectors":    ["1015", "1016", "1007", "1012"],
-        "description":"生産指数の上昇は製造業全般の追い風",
+        "description": "生産指数の上昇は製造業全般の追い風",
     },
     {
         "id":         "wages",
         "name":       "毎月勤労統計（現金給与総額）",
-        "statsCode":  "00450071",
+        "statsCode":  "00450071",   # 厚労省 毎月勤労統計調査（確認済み）
         "searchWord": "毎月勤労統計 現金給与",
-        "cycle":      "3",
         "unit":       "（円）",
         "direction":  "higher_is_good",
         "sectors":    ["1027", "1033", "1004", "1019"],
-        "description":"賃金上昇は消費拡大につながり、小売・外食・サービス業に追い風",
+        "description": "賃金上昇は消費拡大につながり、小売・外食・サービス業に追い風",
     },
     {
         "id":         "household_spending",
         "name":       "家計調査（消費支出）",
-        "statsCode":  "00200561",
+        "statsCode":  "00200561",   # 総務省 家計調査（確認済み）
         "searchWord": "家計調査 消費支出",
-        "cycle":      "3",
         "unit":       "（円）",
         "direction":  "higher_is_good",
         "sectors":    ["1027", "1033", "1004", "1026"],
-        "description":"消費支出の増加は内需型業種全般の追い風",
+        "description": "消費支出の増加は内需型業種全般の追い風",
     },
     {
         "id":         "unemployment",
         "name":       "労働力調査（完全失業率）",
-        "statsCode":  "00200531",
+        "statsCode":  "00200531",   # 総務省 労働力調査（確認済み）
         "searchWord": "労働力調査 完全失業率",
-        "cycle":      "3",
         "unit":       "（%）",
         "direction":  "higher_is_bad",
         "sectors":    ["1027", "1033", "1028", "1032"],
-        "description":"失業率上昇は景気悪化を示し、内需・金融・不動産に逆風",
+        "description": "失業率上昇は景気悪化を示し、内需・金融・不動産に逆風",
     },
     {
         "id":         "construction_starts",
         "name":       "建設工事着工統計",
-        "statsCode":  "00600220",
+        "statsCode":  "00600220",   # 国交省 建設工事着工統計（確認済み）
         "searchWord": "建設工事着工 住宅",
-        "cycle":      "3",
         "unit":       "（戸）",
         "direction":  "higher_is_good",
         "sectors":    ["1003", "1032", "1012", "1014"],
-        "description":"着工件数の増加は建設・不動産・鉄鋼の追い風",
+        "description": "着工件数の増加は建設・不動産・鉄鋼の追い風",
     },
     {
         "id":         "machinery_orders",
         "name":       "機械受注統計（民需）",
-        "statsCode":  "00100409",
+        "statsCode":  "00100401",   # ← 修正: 00100409(国民経済計算)→00100401(機械受注)
         "searchWord": "機械受注 民需",
-        "cycle":      "3",
         "unit":       "（億円）",
         "direction":  "higher_is_good",
         "sectors":    ["1015", "1016", "1018"],
-        "description":"機械受注の増加は設備投資拡大を示し、機械・電気機器に先行追い風",
+        "description": "機械受注の増加は設備投資拡大を示し、機械・電気機器に先行追い風",
     },
     {
         "id":         "trade_exports",
         "name":       "貿易統計（輸出総額）",
-        "statsCode":  "00350300",
+        "statsCode":  "00350300",   # 財務省 普通貿易統計（確認済み）
         "searchWord": "貿易統計 輸出 総額",
-        "cycle":      "3",
         "unit":       "（百万円）",
         "direction":  "higher_is_good",
         "sectors":    ["1017", "1015", "1007", "1016"],
-        "description":"輸出増加は外需型製造業（自動車・機械・化学）の追い風",
+        "description": "輸出増加は外需型製造業（自動車・機械・化学）の追い風",
     },
 ]
 
@@ -146,117 +136,126 @@ SECTOR_NAMES = {
 # ==============================================================
 
 def setup_dirs(cfg) -> dict:
-    """ディレクトリを準備する（Colab/GitHub Actions両対応）"""
-    # Colabのみマウント。失敗は無音でスキップ（GitHub Actionsでの不要ログを抑制）
     try:
         from google.colab import drive
         drive.mount("/content/drive")
         print("  ✅ Google Drive マウント完了")
     except Exception:
-        pass
+        pass  # GitHub Actions では正常スキップ
 
     insight_dir = Path(cfg.INSIGHT_DIR) / "gov"
     data_dir    = Path(cfg.DATA_DIR) / "gov_cache"
-
     for d in [insight_dir, data_dir]:
         try:
             d.mkdir(parents=True, exist_ok=True)
         except PermissionError:
             pass
-
     return {"insight_dir": insight_dir, "data_dir": data_dir}
 
 
 # ==============================================================
-# BLOCK 2: statsDataId 動的検索（v4.0改善: cycle指定 + 更新日時ソート）
+# BLOCK 2: statsDataId 動的検索（v5.0: フォールバック追加）
 # ==============================================================
 
-def search_statsdata_id(
-    app_id:      str,
-    stats_code:  str,
-    search_word: str,
-    cycle:       str  = "3",   # 3=月次
-    data_dir:    Optional[Path] = None,
-) -> Optional[str]:
+def _call_stats_list(app_id: str, stats_code: str,
+                     search_word: str, cycle: Optional[str]) -> list:
     """
-    getStatsList API で月次DB型の統計表IDを検索する。
-
-    【v4.0の改善点】
-    - cycle=3（月次）で絞り込み → 四半期・年次が混入しない
-    - 更新日時（@updated）で降順ソート → 最新の統計表を選択
-    - statsCode + searchWord + cycle の3条件で一意に特定
-
-    Returns:
-        statsDataId (str) or None
+    getStatsList を呼び出して TABLE_INF リストを返す。
+    cycle=None の場合は cycle パラメータを省略する。
     """
     try:
         import requests
     except ImportError:
-        return None
-
-    # キャッシュ確認（月次キャッシュ）
-    if data_dir:
-        month = datetime.now().strftime("%Y-%m")
-        key   = f"{stats_code}_{cycle}"
-        cache = data_dir / f"id_cache_{key}_{month}.txt"
-        if cache.exists():
-            cached = cache.read_text().strip()
-            if cached:
-                return cached
+        return []
 
     params = {
         "appId":             app_id,
         "lang":              "J",
         "statsCode":         stats_code,
         "searchWord":        search_word,
-        "cycle":             cycle,        # ★ v4.0追加: 月次に限定
-        "searchKind":        "1",          # 統計情報
+        "searchKind":        "1",
         "explanationGetFlg": "N",
     }
+    if cycle:
+        params["cycle"] = cycle
 
     try:
         resp = requests.get(ESTAT_LIST_URL, params=params, timeout=20)
         if resp.status_code != 200:
-            return None
-
+            return []
         raw    = resp.json()
-        status = raw.get("GET_STATS_LIST", {}).get("RESULT", {}).get("STATUS", -1)
+        status = (raw.get("GET_STATS_LIST", {})
+                     .get("RESULT", {}).get("STATUS", -1))
         if status != 0:
-            return None
-
+            return []
         tables = (raw.get("GET_STATS_LIST", {})
                      .get("DATALIST_INF", {})
                      .get("TABLE_INF", []))
         if not tables:
-            return None
+            return []
+        return [tables] if isinstance(tables, dict) else tables
+    except Exception:
+        return []
 
-        if isinstance(tables, dict):
-            tables = [tables]
 
-        # ★ v4.0改善: @updated（更新日時）で降順ソートして最新を選択
-        def _updated(t):
-            return t.get("@updated", "0")
+def search_statsdata_id(
+    app_id:      str,
+    stats_code:  str,
+    search_word: str,
+    data_dir:    Optional[Path] = None,
+) -> Optional[str]:
+    """
+    getStatsList API で最新の statsDataId を返す。
 
-        tables_sorted = sorted(tables, key=_updated, reverse=True)
-        chosen_id     = tables_sorted[0].get("@id", "")
+    【v5.0 フォールバック戦略】
+      1. cycle=3（月次）で検索
+      2. 結果0件なら cycle 指定なしで再検索
+      3. 結果を OPEN_DATE（公開日）降順ソートして最新IDを選択
 
-        if chosen_id:
-            print(f"    🔍 statsDataId: {chosen_id} "
-                  f"(更新: {tables_sorted[0].get('@updated','?')}, "
-                  f"候補: {len(tables)}件)")
+    Returns:
+        statsDataId (str) or None
+    """
+    # キャッシュ確認
+    if data_dir:
+        month = datetime.now().strftime("%Y-%m")
+        cache = data_dir / f"id_cache_{stats_code}_{month}.txt"
+        if cache.exists():
+            cached = cache.read_text().strip()
+            if cached:
+                return cached
 
-        if chosen_id and data_dir:
-            try:
-                cache.parent.mkdir(parents=True, exist_ok=True)
-                cache.write_text(chosen_id)
-            except Exception:
-                pass
+    # Step1: cycle=3 で試行
+    tables = _call_stats_list(app_id, stats_code, search_word, cycle="3")
 
-        return chosen_id if chosen_id else None
+    # Step2: 0件なら cycle なしで再試行（フォールバック）
+    if not tables:
+        tables = _call_stats_list(app_id, stats_code, search_word, cycle=None)
 
-    except Exception as e:
-        print(f"    ⚠️  ID検索例外 ({stats_code}): {str(e)[:50]}")
+    if not tables:
         return None
+
+    # Step3: OPEN_DATE（公開日）または @updated で降順ソート → 最新を選択
+    def _sort_key(t):
+        # e-Stat JSON では TABLE_INF の属性は "@id", "OPEN_DATE", "TABLE_NAME" 等
+        return t.get("OPEN_DATE", t.get("@updated", "0"))
+
+    tables_sorted = sorted(tables, key=_sort_key, reverse=True)
+    chosen = tables_sorted[0]
+    found_id = chosen.get("@id", "")
+
+    if found_id:
+        open_date = chosen.get("OPEN_DATE", chosen.get("@updated", "?"))
+        print(f"    🔍 statsDataId: {found_id} "
+              f"(公開日: {open_date}, 候補: {len(tables)}件)")
+
+    if found_id and data_dir:
+        try:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(found_id)
+        except Exception:
+            pass
+
+    return found_id if found_id else None
 
 
 # ==============================================================
@@ -288,7 +287,6 @@ def fetch_estat_data(
     except ImportError:
         return None
 
-    # キャッシュ確認（月次）
     if data_dir:
         month = datetime.now().strftime("%Y-%m")
         cache = data_dir / f"data_{stats_data_id}_{month}.json"
@@ -313,7 +311,7 @@ def fetch_estat_data(
     try:
         resp = requests.get(ESTAT_DATA_URL, params=params, timeout=30)
         if resp.status_code != 200:
-            print(f"    ⚠️  HTTP {resp.status_code} (ID={stats_data_id})")
+            print(f"    ⚠️  HTTP {resp.status_code}")
             return None
 
         raw    = resp.json()
@@ -362,7 +360,7 @@ def fetch_estat_data(
         return records if records else None
 
     except Exception as e:
-        print(f"    ⚠️  データ取得例外 (ID={stats_data_id}): {str(e)[:60]}")
+        print(f"    ⚠️  データ取得例外: {str(e)[:60]}")
         return None
 
 
@@ -508,17 +506,13 @@ def build_report(stat_results: list, sector_signals: dict) -> str:
 # ==============================================================
 
 def run_gov_pipeline(cfg) -> dict:
-    """
-    全政府統計を取得・分析してレポートを保存する。
-    stock_analyzer_main.py の mod.main(cfg=cfg) から呼ばれる。
-    """
     print(f"\n{'='*60}")
-    print("  📊 政府統計パイプライン v4.0 実行開始")
+    print("  📊 政府統計パイプライン v5.0 実行開始")
     print(f"{'='*60}")
 
     app_id = getattr(cfg, "ESTAT_API_KEY", "")
     if not app_id:
-        print("  ⏩ ESTAT_API_KEY 未設定（config.py に追加してください）")
+        print("  ⏩ ESTAT_API_KEY 未設定")
         return {"stats_fetched": 0, "stats_total": 0, "skipped": True}
 
     dirs        = setup_dirs(cfg)
@@ -529,12 +523,10 @@ def run_gov_pipeline(cfg) -> dict:
     for stat_def in STAT_DEFINITIONS:
         print(f"\n  📥 {stat_def['name']} 取得中...")
 
-        # Step1: statsDataIdを動的検索（cycle=3指定・更新日時ソート）
         stats_id = search_statsdata_id(
             app_id      = app_id,
             stats_code  = stat_def["statsCode"],
             search_word = stat_def["searchWord"],
-            cycle       = stat_def.get("cycle", "3"),
             data_dir    = data_dir,
         )
 
@@ -545,12 +537,12 @@ def run_gov_pipeline(cfg) -> dict:
                 "stat":    stat_def,
                 "records": [],
                 "changes": {},
-                "impact":  {"signal": "neutral", "score": 0, "reason": "ID取得失敗"},
+                "impact":  {"signal": "neutral", "score": 0,
+                             "reason": "ID取得失敗"},
             })
             time.sleep(0.3)
             continue
 
-        # Step2: データ取得
         records = fetch_estat_data(stats_id, app_id, data_dir)
 
         if records:
@@ -560,19 +552,16 @@ def run_gov_pipeline(cfg) -> dict:
                        "neutral":  "➡️"}.get(impact["signal"], "➡️")
             print(f"  {icon} {impact['reason']}")
             stat_results.append({
-                "stat":    stat_def,
-                "records": records,
-                "changes": changes,
-                "impact":  impact,
+                "stat": stat_def, "records": records,
+                "changes": changes, "impact": impact,
             })
         else:
             print("  ⚠️  データ取得失敗またはデータなし")
             stat_results.append({
-                "stat":    stat_def,
-                "records": [],
+                "stat": stat_def, "records": [],
                 "changes": {},
-                "impact":  {"signal": "neutral", "score": 0,
-                             "reason": "データ取得失敗"},
+                "impact": {"signal": "neutral", "score": 0,
+                            "reason": "データ取得失敗"},
             })
 
         time.sleep(0.5)
@@ -625,7 +614,7 @@ if __name__ == "__main__":
             cfg  = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(cfg)
             break
-    print("=== gov_data_pipeline v4.0 単体テスト ===")
+    print("=== gov_data_pipeline v5.0 単体テスト ===")
     key = getattr(cfg, "ESTAT_API_KEY", "")
     print(f"e-Stat APIキー: {'あり' if key else 'なし（スキップ）'}")
     if key:
