@@ -95,24 +95,24 @@ def extract_alerts(cfg, results: dict) -> list:
                else s.get("sector_name", s.get("sector_code", str(s)))
                for s in golden
            ]
-            alerts.append({
+           alerts.append({
                 "trigger":  "golden_cross",
                 "title":    f"📈 ゴールデンクロス {len(golden)}業種",
                 "body":     "  " + " / ".join(names),
                 "severity": "medium",
-            })
+           })
         if dead:
            names = [
                s if isinstance(s, str)
                else s.get("sector_name", s.get("sector_code", str(s)))
                for s in dead
            ]
-            alerts.append({
+           alerts.append({
                 "trigger":  "dead_cross",
                 "title":    f"📉 デッドクロス {len(dead)}業種",
                 "body":     "  " + " / ".join(names),
                 "severity": "medium",
-            })
+           })
 
     # ── ③ 高スコアアイデア ────────────────────────────────────
     if getattr(cfg, "ALERT_ON_HIGH_SCORE_IDEA", True):
