@@ -509,6 +509,18 @@ def run_gov_pipeline(cfg) -> dict:
         "skipped":        False,
     }
 
+def main(cfg=None):
+    """stock_analyzer_main.py からの呼び出し互換用"""
+    if cfg is None:
+        import importlib.util
+        for p in ["/content/config.py",
+                  str(Path(__file__).parent / "config.py")]:
+            if Path(p).exists():
+                spec = importlib.util.spec_from_file_location("config", p)
+                cfg  = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(cfg)
+                break
+    return run_gov_pipeline(cfg)
 
 # ==============================================================
 # 単体テスト
