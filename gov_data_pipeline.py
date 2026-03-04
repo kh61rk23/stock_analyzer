@@ -1,17 +1,12 @@
 # ==============================================================
-# gov_data_pipeline.py  v3.0  (e-Stat API 動的ID検索版)
+# gov_data_pipeline.py  v4.0  (e-Stat 動的ID検索・堅牢版)
 # ==============================================================
-# 【v2.0 → v3.0 変更点】
-#   統計表IDをハードコードせず、getStatsList APIで動的に検索する。
-#   IDが変わっても壊れない設計。キャッシュで毎回検索を回避。
-#
-# 【e-Stat APIの2種類のID問題】
-#   ファイル型ID: Excel/CSVダウンロード用。getStatsDataでは使えない。
-#   DB型ID:      getStatsDataで直接クエリ可能。今回はこちらを使う。
-#   → getStatsListで「DB型のみ」を検索してIDを自動取得する。
-#
-# 【config.py で必要な設定】
-#   ESTAT_API_KEY : str = ""  # e-Stat アプリケーションID
+# 【v3.0 → v4.0 改善点（Gemini提案を反映）】
+#   1. getStatsList に cycle=3（月次）を追加し検索精度を向上
+#   2. 結果を更新日時（@updated）で降順ソートし最新IDを選択
+#   3. 統計コード（statsCode 8桁）とcycleの組み合わせで絞り込み
+#      → 「似た統計が大量ヒット」問題を解消
+#   4. Colabマウントのログを抑制（GitHub Actionsでの不要出力を削除）
 # ==============================================================
 
 import json
@@ -26,16 +21,19 @@ ESTAT_DATA_URL = "https://api.e-stat.go.jp/rest/3.0/app/json/getStatsData"
 
 
 # ==============================================================
-# BLOCK 0: 統計定義（statsDataIdは空欄→動的検索で補完）
+# BLOCK 0: 統計定義
 # ==============================================================
-# searchWord: getStatsListで検索するキーワード
-# statsCode : 政府統計コード（8桁）で絞り込む
+# statsCode: 政府統計コード8桁
+# searchWord: 絞り込みキーワード（statsCode + cycle=3 + これで一意に特定）
+# cycle: 3=月次、4=四半期、5=年次（今回は月次統計のみ）
+#
+#   statsCode → 主管省庁
 #   00200521 = 消費者物価指数（総務省）
 #   00550300 = 鉱工業指数（経産省）
 #   00450071 = 毎月勤労統計（厚労省）
 #   00200561 = 家計調査（総務省）
 #   00200531 = 労働力調査（総務省）
-#   00600220 = 建設着工統計（国交省）
+#   00600220 = 建設工事着工統計（国交省）
 #   00100409 = 機械受注（内閣府）
 #   00350300 = 貿易統計（財務省）
 
@@ -44,7 +42,8 @@ STAT_DEFINITIONS = [
         "id":         "cpi",
         "name":       "消費者物価指数（CPI）",
         "statsCode":  "00200521",
-        "searchWord": "消費者物価指数 月次 総合",
+        "searchWord": "消費者物価指数 総合",
+        "cycle":      "3",   # 月次
         "unit":       "（2020年=100）",
         "direction":  "higher_is_bad",
         "sectors":    ["1027", "1033", "1019", "1004"],
@@ -54,7 +53,8 @@ STAT_DEFINITIONS = [
         "id":         "industrial_production",
         "name":       "鉱工業生産指数",
         "statsCode":  "00550300",
-        "searchWord": "鉱工業指数 生産指数 月次",
+        "searchWord": "鉱工業指数 生産",
+        "cycle":      "3",
         "unit":       "（2015年=100）",
         "direction":  "higher_is_good",
         "sectors":    ["1015", "1016", "1007", "1012"],
@@ -64,7 +64,8 @@ STAT_DEFINITIONS = [
         "id":         "wages",
         "name":       "毎月勤労統計（現金給与総額）",
         "statsCode":  "00450071",
-        "searchWord": "毎月勤労統計 現金給与総額 月次",
+        "searchWord": "毎月勤労統計 現金給与",
+        "cycle":      "3",
         "unit":       "（円）",
         "direction":  "higher_is_good",
         "sectors":    ["1027", "1033", "1004", "1019"],
@@ -74,7 +75,8 @@ STAT_DEFINITIONS = [
         "id":         "household_spending",
         "name":       "家計調査（消費支出）",
         "statsCode":  "00200561",
-        "searchWord": "家計調査 消費支出 月次 二人以上",
+        "searchWord": "家計調査 消費支出",
+        "cycle":      "3",
         "unit":       "（円）",
         "direction":  "higher_is_good",
         "sectors":    ["1027", "1033", "1004", "1026"],
@@ -84,7 +86,8 @@ STAT_DEFINITIONS = [
         "id":         "unemployment",
         "name":       "労働力調査（完全失業率）",
         "statsCode":  "00200531",
-        "searchWord": "労働力調査 完全失業率 月次",
+        "searchWord": "労働力調査 完全失業率",
+        "cycle":      "3",
         "unit":       "（%）",
         "direction":  "higher_is_bad",
         "sectors":    ["1027", "1033", "1028", "1032"],
@@ -94,7 +97,8 @@ STAT_DEFINITIONS = [
         "id":         "construction_starts",
         "name":       "建設工事着工統計",
         "statsCode":  "00600220",
-        "searchWord": "建設工事着工 新設住宅 月次",
+        "searchWord": "建設工事着工 住宅",
+        "cycle":      "3",
         "unit":       "（戸）",
         "direction":  "higher_is_good",
         "sectors":    ["1003", "1032", "1012", "1014"],
@@ -104,7 +108,8 @@ STAT_DEFINITIONS = [
         "id":         "machinery_orders",
         "name":       "機械受注統計（民需）",
         "statsCode":  "00100409",
-        "searchWord": "機械受注 民需 月次",
+        "searchWord": "機械受注 民需",
+        "cycle":      "3",
         "unit":       "（億円）",
         "direction":  "higher_is_good",
         "sectors":    ["1015", "1016", "1018"],
@@ -114,7 +119,8 @@ STAT_DEFINITIONS = [
         "id":         "trade_exports",
         "name":       "貿易統計（輸出総額）",
         "statsCode":  "00350300",
-        "searchWord": "貿易統計 輸出 月次",
+        "searchWord": "貿易統計 輸出 総額",
+        "cycle":      "3",
         "unit":       "（百万円）",
         "direction":  "higher_is_good",
         "sectors":    ["1017", "1015", "1007", "1016"],
@@ -140,14 +146,14 @@ SECTOR_NAMES = {
 # ==============================================================
 
 def setup_dirs(cfg) -> dict:
-    """実行環境に応じてディレクトリを準備する（Colab/GitHub Actions両対応）"""
-    # GitHub Actions では Colab のマウントは不要（スキップが正常動作）
+    """ディレクトリを準備する（Colab/GitHub Actions両対応）"""
+    # Colabのみマウント。失敗は無音でスキップ（GitHub Actionsでの不要ログを抑制）
     try:
         from google.colab import drive
         drive.mount("/content/drive")
         print("  ✅ Google Drive マウント完了")
     except Exception:
-        pass  # GitHub Actions では正常スキップ。ログ出力しない
+        pass
 
     insight_dir = Path(cfg.INSIGHT_DIR) / "gov"
     data_dir    = Path(cfg.DATA_DIR) / "gov_cache"
@@ -162,18 +168,23 @@ def setup_dirs(cfg) -> dict:
 
 
 # ==============================================================
-# BLOCK 2: statsDataId 動的検索
+# BLOCK 2: statsDataId 動的検索（v4.0改善: cycle指定 + 更新日時ソート）
 # ==============================================================
 
 def search_statsdata_id(
     app_id:      str,
     stats_code:  str,
     search_word: str,
+    cycle:       str  = "3",   # 3=月次
     data_dir:    Optional[Path] = None,
 ) -> Optional[str]:
     """
-    getStatsList API でDB型の統計表IDを検索して返す。
-    同一月内はキャッシュを使い、API呼び出しを節約する。
+    getStatsList API で月次DB型の統計表IDを検索する。
+
+    【v4.0の改善点】
+    - cycle=3（月次）で絞り込み → 四半期・年次が混入しない
+    - 更新日時（@updated）で降順ソート → 最新の統計表を選択
+    - statsCode + searchWord + cycle の3条件で一意に特定
 
     Returns:
         statsDataId (str) or None
@@ -183,11 +194,11 @@ def search_statsdata_id(
     except ImportError:
         return None
 
-    # キャッシュ確認（月次）
+    # キャッシュ確認（月次キャッシュ）
     if data_dir:
-        month  = datetime.now().strftime("%Y-%m")
-        key    = stats_code.replace("/", "_")
-        cache  = data_dir / f"id_cache_{key}_{month}.txt"
+        month = datetime.now().strftime("%Y-%m")
+        key   = f"{stats_code}_{cycle}"
+        cache = data_dir / f"id_cache_{key}_{month}.txt"
         if cache.exists():
             cached = cache.read_text().strip()
             if cached:
@@ -198,7 +209,8 @@ def search_statsdata_id(
         "lang":              "J",
         "statsCode":         stats_code,
         "searchWord":        search_word,
-        "searchKind":        "1",   # 1=統計情報（DB型含む）
+        "cycle":             cycle,        # ★ v4.0追加: 月次に限定
+        "searchKind":        "1",          # 統計情報
         "explanationGetFlg": "N",
     }
 
@@ -218,26 +230,29 @@ def search_statsdata_id(
         if not tables:
             return None
 
-        # TABLE_INFは単一dictの場合もリストの場合もある
         if isinstance(tables, dict):
             tables = [tables]
 
-        # DB型（STATISTICS_NAME に「DB」を含むか、または最初のものを採用）
-        db_tables = [t for t in tables
-                     if "DB" in str(t.get("STATISTICS_NAME", "")).upper()
-                     or "データベース" in str(t.get("STATISTICS_NAME", ""))]
+        # ★ v4.0改善: @updated（更新日時）で降順ソートして最新を選択
+        def _updated(t):
+            return t.get("@updated", "0")
 
-        chosen = db_tables[0] if db_tables else tables[0]
-        found_id = chosen.get("@id", "")
+        tables_sorted = sorted(tables, key=_updated, reverse=True)
+        chosen_id     = tables_sorted[0].get("@id", "")
 
-        if found_id and data_dir:
+        if chosen_id:
+            print(f"    🔍 statsDataId: {chosen_id} "
+                  f"(更新: {tables_sorted[0].get('@updated','?')}, "
+                  f"候補: {len(tables)}件)")
+
+        if chosen_id and data_dir:
             try:
                 cache.parent.mkdir(parents=True, exist_ok=True)
-                cache.write_text(found_id)
+                cache.write_text(chosen_id)
             except Exception:
                 pass
 
-        return found_id if found_id else None
+        return chosen_id if chosen_id else None
 
     except Exception as e:
         print(f"    ⚠️  ID検索例外 ({stats_code}): {str(e)[:50]}")
@@ -273,7 +288,7 @@ def fetch_estat_data(
     except ImportError:
         return None
 
-    # キャッシュ（月次）
+    # キャッシュ確認（月次）
     if data_dir:
         month = datetime.now().strftime("%Y-%m")
         cache = data_dir / f"data_{stats_data_id}_{month}.json"
@@ -494,11 +509,11 @@ def build_report(stat_results: list, sector_signals: dict) -> str:
 
 def run_gov_pipeline(cfg) -> dict:
     """
-    全政府統計を取得・分析してレポートを保存するメインエントリ。
+    全政府統計を取得・分析してレポートを保存する。
     stock_analyzer_main.py の mod.main(cfg=cfg) から呼ばれる。
     """
     print(f"\n{'='*60}")
-    print("  📊 政府統計パイプライン v3.0 実行開始")
+    print("  📊 政府統計パイプライン v4.0 実行開始")
     print(f"{'='*60}")
 
     app_id = getattr(cfg, "ESTAT_API_KEY", "")
@@ -514,16 +529,18 @@ def run_gov_pipeline(cfg) -> dict:
     for stat_def in STAT_DEFINITIONS:
         print(f"\n  📥 {stat_def['name']} 取得中...")
 
-        # Step1: statsDataIdを動的に検索
+        # Step1: statsDataIdを動的検索（cycle=3指定・更新日時ソート）
         stats_id = search_statsdata_id(
             app_id      = app_id,
             stats_code  = stat_def["statsCode"],
             search_word = stat_def["searchWord"],
+            cycle       = stat_def.get("cycle", "3"),
             data_dir    = data_dir,
         )
 
         if not stats_id:
-            print(f"    ⚠️  statsDataId が見つかりません（statsCode={stat_def['statsCode']}）")
+            print(f"    ⚠️  statsDataId が見つかりません"
+                  f"（statsCode={stat_def['statsCode']}）")
             stat_results.append({
                 "stat":    stat_def,
                 "records": [],
@@ -532,8 +549,6 @@ def run_gov_pipeline(cfg) -> dict:
             })
             time.sleep(0.3)
             continue
-
-        print(f"    🔍 statsDataId: {stats_id}")
 
         # Step2: データ取得
         records = fetch_estat_data(stats_id, app_id, data_dir)
@@ -589,7 +604,7 @@ def run_gov_pipeline(cfg) -> dict:
 
 
 def main(cfg=None):
-    """stock_analyzer_main.py からの呼び出し互換用"""
+    """stock_analyzer_main.py の mod.main(cfg=cfg) との互換用エントリ"""
     if cfg is None:
         import importlib.util
         for p in ["/content/config.py",
@@ -610,7 +625,7 @@ if __name__ == "__main__":
             cfg  = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(cfg)
             break
-    print("=== gov_data_pipeline v3.0 単体テスト ===")
+    print("=== gov_data_pipeline v4.0 単体テスト ===")
     key = getattr(cfg, "ESTAT_API_KEY", "")
     print(f"e-Stat APIキー: {'あり' if key else 'なし（スキップ）'}")
     if key:
