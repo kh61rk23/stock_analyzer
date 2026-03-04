@@ -407,14 +407,8 @@ def run_gov_pipeline():
         return False
 
     try:
-        mod.main(
-            lag_weeks_list=[0, 4, 8],
-            write_sheet=cfg.WRITE_SHEET,
-            credentials_path=cfg.CREDENTIALS_PATH,
-            spreadsheet_id=cfg.SPREADSHEET_ID,
-            extra_notes=f"v3.0 自動実行 {datetime.now().strftime('%Y-%m-%d')}",
-        )
-        logger.add("gov_pipeline", "success", "野菜価格×外食株 相関分析完了")
+        mod.main(cfg=cfg)
+        logger.add("gov_pipeline", "success", "政府統計パイプライン完了")
         return True
     except Exception as e:
         msg = str(e)[:120]
