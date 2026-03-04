@@ -701,9 +701,11 @@ def run_all_tasks(mode: str = "all") -> dict:
                 "/content/alert_notifier.py",
                 cfg.DRIVE_BASE / "alert_notifier.py",
             )
-            if _an:
+            if _an and isinstance(results, dict):
                 an_result = _an.run_alert_notifier(cfg, results)
                 results["alerts"] = an_result
+            elif _an:
+                print(f"  ⚠️ アラート通知をスキップ: results が辞書型ではありません (型: {type(results).__name__})")
                 if not an_result.get("skipped"):
                     logger.add("alert_notifier", "success",
                                f"送信:{an_result.get('alerts_sent',0)}件 "
