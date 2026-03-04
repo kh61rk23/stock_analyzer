@@ -51,7 +51,7 @@ ALL_DIRS = [
 
 SPREADSHEET_ID   = "1CePiavYj_6OR0cOz84V4RkA0c0S6IwZlcHCv8_bsOjc"
 CREDENTIALS_PATH = str(VIEWER_BASE / "service_account.json")
-WRITE_SHEET      = False   # True にすると Google Sheets に書き込む
+WRITE_SHEET      = True   # True にすると Google Sheets に書き込む
 
 RUN_SCHEDULE_HOUR   = 8    # 毎朝何時に自動実行するか（0〜23）
 RUN_SCHEDULE_MINUTE = 0
