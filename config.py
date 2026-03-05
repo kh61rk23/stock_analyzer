@@ -569,6 +569,8 @@ SHORT_TERM_TOP_N: int = 5
 
 # 政策金利トラッカーを有効化するフラグ
 ENABLE_POLICY_TRACKER: bool = True
+# 米国セクター分析（S&P500 11セクター）
+ENABLE_US_SECTOR: bool = True
 
 # ── FRED API（任意・無料）──────────────────────────────────
 # 設定すると FFレート(FEDFUNDS)・IOER 実績値も取得できる。
@@ -637,6 +639,7 @@ DAILY_MODULES = [
     "sector",        # セクターエージェント
     "timeline",      # 月次トレンド＋デイリー騰落
     "policy",        # 政策金利トラッカー
+    "us_sector",   # 米国S&P500 11セクター分析
 ]
 
 # ── ウィークリーサイクル（月曜朝に追加実行）───────────────────
