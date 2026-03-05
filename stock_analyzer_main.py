@@ -407,7 +407,7 @@ def run_gov_pipeline():
         return False
 
     try:
-        mod.main(cfg=cfg)
+        result = mod.main(cfg=cfg)
         fetched = result.get("stats_fetched", 0) if isinstance(result, dict) else 0
         total   = result.get("stats_total",   0) if isinstance(result, dict) else 0
         logger.add("gov_pipeline", "success", f"政府統計取得完了: {fetched}/{total}")
