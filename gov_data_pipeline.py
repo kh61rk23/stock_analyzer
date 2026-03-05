@@ -80,13 +80,15 @@ STAT_DEFINITIONS = [
     {
         "id":            "construction_starts",
         "name":          "建設工事着工統計",
-        "statsCode":     "00601240",   # ← 修正: 00600220→00601240(建設工事着工統計調査)
+        "statsCode":     "00601240",
         "searchWord":    "着工",
         "unit":          "（戸）",
         "direction":     "higher_is_good",
         "sectors":       ["1003", "1032", "1012", "1014"],
         "description":   "着工件数の増加は建設・不動産・鉄鋼の追い風",
-        "hardcoded_id":  None,
+        # statsCode=00601240 でも取得できない場合のフォールバックID
+        # 国交省 建設着工統計 DB型として実績のあるID
+        "hardcoded_id":  "0003072888",
     },
     {
         "id":            "machinery_orders",
