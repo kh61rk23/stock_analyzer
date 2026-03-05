@@ -408,8 +408,10 @@ def run_gov_pipeline():
 
     try:
         mod.main(cfg=cfg)
-        logger.add("gov_pipeline", "success", "政府統計パイプライン完了")
-        return True
+        fetched = result.get("stats_fetched", 0) if isinstance(result, dict) else 0
+        total   = result.get("stats_total",   0) if isinstance(result, dict) else 0
+        logger.add("gov_pipeline", "success", f"政府統計取得完了: {fetched}/{total}")
+        return result if isinstance(result, dict) else True
     except Exception as e:
         msg = str(e)[:120]
         print(f"  ❌ 実行エラー: {msg}")
@@ -629,6 +631,30 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ 政策金利トラッカー: スキップ（config.ENABLE_POLICY_TRACKER=False）")
 
+    # ── 米国セクター分析（新規追加）────────────────────────
+    if getattr(cfg, "ENABLE_US_SECTOR", False) and _in_mode("us_sector"):
+        print("\n  🇺🇸 米国セクター分析を実行中...")
+        try:
+            _us = _load_local_module(
+                "us_sector_pipeline",
+                "/content/us_sector_pipeline.py",
+                cfg.DRIVE_BASE / "us_sector_pipeline.py",
+            )
+            if _us:
+                us_result = _us.main(cfg, macro_snapshot_for_sector)
+                results["us_sectors"] = us_result
+                top3 = us_result.get("top3", [])
+                logger.add("us_sector", "success",
+                           f"Top3: {'>'.join(top3)} | "
+                           f"{len(us_result.get('sectors', {}))}セクター分析完了")
+            else:
+                print("  ⚠️  us_sector_pipeline.py が見つかりません")
+        except Exception as e:
+            logger.add("us_sector", "error", str(e)[:100])
+            print(f"  ⚠️  米国セクター分析エラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ 米国セクター分析: スキップ（config.ENABLE_US_SECTOR=False）")
+    
 # ── アイデアジェネレーター（4-A 追加）──────────────────────
     if getattr(cfg, "ENABLE_IDEA_GENERATOR", False) and _in_mode("idea"):
         print("\n  💡 アイデアジェネレーターを実行中...")
