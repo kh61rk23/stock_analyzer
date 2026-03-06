@@ -35,6 +35,7 @@ def run_analysis(sector_code: str, cfg) -> dict:
     繊維製品 の分析を実行する。
     stock_analyzer_main.py の run_sector_analysis() から動的ロードで呼ばれる。
     """
+    result = {}
     print(f"  [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
 
     companies = fetch_financials(TARGET_TICKERS)
