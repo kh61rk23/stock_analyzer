@@ -627,6 +627,8 @@ EVAL_FORCE_WEEKLY: bool = False
 # 週次レポート: INSIGHT_DIR/ideas/weekly_summary_YYYY-WXX.md
 # → INSIGHT_DIR を共用（BLOCK 1 で定義済み）
 
+ENABLE_SCREENER: bool = True   # スクリーニング有効化フラグ
+
 # ==============================================================
 # BLOCK 13: 自律サイクル設定（4-C 追加）
 # ==============================================================
