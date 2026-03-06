@@ -42,6 +42,7 @@ SECTOR_NOTE = """
 
 
 def run_analysis(sector_code: str, cfg) -> dict:
+    result = {}
     print(f"  🏢 [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
 
     companies     = fetch_financials(TARGET_TICKERS)
