@@ -576,7 +576,7 @@ ENABLE_US_SECTOR: bool = True
 # 設定すると FFレート(FEDFUNDS)・IOER 実績値も取得できる。
 # APIキー取得: https://fred.stlouisfed.org/docs/api/api_key.html
 # 未設定（空文字）の場合は yfinance 市場プロキシのみ使用する。
-POLICY_FRED_API_KEY: str = ""    # ← 任意。取得後ここに貼り付ける
+POLICY_FRED_API_KEY: str = "REDACTED_POLICY_FRED_API_KEY"    # ← 任意。取得後ここに貼り付ける
 
 # 変化として検知する閾値（単位: %pt）
 # 0.05 = 0.05%ポイント以上の変動を変化として記録
