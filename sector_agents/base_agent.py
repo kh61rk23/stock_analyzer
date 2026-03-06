@@ -363,7 +363,21 @@ def build_result(
         for t, risks in edinet_risks.items()
         for r in risks
     ]
-
+    
+    # ── 根拠文を追加（score_explainer連携）───────────────
+    try:
+        import sys, importlib
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        _se = importlib.import_module("score_explainer")
+        result = _se.enrich_result_with_reason(
+            result,
+            gov_sector_signals=None,  # gov結果が渡せる場合は変更
+            macro_snapshot=macro_snapshot if 'macro_snapshot' in dir() else None,
+        )
+    except Exception:
+        result["reason_text"] = ""
+    return result
+    
     return {
         "sector_code":     sector_code,
         "sector_name_ja":  sector_name,
