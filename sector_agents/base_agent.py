@@ -358,39 +358,44 @@ def build_result(
         pass
 
     # edinet_risks をフラットなリスト形式に変換して格納
+   # --- base_agent.py (264行目付近〜) ---
     edinet_flat = [
         {"ticker": t, "risk": r}
         for t, risks in edinet_risks.items()
         for r in risks
     ]
     
-    # ── 根拠文を追加（score_explainer連携）───────────────
-    try:
-        import sys, importlib
-        sys.path.insert(0, str(Path(__file__).parent.parent))
-        _se = importlib.import_module("score_explainer")
-        result = _se.enrich_result_with_reason(
-            result,
-            gov_sector_signals=None,  # gov結果が渡せる場合は変更
-            macro_snapshot=macro_snapshot if 'macro_snapshot' in dir() else None,
-        )
-    except Exception:
-        result["reason_text"] = ""
-    return result
-    
-    return {
+    # 【修正箇所】ここで result 変数を明示的に定義する
+    result = {
         "sector_code":     sector_code,
         "sector_name_ja":  sector_name,
         "analysis_date":   datetime.now().strftime("%Y-%m-%d"),
         "composite_score": score,
         "macro_signals":   macro_signals,
         "top_companies":   companies,
-        "edinet_risks":    edinet_flat,      # 2-B 追加
+        "edinet_risks":    edinet_flat,
         "arxiv_papers":    [],
         "insight_text":    insight_text,
         "risk_level":      risk_level,
+        "reason_text":     "",  # エラー回避用の初期値
     }
-
+    
+    # ── 根拠文を追加（score_explainer連携）───────────────
+    try:
+        import sys, importlib
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        _se = importlib.import_module("score_explainer")
+        # 上で result を定義済みなので、正常にデータを渡せる
+        result = _se.enrich_result_with_reason(
+            result,
+            gov_sector_signals=None,
+            macro_snapshot=macro_snapshot if 'macro_snapshot' in dir() else None,
+        )
+    except Exception as e:
+        # 例外が発生しても result は辞書として存在するため、システムは落ちない
+        print(f"    ⚠️ score_explainer連携エラー: {e}")
+        
+    return result
 
 def _load_edinet_client(cfg):
     """
