@@ -90,29 +90,21 @@ def extract_alerts(cfg, results: dict) -> list:
         dead   = lt.get("dead_cross_sectors",   [])
 
         if golden:
-           names = [
-               s if isinstance(s, str)
-               else s.get("sector_name", s.get("sector_code", str(s)))
-               for s in golden
-           ]
-           alerts.append({
+            names = [s.get("sector_name", s.get("sector_code", "")) for s in golden]
+            alerts.append({
                 "trigger":  "golden_cross",
                 "title":    f"📈 ゴールデンクロス {len(golden)}業種",
                 "body":     "  " + " / ".join(names),
                 "severity": "medium",
-           })
+            })
         if dead:
-           names = [
-               s if isinstance(s, str)
-               else s.get("sector_name", s.get("sector_code", str(s)))
-               for s in dead
-           ]
-           alerts.append({
+            names = [s.get("sector_name", s.get("sector_code", "")) for s in dead]
+            alerts.append({
                 "trigger":  "dead_cross",
                 "title":    f"📉 デッドクロス {len(dead)}業種",
                 "body":     "  " + " / ".join(names),
                 "severity": "medium",
-           })
+            })
 
     # ── ③ 高スコアアイデア ────────────────────────────────────
     if getattr(cfg, "ALERT_ON_HIGH_SCORE_IDEA", True):
@@ -147,6 +139,33 @@ def extract_alerts(cfg, results: dict) -> list:
                 "title":    f"🔴 マクロ逆風集中 {len(headwinds)}件",
                 "body":     "  " + " / ".join(names),
                 "severity": "medium",
+            })
+
+    # ── ⑤ 注目業種トップ3（根拠付き）─────────────────────────
+    # score_explainer.py の enrich_result_with_reason() で
+    # "reason_text" が付与されていれば根拠文も表示する
+    sector_results = results.get("sector_results", {})
+    if sector_results:
+        sorted_sectors = sorted(
+            sector_results.items(),
+            key=lambda x: x[1].get("composite_score", 0),
+            reverse=True,
+        )
+        lines = []
+        for code, r in sorted_sectors[:3]:
+            name   = r.get("sector_name_ja", code)
+            score  = r.get("composite_score", 0)
+            reason = r.get("reason_text", "")
+            line   = f"  {name}: {score:.0f}点"
+            if reason:
+                line += f"\n    {reason}"
+            lines.append(line)
+        if lines:
+            alerts.append({
+                "trigger":  "top_sectors",
+                "title":    "🏆 注目業種トップ3（本日）",
+                "body":     "\n".join(lines),
+                "severity": "info",
             })
 
     return alerts
@@ -206,46 +225,34 @@ def build_message(alerts: list, mode: str = "line") -> str:
 # BLOCK 3: LINE Notify 送信
 # ==============================================================
 
-def send_line(token: str, message: str, user_id: str = "") -> tuple:
+def send_line(token: str, message: str) -> tuple:
     """
-    LINE Messaging API でプッシュメッセージを送信する。
-    （LINE Notify は 2025年3月終了 → Messaging API に移行）
-
-    Args:
-        token   : チャネルアクセストークン（LINE Developers Console で発行）
-        message : 送信するテキスト（最大 5000文字）
-        user_id : 送信先ユーザーID（LINE アプリ > ボット友達追加後に確認可能）
+    LINE Notify でメッセージを送信する。
+    ネットワーク無効環境では例外をキャッチして失敗を返す。
 
     Returns:
         (success: bool, error_msg: str)
     """
     if not token:
-        return False, "LINE トークン未設定（スキップ）"
-    if not user_id:
-        return False, "LINE ユーザーID 未設定（ALERT_LINE_USER_ID を config.py に設定）"
+        return False, "LINE トークン未設定"
 
     try:
-        payload = json.dumps({
-            "to": user_id,
-            "messages": [{"type": "text", "text": message[:5000]}]
-        }).encode("utf-8")
+        data    = urllib.parse.urlencode({"message": message}).encode("utf-8")
         headers = {
-            "Authorization":  f"Bearer {token}",
-            "Content-Type":   "application/json",
+            "Authorization": f"Bearer {token}",
+            "Content-Type":  "application/x-www-form-urlencoded",
         }
-        req = urllib.request.Request(
-            "https://api.line.me/v2/bot/message/push",
-            data=payload,
+        req  = urllib.request.Request(
+            "https://notify-api.line.me/api/notify",
+            data=data,
             headers=headers,
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             body = resp.read().decode("utf-8")
-            # 成功時は {} が返る
-            return True, ""
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8")
-        return False, f"LINE API HTTPError {e.code}: {body[:100]}"
+            if '"status":200' in body:
+                return True, ""
+            return False, f"LINE API: {body[:100]}"
     except Exception as e:
         return False, f"LINE 送信エラー: {str(e)[:80]}"
 
@@ -381,8 +388,7 @@ def run_alert_notifier(cfg, results: dict) -> dict:
     # LINE 送信
     if has_line:
         line_msg = build_message(alerts, mode="line")
-        line_uid = getattr(cfg, "ALERT_LINE_USER_ID", "")
-        ok, err  = send_line(line_token, line_msg, user_id=line_uid)
+        ok, err  = send_line(line_token, line_msg)
         if ok:
             channels.append("LINE")
             messages.append(line_msg)
