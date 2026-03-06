@@ -56,6 +56,7 @@ def run_analysis(sector_code: str, cfg) -> dict:
     Returns:
         SECTOR_AGENT_RESULT_SCHEMA 準拠の辞書
     """
+    result = {}
     print(f"  🏦 [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
 
     # 財務データ取得
