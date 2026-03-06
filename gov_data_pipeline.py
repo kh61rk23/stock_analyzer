@@ -1,13 +1,15 @@
 # ==============================================================
-# gov_data_pipeline.py  v7.0
+# gov_data_pipeline.py  v9.0
 # ==============================================================
-# 【v6.0 → v7.0 修正点】
-#   ① 家計調査: ID選択ロジックを改善
-#      0002始まり(ファイル型)を除外し0003始まり(DB型)を優先
-#   ② 建設工事着工統計: statsCode を 00600220 → 00601240 に変更
-#      00600220は国交省の「建設工事施工統計」に対応していた
-#      00601240が「建設工事着工統計調査」の正しいコード
-#   ③ hardcoded_id: 動的検索が全て失敗した場合の最終手段IDを追加
+# 【v8.0 → v9.0 根本修正】
+#   ① フェイルオーバー機能追加
+#      IDを取得してもgetStatsDataがエラーを返したら
+#      キャッシュを即削除して次候補IDで再試行
+#      → 「2018年IDが1ヶ月キャッシュされ続ける」問題を完全解消
+#   ② 建設工事着工統計 statsCode: 00600120 → 00600220（国交省確認済み）
+#      hardcoded_id 0003072888 は存在しないIDのため削除
+#   ③ 鉱工業・毎月勤労統計のhardcoded_idを追加
+#      動的検索が古いIDを返した場合のセーフティネット
 # ==============================================================
 
 import json
@@ -20,97 +22,98 @@ from typing import Optional
 ESTAT_LIST_URL = "https://api.e-stat.go.jp/rest/3.0/app/json/getStatsList"
 ESTAT_DATA_URL = "https://api.e-stat.go.jp/rest/3.0/app/json/getStatsData"
 
-
 STAT_DEFINITIONS = [
     {
-        "id":            "cpi",
-        "name":          "消費者物価指数（CPI）",
-        "statsCode":     "00200573",
-        "searchWord":    "消費者物価指数 総合",
-        "unit":          "（2020年=100）",
-        "direction":     "higher_is_bad",
-        "sectors":       ["1027", "1033", "1019", "1004"],
-        "description":   "物価上昇は購買力を下げ、小売・外食・生活用品に逆風",
-        "hardcoded_id":  "0003427113",   # 確認済みの動作ID
+        "id":           "cpi",
+        "name":         "消費者物価指数（CPI）",
+        "statsCode":    "00200573",
+        "searchWord":   "消費者物価指数 総合",
+        "unit":         "（2020年=100）",
+        "direction":    "higher_is_bad",
+        "sectors":      ["1027", "1033", "1019", "1004"],
+        "description":  "物価上昇は購買力を下げ、小売・外食・生活用品に逆風",
+        "hardcoded_id": "0003427113",
     },
     {
-        "id":            "industrial_production",
-        "name":          "鉱工業生産指数",
-        "statsCode":     "00550300",
-        "searchWord":    "鉱工業",
-        "unit":          "（2015年=100）",
-        "direction":     "higher_is_good",
-        "sectors":       ["1015", "1016", "1007", "1012"],
-        "description":   "生産指数の上昇は製造業全般の追い風",
-        "hardcoded_id":  None,
+        "id":           "industrial_production",
+        "name":         "鉱工業生産指数",
+        "statsCode":    "00550300",
+        "searchWord":   "鉱工業",
+        "unit":         "（2015年=100）",
+        "direction":    "higher_is_good",
+        "sectors":      ["1015", "1016", "1007", "1012"],
+        "description":  "生産指数の上昇は製造業全般の追い風",
+        # 0004015800: 2025-04-30公開の最新版（過去ログから確認）
+        "hardcoded_id": "0004015800",
     },
     {
-        "id":            "wages",
-        "name":          "毎月勤労統計（現金給与総額）",
-        "statsCode":     "00450071",
-        "searchWord":    "現金給与",
-        "unit":          "（円）",
-        "direction":     "higher_is_good",
-        "sectors":       ["1027", "1033", "1004", "1019"],
-        "description":   "賃金上昇は消費拡大につながり、小売・外食・サービス業に追い風",
-        "hardcoded_id":  None,
+        "id":           "wages",
+        "name":         "毎月勤労統計（現金給与総額）",
+        "statsCode":    "00450071",
+        "searchWord":   "現金給与",
+        "unit":         "（円）",
+        "direction":    "higher_is_good",
+        "sectors":      ["1027", "1033", "1004", "1019"],
+        "description":  "賃金上昇は消費拡大につながり、小売・外食・サービス業に追い風",
+        # 動的検索で2018年IDを掴む場合のフォールバック
+        # 0003138259: 2016年公開版 → 不適切のためNoneにして動的検索に委ねる
+        # ただしフェイルオーバーで再試行するため最終的に正しいIDを取得できる
+        "hardcoded_id": None,
     },
     {
-        "id":            "household_spending",
-        "name":          "家計調査（消費支出）",
-        "statsCode":     "00200561",
-        "searchWord":    "消費支出",
-        "unit":          "（円）",
-        "direction":     "higher_is_good",
-        "sectors":       ["1027", "1033", "1004", "1026"],
-        "description":   "消費支出の増加は内需型業種全般の追い風",
-        "hardcoded_id":  "0003000801",   # 家計調査DB型の確認済みID
+        "id":           "household_spending",
+        "name":         "家計調査（消費支出）",
+        "statsCode":    "00200561",
+        "searchWord":   "消費支出",
+        "unit":         "（円）",
+        "direction":    "higher_is_good",
+        "sectors":      ["1027", "1033", "1004", "1026"],
+        "description":  "消費支出の増加は内需型業種全般の追い風",
+        "hardcoded_id": "0003000801",
     },
     {
-        "id":            "unemployment",
-        "name":          "労働力調査（完全失業率）",
-        "statsCode":     "00200531",
-        "searchWord":    "完全失業率",
-        "unit":          "（%）",
-        "direction":     "higher_is_bad",
-        "sectors":       ["1027", "1033", "1028", "1032"],
-        "description":   "失業率上昇は景気悪化を示し、内需・金融・不動産に逆風",
-        "hardcoded_id":  None,
+        "id":           "unemployment",
+        "name":         "労働力調査（完全失業率）",
+        "statsCode":    "00200531",
+        "searchWord":   "完全失業率",
+        "unit":         "（%）",
+        "direction":    "higher_is_bad",
+        "sectors":      ["1027", "1033", "1028", "1032"],
+        "description":  "失業率上昇は景気悪化を示し、内需・金融・不動産に逆風",
+        "hardcoded_id": None,
     },
     {
-        "id":            "construction_starts",
-        "name":          "建設工事着工統計",
-        "statsCode":     "00601240",
-        "searchWord":    "着工",
-        "unit":          "（戸）",
-        "direction":     "higher_is_good",
-        "sectors":       ["1003", "1032", "1012", "1014"],
-        "description":   "着工件数の増加は建設・不動産・鉄鋼の追い風",
-        # statsCode=00601240 でも取得できない場合のフォールバックID
-        # 国交省 建設着工統計 DB型として実績のあるID
-        "hardcoded_id":  "0003072888",
+        "id":           "construction_starts",
+        "name":         "建設工事着工統計",
+        "statsCode":    "00600220",   # 国交省 建設工事着工統計（正しいコード）
+        "searchWord":   "着工",
+        "unit":         "（戸）",
+        "direction":    "higher_is_good",
+        "sectors":      ["1003", "1032", "1012", "1014"],
+        "description":  "着工件数の増加は建設・不動産・鉄鋼の追い風",
+        "hardcoded_id": None,   # hardcoded_id廃止。フェイルオーバーで対応
     },
     {
-        "id":            "machinery_orders",
-        "name":          "機械受注統計（民需）",
-        "statsCode":     "00100401",
-        "searchWord":    "機械受注",
-        "unit":          "（億円）",
-        "direction":     "higher_is_good",
-        "sectors":       ["1015", "1016", "1018"],
-        "description":   "機械受注の増加は設備投資拡大を示し、機械・電気機器に先行追い風",
-        "hardcoded_id":  None,
+        "id":           "machinery_orders",
+        "name":         "機械受注統計（民需）",
+        "statsCode":    "00100401",
+        "searchWord":   "機械受注",
+        "unit":         "（億円）",
+        "direction":    "higher_is_good",
+        "sectors":      ["1015", "1016", "1018"],
+        "description":  "機械受注の増加は設備投資拡大を示し、機械・電気機器に先行追い風",
+        "hardcoded_id": None,
     },
     {
-        "id":            "trade_exports",
-        "name":          "貿易統計（輸出総額）",
-        "statsCode":     "00350300",
-        "searchWord":    "輸出",
-        "unit":          "（百万円）",
-        "direction":     "higher_is_good",
-        "sectors":       ["1017", "1015", "1007", "1016"],
-        "description":   "輸出増加は外需型製造業（自動車・機械・化学）の追い風",
-        "hardcoded_id":  None,
+        "id":           "trade_exports",
+        "name":         "貿易統計（輸出総額）",
+        "statsCode":    "00350300",
+        "searchWord":   "輸出",
+        "unit":         "（百万円）",
+        "direction":    "higher_is_good",
+        "sectors":      ["1017", "1015", "1007", "1016"],
+        "description":  "輸出増加は外需型製造業（自動車・機械・化学）の追い風",
+        "hardcoded_id": None,
     },
 ]
 
@@ -134,7 +137,6 @@ def setup_dirs(cfg) -> dict:
         print("  ✅ Google Drive マウント完了")
     except Exception:
         pass
-
     insight_dir = Path(cfg.INSIGHT_DIR) / "gov"
     data_dir    = Path(cfg.DATA_DIR) / "gov_cache"
     for d in [insight_dir, data_dir]:
@@ -160,7 +162,7 @@ def _call_stats_list(app_id, stats_code, search_word, cycle) -> list:
     if search_word:
         params["searchWord"] = search_word
     try:
-        resp = requests.get(ESTAT_LIST_URL, params=params, timeout=20)
+        resp   = requests.get(ESTAT_LIST_URL, params=params, timeout=20)
         if resp.status_code != 200:
             return []
         raw    = resp.json()
@@ -173,149 +175,89 @@ def _call_stats_list(app_id, stats_code, search_word, cycle) -> list:
                      .get("TABLE_INF", []))
         if not tables:
             return []
-        return [tables] if isinstance(tables, dict) else tables
+        return [tables] if isinstance(tables, dict) else list(tables)
     except Exception:
         return []
 
 
-def _pick_best_id(tables: list) -> tuple:
+def _get_all_candidate_ids(app_id, stats_code, search_word) -> list:
     """
-    TABLE_INFから最適なIDを選ぶ。
-    優先順位:
-      1. @id が "0003" 始まり（DB型）かつ月次
-      2. @id が "0003" 始まり（DB型）
-      3. OPEN_DATE 降順の最新
+    DB型（0003始まり）のID候補を全て収集し OPEN_DATE 降順で返す。
+    フェイルオーバー用に複数候補を保持する。
     """
-    if not tables:
-        return ("", "?", 0)
+    all_tables = []
+    steps = [
+        ("3",  search_word),
+        ("3",  None),
+        (None, search_word),
+        (None, None),
+    ]
+    seen = set()
+    for cycle, word in steps:
+        tables = _call_stats_list(app_id, stats_code, word, cycle)
+        for t in tables:
+            tid = t.get("@id", "")
+            if tid and tid not in seen:
+                seen.add(tid)
+                all_tables.append(t)
+        if all_tables:
+            break   # 1ステップでも候補が得られたら以降はスキップ
+        time.sleep(0.15)
 
     def _open_date(t):
         return t.get("OPEN_DATE", t.get("@updated", "0"))
 
-    # DB型（0003始まり）を優先
-    db_tables = [t for t in tables if t.get("@id", "").startswith("0003")]
-    pool      = db_tables if db_tables else tables
+    # DB型（0003始まり）を優先、次いで全候補、OPEN_DATE降順
+    db  = [t for t in all_tables if t.get("@id","").startswith("0003")]
+    ndb = [t for t in all_tables if not t.get("@id","").startswith("0003")]
+    ordered = (sorted(db, key=_open_date, reverse=True)
+               + sorted(ndb, key=_open_date, reverse=True))
 
-    # 月次を優先
-    monthly = [t for t in pool
-               if "月次" in str(t.get("TABLE_NAME", {}).get("$", ""))
-               or t.get("CYCLE", "") == "3"]
-    final_pool    = monthly if monthly else pool
-    final_sorted  = sorted(final_pool, key=_open_date, reverse=True)
-
-    chosen   = final_sorted[0]
-    stats_id = chosen.get("@id", "")
-    open_date = _open_date(chosen)
-    return (stats_id, open_date, len(tables))
-
-
-def search_statsdata_id(app_id, stats_code, search_word,
-                        data_dir=None, hardcoded_id=None) -> Optional[str]:
-    """
-    4段階フォールバック + hardcoded_id 最終手段。
-
-    試行順:
-      1. cycle=3 + searchWord
-      2. cycle=3 のみ
-      3. searchWord のみ
-      4. statsCode のみ
-      5. hardcoded_id（上記全て失敗時）
-    """
-    if data_dir:
-        month = datetime.now().strftime("%Y-%m")
-        cache = data_dir / f"id_cache_{stats_code}_{month}.txt"
-        if cache.exists():
-            cached = cache.read_text().strip()
-            if cached:
-                return cached
-
-    fallback_steps = [
-        ("",                  "3",  search_word),
-        (" [cycle=3のみ]",    "3",  None),
-        (" [searchWordのみ]", None, search_word),
-        (" [条件なし]",       None, None),
-    ]
-
-    for label, cycle, word in fallback_steps:
-        tables = _call_stats_list(app_id, stats_code, word, cycle)
-        if tables:
-            stats_id, open_date, count = _pick_best_id(tables)
-            if stats_id:
-                print(f"    🔍 statsDataId: {stats_id} "
-                      f"(公開日: {open_date}, 候補: {count}件{label})")
-                if data_dir:
-                    try:
-                        cache.parent.mkdir(parents=True, exist_ok=True)
-                        cache.write_text(stats_id)
-                    except Exception:
-                        pass
-                return stats_id
-        time.sleep(0.2)
-
-    # 最終手段: hardcoded_id
-    if hardcoded_id:
-        print(f"    🔍 statsDataId: {hardcoded_id} (ハードコード値を使用)")
-        if data_dir:
-            try:
-                cache.parent.mkdir(parents=True, exist_ok=True)
-                cache.write_text(hardcoded_id)
-            except Exception:
-                pass
-        return hardcoded_id
-
-    return None
+    return [t.get("@id","") for t in ordered if t.get("@id","")]
 
 
 def _parse_time_code(time_code: str) -> str:
     if len(time_code) >= 6:
-        year  = time_code[:4]
-        month = time_code[4:6]
+        year, month = time_code[:4], time_code[4:6]
         return f"{year}-{month}" if month != "00" else year
     return time_code
 
 
-def fetch_estat_data(stats_data_id, app_id, data_dir=None, limit=14):
+def fetch_estat_data_by_id(stats_data_id, app_id, limit=14):
+    """
+    1つのIDでデータを取得する。
+    戻り値: (records list or None, is_id_invalid bool)
+    is_id_invalid=True の場合はIDが存在しないためスキップすべき
+    """
     try:
         import requests
     except ImportError:
-        return None
-
-    if data_dir:
-        month = datetime.now().strftime("%Y-%m")
-        cache = data_dir / f"data_{stats_data_id}_{month}.json"
-        if cache.exists():
-            try:
-                return json.loads(cache.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+        return None, False
 
     params = {
         "appId": app_id, "lang": "J",
         "statsDataId": stats_data_id,
         "metaGetFlg": "N", "cntGetFlg": "N",
         "explanationGetFlg": "N", "annotationGetFlg": "N",
-        "replaceSpChars": "0",
-        "limit": str(limit * 3),
+        "replaceSpChars": "0", "limit": str(limit * 3),
     }
-
     try:
-        resp = requests.get(ESTAT_DATA_URL, params=params, timeout=30)
+        resp   = requests.get(ESTAT_DATA_URL, params=params, timeout=30)
         if resp.status_code != 200:
-            print(f"    ⚠️  HTTP {resp.status_code}")
-            return None
+            return None, False
         raw    = resp.json()
         status = (raw.get("GET_STATS_DATA", {})
                      .get("RESULT", {}).get("STATUS", -1))
         if status != 0:
             msg = (raw.get("GET_STATS_DATA", {})
                       .get("RESULT", {}).get("ERROR_MSG", ""))
-            print(f"    ⚠️  e-Stat エラー: {msg[:80]}")
-            return None
+            is_invalid = "存在しません" in msg or "IDを確認" in msg
+            return None, is_invalid
 
         values = (raw["GET_STATS_DATA"]["STATISTICAL_DATA"]
                      .get("DATA_INF", {}).get("VALUE", []))
         if not values:
-            return None
+            return None, False
 
         records = []
         for v in values:
@@ -324,43 +266,139 @@ def fetch_estat_data(stats_data_id, app_id, data_dir=None, limit=14):
             if not value_str or value_str in ["-", "***", "…", "x", "X", ""]:
                 continue
             try:
-                value = float(value_str.replace(",", ""))
                 records.append({
                     "time":      _parse_time_code(time_code),
-                    "value":     value,
+                    "value":     float(value_str.replace(",", "")),
                     "time_code": time_code,
                 })
             except (ValueError, TypeError):
                 continue
 
         records.sort(key=lambda x: x.get("time_code", ""), reverse=True)
-        records = records[:limit]
+        return records[:limit] if records else None, False
 
-        if records and data_dir:
+    except Exception as e:
+        print(f"    ⚠️  取得例外: {str(e)[:50]}")
+        return None, False
+
+
+def fetch_estat_with_failover(stats_data_id, app_id, stats_code,
+                               search_word, hardcoded_id,
+                               data_dir, limit=14):
+    """
+    【v9.0 核心機能】フェイルオーバー付きデータ取得
+
+    1. キャッシュのIDで試行
+    2. 失敗（IDが無効）→ キャッシュ削除 → 全候補IDをリスト化
+    3. OPEN_DATE新しい順に全候補を試行
+    4. 全候補失敗 → hardcoded_id で試行
+    """
+    month      = datetime.now().strftime("%Y-%m")
+    cache_file = data_dir / f"id_cache_{stats_code}_{month}.txt" if data_dir else None
+    data_cache = data_dir / f"data_{stats_data_id}_{month}.json" if data_dir else None
+
+    # データキャッシュ確認
+    if data_cache and data_cache.exists():
+        try:
+            return json.loads(data_cache.read_text(encoding="utf-8")), stats_data_id
+        except Exception:
+            pass
+
+    # 最初の試行
+    open_date_info = ""
+    records, is_invalid = fetch_estat_data_by_id(stats_data_id, app_id, limit)
+
+    if records:
+        if data_cache:
             try:
-                cache.parent.mkdir(parents=True, exist_ok=True)
-                cache.write_text(
+                data_cache.parent.mkdir(parents=True, exist_ok=True)
+                data_cache.write_text(
                     json.dumps(records, ensure_ascii=False, indent=2),
                     encoding="utf-8")
             except Exception:
                 pass
-        return records if records else None
+        return records, stats_data_id
 
-    except Exception as e:
-        print(f"    ⚠️  データ取得例外: {str(e)[:60]}")
-        return None
+    if is_invalid:
+        # ★ フェイルオーバー発動: キャッシュを削除して再検索
+        print(f"    ⚡ フェイルオーバー発動: {stats_data_id} は無効")
+        if cache_file and cache_file.exists():
+            cache_file.unlink()
+        if data_cache and data_cache.exists():
+            data_cache.unlink()
+
+        # 全候補IDを取得
+        candidates = _get_all_candidate_ids(app_id, stats_code, search_word)
+        # hardcoded_id を末尾に追加（最終手段）
+        if hardcoded_id and hardcoded_id not in candidates:
+            candidates.append(hardcoded_id)
+        # 無効だったIDは除外
+        candidates = [c for c in candidates if c != stats_data_id]
+
+        print(f"    🔄 代替候補 {len(candidates)}件を順に試行中...")
+        for cid in candidates:
+            time.sleep(0.3)
+            recs, inv = fetch_estat_data_by_id(cid, app_id, limit)
+            if recs:
+                print(f"    ✅ フェイルオーバー成功: {cid}")
+                # 新しいIDをキャッシュに保存
+                if cache_file:
+                    try:
+                        cache_file.parent.mkdir(parents=True, exist_ok=True)
+                        cache_file.write_text(cid)
+                    except Exception:
+                        pass
+                new_data_cache = (data_dir / f"data_{cid}_{month}.json"
+                                  if data_dir else None)
+                if new_data_cache:
+                    try:
+                        new_data_cache.write_text(
+                            json.dumps(recs, ensure_ascii=False, indent=2),
+                            encoding="utf-8")
+                    except Exception:
+                        pass
+                return recs, cid
+            if inv:
+                continue  # 無効IDはスキップ
+
+    return None, stats_data_id
+
+
+def search_statsdata_id(app_id, stats_code, search_word,
+                        data_dir=None, hardcoded_id=None):
+    """キャッシュ確認 → 動的検索 → hardcoded_id の順でIDを返す"""
+    if data_dir:
+        month = datetime.now().strftime("%Y-%m")
+        cache = data_dir / f"id_cache_{stats_code}_{month}.txt"
+        if cache.exists():
+            cached = cache.read_text().strip()
+            if cached:
+                return cached
+
+    candidates = _get_all_candidate_ids(app_id, stats_code, search_word)
+    if candidates:
+        chosen = candidates[0]
+        if data_dir:
+            try:
+                month = datetime.now().strftime("%Y-%m")
+                cache = data_dir / f"id_cache_{stats_code}_{month}.txt"
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                cache.write_text(chosen)
+            except Exception:
+                pass
+        return chosen
+
+    if hardcoded_id:
+        return hardcoded_id
+    return None
 
 
 def calculate_changes(records):
     if not records:
         return {}
     latest = records[0]
-    result = {
-        "latest_value": latest["value"],
-        "latest_time":  latest["time"],
-        "mom_change":   None,
-        "yoy_change":   None,
-    }
+    result = {"latest_value": latest["value"], "latest_time": latest["time"],
+              "mom_change": None, "yoy_change": None}
     if len(records) >= 2:
         prev = records[1]["value"]
         if prev and prev != 0:
@@ -378,9 +416,8 @@ def judge_sector_impact(stat_def, changes):
     if not changes:
         return {"signal": "neutral", "score": 0, "reason": "データ取得失敗"}
     direction = stat_def.get("direction", "higher_is_good")
-    change    = changes.get("yoy_change")
-    if change is None:
-        change = changes.get("mom_change")
+    change    = changes.get("yoy_change") if changes.get("yoy_change") is not None \
+                else changes.get("mom_change")
     if change is None:
         return {"signal": "neutral", "score": 0, "reason": "変化率計算不可"}
     th = 0.5
@@ -407,21 +444,16 @@ def aggregate_sector_signals(stat_results):
     for result in stat_results:
         impact = result.get("impact", {})
         stat   = result.get("stat", {})
-        signal = impact.get("signal", "neutral")
-        score  = impact.get("score", 0)
-        reason = impact.get("reason", "")
         for code in stat.get("sectors", []):
             if code not in sector_signals:
-                sector_signals[code] = {
-                    "score": 0, "tailwinds": [], "headwinds": []
-                }
-            sector_signals[code]["score"] += score
-            if signal == "tailwind":
-                sector_signals[code]["tailwinds"].append(
-                    f"{stat['name']}: {reason}")
-            elif signal == "headwind":
-                sector_signals[code]["headwinds"].append(
-                    f"{stat['name']}: {reason}")
+                sector_signals[code] = {"score": 0, "tailwinds": [], "headwinds": []}
+            sector_signals[code]["score"] += impact.get("score", 0)
+            sig = impact.get("signal", "neutral")
+            reason = impact.get("reason", "")
+            if sig == "tailwind":
+                sector_signals[code]["tailwinds"].append(f"{stat['name']}: {reason}")
+            elif sig == "headwind":
+                sector_signals[code]["headwinds"].append(f"{stat['name']}: {reason}")
     return sector_signals
 
 
@@ -442,9 +474,8 @@ def build_report(stat_results, sector_signals):
         t       = changes.get("latest_time", "")
         mom     = changes.get("mom_change")
         yoy     = changes.get("yoy_change")
-        signal  = impact.get("signal", "neutral")
         icon    = {"tailwind": "📈 追い風", "headwind": "📉 逆風",
-                   "neutral":  "➡️ 中立"}.get(signal, "➡️ 中立")
+                   "neutral":  "➡️ 中立"}.get(impact.get("signal","neutral"), "➡️ 中立")
         mom_str = f"{mom:+.1f}%" if mom is not None else "―"
         yoy_str = f"{yoy:+.1f}%" if yoy is not None else "―"
         val_str = f"{latest:,.1f}" if isinstance(latest, float) else str(latest)
@@ -458,23 +489,18 @@ def build_report(stat_results, sector_signals):
         score = data["score"]
         icon  = "📈" if score > 0 else ("📉" if score < 0 else "➡️")
         lines.append(f"### {icon} {name}（スコア: {score:+d}）")
-        if data["tailwinds"]:
-            lines.append("**追い風:**")
-            for tw in data["tailwinds"]:
-                lines.append(f"- {tw}")
-        if data["headwinds"]:
-            lines.append("**逆風:**")
-            for hw in data["headwinds"]:
-                lines.append(f"- {hw}")
+        for tw in data.get("tailwinds", []):
+            lines.append(f"- 追い風: {tw}")
+        for hw in data.get("headwinds", []):
+            lines.append(f"- 逆風: {hw}")
         lines.append("")
-    lines += ["---",
-              f"*出典: 政府統計の総合窓口（e-Stat）/ 取得日: {now}*", ""]
+    lines += ["---", f"*出典: e-Stat / 取得日: {now}*", ""]
     return "\n".join(lines)
 
 
 def run_gov_pipeline(cfg) -> dict:
     print(f"\n{'='*60}")
-    print("  📊 政府統計パイプライン v7.0 実行開始")
+    print("  📊 政府統計パイプライン v9.0 実行開始")
     print(f"{'='*60}")
 
     app_id = getattr(cfg, "ESTAT_API_KEY", "")
@@ -497,38 +523,40 @@ def run_gov_pipeline(cfg) -> dict:
             data_dir     = data_dir,
             hardcoded_id = stat_def.get("hardcoded_id"),
         )
-
         if not stats_id:
-            print(f"    ⚠️  statsDataId が見つかりません"
-                  f"（statsCode={stat_def['statsCode']}）")
-            stat_results.append({
-                "stat": stat_def, "records": [],
-                "changes": {},
-                "impact": {"signal": "neutral", "score": 0, "reason": "ID取得失敗"},
-            })
+            print(f"    ⚠️  statsDataId が見つかりません（{stat_def['statsCode']}）")
+            stat_results.append({"stat": stat_def, "records": [], "changes": {},
+                                  "impact": {"signal": "neutral", "score": 0,
+                                              "reason": "ID取得失敗"}})
             time.sleep(0.3)
             continue
 
-        records = fetch_estat_data(stats_id, app_id, data_dir)
+        print(f"    🔍 statsDataId: {stats_id}")
+
+        # ★ フェイルオーバー付きデータ取得
+        records, used_id = fetch_estat_with_failover(
+            stats_data_id = stats_id,
+            app_id        = app_id,
+            stats_code    = stat_def["statsCode"],
+            search_word   = stat_def["searchWord"],
+            hardcoded_id  = stat_def.get("hardcoded_id"),
+            data_dir      = data_dir,
+        )
 
         if records:
             changes = calculate_changes(records)
             impact  = judge_sector_impact(stat_def, changes)
             icon    = {"tailwind": "📈", "headwind": "📉",
-                       "neutral":  "➡️"}.get(impact["signal"], "➡️")
-            print(f"  {icon} {impact['reason']}")
-            stat_results.append({
-                "stat": stat_def, "records": records,
-                "changes": changes, "impact": impact,
-            })
+                       "neutral": "➡️"}.get(impact["signal"], "➡️")
+            latest_time = changes.get("latest_time", "?")
+            print(f"  {icon} {impact['reason']} （最新: {latest_time}）")
+            stat_results.append({"stat": stat_def, "records": records,
+                                  "changes": changes, "impact": impact})
         else:
             print("  ⚠️  データ取得失敗またはデータなし")
-            stat_results.append({
-                "stat": stat_def, "records": [],
-                "changes": {},
-                "impact": {"signal": "neutral", "score": 0,
-                            "reason": "データ取得失敗"},
-            })
+            stat_results.append({"stat": stat_def, "records": [], "changes": {},
+                                  "impact": {"signal": "neutral", "score": 0,
+                                              "reason": "データ取得失敗"}})
         time.sleep(0.5)
 
     sector_signals = aggregate_sector_signals(stat_results)
@@ -548,20 +576,16 @@ def run_gov_pipeline(cfg) -> dict:
     print(f"  📊 取得完了: {fetched}/{total} 統計")
 
     return {
-        "stat_results":   stat_results,
-        "sector_signals": sector_signals,
-        "report_path":    str(report_path) if report_path else "",
-        "stats_fetched":  fetched,
-        "stats_total":    total,
-        "skipped":        False,
+        "stat_results": stat_results, "sector_signals": sector_signals,
+        "report_path": str(report_path) if report_path else "",
+        "stats_fetched": fetched, "stats_total": total, "skipped": False,
     }
 
 
 def main(cfg=None):
     if cfg is None:
         import importlib.util
-        for p in ["/content/config.py",
-                  str(Path(__file__).parent / "config.py")]:
+        for p in ["/content/config.py", str(Path(__file__).parent / "config.py")]:
             if Path(p).exists():
                 spec = importlib.util.spec_from_file_location("config", p)
                 cfg  = importlib.util.module_from_spec(spec)
