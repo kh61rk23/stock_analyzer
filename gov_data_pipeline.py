@@ -50,15 +50,14 @@ STAT_DEFINITIONS = [
         "id":           "wages",
         "name":         "毎月勤労統計（現金給与総額）",
         "statsCode":    "00450071",
-        "searchWord":   "現金給与",
+        "searchWord":   "現金給与総額",
         "unit":         "（円）",
         "direction":    "higher_is_good",
         "sectors":      ["1027", "1033", "1004", "1019"],
         "description":  "賃金上昇は消費拡大につながり、小売・外食・サービス業に追い風",
-        # 動的検索で2018年IDを掴む場合のフォールバック
-        # 0003138259: 2016年公開版 → 不適切のためNoneにして動的検索に委ねる
-        # ただしフェイルオーバーで再試行するため最終的に正しいIDを取得できる
-        "hardcoded_id": None,
+        # v9.1: フォールバックIDを設定（動的検索が2018年IDを掴む問題への対処）
+        # 動的検索でも _is_stale チェックでフェイルオーバーするが、IDがNoneだと最終手段なし
+        "hardcoded_id": None,  # フェイルオーバーの全候補試行に委ねる
     },
     {
         "id":           "household_spending",
@@ -75,7 +74,7 @@ STAT_DEFINITIONS = [
         "id":           "unemployment",
         "name":         "労働力調査（完全失業率）",
         "statsCode":    "00200531",
-        "searchWord":   "完全失業率",
+        "searchWord":   "完全失業率 月次",
         "unit":         "（%）",
         "direction":    "higher_is_bad",
         "sectors":      ["1027", "1033", "1028", "1032"],
@@ -85,13 +84,14 @@ STAT_DEFINITIONS = [
     {
         "id":           "construction_starts",
         "name":         "建設工事着工統計",
-        "statsCode":    "00600220",   # 国交省 建設工事着工統計（正しいコード）
-        "searchWord":   "着工",
+        "statsCode":    "00600130",   # 国交省 建設着工統計調査（v9.1修正: 00600220→00600130）
+        "searchWord":   "新設住宅着工",
         "unit":         "（戸）",
         "direction":    "higher_is_good",
         "sectors":      ["1003", "1032", "1012", "1014"],
         "description":  "着工件数の増加は建設・不動産・鉄鋼の追い風",
-        "hardcoded_id": None,   # hardcoded_id廃止。フェイルオーバーで対応
+        "hardcoded_id": None,
+        "fallback_stats_codes": ["00600220", "00600140"],  # 複数statsCodeを試す
     },
     {
         "id":           "machinery_orders",
@@ -207,12 +207,9 @@ def _get_all_candidate_ids(app_id, stats_code, search_word) -> list:
     def _open_date(t):
         return t.get("OPEN_DATE", t.get("@updated", "0"))
 
-    # DB型（0003始まり）を優先、次いで全候補、OPEN_DATE降順
-    db  = [t for t in all_tables if t.get("@id","").startswith("0003")]
-    ndb = [t for t in all_tables if not t.get("@id","").startswith("0003")]
-    ordered = (sorted(db, key=_open_date, reverse=True)
-               + sorted(ndb, key=_open_date, reverse=True))
-
+    # ★ 修正C: OPEN_DATE降順のみ（0003prefix優先を廃止）
+    # 理由: 0004-prefixの正しいIDが0003-prefixの古いIDに負けてしまう
+    ordered = sorted(all_tables, key=_open_date, reverse=True)
     return [t.get("@id","") for t in ordered if t.get("@id","")]
 
 
@@ -223,7 +220,21 @@ def _parse_time_code(time_code: str) -> str:
     return time_code
 
 
-def fetch_estat_data_by_id(stats_data_id, app_id, limit=14):
+def _is_stale(records, max_years_old=2) -> bool:
+    """最新データが max_years_old 年以上前なら True（古いIDを検出するため）"""
+    if not records:
+        return False
+    latest_time = records[0].get("time", "")
+    if not latest_time:
+        return False
+    try:
+        year = int(latest_time[:4])
+        return (datetime.now().year - year) >= max_years_old
+    except (ValueError, IndexError):
+        return False
+
+
+def fetch_estat_data_by_id(stats_data_id, app_id, limit=24):
     """
     1つのIDでデータを取得する。
     戻り値: (records list or None, is_id_invalid bool)
@@ -284,7 +295,7 @@ def fetch_estat_data_by_id(stats_data_id, app_id, limit=14):
 
 def fetch_estat_with_failover(stats_data_id, app_id, stats_code,
                                search_word, hardcoded_id,
-                               data_dir, limit=14):
+                               data_dir, limit=24):
     """
     【v9.0 核心機能】フェイルオーバー付きデータ取得
 
@@ -319,9 +330,15 @@ def fetch_estat_with_failover(stats_data_id, app_id, stats_code,
                 pass
         return records, stats_data_id
 
-    if is_invalid:
+    # ★ 古いデータ（2年以上前）もフェイルオーバー対象
+    is_stale = _is_stale(records)
+    if is_stale and records:
+        print(f"    ⚡ フェイルオーバー発動: {stats_data_id} は古いデータ（最新: {records[0].get('time','?')}）")
+
+    if is_invalid or is_stale:
         # ★ フェイルオーバー発動: キャッシュを削除して再検索
-        print(f"    ⚡ フェイルオーバー発動: {stats_data_id} は無効")
+        if is_invalid:
+            print(f"    ⚡ フェイルオーバー発動: {stats_data_id} は無効")
         if cache_file and cache_file.exists():
             cache_file.unlink()
         if data_cache and data_cache.exists():
@@ -329,9 +346,13 @@ def fetch_estat_with_failover(stats_data_id, app_id, stats_code,
 
         # 全候補IDを取得
         candidates = _get_all_candidate_ids(app_id, stats_code, search_word)
-        # hardcoded_id を末尾に追加（最終手段）
+        # ★ 修正D: hardcoded_idを先頭に挿入（最優先で試行）
+        # 理由: hardcoded_idは人間が確認済みの正しいID。末尾より先頭に置く
         if hardcoded_id and hardcoded_id not in candidates:
-            candidates.append(hardcoded_id)
+            candidates.insert(0, hardcoded_id)
+        elif hardcoded_id and hardcoded_id in candidates:
+            candidates.remove(hardcoded_id)
+            candidates.insert(0, hardcoded_id)
         # 無効だったIDは除外
         candidates = [c for c in candidates if c != stats_data_id]
 
@@ -366,7 +387,13 @@ def fetch_estat_with_failover(stats_data_id, app_id, stats_code,
 
 def search_statsdata_id(app_id, stats_code, search_word,
                         data_dir=None, hardcoded_id=None):
-    """キャッシュ確認 → 動的検索 → hardcoded_id の順でIDを返す"""
+    """hardcoded_id優先 → キャッシュ確認 → 動的検索 の順でIDを返す
+    v9.1修正: hardcoded_idがある場合は動的検索より先に返す（古いIDを掴む問題を回避）
+    """
+    # hardcoded_idが設定されている場合は最優先で使用
+    if hardcoded_id:
+        return hardcoded_id
+
     if data_dir:
         month = datetime.now().strftime("%Y-%m")
         cache = data_dir / f"id_cache_{stats_code}_{month}.txt"
@@ -388,8 +415,6 @@ def search_statsdata_id(app_id, stats_code, search_word,
                 pass
         return chosen
 
-    if hardcoded_id:
-        return hardcoded_id
     return None
 
 
@@ -404,11 +429,25 @@ def calculate_changes(records):
         if prev and prev != 0:
             result["mom_change"] = round(
                 (latest["value"] - prev) / abs(prev) * 100, 2)
-    if len(records) >= 13:
-        yr = records[12]["value"]
-        if yr and yr != 0:
-            result["yoy_change"] = round(
-                (latest["value"] - yr) / abs(yr) * 100, 2)
+    # ★ 修正A: records[12]固定→時刻文字列で1年前を特定
+    # 理由: データが月次でない場合records[12]が12年前等になり異常値
+    try:
+        latest_time = latest.get("time", "")
+        latest_year = int(latest_time[:4]) if latest_time else 0
+        target_year = str(latest_year - 1) if latest_year > 0 else ""
+        yr_record   = None
+        if target_year:
+            yr_record = next(
+                (r for r in records[1:] if r["time"].startswith(target_year)),
+                None
+            )
+        if yr_record:
+            yr = yr_record["value"]
+            if yr and yr != 0:
+                result["yoy_change"] = round(
+                    (latest["value"] - yr) / abs(yr) * 100, 2)
+    except Exception:
+        pass
     return result
 
 
@@ -516,15 +555,23 @@ def run_gov_pipeline(cfg) -> dict:
     for stat_def in STAT_DEFINITIONS:
         print(f"\n  📥 {stat_def['name']} 取得中...")
 
-        stats_id = search_statsdata_id(
-            app_id       = app_id,
-            stats_code   = stat_def["statsCode"],
-            search_word  = stat_def["searchWord"],
-            data_dir     = data_dir,
-            hardcoded_id = stat_def.get("hardcoded_id"),
-        )
+        # statsCode を複数候補で試す（fallback_stats_codes対応）
+        all_codes = [stat_def["statsCode"]] + stat_def.get("fallback_stats_codes", [])
+        stats_id = None
+        for _try_code in all_codes:
+            stats_id = search_statsdata_id(
+                app_id       = app_id,
+                stats_code   = _try_code,
+                search_word  = stat_def["searchWord"],
+                data_dir     = data_dir,
+                hardcoded_id = stat_def.get("hardcoded_id") if _try_code == all_codes[0] else None,
+            )
+            if stats_id:
+                if _try_code != stat_def["statsCode"]:
+                    print(f"    🔄 フォールバックstatsCode使用: {_try_code}")
+                break
         if not stats_id:
-            print(f"    ⚠️  statsDataId が見つかりません（{stat_def['statsCode']}）")
+            print(f"    ⚠️  statsDataId が見つかりません（{' / '.join(all_codes)}）")
             stat_results.append({"stat": stat_def, "records": [], "changes": {},
                                   "impact": {"signal": "neutral", "score": 0,
                                               "reason": "ID取得失敗"}})
