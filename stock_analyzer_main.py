@@ -569,40 +569,6 @@ def run_all_tasks(mode: str = "all") -> dict:
         results["sectors"] = sector_results
         print(f"  ✅ セクター分析完了: {len(sector_results)} 業種")
 
-        # ── スクリーニング実行（全業種完了後）──────────────────
-        if getattr(cfg, "ENABLE_SCREENER", True):
-            try:
-                _sc = _load_local_module(
-                    "stock_screener",
-                    "/content/stock_screener.py",
-                    cfg.DRIVE_BASE / "stock_screener.py",
-                )
-                if _sc:
-                    screen_all = []
-                    for _code, _res in sector_results.items():
-                        _companies = _res.get("top_companies", []) if isinstance(_res, dict) else []
-                        if _companies:
-                            _sr = _sc.screen_companies(
-                                companies   = _companies,
-                                cfg         = cfg,
-                                sector_name = _res.get("sector_name_ja", _code),
-                            )
-                            screen_all.append({
-                                "sector_name":  _res.get("sector_name_ja", _code),
-                                "screen_result": _sr,
-                            })
-                            print(f"  📋 {_sr['summary']}")
-                    if screen_all:
-                        _screen_dir = Path(cfg.INSIGHT_DIR) / "screening"
-                        _sc.save_screen_report(screen_all, _screen_dir)
-            except Exception as _e:
-                print(f"  ⚠️  スクリーニングエラー: {str(_e)[:80]}")
-    else:
-        if not cfg.ENABLE_SECTOR:
-            print("  ⏩ セクター分析: スキップ（config.ENABLE_SECTOR=False）")
-        elif not cfg.IMPLEMENTED_AGENTS:
-            print("  ⏩ セクター分析: スキップ（実装済みエージェントなし）")
-
     # ── タイムライン分析（3-A 追加）───────────────────────────
     if getattr(cfg, "ENABLE_TIMELINE", False) and _in_mode("timeline"):
         print("\n  ⏳ タイムライン分析を実行中...")
@@ -821,6 +787,50 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ アラート通知: スキップ（config.ENABLE_ALERT=False）")
 
+# ── IMF グローバルマクロ（デイリー）───────────────────────
+    if getattr(cfg, "ENABLE_IMF", False) and _in_mode("imf"):
+        print("\n  🌍 IMFグローバルマクロパイプラインを実行中...")
+        try:
+            _imf = _load_local_module(
+                "imf_pipeline",
+                "/content/imf_pipeline.py",
+                cfg.DRIVE_BASE / "imf_pipeline.py",
+            )
+            if _imf:
+                imf_result = _imf.run_imf_pipeline(cfg)
+                results["imf"] = imf_result
+                logger.add("imf_pipeline", "success", imf_result.get("summary", ""))
+            else:
+                print("  ⚠️  imf_pipeline.py が見つかりません")
+        except Exception as e:
+            logger.add("imf_pipeline", "error", str(e)[:100])
+            print(f"  ⚠️  IMFエラー: {str(e)[:80]}")
+    else:
+        if not getattr(cfg, "ENABLE_IMF", False):
+            print("  ⏩ IMFパイプライン: スキップ（ENABLE_IMF=False）")
+
+    # ── Step E: SEC/有報要約（無効化中・Claude API有料のため）────
+    if getattr(cfg, "ENABLE_SEC_SUMMARIZER", False) and _in_mode("sec_summary"):
+        try:
+            _ss = _load_local_module(
+                "sec_summarizer",
+                "/content/sec_summarizer.py",
+                cfg.DRIVE_BASE / "sec_summarizer.py",
+            )
+            if _ss:
+                screener_res = results.get("screener", {"candidates": []})
+                ss_result = _ss.run_sec_summarizer(cfg, screener_res)
+                results["sec_summary"] = ss_result
+                logger.add("sec_summarizer", "success",
+                           f"成功:{ss_result.get('success_count',0)}件")
+            else:
+                print("  ⚠️  sec_summarizer.py が見つかりません")
+        except Exception as e:
+            logger.add("sec_summarizer", "error", str(e)[:100])
+            print(f"  ⚠️  要約エラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ SEC/有報要約: スキップ（ENABLE_SEC_SUMMARIZER=False）")
+    
     elapsed = (datetime.now() - start).seconds
     print(f"\n{'='*60}")
     print(f"  ✅ 全タスク完了（{elapsed}秒）")
