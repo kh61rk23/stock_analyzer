@@ -629,6 +629,11 @@ EVAL_FORCE_WEEKLY: bool = False
 
 ENABLE_SCREENER: bool = True   # スクリーニング有効化フラグ
 
+# Step C': テーマETFトラッキング設定
+ENABLE_ETF_TRACKER: bool = True     # テーマETFトラッキングの有効化
+ETF_TOP_N: int = 3                  # アラートに表示するトップテーマ数
+ETF_THEME_IDS = None                # None=全テーマ / 例: ["quantum","ai_infra"]
+
 # ==============================================================
 # BLOCK 14: ニュースRSSパイプライン設定（Step B）
 # ==============================================================
