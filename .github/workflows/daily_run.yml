@@ -47,6 +47,9 @@ on:
 concurrency:
   group: stock-analyzer
   cancel-in-progress: false
+  
+permissions:
+  contents: write   # git push を許可
 
 jobs:
   run-analyzer:
@@ -58,6 +61,8 @@ jobs:
       # ── 1. リポジトリのチェックアウト ─────────────────────
       - name: 📥 Checkout
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}   # 書き込み用トークン
 
       # ── 2. Python セットアップ ────────────────────────────
       - name: 🐍 Setup Python
