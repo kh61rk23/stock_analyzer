@@ -736,8 +736,35 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         if not getattr(cfg, "ENABLE_SCREENER", False):
             print("  ⏩ 個別株スクリーニング: スキップ（ENABLE_SCREENER=False）")
-    
-# ── アイデアジェネレーター（4-A 追加）──────────────────────
+
+    # ── テーマETFトラッキング（Step C'）─────────────────────
+    if getattr(cfg, "ENABLE_ETF_TRACKER", False) and _in_mode("etf_tracker"):
+        print("\n  🌡️  テーマETFトラッキングを実行中...")
+        try:
+            _etf = _load_local_module(
+                "thematic_etf_tracker",
+                "/content/thematic_etf_tracker.py",
+                cfg.DRIVE_BASE / "thematic_etf_tracker.py",
+            )
+            if _etf:
+                arxiv_res = results.get("arxiv")
+                etf_result = _etf.run_thematic_etf_tracker(cfg, arxiv_res)
+                results["etf_tracker"] = etf_result
+                hot = sum(1 for t in etf_result.get("themes", [])
+                          if t["signal"] == "hot")
+                logger.add("etf_tracker", "success",
+                           f"HOT:{hot}件 / "
+                           f"TOP:{etf_result['themes'][0]['theme_name'] if etf_result['themes'] else 'N/A'}")
+            else:
+                print("  ⚠️  thematic_etf_tracker.py が見つかりません")
+        except Exception as e:
+            logger.add("etf_tracker", "error", str(e)[:100])
+            print(f"  ⚠️  テーマETFエラー: {str(e)[:80]}")
+    else:
+        if not getattr(cfg, "ENABLE_ETF_TRACKER", False):
+            print("  ⏩ テーマETF: スキップ（ENABLE_ETF_TRACKER=False）")
+
+    # ── アイデアジェネレーター（4-A 追加）──────────────────────
     if getattr(cfg, "ENABLE_IDEA_GENERATOR", False) and _in_mode("idea"):
         print("\n  💡 アイデアジェネレーターを実行中...")
         try:
