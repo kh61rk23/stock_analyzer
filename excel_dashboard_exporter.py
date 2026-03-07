@@ -122,7 +122,7 @@ def _rows_from_jp_sectors(sector_results: dict, date_str: str,
             "category":        code,
             "name_ja":         name_ja,
             "name_en":         name_en,
-            "composite_score": round(float(score), 1),
+            "composite_score": round(float(score or 0), 1),
             "risk_level":      risk,
             "ret_1m":          "",
             "ret_3m":          "",
@@ -232,7 +232,7 @@ def _rows_from_etf_tracker(etf_result: dict, date_str: str) -> list:
             "etfs":            ",".join(theme.get("etfs", [])),
             "heat_score":      theme.get("heat_score", ""),
             "arxiv_growth":    round(float(arxiv_growth), 1)
-                               if arxiv_growth != "" else "",
+                               if (arxiv_growth != "" and arxiv_growth is not None) else "",
             "top_company_1":   "",
             "top_company_2":   "",
             "notes":           (f"ArXiv直近4週:{ad.get('recent_4w',0)}件"
@@ -332,7 +332,7 @@ def run_excel_exporter(cfg, results: dict) -> dict:
     # composite_score 降順でソート（market別に）
     all_rows.sort(key=lambda r: (
         {"JP": 0, "US": 1, "ETF": 2}.get(r["market"], 9),
-        -(float(r["composite_score"]) if r["composite_score"] != "" else 0),
+        -(float(r["composite_score"]) if (r["composite_score"] not in ("", None)) else 0),
     ))
 
     # 書き出し
