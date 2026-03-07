@@ -340,35 +340,6 @@ def run_sector_analysis(sector_code: str, macro_snapshot: dict) -> dict:
         if s["sector_signals"].get(sector_code)
     ]
 
-    # ── スクリーニング実行（stock_screener連携）─────────────
-    if getattr(cfg, "ENABLE_SCREENER", True):
-        try:
-            _sc = _load_local_module(
-                "stock_screener",
-                "/content/stock_screener.py",
-                cfg.DRIVE_BASE / "stock_screener.py",
-            )
-            if _sc:
-                screen_all = []
-                for code, result in sector_results.items():
-                    companies = result.get("top_companies", [])
-                    if companies:
-                        sr = _sc.screen_companies(
-                            companies   = companies,
-                            cfg         = cfg,
-                            sector_name = result.get("sector_name_ja", code),
-                        )
-                        screen_all.append({
-                            "sector_name":  result.get("sector_name_ja", code),
-                            "screen_result": sr,
-                        })
-                        print(f"  📋 {sr['summary']}")
-                # まとめてレポート保存
-                screen_dir = Path(cfg.INSIGHT_DIR) / "screening"
-                _sc.save_screen_report(screen_all, screen_dir)
-        except Exception as e:
-            print(f"  ⚠️  スクリーニングエラー: {str(e)[:80]}")
-
     return {
         "sector_code":    sector_code,
         "sector_name_ja": sector_info.get("name_ja", sector_code),
