@@ -122,23 +122,9 @@ jobs:
           IQY="stock_data/data/dashboard/dashboard.iqy"
 
           if [ -f "$CSV" ]; then
-            # .iqy ファイルを動的生成（リポジトリURLを自動取得）
             GDRIVE_FILE_ID="${{ secrets.GDRIVE_DASHBOARD_FILE_ID }}"
             RAW_URL="https://drive.google.com/uc?export=download&id=${GDRIVE_FILE_ID}"
-            mkdir -p stock_data/data/dashboard
-            cat > "$IQY" << IQY_CONTENT
-          WEB
-          1
-          ${RAW_URL}
-
-          Selection=EntireDocument
-          Formatting=None
-          PreFormattedTextToColumns=True
-          ConsecutiveDelimitersAsOne=True
-          SingleBlockTextImport=False
-          DisableDateRecognition=False
-          DisableRedirections=False
-          IQY_CONTENT
+            printf 'WEB\n1\n%s\n\nSelection=EntireDocument\nFormatting=None\nPreFormattedTextToColumns=True\nConsecutiveDelimitersAsOne=True\nSingleBlockTextImport=False\nDisableDateRecognition=False\nDisableRedirections=False\n' "${RAW_URL}" > "$IQY"
 
             git config user.name  "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
