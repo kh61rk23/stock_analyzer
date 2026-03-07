@@ -712,6 +712,30 @@ def run_all_tasks(mode: str = "all") -> dict:
             print(f"  ⚠️  米国セクター分析エラー: {str(e)[:80]}")
     else:
         print("  ⏩ 米国セクター分析: スキップ（config.ENABLE_US_SECTOR=False）")
+
+    # ── 個別銘柄スクリーニング（Step C）─────────────────────
+    if getattr(cfg, "ENABLE_SCREENER", False) and _in_mode("screener"):
+        print("\n  📋 個別銘柄スクリーニングを実行中...")
+        try:
+            _sc = _load_local_module(
+                "stock_screener",
+                "/content/stock_screener.py",
+                cfg.DRIVE_BASE / "stock_screener.py",
+            )
+            if _sc:
+                sector_res = results.get("sectors", {})
+                screen_result = _sc.run_stock_screener(cfg, sector_res)
+                results["screener"] = screen_result
+                logger.add("stock_screener", "success",
+                           f"通過:{screen_result.get('pass_count',0)}銘柄")
+            else:
+                print("  ⚠️  stock_screener.py が見つかりません")
+        except Exception as e:
+            logger.add("stock_screener", "error", str(e)[:100])
+            print(f"  ⚠️  スクリーニングエラー: {str(e)[:80]}")
+    else:
+        if not getattr(cfg, "ENABLE_SCREENER", False):
+            print("  ⏩ 個別株スクリーニング: スキップ（ENABLE_SCREENER=False）")
     
 # ── アイデアジェネレーター（4-A 追加）──────────────────────
     if getattr(cfg, "ENABLE_IDEA_GENERATOR", False) and _in_mode("idea"):
