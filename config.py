@@ -633,6 +633,19 @@ ENABLE_SCREENER: bool = True   # スクリーニング有効化フラグ
 # BLOCK 14: ニュースRSSパイプライン設定（Step B）
 # ==============================================================
 ENABLE_NEWS: bool = True          # ニュースRSS取得の有効化
+# Google Custom Search API（有料メディア記事検索）
+GOOGLE_CSE_API_KEY: str = "REDACTED_GOOGLE"   # Google Cloud Console で取得
+GOOGLE_CSE_ID:      str = "033b43821c3a5442b"   # cse.google.com で取得
+ENABLE_PAID_MEDIA_SEARCH: bool = False  # API設定後に True に変更
+
+# Step C: 個別株スクリーニング設定
+SCREEN_TOP_N_SECTORS: int   = 7      # スクリーニング対象業種数（スコア上位N）
+SCREEN_PER_MAX:       float = 30.0   # PER 上限
+SCREEN_PBR_MAX:       float = 5.0    # PBR 上限
+SCREEN_ROE_MIN:       float = 0.05   # ROE 下限（5% = 0.05）
+SCREEN_MCAP_MIN_B:    float = 80.0  # 時価総額下限（80億）
+SCREEN_VOL_MIN:       int   = 50_000 # 出来高下限（5万株/日）
+
 NEWS_TOP_N:  int  = 10            # アラートに表示する重要記事の最大件数
 NEWS_FEEDS_ENABLED = None         # None=全フィード有効 / リスト指定で絞り込み
                                   # 例: ["reuters_business", "nhk_top"]
