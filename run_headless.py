@@ -45,6 +45,7 @@ def apply_env_overrides(cfg):
         "EDINET_API_KEY":             "EDINET_API_KEY",
         "EDINETDB_API_KEY":           "EDINETDB_API_KEY",
         "POLICY_FRED_API_KEY":        "POLICY_FRED_API_KEY",
+        "GDRIVE_DASHBOARD_FILE_ID":  "GDRIVE_DASHBOARD_FILE_ID",
         "ESTAT_API_KEY":              "ESTAT_API_KEY",
         "GOOGLE_OAUTH_CLIENT_ID":     "GOOGLE_OAUTH_CLIENT_ID",
         "GOOGLE_OAUTH_CLIENT_SECRET": "GOOGLE_OAUTH_CLIENT_SECRET",
