@@ -637,7 +637,7 @@ IMF_INDICATORS = [
 IMF_COUNTRIES = ["JPN", "USA", "CHN", "DEU", "EA19", "W"]
 
 # Step E: SEC 10-K / 有報 Claude API 要約設定
-ENABLE_SEC_SUMMARIZER: bool = True   # ANTHROPIC_API_KEY 設定後に True へ変更
+ENABLE_SEC_SUMMARIZER: bool = False   # ANTHROPIC_API_KEY 設定後に True へ変更
 ANTHROPIC_API_KEY: str = ""           # GitHub Secrets で設定（下記参照）
 SEC_USER_AGENT: str = "StockAnalyzer REDACTED_EMAIL"
 SUMMARY_MAX_TICKERS: int = 10         # 要約する最大銘柄数（コスト管理）
