@@ -563,6 +563,23 @@ def run_news_pipeline(cfg) -> dict:
     # フィード取得
     print(f"  📡 {len(RSS_FEEDS)}フィードを取得中...")
     articles = fetch_all_feeds(RSS_FEEDS, cfg)
+    # 有料メディア記事を Google CSE で補完
+    if getattr(cfg, "ENABLE_PAID_MEDIA_SEARCH", False):
+        try:
+            import importlib.util, sys
+            for p in ["/content/paid_media_searcher.py",
+                      str(__file__).replace("news_pipeline.py",
+                                            "paid_media_searcher.py")]:
+                if __import__("pathlib").Path(p).exists():
+                    spec = importlib.util.spec_from_file_location(
+                        "paid_media_searcher", p)
+                    _pm = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(_pm)
+                    paid_articles = _pm.fetch_paid_media_articles(cfg)
+                    articles.extend(paid_articles)
+                    break
+        except Exception as e:
+            print(f"  ⚠️  有料メディア検索エラー: {str(e)[:60]}")
     print(f"  → 合計 {len(articles)} 件取得")
 
     if not articles:
