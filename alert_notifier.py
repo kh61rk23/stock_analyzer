@@ -90,7 +90,7 @@ def extract_alerts(cfg, results: dict) -> list:
         dead   = lt.get("dead_cross_sectors",   [])
 
         if golden:
-            names = [s.get("sector_name", s.get("sector_code", "")) if isinstance(s, dict) else str(s) for s in golden]
+            names = [s.get("sector_name", s.get("sector_code", "")) for s in golden]
             alerts.append({
                 "trigger":  "golden_cross",
                 "title":    f"📈 ゴールデンクロス {len(golden)}業種",
@@ -98,7 +98,7 @@ def extract_alerts(cfg, results: dict) -> list:
                 "severity": "medium",
             })
         if dead:
-            names = [s.get("sector_name", s.get("sector_code", "")) if isinstance(s, dict) else str(s) for s in dead]
+            names = [s.get("sector_name", s.get("sector_code", "")) for s in dead]
             alerts.append({
                 "trigger":  "dead_cross",
                 "title":    f"📉 デッドクロス {len(dead)}業種",
@@ -140,8 +140,51 @@ def extract_alerts(cfg, results: dict) -> list:
                 "body":     "  " + " / ".join(names),
                 "severity": "medium",
             })
+            
+    # ── ⑤ 本日の注目ニュース ─────────────────────────────────
+    news_result = results.get("news", {})
+    if news_result and isinstance(news_result, dict):
+        top_articles = news_result.get("top_articles", [])
+        max_n = getattr(cfg, "NEWS_ALERT_MAX_ARTICLES", 5)
+        if top_articles:
+            lines = []
+            sector_results_for_news = results.get("sectors", {})
+            # 上位スコア業種の関連ニュースを優先
+            by_sector = news_result.get("by_sector", {})
+            shown_titles = set()
+            sorted_secs = sorted(
+                sector_results_for_news.items(),
+                key=lambda x: x[1].get("composite_score", 0)
+                    if isinstance(x[1], dict) else 0,
+                reverse=True,
+            )
+            for code, _ in sorted_secs[:5]:
+                arts = by_sector.get(code, [])
+                if arts:
+                    a = arts[0]
+                    t = a["title"][:60]
+                    if t not in shown_titles:
+                        lines.append(f"  [{a['source']}] {t}")
+                        shown_titles.add(t)
+                    if len(lines) >= max_n:
+                        break
+            # 残りを重要度順で補完
+            for a in top_articles:
+                if len(lines) >= max_n:
+                    break
+                t = a["title"][:60]
+                if t not in shown_titles:
+                    lines.append(f"  [{a['source']}] {t}")
+                    shown_titles.add(t)
+            if lines:
+                alerts.append({
+                    "trigger":  "news_top",
+                    "title":    f"📰 本日の注目ニュース（{len(lines)}件）",
+                    "body":     "\n".join(lines),
+                    "severity": "info",
+                })
 
-    # ── ⑤ 注目業種トップ3（根拠付き）─────────────────────────
+    # ── ⑥ 注目業種トップ3（根拠付き）─────────────────────────
     # score_explainer.py の enrich_result_with_reason() で
     # "reason_text" が付与されていれば根拠文も表示する
     sector_results = results.get("sector_results", {})
