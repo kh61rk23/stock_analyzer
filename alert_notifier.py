@@ -183,8 +183,37 @@ def extract_alerts(cfg, results: dict) -> list:
                     "body":     "\n".join(lines),
                     "severity": "info",
                 })
-
-    # ── ⑥ 注目業種トップ3（根拠付き）─────────────────────────
+    # ── ⑥ テーマETF 熱量ランキング ───────────────────────────
+    etf_result = results.get("etf_tracker", {})
+    if etf_result and isinstance(etf_result, dict):
+        top_themes = etf_result.get("top_themes", [])
+        hot_themes = [t for t in etf_result.get("themes", [])
+                      if t["signal"] == "hot"]
+        display = hot_themes if hot_themes else top_themes
+        if display:
+            SIGNAL_ICONS = {
+                "hot": "🔥", "warming": "📈",
+                "neutral": "➡️", "cooling": "❄️",
+            }
+            lines = []
+            for t in display[:3]:
+                icon   = SIGNAL_ICONS.get(t["signal"], "➡️")
+                etfs   = "/".join(t["etfs"])
+                arxiv  = (f"ArXiv+{t['arxiv_detail']['growth_rate']:.0f}%"
+                          if t["arxiv_detail"].get("growth_rate") is not None
+                          else "")
+                lines.append(
+                    f"  {icon} {t['theme_name']}({etfs}): "
+                    f"熱量{t['heat_score']:.0f}点  {arxiv}"
+                )
+            alerts.append({
+                "trigger":  "etf_theme",
+                "title":    f"🌡️ テーマETF熱量 TOP{len(lines)}",
+                "body":     "\n".join(lines),
+                "severity": "high" if hot_themes else "info",
+            })
+            
+    # ── ⑦ 注目業種トップ3（根拠付き）─────────────────────────
     # score_explainer.py の enrich_result_with_reason() で
     # "reason_text" が付与されていれば根拠文も表示する
     sector_results = results.get("sector_results", {})
