@@ -104,6 +104,7 @@ jobs:
           ALERT_LINE_USER_ID:   ${{ secrets.ALERT_LINE_USER_ID }}
           EDINET_API_KEY:       ${{ secrets.EDINET_API_KEY }}
           POLICY_FRED_API_KEY:  ${{ secrets.POLICY_FRED_API_KEY }}
+          GDRIVE_DASHBOARD_FILE_ID:   ${{ secrets.GDRIVE_DASHBOARD_FILE_ID }}
           GOOGLE_OAUTH_CLIENT_ID:     ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
           GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
           GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
@@ -122,7 +123,8 @@ jobs:
 
           if [ -f "$CSV" ]; then
             # .iqy ファイルを動的生成（リポジトリURLを自動取得）
-            RAW_URL="https://raw.githubusercontent.com/${{ github.repository }}/main/stock_data/data/dashboard/dashboard_latest.csv"
+            GDRIVE_FILE_ID="${{ secrets.GDRIVE_DASHBOARD_FILE_ID }}"
+            RAW_URL="https://drive.google.com/uc?export=download&id=${GDRIVE_FILE_ID}"
             mkdir -p stock_data/data/dashboard
             cat > "$IQY" << IQY_CONTENT
           WEB
