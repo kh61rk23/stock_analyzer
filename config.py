@@ -629,6 +629,19 @@ EVAL_FORCE_WEEKLY: bool = False
 
 ENABLE_SCREENER: bool = True   # スクリーニング有効化フラグ
 
+# IMF グローバルマクロパイプライン設定
+ENABLE_IMF: bool = True
+IMF_INDICATORS = [
+    "NGDP_RPCH", "PCPIPCH", "LUR", "BCA_NGDPD", "GGXWDG_NGDP"
+]
+IMF_COUNTRIES = ["JPN", "USA", "CHN", "DEU", "EA19", "W"]
+
+# Step E: SEC 10-K / 有報 Claude API 要約設定
+ENABLE_SEC_SUMMARIZER: bool = True   # ANTHROPIC_API_KEY 設定後に True へ変更
+ANTHROPIC_API_KEY: str = ""           # GitHub Secrets で設定（下記参照）
+SEC_USER_AGENT: str = "StockAnalyzer REDACTED_EMAIL"
+SUMMARY_MAX_TICKERS: int = 10         # 要約する最大銘柄数（コスト管理）
+
 # Step C': テーマETFトラッキング設定
 ENABLE_ETF_TRACKER: bool = True     # テーマETFトラッキングの有効化
 # Step D: Excel ダッシュボード CSV エクスポート
@@ -671,6 +684,7 @@ DAILY_MODULES = [
     "timeline",      # 月次トレンド＋デイリー騰落
     "policy",        # 政策金利トラッカー
     "us_sector",     # 米国S&P500 11セクター分析
+    "imf",           # IMF グローバルマクロパイプライン
     "etf_tracker",   # テーマETFトラッキング（Step C'）
     "news",          # ニュースRSSパイプライン（Step B）
     "screener",      # スキャナーの追加
@@ -683,6 +697,7 @@ WEEKLY_MODULES = [
     "correlation",   # 米国債×業種 相関監査
     "idea",          # アイデア生成
     "evaluation",    # アイデア評価・週次集計
+    "sec_summary",   # SEC 10-K / 有報 Claude API 日本語3行要約（Step E）
 ]
 
 # ウィークリー実行の曜日（0=月曜 〜 6=日曜）
