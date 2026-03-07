@@ -636,7 +636,7 @@ ENABLE_NEWS: bool = True          # ニュースRSS取得の有効化
 # Google Custom Search API（有料メディア記事検索）
 GOOGLE_CSE_API_KEY: str = "REDACTED_GOOGLE"   # Google Cloud Console で取得
 GOOGLE_CSE_ID:      str = "033b43821c3a5442b"   # cse.google.com で取得
-ENABLE_PAID_MEDIA_SEARCH: bool = False  # API設定後に True に変更
+ENABLE_PAID_MEDIA_SEARCH: bool = True  # API設定後に True に変更
 
 # Step C: 個別株スクリーニング設定
 SCREEN_TOP_N_SECTORS: int   = 7      # スクリーニング対象業種数（スコア上位N）
