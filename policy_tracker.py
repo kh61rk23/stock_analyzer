@@ -83,18 +83,6 @@ WATCH_TICKERS = {
         "dn_tailwind": ["1032"],
         "dn_headwind": ["1028"],
     },
-    "^JP10YT=XX": {   # ※yfinanceの日本10年債シンボルは廃止。取得失敗時は前回値を保持
-        "label":    "日本10年債利回り",
-        "bank":     "日銀",
-        "currency": "JPY",
-        "up_dir":   "日銀 利上げ方向（YCC 撤廃・引き締め）",
-        "dn_dir":   "日銀 緩和継続・利下げ方向",
-        "up_tailwind": ["1028"],
-        "up_headwind": ["1032"],
-        "dn_tailwind": ["1032"],
-        "dn_headwind": ["1028"],
-        "fallback_value": 1.5,  # 取得失敗時のデフォルト値（%）
-    },
     "JPY=X": {
         "label":    "USD/JPY（円安↑ 円高↓）",
         "bank":     "為替",
