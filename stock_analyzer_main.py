@@ -797,7 +797,7 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ アイデアジェネレーター: スキップ（config.ENABLE_IDEA_GENERATOR=False）")
 
-# ── アイデアエバリュエーター（4-B 追加）────────────────────
+    # ── アイデアエバリュエーター（4-B 追加）────────────────────
     if getattr(cfg, "ENABLE_IDEA_EVALUATOR", False) and _in_mode("evaluation"):
         print("\n  📊 アイデアエバリュエーターを実行中...")
         try:
@@ -822,7 +822,7 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ アイデアエバリュエーター: スキップ（config.ENABLE_IDEA_EVALUATOR=False）")
 
-# ── アラート通知（5-B 追加）────────────────────────────────
+    # ── アラート通知（5-B 追加）────────────────────────────────
     if getattr(cfg, "ENABLE_ALERT", False):
         try:
             _an = _load_local_module(
@@ -857,6 +857,33 @@ def run_all_tasks(mode: str = "all") -> dict:
     print(f"  📝 知見: {cfg.INSIGHT_DIR}")
     print(f"{'='*60}")
     logger.tail(n=5)
+    
+    # ── Excel ダッシュボード CSV エクスポート（Step D）────────
+    if getattr(cfg, "ENABLE_EXCEL_EXPORT", False) and _in_mode("excel_export"):
+        print("\n  📊 Excel ダッシュボード CSV エクスポート中...")
+        try:
+            _ex = _load_local_module(
+                "excel_dashboard_exporter",
+                "/content/excel_dashboard_exporter.py",
+                cfg.DRIVE_BASE / "excel_dashboard_exporter.py",
+            )
+            if _ex:
+                export_result = _ex.run_excel_exporter(cfg, results)
+                results["excel_export"] = export_result
+                logger.add("excel_export", "success",
+                           f"{export_result.get('row_count',0)}行出力 "
+                           f"JP:{export_result['breakdown'].get('JP',0)} "
+                           f"US:{export_result['breakdown'].get('US',0)} "
+                           f"ETF:{export_result['breakdown'].get('ETF',0)}")
+            else:
+                print("  ⚠️  excel_dashboard_exporter.py が見つかりません")
+        except Exception as e:
+            logger.add("excel_export", "error", str(e)[:100])
+            print(f"  ⚠️  Excelエクスポートエラー: {str(e)[:80]}")
+    else:
+        if not getattr(cfg, "ENABLE_EXCEL_EXPORT", False):
+            print("  ⏩ Excelエクスポート: スキップ（ENABLE_EXCEL_EXPORT=False）")
+    
     return results
 
 
