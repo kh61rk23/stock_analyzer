@@ -108,17 +108,39 @@ jobs:
         run: |
           python -u run_headless.py --mode ${{ steps.set-mode.outputs.mode }} 2>&1
 
-      # ── 5-B. ダッシュボードCSVをリポジトリにコミット ───────
-      - name: 📈 Commit dashboard CSV
+      # ── 5-B. ダッシュボードCSVと.iqyをリポジトリにコミット ───────
+      - name: 📊 Commit dashboard files
         if: always()
         run: |
-          if [ -f "stock_data/data/dashboard/dashboard_latest.csv" ]; then
+          CSV="stock_data/data/dashboard/dashboard_latest.csv"
+          IQY="stock_data/data/dashboard/dashboard.iqy"
+
+          if [ -f "$CSV" ]; then
+            # .iqy ファイルを動的生成（リポジトリURLを自動取得）
+            RAW_URL="https://raw.githubusercontent.com/${{ github.repository }}/main/stock_data/data/dashboard/dashboard_latest.csv"
+            mkdir -p stock_data/data/dashboard
+            cat > "$IQY" << IQY_CONTENT
+          WEB
+          1
+          ${RAW_URL}
+
+          Selection=EntireDocument
+          Formatting=None
+          PreFormattedTextToColumns=True
+          ConsecutiveDelimitersAsOne=True
+          SingleBlockTextImport=False
+          DisableDateRecognition=False
+          DisableRedirections=False
+          IQY_CONTENT
+
             git config user.name  "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add stock_data/data/dashboard/
-            git diff --staged --quiet || git commit -m "📊 dashboard CSV update $(date -u '+%Y-%m-%d')"
+            git diff --staged --quiet || \
+              git commit -m "📊 dashboard update $(date -u '+%Y-%m-%d')"
             git push
-            echo "✅ ダッシュボードCSVをコミットしました"
+            echo "✅ dashboard_latest.csv + dashboard.iqy をコミットしました"
+            echo "   URL: ${RAW_URL}"
           else
             echo "⏩ dashboard_latest.csv が存在しないためスキップ"
           fi
