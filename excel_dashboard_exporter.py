@@ -253,7 +253,6 @@ FIELDNAMES = [
     "top_company_1", "top_company_2", "notes",
 ]
 
-
 def _write_csv(rows: list, path: Path) -> None:
     """BOM付きUTF-8（Excel直接開き対応）でCSVを書き出す。"""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -262,6 +261,39 @@ def _write_csv(rows: list, path: Path) -> None:
         writer.writeheader()
         writer.writerows(rows)
 
+def _upload_to_gdrive(latest_csv: Path, dated_csv: Path,
+                      file_id: str, cfg) -> None:
+    """
+    dashboard_latest.csv を Google Drive の固定ファイルIDで上書きアップロードし、
+    dashboard_YYYY-MM-DD.csv を同フォルダに新規アップロードする（履歴保持）。
+    """
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaFileUpload
+    from google.oauth2.credentials import Credentials
+
+    creds = Credentials(
+        token         = None,
+        refresh_token = getattr(cfg, "GOOGLE_OAUTH_REFRESH_TOKEN", ""),
+        client_id     = getattr(cfg, "GOOGLE_OAUTH_CLIENT_ID", ""),
+        client_secret = getattr(cfg, "GOOGLE_OAUTH_CLIENT_SECRET", ""),
+        token_uri     = "https://oauth2.googleapis.com/token",
+    )
+    service = build("drive", "v3", credentials=creds)
+
+    # ① dashboard_latest.csv を固定IDで上書き
+    media = MediaFileUpload(str(latest_csv), mimetype="text/csv", resumable=False)
+    service.files().update(fileId=file_id, media_body=media).execute()
+    print(f"  ☁️  Drive 上書き完了: dashboard_latest.csv (id={file_id[:8]}...)")
+
+    # ② dashboard_YYYY-MM-DD.csv を同フォルダに新規アップロード（履歴）
+    file_meta = service.files().get(fileId=file_id, fields="parents").execute()
+    parents   = file_meta.get("parents", [])
+    media2    = MediaFileUpload(str(dated_csv), mimetype="text/csv")
+    service.files().create(
+        body       = {"name": dated_csv.name, "parents": parents},
+        media_body = media2,
+    ).execute()
+    print(f"  ☁️  Drive 新規保存: {dated_csv.name}")
 
 # ==============================================================
 # BLOCK 5: メインエントリポイント
@@ -348,6 +380,16 @@ def run_excel_exporter(cfg, results: dict) -> dict:
     )
     print(f"     → {latest_path}")
 
+    # ── Google Drive アップロード（履歴保存）──────────────────
+    gdrive_file_id = getattr(cfg, "GDRIVE_DASHBOARD_FILE_ID", "")
+    if gdrive_file_id:
+        try:
+            _upload_to_gdrive(latest_path, dated_path, gdrive_file_id, cfg)
+        except Exception as e:
+            print(f"  ⚠️  Drive アップロード失敗: {str(e)[:60]}")
+    else:
+        print("  ⏩ Drive アップロード: スキップ（GDRIVE_DASHBOARD_FILE_ID 未設定）")
+    
     return {
         "csv_latest_path": str(latest_path),
         "csv_dated_path":  str(dated_path),
