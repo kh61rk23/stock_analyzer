@@ -8,8 +8,6 @@
 #      → 「2018年IDが1ヶ月キャッシュされ続ける」問題を完全解消
 #   ② 建設工事着工統計 statsCode: 00600120 → 00600220（国交省確認済み）
 #      hardcoded_id 0003072888 は存在しないIDのため削除
-#   ③ 鉱工業・毎月勤労統計のhardcoded_idを追加
-#      動的検索が古いIDを返した場合のセーフティネット
 # ==============================================================
 
 import json
@@ -32,7 +30,6 @@ STAT_DEFINITIONS = [
         "direction":    "higher_is_bad",
         "sectors":      ["1027", "1033", "1019", "1004"],
         "description":  "物価上昇は購買力を下げ、小売・外食・生活用品に逆風",
-        "hardcoded_id": "0003427113",
     },
     {
         "id":           "industrial_production",
@@ -43,8 +40,6 @@ STAT_DEFINITIONS = [
         "direction":    "higher_is_good",
         "sectors":      ["1015", "1016", "1007", "1012"],
         "description":  "生産指数の上昇は製造業全般の追い風",
-        # 0004015800: 2025-04-30公開の最新版（過去ログから確認）
-        "hardcoded_id": "0004015800",
     },
     {
         "id":           "wages",
@@ -57,7 +52,6 @@ STAT_DEFINITIONS = [
         "description":  "賃金上昇は消費拡大につながり、小売・外食・サービス業に追い風",
         # v9.1: フォールバックIDを設定（動的検索が2018年IDを掴む問題への対処）
         # 動的検索でも _is_stale チェックでフェイルオーバーするが、IDがNoneだと最終手段なし
-        "hardcoded_id": None,  # フェイルオーバーの全候補試行に委ねる
     },
     {
         "id":           "household_spending",
@@ -68,7 +62,6 @@ STAT_DEFINITIONS = [
         "direction":    "higher_is_good",
         "sectors":      ["1027", "1033", "1004", "1026"],
         "description":  "消費支出の増加は内需型業種全般の追い風",
-        "hardcoded_id": "0003000801",
     },
     {
         "id":           "unemployment",
@@ -79,7 +72,6 @@ STAT_DEFINITIONS = [
         "direction":    "higher_is_bad",
         "sectors":      ["1027", "1033", "1028", "1032"],
         "description":  "失業率上昇は景気悪化を示し、内需・金融・不動産に逆風",
-        "hardcoded_id": None,
     },
     {
         "id":           "construction_starts",
@@ -90,7 +82,6 @@ STAT_DEFINITIONS = [
         "direction":    "higher_is_good",
         "sectors":      ["1003", "1032", "1012", "1014"],
         "description":  "着工件数の増加は建設・不動産・鉄鋼の追い風",
-        "hardcoded_id": None,
         "fallback_stats_codes": ["00600220", "00600140"],  # 複数statsCodeを試す
     },
     {
@@ -102,7 +93,6 @@ STAT_DEFINITIONS = [
         "direction":    "higher_is_good",
         "sectors":      ["1015", "1016", "1018"],
         "description":  "機械受注の増加は設備投資拡大を示し、機械・電気機器に先行追い風",
-        "hardcoded_id": None,
     },
     {
         "id":           "trade_exports",
@@ -113,7 +103,6 @@ STAT_DEFINITIONS = [
         "direction":    "higher_is_good",
         "sectors":      ["1017", "1015", "1007", "1016"],
         "description":  "輸出増加は外需型製造業（自動車・機械・化学）の追い風",
-        "hardcoded_id": None,
     },
 ]
 
@@ -384,27 +373,15 @@ def fetch_estat_with_failover(stats_data_id, app_id, stats_code,
 
     return None, stats_data_id
 
-
-def search_statsdata_id(app_id, stats_code, search_word,
-                        data_dir=None, hardcoded_id=None):
-    """hardcoded_id優先 → キャッシュ確認 → 動的検索 の順でIDを返す
-    v9.1修正: hardcoded_idがある場合は動的検索より先に返す（古いIDを掴む問題を回避）
+def search_statsdata_id(app_id, stats_code, search_word, data_dir=None, hardcoded_id=None):
     """
-    # hardcoded_idが設定されている場合は最優先で使用
-    if hardcoded_id:
-        return hardcoded_id
-
-    if data_dir:
-        month = datetime.now().strftime("%Y-%m")
-        cache = data_dir / f"id_cache_{stats_code}_{month}.txt"
-        if cache.exists():
-            cached = cache.read_text().strip()
-            if cached:
-                return cached
-
+    動的検索を最優先し、最新のIDを特定する。
+    """
+    # 候補IDをAPIから取得（更新日時が新しい順に並んでいる）
     candidates = _get_all_candidate_ids(app_id, stats_code, search_word)
+    
     if candidates:
-        chosen = candidates[0]
+        chosen = candidates[0] # 更新日が一番新しいIDを採用
         if data_dir:
             try:
                 month = datetime.now().strftime("%Y-%m")
@@ -414,6 +391,10 @@ def search_statsdata_id(app_id, stats_code, search_word,
             except Exception:
                 pass
         return chosen
+
+    # 動的検索で見つからなかった場合の最終手段としてのみ固定IDを使う
+    if hardcoded_id:
+        return hardcoded_id
 
     return None
 
