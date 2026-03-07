@@ -631,6 +631,8 @@ ENABLE_SCREENER: bool = True   # スクリーニング有効化フラグ
 
 # Step C': テーマETFトラッキング設定
 ENABLE_ETF_TRACKER: bool = True     # テーマETFトラッキングの有効化
+# Step D: Excel ダッシュボード CSV エクスポート
+ENABLE_EXCEL_EXPORT: bool = True  # CSV エクスポートの有効化
 ETF_TOP_N: int = 3                  # アラートに表示するトップテーマ数
 ETF_THEME_IDS = None                # None=全テーマ / 例: ["quantum","ai_infra"]
 
@@ -672,6 +674,7 @@ DAILY_MODULES = [
     "etf_tracker",   # テーマETFトラッキング（Step C'）
     "news",          # ニュースRSSパイプライン（Step B）
     "screener",      # スキャナーの追加
+    "excel_export",  # Excel ダッシュボード CSV エクスポート（Step D）
 ]
 
 # ── ウィークリーサイクル（月曜朝に追加実行）───────────────────
