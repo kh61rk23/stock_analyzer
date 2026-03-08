@@ -104,6 +104,9 @@ jobs:
           ALERT_LINE_USER_ID:   ${{ secrets.ALERT_LINE_USER_ID }}
           EDINET_API_KEY:       ${{ secrets.EDINET_API_KEY }}
           POLICY_FRED_API_KEY:  ${{ secrets.POLICY_FRED_API_KEY }}
+          ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_CSE_API_KEY:   ${{ secrets.GOOGLE_CSE_API_KEY }}
+          GOOGLE_CSE_ID:        ${{ secrets.GOOGLE_CSE_ID }}
           GDRIVE_DASHBOARD_FILE_ID:   ${{ secrets.GDRIVE_DASHBOARD_FILE_ID }}
           GOOGLE_OAUTH_CLIENT_ID:     ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
           GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
