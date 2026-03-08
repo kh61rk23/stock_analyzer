@@ -216,7 +216,7 @@ def extract_alerts(cfg, results: dict) -> list:
     # ── ⑦ 注目業種トップ3（根拠付き）─────────────────────────
     # score_explainer.py の enrich_result_with_reason() で
     # "reason_text" が付与されていれば根拠文も表示する
-    sector_results = results.get("sector_results", {})
+    sector_results = results.get("sectors", results.get("sector_results", {}))
     if sector_results:
         sorted_sectors = sorted(
             sector_results.items(),
