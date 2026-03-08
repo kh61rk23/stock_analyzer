@@ -256,7 +256,7 @@ FIELDNAMES = [
 def _write_csv(rows: list, path: Path) -> None:
     """BOM付きUTF-8（Excel直接開き対応）でCSVを書き出す。"""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+    with open(path, "w", newline="", encoding="cp932") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
         writer.writeheader()
         writer.writerows(rows)
