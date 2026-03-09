@@ -65,6 +65,14 @@ JP_SECTOR_EN = {
     "1033": "Services",
 }
 
+# risk_level → 数値（Power BIでソート・色分けに使用）
+RISK_SCORE = {"low": 1, "medium": 2, "high": 3}
+
+# signal → 数値（棒グラフ・条件付き書式に使用）
+SIGNAL_SCORE = {
+    "tailwind": 2, "warming": 1, "neutral": 0,
+    "cooling": -1, "headwind": -2,
+}
 
 # ==============================================================
 # BLOCK 1: JPセクターデータ → CSV行
@@ -122,13 +130,17 @@ def _rows_from_jp_sectors(sector_results: dict, date_str: str,
             "category":        code,
             "name_ja":         name_ja,
             "name_en":         name_en,
-            "composite_score": round(float(score or 0), 1),
+            "composite_score": round(float(score), 1),
             "risk_level":      risk,
+            "risk_score":      RISK_SCORE.get(risk, 0),
             "ret_1m":          "",
             "ret_3m":          "",
             "signal":          signal,
+            "signal_score":    SIGNAL_SCORE.get(signal, 0),
+            "tailwind_count":  tw,
+            "headwind_count":  hw,
             "etfs":            "",
-            "heat_score":      "",
+            "heat_score":      round(float(score), 1),  # JPはcomposite_scoreで代替
             "arxiv_growth":    "",
             "top_company_1":   top1,
             "top_company_2":   top2,
@@ -173,6 +185,10 @@ def _rows_from_us_sectors(us_result: dict, date_str: str) -> list:
             "name_en":         sec.get("name_en", ""),
             "composite_score": round(float(sr.get("score", 0)), 1),
             "risk_level":      sr.get("risk_level", ""),
+            "risk_score":      RISK_SCORE.get(sr.get("risk_level", ""), 0),
+            "signal_score":    SIGNAL_SCORE.get(signal, 0),
+            "tailwind_count":  "",
+            "headwind_count":  "",
             "ret_1m":          _f(etf.get("ret_1m")),
             "ret_3m":          _f(etf.get("ret_3m")),
             "signal":          "tailwind" if sr.get("score", 0) >= 65
@@ -185,7 +201,7 @@ def _rows_from_us_sectors(us_result: dict, date_str: str) -> list:
             "top_company_2":   "",
             "notes":           " | ".join(sr.get("signals", []))[:80],
         })
-
+    
     return rows
 
 
@@ -245,12 +261,16 @@ def _rows_from_etf_tracker(etf_result: dict, date_str: str) -> list:
 # ==============================================================
 # BLOCK 4: CSV書き出し
 # ==============================================================
-
 FIELDNAMES = [
     "date", "market", "category", "name_ja", "name_en",
-    "composite_score", "risk_level", "ret_1m", "ret_3m",
-    "signal", "etfs", "heat_score", "arxiv_growth",
-    "top_company_1", "top_company_2", "notes",
+    "composite_score",
+    "risk_level",      "risk_score",       # risk_score: low=1 medium=2 high=3
+    "ret_1m",          "ret_3m",
+    "signal",          "signal_score",     # signal_score: tailwind=2 ~ headwind=-2
+    "tailwind_count",  "headwind_count",   # 追い風・逆風件数（整数）
+    "etfs",            "heat_score",       "arxiv_growth",
+    "top_company_1",   "top_company_2",
+    "notes",
 ]
 
 def _write_csv(rows: list, path: Path) -> None:
