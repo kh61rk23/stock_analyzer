@@ -1,8 +1,13 @@
 # ==============================================================
 # sector_agents/1015_agent.py
-# 機械 エージェント v1.0  (東証業種コード: 1015)
+# 機械 エージェント v1.0  （東証業種コード: 1015）
 # ==============================================================
-# 分析対象企業: 6301.T / 6326.T / 6367.T / 6113.T / 7011.T
+# 【分析対象企業】コマツ / 住友重機械工業 / クボタ / 荏原製作所 / 三菱重工業
+# 【マクロ感応度】
+#   中国景気回復 → 💚 追い風（建設機械・農業機械の需要増）
+#   設備投資拡大 → 💚 追い風（工作機械・産業機械の受注増）
+#   円安進行   → 💚 追い風（輸出機械メーカーの収益増）
+#   中国景気減速 → 🔴 逆風  （コマツ・クボタの中国向け需要減）
 # ==============================================================
 
 import sys
@@ -16,36 +21,36 @@ from sector_agents.base_agent import (
     fetch_financials, build_macro_signals, build_result
 )
 
-SECTOR_CODE = "1015"
-SECTOR_NAME = "機械"
+SECTOR_CODE  = "1015"
+SECTOR_NAME  = "機械"
 
-TARGET_TICKERS = ['6301.T', '6326.T', '6367.T', '6113.T', '7011.T']
+TARGET_TICKERS = [
+    "6301.T",  # コマツ
+    "6302.T",  # 住友重機械工業
+    "6326.T",  # クボタ
+    "6361.T",  # 荏原製作所
+    "7011.T",  # 三菱重工業
+]
 
 SECTOR_NOTE = """
 ### 機械 ポイント
-- 工作機械・産業機械・建設機械など幅広い。世界景気感応度が高い。
-- **製造業設備投資**: 国内外の設備投資サイクルに強く連動。
-- **円安**: 輸出比率が高く、円安は業績押し上げ要因。
-- **半導体・EV関連設備**: 需要急増領域で受注増期待。
+- **コマツの中国露出**: 建設機械大手コマツは中国売上比率が高く、中国PMIに敏感。
+- **三菱重工の多角化**: 防衛・エネルギー・物流システム。防衛費増額が追い風。
+- **半導体製造装置**: 一部メーカーは半導体向け精密機械で高成長分野に参入。
+- **注目指標**: 機械受注統計、工作機械受注額、中国建設機械販売台数、設備投資計画。
 """
 
 
 def run_analysis(sector_code: str, cfg) -> dict:
-    """
-    機械 の分析を実行する。
-    stock_analyzer_main.py の run_sector_analysis() から動的ロードで呼ばれる。
-    """
-    result = {}
-    print(f"  [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
+    print(f"  ⚙️ [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
 
-    companies = fetch_financials(TARGET_TICKERS)
-    ok = sum(1 for c in companies if c.get("fetch_ok"))
-    print(f"    財務データ取得: {ok}/{len(TARGET_TICKERS)} 銘柄成功")
-
+    companies     = fetch_financials(TARGET_TICKERS)
     macro_signals = build_macro_signals(SECTOR_CODE, cfg)
+
+    ok = sum(1 for c in companies if c.get("fetch_ok"))
     tw = sum(1 for s in macro_signals if s["signal"] == "tailwind")
     hw = sum(1 for s in macro_signals if s["signal"] == "headwind")
-    print(f"    マクロシグナル: 追い風 {tw}件 / 逆風 {hw}件")
+    print(f"    財務データ: {ok}/{len(TARGET_TICKERS)} 成功 | マクロ: 追い風 {tw} / 逆風 {hw}")
 
     result = build_result(SECTOR_CODE, SECTOR_NAME, companies, macro_signals, cfg)
     result["insight_text"] += "\n" + SECTOR_NOTE

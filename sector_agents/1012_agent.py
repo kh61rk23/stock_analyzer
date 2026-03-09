@@ -1,8 +1,13 @@
 # ==============================================================
 # sector_agents/1012_agent.py
-# 鉄鋼 エージェント v1.0  (東証業種コード: 1012)
+# 鉄鋼 エージェント v1.0  （東証業種コード: 1012）
 # ==============================================================
-# 分析対象企業: 5401.T / 5411.T / 5406.T
+# 【分析対象企業】日本製鉄 / JFEホールディングス / 神戸製鋼所 / 大同特殊鋼 / 東京製鐵
+# 【マクロ感応度】
+#   中国景気回復 → 💚 追い風（鉄鋼需要増・価格上昇）
+#   中国景気減速 → 🔴 逆風  （過剰生産・ダンピング輸出が価格を押し下げ）
+#   自動車生産増 → 💚 追い風（自動車向け鋼板需要増）
+#   原料炭高騰  → 🔴 逆風  （コークス・鉄鉱石価格上昇でコスト増）
 # ==============================================================
 
 import sys
@@ -16,36 +21,36 @@ from sector_agents.base_agent import (
     fetch_financials, build_macro_signals, build_result
 )
 
-SECTOR_CODE = "1012"
-SECTOR_NAME = "鉄鋼"
+SECTOR_CODE  = "1012"
+SECTOR_NAME  = "鉄鋼"
 
-TARGET_TICKERS = ['5401.T', '5411.T', '5406.T']
+TARGET_TICKERS = [
+    "5401.T",  # 日本製鉄
+    "5411.T",  # JFEホールディングス
+    "5406.T",  # 神戸製鋼所
+    "5471.T",  # 大同特殊鋼
+    "5440.T",  # 東京製鐵
+]
 
 SECTOR_NOTE = """
 ### 鉄鋼 ポイント
-- 高炉・電炉による鉄鋼製品の製造・販売。
-- **鉄鉱石・石炭**: 主原料コストで業績変動の主因。
-- **中国過剰生産**: ダンピング競合で市況を下押しするリスク。
-- **高付加価値鋼材**: 販売構成が利益率を決める重要指標。
+- **中国の影響力**: 世界の鉄鋼生産の半分以上を中国が占め、過剰生産が価格を支配。
+- **自動車向け高級鋼**: ハイテン材・電磁鋼板（EV用）は付加価値が高く利益貢献大。
+- **脱炭素コスト**: 水素還元製鉄への転換は巨額の設備投資が必要。
+- **注目指標**: 粗鋼生産量、鉄鉱石・原料炭先物価格、中国PMI製造業、自動車生産台数。
 """
 
 
 def run_analysis(sector_code: str, cfg) -> dict:
-    """
-    鉄鋼 の分析を実行する。
-    stock_analyzer_main.py の run_sector_analysis() から動的ロードで呼ばれる。
-    """
-    result = {}
-    print(f"  [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
+    print(f"  🔩 [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
 
-    companies = fetch_financials(TARGET_TICKERS)
-    ok = sum(1 for c in companies if c.get("fetch_ok"))
-    print(f"    財務データ取得: {ok}/{len(TARGET_TICKERS)} 銘柄成功")
-
+    companies     = fetch_financials(TARGET_TICKERS)
     macro_signals = build_macro_signals(SECTOR_CODE, cfg)
+
+    ok = sum(1 for c in companies if c.get("fetch_ok"))
     tw = sum(1 for s in macro_signals if s["signal"] == "tailwind")
     hw = sum(1 for s in macro_signals if s["signal"] == "headwind")
-    print(f"    マクロシグナル: 追い風 {tw}件 / 逆風 {hw}件")
+    print(f"    財務データ: {ok}/{len(TARGET_TICKERS)} 成功 | マクロ: 追い風 {tw} / 逆風 {hw}")
 
     result = build_result(SECTOR_CODE, SECTOR_NAME, companies, macro_signals, cfg)
     result["insight_text"] += "\n" + SECTOR_NOTE

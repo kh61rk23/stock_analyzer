@@ -1,8 +1,12 @@
 # ==============================================================
 # sector_agents/1014_agent.py
-# 金属製品 エージェント v1.0  (東証業種コード: 1014)
+# 金属製品 エージェント v1.0  （東証業種コード: 1014）
 # ==============================================================
-# 分析対象企業: 5901.T / 5938.T / 5953.T
+# 【分析対象企業】東洋製罐グループホールディングス / NHKスプリング / リンナイ / LIXIL / ノーリツ
+# 【マクロ感応度】
+#   建設需要増  → 💚 追い風（住宅設備・建材需要増）
+#   自動車生産増 → 💚 追い風（スプリング・部品需要増）
+#   鋼材価格高騰 → 🔴 逆風  （原材料コスト上昇）
 # ==============================================================
 
 import sys
@@ -16,36 +20,36 @@ from sector_agents.base_agent import (
     fetch_financials, build_macro_signals, build_result
 )
 
-SECTOR_CODE = "1014"
-SECTOR_NAME = "金属製品"
+SECTOR_CODE  = "1014"
+SECTOR_NAME  = "金属製品"
 
-TARGET_TICKERS = ['5901.T', '5938.T', '5953.T']
+TARGET_TICKERS = [
+    "5901.T",  # 東洋製罐グループホールディングス
+    "5991.T",  # NHKスプリング
+    "5947.T",  # リンナイ
+    "5938.T",  # LIXIL
+    "5943.T",  # ノーリツ
+]
 
 SECTOR_NOTE = """
 ### 金属製品 ポイント
-- 金属加工・部品・建材が主軸。自動車・建設向けが2大需要先。
-- **鋼材コスト**: 原材料費が利益率を直撃。価格転嫁力が重要。
-- **自動車向け**: EV化による部品構成変化への対応が必要。
-- **インフラ投資**: 建設向けは公共工事動向と連動。
+- **多様な川下市場**: 缶詰容器・住宅設備・自動車部品・産業機械用部品など幅広い。
+- **住宅設備**: LIXIL・リンナイは住宅着工数と連動。金利・不動産市況に影響される。
+- **缶・包装**: 食品・飲料の需要は景気に左右されにくいディフェンシブ的性格もある。
+- **注目指標**: 住宅着工統計、自動車生産台数、熱延鋼板価格、産業機械受注額。
 """
 
 
 def run_analysis(sector_code: str, cfg) -> dict:
-    """
-    金属製品 の分析を実行する。
-    stock_analyzer_main.py の run_sector_analysis() から動的ロードで呼ばれる。
-    """
-    result = {}
-    print(f"  [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
+    print(f"  🔧 [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
 
-    companies = fetch_financials(TARGET_TICKERS)
-    ok = sum(1 for c in companies if c.get("fetch_ok"))
-    print(f"    財務データ取得: {ok}/{len(TARGET_TICKERS)} 銘柄成功")
-
+    companies     = fetch_financials(TARGET_TICKERS)
     macro_signals = build_macro_signals(SECTOR_CODE, cfg)
+
+    ok = sum(1 for c in companies if c.get("fetch_ok"))
     tw = sum(1 for s in macro_signals if s["signal"] == "tailwind")
     hw = sum(1 for s in macro_signals if s["signal"] == "headwind")
-    print(f"    マクロシグナル: 追い風 {tw}件 / 逆風 {hw}件")
+    print(f"    財務データ: {ok}/{len(TARGET_TICKERS)} 成功 | マクロ: 追い風 {tw} / 逆風 {hw}")
 
     result = build_result(SECTOR_CODE, SECTOR_NAME, companies, macro_signals, cfg)
     result["insight_text"] += "\n" + SECTOR_NOTE

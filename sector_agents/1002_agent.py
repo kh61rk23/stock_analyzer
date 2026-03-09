@@ -1,8 +1,12 @@
 # ==============================================================
 # sector_agents/1002_agent.py
-# 鉱業 エージェント v1.0  (東証業種コード: 1002)
+# 鉱業 エージェント v1.0  （東証業種コード: 1002）
 # ==============================================================
-# 分析対象企業: 1662.T / 1663.T / 1605.T
+# 【分析対象企業】石油資源開発 / INPEX / K&Oエナジーグループ / 昭和四日市石油 / 日鐵住金建材
+# 【マクロ感応度】
+#   原油高    → 💚 追い風（エネルギー資源の採掘収益増加）
+#   原油安    → 🔴 逆風  （採掘コストが価格を上回るリスク）
+#   円安進行  → 💚 追い風（ドル建て資源収益の円換算増）
 # ==============================================================
 
 import sys
@@ -16,36 +20,36 @@ from sector_agents.base_agent import (
     fetch_financials, build_macro_signals, build_result
 )
 
-SECTOR_CODE = "1002"
-SECTOR_NAME = "鉱業"
+SECTOR_CODE  = "1002"
+SECTOR_NAME  = "鉱業"
 
-TARGET_TICKERS = ['1662.T', '1663.T', '1605.T']
+TARGET_TICKERS = [
+    "1662.T",  # 石油資源開発
+    "1605.T",  # INPEX
+    "1663.T",  # K&Oエナジーグループ
+    "5016.T",  # 昭和四日市石油
+    "1884.T",  # 日鐵住金建材
+]
 
 SECTOR_NOTE = """
 ### 鉱業 ポイント
-- 石油・天然ガス・石炭の採掘・探鉱が主事業。
-- **資源価格**: WTI原油・LNG価格に業績が直結。
-- **為替**: ドル建て売上が多く、円安は追い風。
-- **探鉱リスク**: 資源開発の成否で資産価値が変動。
+- **原油・天然ガス価格**: INPEX等の収益は資源価格に直結。WTI・LNG価格に最注目。
+- **エネルギー転換リスク**: 脱炭素化の長期トレンドは化石燃料関連企業に構造的逆風。
+- **地政学リスク**: 中東・ロシア情勢が資源価格・供給に即影響。
+- **注目指標**: WTI原油先物、LNG価格、採掘コスト(Lifting cost)、埋蔵量。
 """
 
 
 def run_analysis(sector_code: str, cfg) -> dict:
-    """
-    鉱業 の分析を実行する。
-    stock_analyzer_main.py の run_sector_analysis() から動的ロードで呼ばれる。
-    """
-    result = {}
-    print(f"  [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
+    print(f"  ⛏️ [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
 
-    companies = fetch_financials(TARGET_TICKERS)
-    ok = sum(1 for c in companies if c.get("fetch_ok"))
-    print(f"    財務データ取得: {ok}/{len(TARGET_TICKERS)} 銘柄成功")
-
+    companies     = fetch_financials(TARGET_TICKERS)
     macro_signals = build_macro_signals(SECTOR_CODE, cfg)
+
+    ok = sum(1 for c in companies if c.get("fetch_ok"))
     tw = sum(1 for s in macro_signals if s["signal"] == "tailwind")
     hw = sum(1 for s in macro_signals if s["signal"] == "headwind")
-    print(f"    マクロシグナル: 追い風 {tw}件 / 逆風 {hw}件")
+    print(f"    財務データ: {ok}/{len(TARGET_TICKERS)} 成功 | マクロ: 追い風 {tw} / 逆風 {hw}")
 
     result = build_result(SECTOR_CODE, SECTOR_NAME, companies, macro_signals, cfg)
     result["insight_text"] += "\n" + SECTOR_NOTE

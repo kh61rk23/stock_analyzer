@@ -1,8 +1,13 @@
 # ==============================================================
 # sector_agents/1007_agent.py
-# 化学 エージェント v1.0  (東証業種コード: 1007)
+# 化学 エージェント v1.0  （東証業種コード: 1007）
 # ==============================================================
-# 分析対象企業: 4063.T / 4183.T / 4188.T / 4452.T / 4901.T
+# 【分析対象企業】信越化学工業 / 花王 / 三井化学 / 三菱ケミカルグループ / レゾナック・ホールディングス
+# 【マクロ感応度】
+#   原油高    → 🟡 注意  （ナフサ等の原料コスト上昇）
+#   円安進行  → 💚 追い風（信越化学等の輸出企業には収益増）
+#   半導体需要拡大 → 💚 追い風（半導体材料・フォトレジスト需要増）
+#   中国景気減速 → 🔴 逆風  （汎用化学品の価格下落・需要減）
 # ==============================================================
 
 import sys
@@ -16,36 +21,36 @@ from sector_agents.base_agent import (
     fetch_financials, build_macro_signals, build_result
 )
 
-SECTOR_CODE = "1007"
-SECTOR_NAME = "化学"
+SECTOR_CODE  = "1007"
+SECTOR_NAME  = "化学"
 
-TARGET_TICKERS = ['4063.T', '4183.T', '4188.T', '4452.T', '4901.T']
+TARGET_TICKERS = [
+    "4063.T",  # 信越化学工業
+    "4452.T",  # 花王
+    "4183.T",  # 三井化学
+    "4188.T",  # 三菱ケミカルグループ
+    "4004.T",  # レゾナック・ホールディングス
+]
 
 SECTOR_NOTE = """
 ### 化学 ポイント
-- 石化・機能化学・特殊化学と幅広い。ナフサ価格・原油に連動。
-- **原油・ナフサ**: 石化系の主要原料コストで業績変動の主因。
-- **電池材料・半導体材料**: 成長領域で投資テーマになりやすい。
-- **円安**: ドル建て輸出が多い企業は追い風。
+- **半導体材料**: 信越化学（シリコンウェーハ世界首位）はAI・半導体ブームの直接受益者。
+- **高機能材料**: 電子材料・バッテリー材料など高付加価値製品へのシフトが重要。
+- **汎用化学品の厳しさ**: 中国の過剰生産が汎用品価格を押し下げ、マージン圧迫。
+- **注目指標**: ナフサ価格、エチレン稼働率、半導体製造装置受注、中国PMI。
 """
 
 
 def run_analysis(sector_code: str, cfg) -> dict:
-    """
-    化学 の分析を実行する。
-    stock_analyzer_main.py の run_sector_analysis() から動的ロードで呼ばれる。
-    """
-    result = {}
-    print(f"  [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
+    print(f"  ⚗️ [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
 
-    companies = fetch_financials(TARGET_TICKERS)
-    ok = sum(1 for c in companies if c.get("fetch_ok"))
-    print(f"    財務データ取得: {ok}/{len(TARGET_TICKERS)} 銘柄成功")
-
+    companies     = fetch_financials(TARGET_TICKERS)
     macro_signals = build_macro_signals(SECTOR_CODE, cfg)
+
+    ok = sum(1 for c in companies if c.get("fetch_ok"))
     tw = sum(1 for s in macro_signals if s["signal"] == "tailwind")
     hw = sum(1 for s in macro_signals if s["signal"] == "headwind")
-    print(f"    マクロシグナル: 追い風 {tw}件 / 逆風 {hw}件")
+    print(f"    財務データ: {ok}/{len(TARGET_TICKERS)} 成功 | マクロ: 追い風 {tw} / 逆風 {hw}")
 
     result = build_result(SECTOR_CODE, SECTOR_NAME, companies, macro_signals, cfg)
     result["insight_text"] += "\n" + SECTOR_NOTE

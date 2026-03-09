@@ -1,8 +1,12 @@
 # ==============================================================
 # sector_agents/1009_agent.py
-# 石油・石炭製品 エージェント v1.0  (東証業種コード: 1009)
+# 石油・石炭製品 エージェント v1.0  （東証業種コード: 1009）
 # ==============================================================
-# 分析対象企業: 5019.T / 5020.T / 5021.T
+# 【分析対象企業】出光興産 / ENEOSホールディングス / コスモエネルギーホールディングス / INPEX / 昭和四日市石油
+# 【マクロ感応度】
+#   原油高    → 💚 追い風（製品価格上昇・在庫評価益）
+#   原油安    → 🔴 逆風  （在庫評価損・精製マージン悪化）
+#   円安進行  → 🔴 逆風  （原油はドル建て・輸入コスト増）
 # ==============================================================
 
 import sys
@@ -16,36 +20,36 @@ from sector_agents.base_agent import (
     fetch_financials, build_macro_signals, build_result
 )
 
-SECTOR_CODE = "1009"
-SECTOR_NAME = "石油・石炭製品"
+SECTOR_CODE  = "1009"
+SECTOR_NAME  = "石油・石炭製品"
 
-TARGET_TICKERS = ['5019.T', '5020.T', '5021.T']
+TARGET_TICKERS = [
+    "5019.T",  # 出光興産
+    "5020.T",  # ENEOSホールディングス
+    "5021.T",  # コスモエネルギーホールディングス
+    "1605.T",  # INPEX
+    "5016.T",  # 昭和四日市石油
+]
 
 SECTOR_NOTE = """
 ### 石油・石炭製品 ポイント
-- 原油の精製・販売が主軸。WTI・Dubai原油価格に直結。
-- **原油高**: 在庫評価益が発生し短期利益を押し上げる。
-- **脱炭素**: 長期的なリスクとして再エネ移行コストが重い。
-- **設備老朽化**: 製油所の更新投資負担が継続する。
+- **精製マージン**: 原油と石油製品価格の差（クラック・スプレッド）が収益のカギ。
+- **在庫評価損益**: 原油価格変動で四半期ごとに大きな在庫評価損益が発生。
+- **脱炭素化の長期リスク**: EV普及・再エネ拡大でガソリン需要は長期的に減少。
+- **注目指標**: WTI・ドバイ原油先物、精製マージン、ガソリン店頭価格、EV普及率。
 """
 
 
 def run_analysis(sector_code: str, cfg) -> dict:
-    """
-    石油・石炭製品 の分析を実行する。
-    stock_analyzer_main.py の run_sector_analysis() から動的ロードで呼ばれる。
-    """
-    result = {}
-    print(f"  [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
+    print(f"  🛢️ [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
 
-    companies = fetch_financials(TARGET_TICKERS)
-    ok = sum(1 for c in companies if c.get("fetch_ok"))
-    print(f"    財務データ取得: {ok}/{len(TARGET_TICKERS)} 銘柄成功")
-
+    companies     = fetch_financials(TARGET_TICKERS)
     macro_signals = build_macro_signals(SECTOR_CODE, cfg)
+
+    ok = sum(1 for c in companies if c.get("fetch_ok"))
     tw = sum(1 for s in macro_signals if s["signal"] == "tailwind")
     hw = sum(1 for s in macro_signals if s["signal"] == "headwind")
-    print(f"    マクロシグナル: 追い風 {tw}件 / 逆風 {hw}件")
+    print(f"    財務データ: {ok}/{len(TARGET_TICKERS)} 成功 | マクロ: 追い風 {tw} / 逆風 {hw}")
 
     result = build_result(SECTOR_CODE, SECTOR_NAME, companies, macro_signals, cfg)
     result["insight_text"] += "\n" + SECTOR_NOTE

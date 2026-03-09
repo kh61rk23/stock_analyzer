@@ -1,8 +1,13 @@
 # ==============================================================
 # sector_agents/1033_agent.py
-# サービス業 エージェント v1.0  (東証業種コード: 1033)
+# サービス業 エージェント v1.0  （東証業種コード: 1033）
 # ==============================================================
-# 分析対象企業: 2413.T / 6098.T / 4324.T / 2432.T
+# 【分析対象企業】ソフトバンクグループ / LINEヤフー / エムスリー / リクルートホールディングス / 東宝
+# 【マクロ感応度】
+#   個人消費拡大 → 💚 追い風（外食・レジャー・エンタメ需要増）
+#   インバウンド拡大 → 💚 追い風（ホテル・観光・エンタメ需要増）
+#   デジタル化進展 → 💚 追い風（ITサービス・プラットフォーム需要増）
+#   金利上昇   → 🟡 注意  （SBGの有利子負債コスト増）
 # ==============================================================
 
 import sys
@@ -16,36 +21,36 @@ from sector_agents.base_agent import (
     fetch_financials, build_macro_signals, build_result
 )
 
-SECTOR_CODE = "1033"
-SECTOR_NAME = "サービス業"
+SECTOR_CODE  = "1033"
+SECTOR_NAME  = "サービス業"
 
-TARGET_TICKERS = ['2413.T', '6098.T', '4324.T', '2432.T']
+TARGET_TICKERS = [
+    "9984.T",  # ソフトバンクグループ
+    "4689.T",  # LINEヤフー
+    "2413.T",  # エムスリー
+    "6098.T",  # リクルートホールディングス
+    "9602.T",  # 東宝
+]
 
 SECTOR_NOTE = """
 ### サービス業 ポイント
-- 人材・広告・情報サービス・外食・観光等の幅広いサービス業。
-- **労働市場**: 人手不足で人件費上昇が収益圧迫。価格転嫁力が重要。
-- **デジタル化**: ITサービス・DX需要は中長期的に拡大傾向。
-- **インバウンド**: 観光・外食系は訪日客動向に感応。円安が追い風。
+- **SBGの特殊性**: ソフトバンクGはテクノロジー投資会社。NAV（純資産価値）がカギ。
+- **リクルート**: Indeedを持つグローバル求人プラットフォーム。米国雇用市場に連動。
+- **エムスリー**: 医師向けデジタルプラットフォーム。医療DX推進で高成長継続。
+- **注目指標**: 国内消費者信頼感、インバウンド訪日客数、IT投資計画、有効求人倍率。
 """
 
 
 def run_analysis(sector_code: str, cfg) -> dict:
-    """
-    サービス業 の分析を実行する。
-    stock_analyzer_main.py の run_sector_analysis() から動的ロードで呼ばれる。
-    """
-    result = {}
-    print(f"  [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
+    print(f"  🏨 [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
 
-    companies = fetch_financials(TARGET_TICKERS)
-    ok = sum(1 for c in companies if c.get("fetch_ok"))
-    print(f"    財務データ取得: {ok}/{len(TARGET_TICKERS)} 銘柄成功")
-
+    companies     = fetch_financials(TARGET_TICKERS)
     macro_signals = build_macro_signals(SECTOR_CODE, cfg)
+
+    ok = sum(1 for c in companies if c.get("fetch_ok"))
     tw = sum(1 for s in macro_signals if s["signal"] == "tailwind")
     hw = sum(1 for s in macro_signals if s["signal"] == "headwind")
-    print(f"    マクロシグナル: 追い風 {tw}件 / 逆風 {hw}件")
+    print(f"    財務データ: {ok}/{len(TARGET_TICKERS)} 成功 | マクロ: 追い風 {tw} / 逆風 {hw}")
 
     result = build_result(SECTOR_CODE, SECTOR_NAME, companies, macro_signals, cfg)
     result["insight_text"] += "\n" + SECTOR_NOTE

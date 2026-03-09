@@ -1,8 +1,12 @@
 # ==============================================================
 # sector_agents/1004_agent.py
-# 食料品 エージェント v1.0  (東証業種コード: 1004)
+# 食料品 エージェント v1.0  （東証業種コード: 1004）
 # ==============================================================
-# 分析対象企業: 2802.T / 2914.T / 2501.T / 2503.T / 2002.T
+# 【分析対象企業】味の素 / サッポロホールディングス / キリンホールディングス / 日清製粉グループ / 日本たばこ産業
+# 【マクロ感応度】
+#   円安進行  → 🔴 逆風  （輸入原材料コスト上昇）
+#   食料品インフレ → 💚 追い風（価格転嫁が進む局面では増収）
+#   個人消費低迷 → 🟡 注意  （節約志向で内食へシフトも業態次第）
 # ==============================================================
 
 import sys
@@ -16,36 +20,36 @@ from sector_agents.base_agent import (
     fetch_financials, build_macro_signals, build_result
 )
 
-SECTOR_CODE = "1004"
-SECTOR_NAME = "食料品"
+SECTOR_CODE  = "1004"
+SECTOR_NAME  = "食料品"
 
-TARGET_TICKERS = ['2802.T', '2914.T', '2501.T', '2503.T', '2002.T']
+TARGET_TICKERS = [
+    "2802.T",  # 味の素
+    "2501.T",  # サッポロホールディングス
+    "2503.T",  # キリンホールディングス
+    "2002.T",  # 日清製粉グループ
+    "2914.T",  # 日本たばこ産業
+]
 
 SECTOR_NOTE = """
 ### 食料品 ポイント
-- 内需型。円安は原料・輸入コスト増が主なマクロリスク。
-- **価格転嫁力**: 値上げが消費者に受け入れられるかが鍵。
-- **原材料**: 小麦・大豆・砂糖・油脂の国際価格に感応。
-- **人口動態**: 国内消費者減少で長期的な市場縮小リスク。
+- **価格転嫁力**: 原材料高をどれだけ値上げで吸収できるかがカギ。ブランド力が重要。
+- **円安の直撃**: 小麦・大豆・砂糖・食用油のほぼ全てを輸入に依存。
+- **海外展開**: 味の素・日清は海外比率が高く、円安でも収益が増える二面性あり。
+- **注目指標**: 小麦・大豆・とうもろこし先物価格、国内CPI食料品、家計消費支出。
 """
 
 
 def run_analysis(sector_code: str, cfg) -> dict:
-    """
-    食料品 の分析を実行する。
-    stock_analyzer_main.py の run_sector_analysis() から動的ロードで呼ばれる。
-    """
-    result = {}
-    print(f"  [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
+    print(f"  🍱 [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
 
-    companies = fetch_financials(TARGET_TICKERS)
-    ok = sum(1 for c in companies if c.get("fetch_ok"))
-    print(f"    財務データ取得: {ok}/{len(TARGET_TICKERS)} 銘柄成功")
-
+    companies     = fetch_financials(TARGET_TICKERS)
     macro_signals = build_macro_signals(SECTOR_CODE, cfg)
+
+    ok = sum(1 for c in companies if c.get("fetch_ok"))
     tw = sum(1 for s in macro_signals if s["signal"] == "tailwind")
     hw = sum(1 for s in macro_signals if s["signal"] == "headwind")
-    print(f"    マクロシグナル: 追い風 {tw}件 / 逆風 {hw}件")
+    print(f"    財務データ: {ok}/{len(TARGET_TICKERS)} 成功 | マクロ: 追い風 {tw} / 逆風 {hw}")
 
     result = build_result(SECTOR_CODE, SECTOR_NAME, companies, macro_signals, cfg)
     result["insight_text"] += "\n" + SECTOR_NOTE

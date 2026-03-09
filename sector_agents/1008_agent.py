@@ -1,8 +1,12 @@
 # ==============================================================
 # sector_agents/1008_agent.py
-# 医薬品 エージェント v1.0  (東証業種コード: 1008)
+# 医薬品 エージェント v1.0  （東証業種コード: 1008）
 # ==============================================================
-# 分析対象企業: 4519.T / 4523.T / 4568.T / 4506.T / 4507.T
+# 【分析対象企業】中外製薬 / 第一三共 / エーザイ / 塩野義製薬 / 鳥居薬品
+# 【マクロ感応度】
+#   円安進行  → 💚 追い風（海外収益の円換算増・輸出競争力向上）
+#   薬価改定  → 🔴 逆風  （国内薬価引き下げが収益圧迫）
+#   高齢化進展 → 💚 追い風（医薬品需要の長期的拡大）
 # ==============================================================
 
 import sys
@@ -16,36 +20,36 @@ from sector_agents.base_agent import (
     fetch_financials, build_macro_signals, build_result
 )
 
-SECTOR_CODE = "1008"
-SECTOR_NAME = "医薬品"
+SECTOR_CODE  = "1008"
+SECTOR_NAME  = "医薬品"
 
-TARGET_TICKERS = ['4519.T', '4523.T', '4568.T', '4506.T', '4507.T']
+TARGET_TICKERS = [
+    "4519.T",  # 中外製薬
+    "4568.T",  # 第一三共
+    "4523.T",  # エーザイ
+    "4507.T",  # 塩野義製薬
+    "4151.T",  # 鳥居薬品
+]
 
 SECTOR_NOTE = """
 ### 医薬品 ポイント
-- 内需・輸出双方。薬価改定と新薬パイプラインが業績の核。
-- **薬価改定**: 政府の薬価引き下げ政策が定期的な逆風となる。
-- **新薬承認**: FDA・PMDAの承認可否がイベントドリブンで動く。
-- **高齢化**: 国内市場は長期的に拡大。グローバル展開力が差別化要因。
+- **グローバル展開**: 中外製薬（ロシュグループ）・第一三共（欧米で抗体薬物複合体）が高成長。
+- **薬価リスク**: 日本は2年ごとの薬価改定で既収載品の価格が継続的に下がる。
+- **新薬パイプライン**: 後期臨床試験（フェーズ3）の結果が株価を大きく動かす。
+- **注目指標**: 薬価改定率、臨床試験フェーズ移行、海外売上高比率、R&D費用比率。
 """
 
 
 def run_analysis(sector_code: str, cfg) -> dict:
-    """
-    医薬品 の分析を実行する。
-    stock_analyzer_main.py の run_sector_analysis() から動的ロードで呼ばれる。
-    """
-    result = {}
-    print(f"  [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
+    print(f"  💊 [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
 
-    companies = fetch_financials(TARGET_TICKERS)
-    ok = sum(1 for c in companies if c.get("fetch_ok"))
-    print(f"    財務データ取得: {ok}/{len(TARGET_TICKERS)} 銘柄成功")
-
+    companies     = fetch_financials(TARGET_TICKERS)
     macro_signals = build_macro_signals(SECTOR_CODE, cfg)
+
+    ok = sum(1 for c in companies if c.get("fetch_ok"))
     tw = sum(1 for s in macro_signals if s["signal"] == "tailwind")
     hw = sum(1 for s in macro_signals if s["signal"] == "headwind")
-    print(f"    マクロシグナル: 追い風 {tw}件 / 逆風 {hw}件")
+    print(f"    財務データ: {ok}/{len(TARGET_TICKERS)} 成功 | マクロ: 追い風 {tw} / 逆風 {hw}")
 
     result = build_result(SECTOR_CODE, SECTOR_NAME, companies, macro_signals, cfg)
     result["insight_text"] += "\n" + SECTOR_NOTE

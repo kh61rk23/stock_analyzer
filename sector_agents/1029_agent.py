@@ -1,8 +1,12 @@
 # ==============================================================
 # sector_agents/1029_agent.py
-# 証券・商品先物取引業 エージェント v1.0  (東証業種コード: 1029)
+# 証券・商品先物取引業 エージェント v1.0  （東証業種コード: 1029）
 # ==============================================================
-# 分析対象企業: 8601.T / 8604.T / 8697.T
+# 【分析対象企業】大和証券グループ本社 / 野村ホールディングス / 松井証券 / マネックスグループ / JAFCO
+# 【マクロ感応度】
+#   株式相場好調  → 💚 追い風（売買代金増・投信販売増・IPO活発化）
+#   金利上昇    → 💚 追い風（債券ビジネス活性化）
+#   株式相場低迷  → 🔴 逆風  （売買代金減・運用残高減・手数料収入減）
 # ==============================================================
 
 import sys
@@ -16,36 +20,36 @@ from sector_agents.base_agent import (
     fetch_financials, build_macro_signals, build_result
 )
 
-SECTOR_CODE = "1029"
-SECTOR_NAME = "証券・商品先物取引業"
+SECTOR_CODE  = "1029"
+SECTOR_NAME  = "証券・商品先物取引業"
 
-TARGET_TICKERS = ['8601.T', '8604.T', '8697.T']
+TARGET_TICKERS = [
+    "8601.T",  # 大和証券グループ本社
+    "8604.T",  # 野村ホールディングス
+    "8628.T",  # 松井証券
+    "8698.T",  # マネックスグループ
+    "8595.T",  # JAFCO
+]
 
 SECTOR_NOTE = """
 ### 証券・商品先物取引業 ポイント
-- 株式・債券の売買仲介・自己売買。市場ボラティリティに敏感。
-- **株式市場**: 売買代金増加時に手数料収入が増加。
-- **金利上昇**: 債券価格下落で自己保有債券の評価損リスク。
-- **VIX**: 上昇時はトレーディング収益増も、信用収縮リスク。
+- **売買代金との連動**: 東証の1日平均売買代金が業績の最重要指標。3兆円超が好況の目安。
+- **オンライン証券の台頭**: 松井・マネックスはコスト競争力で業績堅調。
+- **新NISA効果**: 投資信託残高が急増中。手数料収入の安定化に期待。
+- **注目指標**: 東証売買代金（日次）、日経平均水準、新規口座開設数、投信設定・解約額。
 """
 
 
 def run_analysis(sector_code: str, cfg) -> dict:
-    """
-    証券・商品先物取引業 の分析を実行する。
-    stock_analyzer_main.py の run_sector_analysis() から動的ロードで呼ばれる。
-    """
-    result = {}
-    print(f"  [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
+    print(f"  📊 [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
 
-    companies = fetch_financials(TARGET_TICKERS)
-    ok = sum(1 for c in companies if c.get("fetch_ok"))
-    print(f"    財務データ取得: {ok}/{len(TARGET_TICKERS)} 銘柄成功")
-
+    companies     = fetch_financials(TARGET_TICKERS)
     macro_signals = build_macro_signals(SECTOR_CODE, cfg)
+
+    ok = sum(1 for c in companies if c.get("fetch_ok"))
     tw = sum(1 for s in macro_signals if s["signal"] == "tailwind")
     hw = sum(1 for s in macro_signals if s["signal"] == "headwind")
-    print(f"    マクロシグナル: 追い風 {tw}件 / 逆風 {hw}件")
+    print(f"    財務データ: {ok}/{len(TARGET_TICKERS)} 成功 | マクロ: 追い風 {tw} / 逆風 {hw}")
 
     result = build_result(SECTOR_CODE, SECTOR_NAME, companies, macro_signals, cfg)
     result["insight_text"] += "\n" + SECTOR_NOTE

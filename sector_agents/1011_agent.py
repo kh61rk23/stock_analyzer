@@ -1,8 +1,12 @@
 # ==============================================================
 # sector_agents/1011_agent.py
-# ガラス・土石製品 エージェント v1.0  (東証業種コード: 1011)
+# ガラス・土石製品 エージェント v1.0  （東証業種コード: 1011）
 # ==============================================================
-# 分析対象企業: 5332.T / 5333.T / 5201.T / 5214.T
+# 【分析対象企業】AGC / TOTO / 東海カーボン / 太平洋セメント / 日本板硝子
+# 【マクロ感応度】
+#   建設需要増  → 💚 追い風（窓ガラス・セメント需要増）
+#   エネルギー高 → 🔴 逆風  （窯業は大量のエネルギーを使用）
+#   中国景気減速 → 🔴 逆風  （セメント・ガラスの需要・価格下落）
 # ==============================================================
 
 import sys
@@ -16,36 +20,36 @@ from sector_agents.base_agent import (
     fetch_financials, build_macro_signals, build_result
 )
 
-SECTOR_CODE = "1011"
-SECTOR_NAME = "ガラス・土石製品"
+SECTOR_CODE  = "1011"
+SECTOR_NAME  = "ガラス・土石製品"
 
-TARGET_TICKERS = ['5332.T', '5333.T', '5201.T', '5214.T']
+TARGET_TICKERS = [
+    "5201.T",  # AGC
+    "5332.T",  # TOTO
+    "5301.T",  # 東海カーボン
+    "5233.T",  # 太平洋セメント
+    "5202.T",  # 日本板硝子
+]
 
 SECTOR_NOTE = """
 ### ガラス・土石製品 ポイント
-- ガラス・セメント・セラミクス。建設・自動車向けが主需要。
-- **建設需要**: 住宅・インフラ投資に連動。金利上昇は逆風。
-- **エネルギーコスト**: 焼成・溶融工程でエネルギー多消費型。
-- **高機能ガラス**: 車載用・OLED用ガラスは高成長領域。
+- **建設連動**: セメント・ガラスは建設着工統計に業績が強く連動する。
+- **車載ガラス**: AGCは自動車用ガラス・電子材料も展開。EV・ADAS需要が追い風。
+- **中国依存リスク**: 中国の不動産不況がセメント・ガラス需要を直撃している。
+- **注目指標**: セメント出荷量、建設着工統計、中国不動産投資額、エネルギー価格。
 """
 
 
 def run_analysis(sector_code: str, cfg) -> dict:
-    """
-    ガラス・土石製品 の分析を実行する。
-    stock_analyzer_main.py の run_sector_analysis() から動的ロードで呼ばれる。
-    """
-    result = {}
-    print(f"  [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
+    print(f"  🪟 [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
 
-    companies = fetch_financials(TARGET_TICKERS)
-    ok = sum(1 for c in companies if c.get("fetch_ok"))
-    print(f"    財務データ取得: {ok}/{len(TARGET_TICKERS)} 銘柄成功")
-
+    companies     = fetch_financials(TARGET_TICKERS)
     macro_signals = build_macro_signals(SECTOR_CODE, cfg)
+
+    ok = sum(1 for c in companies if c.get("fetch_ok"))
     tw = sum(1 for s in macro_signals if s["signal"] == "tailwind")
     hw = sum(1 for s in macro_signals if s["signal"] == "headwind")
-    print(f"    マクロシグナル: 追い風 {tw}件 / 逆風 {hw}件")
+    print(f"    財務データ: {ok}/{len(TARGET_TICKERS)} 成功 | マクロ: 追い風 {tw} / 逆風 {hw}")
 
     result = build_result(SECTOR_CODE, SECTOR_NAME, companies, macro_signals, cfg)
     result["insight_text"] += "\n" + SECTOR_NOTE
