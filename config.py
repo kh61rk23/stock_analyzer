@@ -508,7 +508,7 @@ GOV_VEGPRICE_API = "https://api.cultivationdata.net/yasai_kakaku?div=all&type=cs
 # ★ 空文字のままにしておくと EDINET 取得をスキップして
 #   他の分析には影響を与えない（エラーにならない）
 
-EDINET_API_KEY: str = ""  # ここは金融庁のEDINETなのでもう使わない
+EDINET_API_KEY: str = "REDACTED_EDINET_API_KEY"  # ここは金融庁のEDINETになる
 EDINETDB_API_KEY: str = "REDACTED_EDINETDB" # ここは民間のEDINETDBなので使う
 ESTAT_API_KEY: str = "REDACTED_ESTAT_API_KEY"
 
