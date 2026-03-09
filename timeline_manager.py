@@ -179,8 +179,8 @@ def run_long_term_analysis(cfg) -> dict:
             elif d["cross"] == "dead":
                 cross_flags.append(f"{tkr}: 💀 デッドクロス（MA下抜け）")
                 has_dc = True
-        if has_gc: golden_cross.append(code)
-        if has_dc: dead_cross.append(code)
+        if has_gc: golden_cross.append({"sector_code": code, "sector_name": name})
+        if has_dc: dead_cross.append({"sector_code": code, "sector_name": name})
 
         sector_trends.append({
             "sector_code":    code,
