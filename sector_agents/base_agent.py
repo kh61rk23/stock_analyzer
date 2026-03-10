@@ -251,6 +251,15 @@ def calc_composite_score(companies: list, macro_signals: list) -> tuple:
             fin_score += 10 if avg_roa >= 0.05 else (5 if avg_roa >= 0.02 else 0)
         if avg_opm is not None:
             fin_score += 15 if avg_opm >= 0.10 else (8 if avg_opm >= 0.05 else 0)
+        # アクルーアルスコア（利益の質）
+        # viewerからデータが取れている場合のみ評価
+        ok_accrual = [c.get("accrual_ratio") for c in ok_companies
+                      if c.get("accrual_ratio") is not None]
+        if ok_accrual:
+            avg_accrual = sum(ok_accrual) / len(ok_accrual)
+            if avg_accrual < -0.02:    fin_score += 8   # 超優良
+            elif avg_accrual < 0.02:   fin_score += 4   # 良好
+            elif avg_accrual > 0.05:   fin_score -= 8   # 利益水増し疑い
 
         # アナリスト推奨（平均）
         avg_rec    = _safe_avg([c.get("rec_mean") for c in ok_companies])
@@ -313,7 +322,9 @@ def build_insight_text(
         if not c.get("fetch_ok"):
             lines.append(f"| {c['ticker']} | — | — | — | — | — | — | — | — |")
             continue
-        upside_str = fmt_pct(c.get("analyst_upside")) if c.get("analyst_upside") is not None else "N/A"
+        acr = c.get("accrual_ratio")
+        acr_str = f"{acr*100:+.1f}%" if acr is not None else "N/A"
+        acr_icon = "⚠️" if acr and acr > 0.05 else ("✅" if acr and acr < -0.02 else "")
         rec_str = c.get("rec_key", "N/A")
         lines.append(
             f"| {c['name'][:14]} "
