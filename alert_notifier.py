@@ -357,6 +357,35 @@ def extract_alerts(cfg, results: dict) -> list:
                 "severity": "medium",
             })
 
+    # ── ⑩ 週次レポートサマリー（月曜のみ）────────────────────
+    weekly = results.get("weekly_report", {})
+    if weekly and not weekly.get("skipped") and isinstance(weekly, dict):
+        summary = weekly.get("summary", {})
+        top3    = summary.get("top3_sectors", [])
+        bot3    = summary.get("bottom3_sectors", [])
+        picks   = summary.get("top_picks", [])
+        n_pass  = summary.get("screener_pass", 0)
+        lines   = []
+        if top3:
+            lines.append(f"  📈 注目業種: {' ＞ '.join(top3)}")
+        if bot3:
+            lines.append(f"  📉 警戒業種: {' / '.join(bot3)}")
+        if picks:
+            lines.append(f"  🔍 スクリーニング通過 {n_pass}社 | 上位: {' / '.join(picks)}")
+        # レポート本文の先頭300字を添付
+        report_head = (weekly.get("report_md", "")[:300]
+                       .replace("# ", "").replace("## ", "").replace("**", ""))
+        if report_head:
+            lines.append("")
+            lines.append(report_head.strip())
+        if lines:
+            alerts.append({
+                "trigger":  "weekly_report",
+                "title":    "📊 週次投資判断レポート",
+                "body":     "\n".join(lines),
+                "severity": "info",
+            })
+    
     return alerts
 
 
