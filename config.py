@@ -524,6 +524,52 @@ EDINET_MAX_COMPANIES = 2
 # EDINET キャッシュ有効期間（日）: この日数以内に取得済みなら再取得しない
 EDINET_CACHE_DAYS = 100
 
+# ==============================================================
+# BLOCK 17: 米国株スクリーニング設定
+# ==============================================================
+ENABLE_US_SCREENER: bool        = True
+US_SCREENER_MAX_WORKERS: int    = 5
+US_SCREENER_MAX_TICKERS: int    = 5500
+US_CUSTOM_UNIVERSE_DIR: str     = "data/custom_universe"
+US_SCREENER_CATEGORIES: list    = [
+    "sp500", "nasdaq_growth", "saas_cloud", "ai_semicon",
+    "biotech", "adr", "fintech", "healthcare_svc", "reit",
+    "clean_energy", "defense_cyber", "consumer_dtc",
+    "infrastructure", "materials_agtech", "media_entertainment",
+    "quantum", "lithium", "uranium", "water", "genomics",
+    "robotics", "metaverse", "blockchain", "longevity",
+    "supply_chain",
+]
+US_SCREENER_TOP_N: int          = 10
+
+# ==============================================================
+# BLOCK 18: stock_viewer Googleスプレッドシート連携
+# ==============================================================
+VIEWER_SPREADSHEET_ID: str      = ""   # ← 設定済みなら値を入れる
+VIEWER_SERVICE_ACCOUNT_PATH: str = "service_account.json"
+VIEWER_WATCHLIST_SHEET: str     = "watchlist"
+
+# ==============================================================
+# BLOCK 19: EdinetDB ローテーション設定
+# ==============================================================
+ENABLE_EDINET_ROTATION: bool    = True
+EDINET_ROTATION_PER_DAY: int    = 33
+EDINET_ROTATION_CACHE_DAYS: int = 30
+EDINET_DAILY_BUDGET: int        = 80
+EDINET_RETRY_BUDGET: int        = 5
+EDINET_WATCHLIST_TICKERS: list  = []
+EDINET_SCREENER_CANDIDATES: list = []
+
+# ==============================================================
+# BLOCK 20: Step E代替・Step F 設定
+# ==============================================================
+ENABLE_BIZ_SUMMARY: bool        = True
+DEEPL_API_KEY: str              = "REDACTED_DEEPL_API_KEY"   # ← GitHub Secretsから注入
+BIZ_SUMMARY_MAX_COMPANIES: int  = 2
+BIZ_SUMMARY_CACHE_DAYS: int     = 90
+
+ENABLE_WEEKLY_REPORT: bool      = True
+
 # ── EdinetDB ローテーション設定（BLOCK 19）────────────────────
 ENABLE_EDINET_ROTATION: bool   = True
 EDINET_ROTATION_PER_DAY: int   = 33   # 1日あたりのローテーション取得社数
