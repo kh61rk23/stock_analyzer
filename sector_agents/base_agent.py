@@ -1,25 +1,13 @@
 # ==============================================================
-# sector_agents/base_agent.py
-# 全業種エージェント 共通ロジック v1.1
+# sector_agents/base_agent.py  v2.0
 # ==============================================================
-# 【v1.1 変更点（2-B）】
-#   - build_result() に EDINET リスク取得を統合
-#   - fetch_edinet_risks() を追加（edinet_client の呼び出しラッパー）
-#   - build_insight_text() にリスクセクションを追加
-#   ※ 各エージェント（1028_agent.py 等）は変更不要
-# ==============================================================
-# ==============================================================
-# 【役割】
-#   各業種エージェント（1028_agent.py 等）が共通で使う
-#   財務データ取得・スコア計算・結果フォーマット処理をまとめる。
-#
-# 【依存】
-#   config.py のみ（stock_analyzer_main.py は import しない）
-#
-# 【各エージェントからの使い方】
-#   from sector_agents.base_agent import (
-#       fetch_financials, build_macro_signals, build_result
-#   )
+# 【v1.1 → v2.0 変更点】
+#   ① fetch_financials(): yfinance 全取得可能フィールドを追加（40+項目）
+#      追加: 配当・アナリスト目標株価・FCF・D/Eレシオ・機関保有率・ベータ等
+#   ② build_result(): edinet_client v3.0 の get_sector_data() に対応
+#      analysis + financials + gov_meta を一括取得
+#   ③ calc_composite_score(): アナリスト推奨スコアを加算（最大+5点）
+#   ④ build_insight_text(): 財務トレンド・配当・アナリスト情報セクション追加
 # ==============================================================
 
 import re
@@ -28,29 +16,35 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+
 # ==============================================================
-# BLOCK 1: yfinance 財務データ取得
+# BLOCK 1: yfinance 財務データ取得（v2.0 全フィールド）
 # ==============================================================
 
 def fetch_financials(tickers: list, max_retries: int = 2) -> list:
     """
-    yfinance で複数銘柄の財務指標を取得する。
+    yfinance で複数銘柄の財務指標を全フィールド取得する。
 
-    取得する指標:
-      - shortName       : 銘柄名
-      - marketCap       : 時価総額
-      - trailingPE      : 株価収益率（PER）
-      - priceToBook     : 株価純資産倍率（PBR）
-      - returnOnEquity  : 自己資本利益率（ROE）
-      - returnOnAssets  : 総資産利益率（ROA）
-      - operatingMargins: 営業利益率
-      - revenueGrowth   : 売上成長率
-      - currentPrice    : 現在株価
-      - 52WeekChange    : 52週騰落率
-
-    Returns:
-        list of dict: 取得できた銘柄ごとの指標辞書
-                      取得失敗の銘柄はスキップ（全体が止まらない設計）
+    取得フィールド一覧:
+      【基本株価】 currentPrice, previousClose, dayHigh, dayLow
+                  fiftyDayAverage, twoHundredDayAverage
+                  fiftyTwoWeekHigh, fiftyTwoWeekLow
+                  volume, averageVolume, marketCap
+      【バリュエーション】 trailingPE, forwardPE, priceToBook (PBR)
+                  priceToSalesTrailing12Months (PSR)
+                  enterpriseValue, enterpriseToRevenue, enterpriseToEbitda
+                  trailingEps, forwardEps, bookValue
+      【利益率】   grossMargins, operatingMargins, ebitdaMargins, profitMargins
+      【成長率】   revenueGrowth, earningsGrowth, earningsQuarterlyGrowth
+      【収益性】   returnOnEquity (ROE), returnOnAssets (ROA)
+      【CF・財務】 freeCashflow, operatingCashflow, totalCash, totalDebt
+                  totalRevenue, currentRatio, quickRatio, debtToEquity
+      【配当】     dividendYield, dividendRate, payoutRatio
+                  fiveYearAvgDividendYield, exDividendDate, lastDividendDate
+      【アナリスト】targetMeanPrice, targetHighPrice, targetLowPrice
+                  recommendationMean, recommendationKey, numberOfAnalystOpinions
+      【その他】   beta, 52WeekChange, heldPercentInstitutions,
+                  heldPercentInsiders, shortRatio, fullTimeEmployees
     """
     try:
         import yfinance as yf
@@ -65,37 +59,118 @@ def fetch_financials(tickers: list, max_retries: int = 2) -> list:
             try:
                 info = yf.Ticker(ticker).info or {}
 
-                # ── 各指標を安全に取得（None の場合は None のまま） ──
-                def _get(key: str) -> Optional[float]:
+                def _f(key: str) -> Optional[float]:
                     v = info.get(key)
                     try:
                         return float(v) if v is not None else None
                     except (TypeError, ValueError):
                         return None
 
+                def _i(key: str) -> Optional[int]:
+                    v = info.get(key)
+                    try:
+                        return int(v) if v is not None else None
+                    except (TypeError, ValueError):
+                        return None
+
+                # アナリスト推奨（1.0=強気買い〜5.0=強気売り）
+                rec_mean = _f("recommendationMean")
+                rec_key  = info.get("recommendationKey", "")
+
+                # 目標株価乖離率（targetMeanPrice / currentPrice - 1）
+                cur_price    = _f("regularMarketPrice") or _f("currentPrice")
+                target_mean  = _f("targetMeanPrice")
+                upside = None
+                if cur_price and target_mean and cur_price > 0:
+                    upside = (target_mean / cur_price) - 1.0  # 正 = 上昇余地
+
                 results.append({
-                    "ticker":          ticker,
-                    "name":            info.get("shortName") or info.get("longName") or ticker,
-                    "market_cap":      _get("marketCap"),
-                    "per":             _get("trailingPE"),
-                    "pbr":             _get("priceToBook"),
-                    "roe":             _get("returnOnEquity"),       # 小数表記（0.12 = 12%）
-                    "roa":             _get("returnOnAssets"),       # 同上
-                    "op_margin":       _get("operatingMargins"),     # 同上
-                    "revenue_growth":  _get("revenueGrowth"),        # 同上
-                    "current_price":   _get("regularMarketPrice") or _get("currentPrice"),
-                    "week52_change":   _get("52WeekChange"),         # 同上
-                    "fetch_ok":        True,
+                    # ── 識別 ──────────────────────────────────────
+                    "ticker":        ticker,
+                    "name":          info.get("shortName") or info.get("longName") or ticker,
+                    "fetch_ok":      True,
+
+                    # ── 基本株価 ──────────────────────────────────
+                    "current_price":       cur_price,
+                    "prev_close":          _f("previousClose"),
+                    "day_high":            _f("dayHigh"),
+                    "day_low":             _f("dayLow"),
+                    "ma50":                _f("fiftyDayAverage"),
+                    "ma200":               _f("twoHundredDayAverage"),
+                    "week52_high":         _f("fiftyTwoWeekHigh"),
+                    "week52_low":          _f("fiftyTwoWeekLow"),
+                    "volume":              _i("volume"),
+                    "avg_volume":          _i("averageVolume"),
+                    "market_cap":          _f("marketCap"),
+                    "week52_change":       _f("52WeekChange"),
+
+                    # ── バリュエーション ───────────────────────────
+                    "per":                 _f("trailingPE"),
+                    "forward_per":         _f("forwardPE"),
+                    "pbr":                 _f("priceToBook"),
+                    "psr":                 _f("priceToSalesTrailing12Months"),
+                    "ev":                  _f("enterpriseValue"),
+                    "ev_revenue":          _f("enterpriseToRevenue"),
+                    "ev_ebitda":           _f("enterpriseToEbitda"),
+                    "eps_trailing":        _f("trailingEps"),
+                    "eps_forward":         _f("forwardEps"),
+                    "book_value":          _f("bookValue"),
+
+                    # ── 利益率 ────────────────────────────────────
+                    "gross_margin":        _f("grossMargins"),
+                    "op_margin":           _f("operatingMargins"),
+                    "ebitda_margin":       _f("ebitdaMargins"),
+                    "net_margin":          _f("profitMargins"),
+
+                    # ── 成長率 ────────────────────────────────────
+                    "revenue_growth":      _f("revenueGrowth"),
+                    "earnings_growth":     _f("earningsGrowth"),
+                    "earnings_qgrowth":    _f("earningsQuarterlyGrowth"),
+
+                    # ── 収益性 ────────────────────────────────────
+                    "roe":                 _f("returnOnEquity"),
+                    "roa":                 _f("returnOnAssets"),
+
+                    # ── CF・財務健全性 ─────────────────────────────
+                    "free_cashflow":       _f("freeCashflow"),
+                    "operating_cashflow":  _f("operatingCashflow"),
+                    "total_cash":          _f("totalCash"),
+                    "total_debt":          _f("totalDebt"),
+                    "total_revenue":       _f("totalRevenue"),
+                    "current_ratio":       _f("currentRatio"),
+                    "quick_ratio":         _f("quickRatio"),
+                    "debt_to_equity":      _f("debtToEquity"),
+
+                    # ── 配当 ──────────────────────────────────────
+                    "dividend_yield":      _f("dividendYield"),
+                    "dividend_rate":       _f("dividendRate"),
+                    "payout_ratio":        _f("payoutRatio"),
+                    "div_yield_5y_avg":    _f("fiveYearAvgDividendYield"),
+                    "ex_dividend_date":    info.get("exDividendDate"),
+                    "last_dividend_date":  info.get("lastDividendDate"),
+
+                    # ── アナリスト ────────────────────────────────
+                    "target_mean":         target_mean,
+                    "target_high":         _f("targetHighPrice"),
+                    "target_low":          _f("targetLowPrice"),
+                    "analyst_upside":      upside,
+                    "rec_mean":            rec_mean,
+                    "rec_key":             rec_key,
+                    "analyst_count":       _i("numberOfAnalystOpinions"),
+
+                    # ── その他 ────────────────────────────────────
+                    "beta":                _f("beta"),
+                    "inst_ownership":      _f("heldPercentInstitutions"),
+                    "insider_ownership":   _f("heldPercentInsiders"),
+                    "short_ratio":         _f("shortRatio"),
+                    "employees":           _i("fullTimeEmployees"),
                 })
-                break  # 成功したらリトライ不要
+                break
 
             except Exception as e:
                 if attempt == max_retries:
                     print(f"    ⚠️  {ticker} 取得失敗: {str(e)[:60]}")
-                    results.append({
-                        "ticker": ticker, "name": ticker,
-                        "fetch_ok": False,
-                    })
+                    results.append({"ticker": ticker, "name": ticker, "fetch_ok": False})
                 else:
                     time.sleep(2)
 
@@ -103,52 +178,37 @@ def fetch_financials(tickers: list, max_retries: int = 2) -> list:
 
 
 # ==============================================================
-# BLOCK 2: 財務指標のフォーマット表示文字列
+# BLOCK 2: 数値フォーマット
 # ==============================================================
 
 def fmt_pct(v: Optional[float], digits: int = 1) -> str:
-    """小数（0.12）を「12.0%」形式の文字列に変換。None は 'N/A'"""
-    if v is None:
-        return "N/A"
+    if v is None: return "N/A"
     return f"{v * 100:.{digits}f}%"
 
 def fmt_val(v: Optional[float], digits: int = 2) -> str:
-    """数値を文字列に変換。None は 'N/A'"""
-    if v is None:
-        return "N/A"
+    if v is None: return "N/A"
     return f"{v:.{digits}f}"
 
 def fmt_cap(v: Optional[float]) -> str:
-    """時価総額を「〇兆〇千億円」形式に変換（円）"""
-    if v is None:
-        return "N/A"
-    # yfinance は円建て銘柄でも円で返す
-    if v >= 1e12:
-        return f"{v/1e12:.1f}兆円"
-    if v >= 1e8:
-        return f"{v/1e8:.0f}億円"
+    if v is None: return "N/A"
+    if v >= 1e12: return f"{v/1e12:.1f}兆円"
+    if v >= 1e8:  return f"{v/1e8:.0f}億円"
     return f"{v:.0f}円"
+
+def fmt_yen(v: Optional[float]) -> str:
+    if v is None: return "N/A"
+    return f"¥{v:,.0f}"
+
+def _safe_avg(values: list) -> Optional[float]:
+    v = [x for x in values if x is not None]
+    return sum(v) / len(v) if v else None
 
 
 # ==============================================================
-# BLOCK 3: マクロシグナル評価（config.MACRO_RULES 参照）
+# BLOCK 3: マクロシグナル評価
 # ==============================================================
 
 def build_macro_signals(sector_code: str, cfg) -> list:
-    """
-    config.MACRO_RULES を参照して、指定業種に関係する
-    マクロシグナルのリストを返す。
-
-    Returns:
-        list of dict: [
-          {
-            "factor":  "interest_rate_rise",
-            "label":   "金利上昇",
-            "signal":  "tailwind",         # tailwind / headwind / watch
-            "rationale": "預貸金利ザヤ拡大...",
-          }
-        ]
-    """
     signals = []
     for factor, rule in cfg.MACRO_RULES.items():
         for sig_type, codes in rule.get("signal", {}).items():
@@ -163,37 +223,22 @@ def build_macro_signals(sector_code: str, cfg) -> list:
 
 
 # ==============================================================
-# BLOCK 4: 総合スコア計算
+# BLOCK 4: 総合スコア計算（v2.0 アナリスト推奨加算）
 # ==============================================================
 
-def calc_composite_score(
-    companies:     list,
-    macro_signals: list,
-) -> tuple:
+def calc_composite_score(companies: list, macro_signals: list) -> tuple:
     """
-    財務指標 × マクロシグナルから業種の総合スコアと
-    リスクレベル（high / medium / low）を算出する。
+    財務スコア(40) + マクロスコア(30) + アナリストスコア(5) の合計。
 
-    スコアリング基準:
-      財務スコア（最大 40 点）:
-        ROE ≥ 10% : +15点
-        ROE ≥  5% : + 8点
-        ROA ≥  5% : +10点
-        ROA ≥  2% : + 5点
-        営業利益率 ≥ 10% : +15点
-        営業利益率 ≥  5% : + 8点
-      マクロスコア（最大 30 点）:
-        tailwind 1件 : +10点
-        watch    1件 : + 0点
-        headwind 1件 : -10点
-
-    Returns:
-        (score: float, risk_level: str)
+    アナリストスコア:
+      recommendationMean ≤ 2.0 (Buy相当): +5点
+      recommendationMean ≤ 2.5 (Outperform相当): +3点
+      analyst_upside ≥ 20%: +2点追加
     """
-    fin_score   = 0.0
-    macro_score = 0.0
+    fin_score     = 0.0
+    macro_score   = 0.0
+    analyst_score = 0.0
 
-    # 財務スコア：取得できた銘柄の平均値で評価
     ok_companies = [c for c in companies if c.get("fetch_ok")]
     if ok_companies:
         avg_roe = _safe_avg([c.get("roe") for c in ok_companies])
@@ -207,35 +252,30 @@ def calc_composite_score(
         if avg_opm is not None:
             fin_score += 15 if avg_opm >= 0.10 else (8 if avg_opm >= 0.05 else 0)
 
-    # マクロスコア
+        # アナリスト推奨（平均）
+        avg_rec    = _safe_avg([c.get("rec_mean") for c in ok_companies])
+        avg_upside = _safe_avg([c.get("analyst_upside") for c in ok_companies])
+        if avg_rec is not None:
+            analyst_score += 5 if avg_rec <= 2.0 else (3 if avg_rec <= 2.5 else 0)
+        if avg_upside is not None and avg_upside >= 0.20:
+            analyst_score += 2
+
     for s in macro_signals:
-        if s["signal"] == "tailwind":
-            macro_score += 10
-        elif s["signal"] == "headwind":
-            macro_score -= 10
+        if s["signal"] == "tailwind":   macro_score += 10
+        elif s["signal"] == "headwind": macro_score -= 10
 
-    total_score = fin_score + macro_score
+    total = fin_score + macro_score + analyst_score
 
-    # リスクレベル判定
     headwinds = sum(1 for s in macro_signals if s["signal"] == "headwind")
-    if headwinds >= 2 or total_score < 10:
-        risk_level = "high"
-    elif headwinds == 1 or total_score < 25:
-        risk_level = "medium"
-    else:
-        risk_level = "low"
+    if headwinds >= 2 or total < 10:    risk_level = "high"
+    elif headwinds == 1 or total < 25:  risk_level = "medium"
+    else:                               risk_level = "low"
 
-    return round(total_score, 1), risk_level
-
-
-def _safe_avg(values: list) -> Optional[float]:
-    """None を除いた平均値を返す。全て None なら None を返す"""
-    v = [x for x in values if x is not None]
-    return sum(v) / len(v) if v else None
+    return round(total, 1), risk_level
 
 
 # ==============================================================
-# BLOCK 5: インサイトテキスト生成
+# BLOCK 5: インサイトテキスト生成（v2.0 全フィールド対応）
 # ==============================================================
 
 def build_insight_text(
@@ -244,14 +284,10 @@ def build_insight_text(
     macro_signals: list,
     score:       float,
     risk_level:  str,
-    edinet_risks: Optional[dict] = None,   # 2-B 追加: {ticker: [リスク要因リスト]}
+    edinet_data: Optional[dict] = None,  # {ticker: full_company_data}
 ) -> str:
-    """
-    分析結果を Markdown 形式のインサイトテキストとして生成する。
-    edinet_risks が指定されていれば「有報リスク」セクションも追記する。
-    """
-    today     = datetime.now().strftime("%Y-%m-%d")
-    icon_map  = {"tailwind": "💚 追い風", "headwind": "🔴 逆風", "watch": "🟡 注意"}
+    today    = datetime.now().strftime("%Y-%m-%d")
+    icon_map = {"tailwind": "💚 追い風", "headwind": "🔴 逆風", "watch": "🟡 注意"}
     risk_icon = {"high": "🔴 高", "medium": "🟡 中", "low": "💚 低"}.get(risk_level, "⚪")
 
     lines = [
@@ -259,53 +295,121 @@ def build_insight_text(
         f"",
         f"**更新**: {today} | **総合スコア**: {score}点 | **リスク**: {risk_icon}",
         f"",
-        f"### マクロシグナル",
-        f"",
+        f"### マクロシグナル", "",
     ]
 
     if macro_signals:
         for s in macro_signals:
-            icon = icon_map.get(s["signal"], "⚪")
-            lines.append(f"- {icon} **{s['label']}**: {s['rationale']}")
+            lines.append(f"- {icon_map.get(s['signal'], '⚪')} **{s['label']}**: {s['rationale']}")
     else:
         lines.append("- ⚪ 現在特筆すべきマクロシグナルなし")
 
+    # ── 財務サマリーテーブル（v2.0拡張: 配当・FCF・アナリスト追加）──
     lines += ["", "### 主要企業 財務サマリー", ""]
-    lines.append("| 銘柄 | ROE | ROA | 営業利益率 | PBR | 52週騰落 |")
-    lines.append("|------|-----|-----|-----------|-----|---------|")
+    lines.append("| 銘柄 | 時価総額 | ROE | 営業利益率 | PBR | PER | 配当利回り | 目標株価乖離 | アナリスト |")
+    lines.append("|------|---------|-----|-----------|-----|-----|-----------|------------|----------|")
 
     for c in companies:
         if not c.get("fetch_ok"):
-            lines.append(f"| {c['ticker']} | — | — | — | — | — |")
+            lines.append(f"| {c['ticker']} | — | — | — | — | — | — | — | — |")
             continue
+        upside_str = fmt_pct(c.get("analyst_upside")) if c.get("analyst_upside") is not None else "N/A"
+        rec_str = c.get("rec_key", "N/A")
         lines.append(
-            f"| {c['name'][:16]} "
+            f"| {c['name'][:14]} "
+            f"| {fmt_cap(c.get('market_cap'))} "
             f"| {fmt_pct(c.get('roe'))} "
-            f"| {fmt_pct(c.get('roa'))} "
             f"| {fmt_pct(c.get('op_margin'))} "
             f"| {fmt_val(c.get('pbr'))}x "
-            f"| {fmt_pct(c.get('week52_change'))} |"
+            f"| {fmt_val(c.get('per'), 1)}x "
+            f"| {fmt_pct(c.get('dividend_yield'))} "
+            f"| {upside_str} "
+            f"| {rec_str} |"
         )
 
-    # ── EDINET リスクセクション（2-B 追加）──────────────────────
-    if edinet_risks:
-        # 企業名マッピング（ticker → 名称）
-        ticker_to_name = {c["ticker"]: c.get("name", c["ticker"])
-                          for c in companies if c.get("fetch_ok")}
+    # ── 財務健全性サマリー ──────────────────────────────────────
+    ok = [c for c in companies if c.get("fetch_ok")]
+    if ok:
+        lines += ["", "### 財務健全性 & キャッシュフロー", ""]
+        lines.append("| 銘柄 | D/Eレシオ | 流動比率 | FCF | 純利益率 | β値 | 機関保有率 |")
+        lines.append("|------|----------|---------|-----|---------|-----|----------|")
+        for c in ok:
+            de   = fmt_val(c.get("debt_to_equity"), 1)
+            cr   = fmt_val(c.get("current_ratio"), 1)
+            fcf_v = c.get("free_cashflow")
+            fcf  = fmt_cap(fcf_v) if fcf_v else "N/A"
+            lines.append(
+                f"| {c['name'][:14]} "
+                f"| {de} "
+                f"| {cr} "
+                f"| {fcf} "
+                f"| {fmt_pct(c.get('net_margin'))} "
+                f"| {fmt_val(c.get('beta'), 2)} "
+                f"| {fmt_pct(c.get('inst_ownership'))} |"
+            )
 
-        lines += ["", "### 有報「事業のリスク」（EDINET 自動取得）", ""]
-        for ticker, risks in edinet_risks.items():
-            name = ticker_to_name.get(ticker, ticker)
-            lines.append(f"**{name}** (`{ticker}`)")
-            for risk in risks:
-                lines.append(f"- {risk}")
+    # ── EdinetDB セクション（v2.0: financials + analysis + gov_meta）──
+    if edinet_data:
+        lines += ["", "### 有報・財務トレンド（EdinetDB / 金融庁EDINET）", ""]
+        for ticker, tdata in edinet_data.items():
+            if not tdata:
+                continue
+            name = tdata.get("company_name", ticker)
+            analysis = tdata.get("analysis", {})
+            fin      = tdata.get("financials", {})
+            gov      = tdata.get("gov_meta", {})
+
+            # 信用スコア
+            if analysis:
+                score_v  = analysis.get("credit_score", 0)
+                rating   = analysis.get("credit_rating", "")
+                r_icon   = {"excellent": "💚", "good": "🟡", "fair": "🟠", "poor": "🔴"}.get(rating, "⚪")
+                lines.append(f"**{name}** (`{ticker}`) {r_icon} 信用スコア: {score_v}/100 ({rating})")
+
+                biz = analysis.get("business_summary", "")
+                if biz:
+                    lines.append(f"> {biz[:200]}")
+
+                risks = analysis.get("risk_factors", [])
+                if risks:
+                    lines.append("**リスク要因**:")
+                    for r in risks[:5]:
+                        lines.append(f"- {r}")
+
+            # 財務トレンド（6年）
+            if fin:
+                years = fin.get("years", [])
+                rev   = fin.get("revenue", [])
+                oi    = fin.get("operating_income", [])
+                rev_cagr = fin.get("revenue_cagr")
+                oi_cagr  = fin.get("op_income_cagr")
+                if years and rev:
+                    rev_str = " → ".join(
+                        f"{int(v/1e8):,}億" if v else "N/A" for v in rev[-3:]
+                    )
+                    oi_str = " → ".join(
+                        f"{int(v/1e8):,}億" if v else "N/A" for v in oi[-3:]
+                    )
+                    lines.append(f"📈 売上高({years[-3] if len(years)>=3 else ''}〜): {rev_str}")
+                    lines.append(f"📊 営業利益: {oi_str}")
+                    cagr_parts = []
+                    if rev_cagr is not None: cagr_parts.append(f"売上CAGR: {rev_cagr*100:+.1f}%/年")
+                    if oi_cagr  is not None: cagr_parts.append(f"営業利益CAGR: {oi_cagr*100:+.1f}%/年")
+                    if cagr_parts: lines.append("  ".join(cagr_parts))
+
+            # 政府EDINET メタ
+            if gov:
+                lines.append(
+                    f"📋 有報: {gov.get('submit_date','N/A')} 提出 "
+                    f"| 期末: {gov.get('period_end','N/A')}"
+                )
             lines.append("")
 
     return "\n".join(lines)
 
 
 # ==============================================================
-# BLOCK 6: 結果辞書ビルダー（SECTOR_AGENT_RESULT_SCHEMA 準拠）
+# BLOCK 6: 結果辞書ビルダー（v2.0 - EdinetDB v3.0対応）
 # ==============================================================
 
 def build_result(
@@ -317,38 +421,50 @@ def build_result(
 ) -> dict:
     """
     SECTOR_AGENT_RESULT_SCHEMA に準拠した辞書を組み立てる。
-    各エージェントの run_analysis() がこれを返す。
 
-    【2-B 追加】
-    cfg.ENABLE_EDINET が True かつ cfg.EDINET_API_KEY が設定されている場合、
-    edinet_client.get_sector_risk_factors() を呼び出してリスク要因を取得し、
-    insight_text と結果辞書に追記する。
-    失敗しても例外を上位に伝播しない（空リストで継続）。
+    【v2.0変更】
+    edinet_client.get_sector_data() を使用:
+      - analysis + financials + gov_meta を一括取得
+      - 日次キャッシュを利用して1日1回のみAPIを叩く
+      - 予算残がなければスキップ（エラーにしない）
     """
     score, risk_level = calc_composite_score(companies, macro_signals)
 
-    # ── EDINET リスク取得（2-B）─────────────────────────────────
-    edinet_risks = {}
-    if getattr(cfg, "ENABLE_EDINET", False) and getattr(cfg, "EDINET_API_KEY", ""):
+    # ── EdinetDB + 政府EDINET 一括取得 ──────────────────────────
+    edinet_data  = {}  # {ticker: full_company_data}
+    edinet_risks = {}  # {ticker: [リスク文字列リスト]} ← 後方互換用
+
+    db_api_key = (
+        getattr(cfg, "EDINETDB_API_KEY", "")
+        or getattr(cfg, "EDINET_API_KEY", "")
+    )
+    if getattr(cfg, "ENABLE_EDINET", False) and db_api_key:
         try:
-            # edinet_client を動的 import（stock_analyzer/ 直下に配置されている前提）
             _edinet = _load_edinet_client(cfg)
             if _edinet:
                 ok_tickers = [c["ticker"] for c in companies if c.get("fetch_ok")]
                 max_co     = getattr(cfg, "EDINET_MAX_COMPANIES", 2)
-                print(f"    📄 EDINET リスク取得中（上位 {max_co} 社）...")
-                edinet_risks = _edinet.get_sector_risk_factors(
-                    ok_tickers, cfg, max_companies=max_co
-                )
+                data_dir   = getattr(cfg, "DATA_DIR", None)
+                cache_dir  = (Path(data_dir) / "edinet_cache") if data_dir else None
+                print(f"    📄 EdinetDB 取得中（最大 {max_co} 社）...")
+                result_data = _edinet.get_sector_data(ok_tickers, cfg, max_co, cache_dir)
+                edinet_data = result_data.get("ticker_data", {})
+                calls_used  = result_data.get("calls_used", 0)
+                print(f"    ✅ EdinetDB: {len(edinet_data)} 社取得 | 本日コール数: {calls_used}/80")
+                # 後方互換: risk_factors リストに変換
+                for ticker, tdata in edinet_data.items():
+                    a = tdata.get("analysis", {})
+                    if a and a.get("risk_factors"):
+                        edinet_risks[ticker] = a["risk_factors"]
         except Exception as e:
-            print(f"    ⚠️  EDINET 取得エラー（スキップ）: {str(e)[:80]}")
+            print(f"    ⚠️  EdinetDB 取得エラー（スキップ）: {str(e)[:80]}")
 
     insight_text = build_insight_text(
         sector_name, companies, macro_signals, score, risk_level,
-        edinet_risks=edinet_risks,
+        edinet_data=edinet_data,
     )
 
-    # 結果を insights/sectors/ に保存
+    # insights/sectors/ に保存
     try:
         today    = datetime.now().strftime("%Y-%m-%d")
         out_path = cfg.SECTOR_DIR / f"{sector_code}_{today}.md"
@@ -357,15 +473,13 @@ def build_result(
     except Exception:
         pass
 
-    # edinet_risks をフラットなリスト形式に変換して格納
-   # --- base_agent.py (264行目付近〜) ---
+    # edinet_risks をフラット形式に変換
     edinet_flat = [
         {"ticker": t, "risk": r}
         for t, risks in edinet_risks.items()
         for r in risks
     ]
-    
-    # 【修正箇所】ここで result 変数を明示的に定義する
+
     result = {
         "sector_code":     sector_code,
         "sector_name_ja":  sector_name,
@@ -374,36 +488,27 @@ def build_result(
         "macro_signals":   macro_signals,
         "top_companies":   companies,
         "edinet_risks":    edinet_flat,
+        "edinet_data":     edinet_data,   # v2.0追加: 全EdinetDBデータ
         "arxiv_papers":    [],
         "insight_text":    insight_text,
         "risk_level":      risk_level,
-        "reason_text":     "",  # エラー回避用の初期値
+        "reason_text":     "",
     }
-    
-    # ── 根拠文を追加（score_explainer連携）───────────────
+
+    # score_explainer 連携
     try:
         import sys, importlib
         sys.path.insert(0, str(Path(__file__).parent.parent))
         _se = importlib.import_module("score_explainer")
-        # 上で result を定義済みなので、正常にデータを渡せる
-        result = _se.enrich_result_with_reason(
-            result,
-            gov_sector_signals=None,
-            macro_snapshot=macro_snapshot if 'macro_snapshot' in dir() else None,
-        )
+        result = _se.enrich_result_with_reason(result, gov_sector_signals=None, macro_snapshot=None)
     except Exception as e:
-        # 例外が発生しても result は辞書として存在するため、システムは落ちない
-        print(f"    ⚠️ score_explainer連携エラー: {e}")
-        
+        print(f"    ⚠️  score_explainer連携エラー: {e}")
+
     return result
 
-def _load_edinet_client(cfg):
-    """
-    edinet_client.py を動的 import する。
-    stock_analyzer/ 直下（cfg.DRIVE_BASE）に配置されていることを前提とする。
-    """
-    import importlib.util, sys
 
+def _load_edinet_client(cfg):
+    import importlib.util, sys
     candidates = [
         Path(getattr(cfg, "DRIVE_BASE", "")) / "edinet_client.py",
         Path(__file__).parents[1] / "edinet_client.py",
@@ -415,6 +520,5 @@ def _load_edinet_client(cfg):
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             return module
-
     print("    ⚠️  edinet_client.py が見つかりません")
     return None
