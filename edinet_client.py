@@ -216,6 +216,17 @@ def _fetch_analysis(edinet_code: str, api_key: str) -> Optional[dict]:
         print(f"      ⚠️  analysis 取得エラー ({edinet_code}): {str(e)[:60]}")
         return None
 
+def _calc_accrual_ratio(records: list) -> Optional[float]:
+    """最新年度のアクルーアル比率を計算する"""
+    if not records:
+        return None
+    latest = records[-1]  # 年度順ソート済みなので末尾が最新
+    ni    = latest.get("net_income")
+    cf_op = latest.get("cf_operating")
+    ta    = latest.get("total_assets")
+    if ni is None or cf_op is None or ta is None or ta == 0:
+        return None
+    return round((ni - cf_op) / ta, 4)
 
 # ==============================================================
 # BLOCK 5: EdinetDB /financials 取得（新規）
@@ -298,6 +309,22 @@ def _fetch_financials(edinet_code: str, api_key: str) -> Optional[dict]:
             "dividend_per_share": dps_list,
             "revenue_cagr":       _cagr(revenue),
             "op_income_cagr":     _cagr(op_income),
+            "gross_profit":    [r.get("gross_profit")      for r in records],
+            "cf_operating":    [r.get("cf_operating")       for r in records],
+            "cf_investing":    [r.get("cf_investing")       for r in records],
+            "cf_financing":    [r.get("cf_financing")       for r in records],
+            "capex":           [r.get("capex")              for r in records],
+            "cash":            [r.get("cash")               for r in records],
+            "depreciation":    [r.get("depreciation")       for r in records],
+            "rnd_expenses":    [r.get("rnd_expenses")       for r in records],
+            "goodwill":        [r.get("goodwill")           for r in records],
+            "trade_receivables":[r.get("trade_receivables") for r in records],
+            "inventories":     [r.get("inventories")        for r in records],
+            "retained_earnings":[r.get("retained_earnings") for r in records],
+
+            # アクルーアル計算（EdinetDB単体で完結）
+            # accrual_ratio = (純利益 - 営業CF) / 総資産
+            "accrual_ratio": _calc_accrual_ratio(records),
         }
     except Exception as e:
         print(f"      ⚠️  financials 取得エラー ({edinet_code}): {str(e)[:60]}")
@@ -453,6 +480,7 @@ def get_full_company_data(ticker: str, cfg,
         "financials":  None,
         "gov_meta":    None,
         "from_cache":  False,
+        "earnings": None,   # TDNet決算短信（最新1件）
     }
 
     if not db_api_key:
@@ -518,6 +546,15 @@ def get_full_company_data(ticker: str, cfg,
     else:
         print(f"      ⚠️  予算上限({DAILY_BUDGET})到達 - financials スキップ")
 
+    # ── earnings（TDNet決算短信）取得（1コール）────────────────
+    if _budget_ok(daily_cache):
+        earnings = _fetch_earnings(edinet_code, db_api_key)
+        _increment_budget(daily_cache)
+        if earnings:
+            result["earnings"] = earnings
+            print(f"        📣 決算短信: {earnings.get('disclosure_date','N/A')} 開示")
+        time.sleep(0.5)
+    
     # ── 政府EDINET メタデータ（予算カウントなし） ─────────────
     if gov_api_key:
         gov_meta = get_gov_edinet_filings(sec_code, gov_api_key, cache_dir)
@@ -538,6 +575,37 @@ def get_full_company_data(ticker: str, cfg,
 
     return result
 
+def _fetch_earnings(edinet_code: str, api_key: str) -> Optional[dict]:
+    """TDNet決算短信データを取得する（最新1件）"""
+    try:
+        import requests
+        resp = requests.get(
+            f"{EDINETDB_BASE}/companies/{edinet_code}/earnings",
+            headers=_headers_db(api_key),
+            params={"limit": 1},
+            timeout=20,
+        )
+        if resp.status_code != 200:
+            return None
+        data = resp.json().get("data", [])
+        if not data:
+            return None
+        latest = data[0]
+        return {
+            "disclosure_date":  latest.get("disclosure_date"),
+            "disclosure_time":  latest.get("disclosure_time"),
+            "fiscal_year":      latest.get("fiscal_year"),
+            "fiscal_quarter":   latest.get("fiscal_quarter"),
+            "revenue":          latest.get("revenue"),         # 百万円
+            "operating_income": latest.get("operatingIncome"), # 百万円
+            "net_income":       latest.get("netIncome"),       # 百万円
+            "revenue_change":   latest.get("revenueChange"),   # 前年比%
+            "ni_change":        latest.get("netIncomeChange"), # 前年比%
+            "pdf_url":          latest.get("pdfUrl"),
+        }
+    except Exception as e:
+        print(f"      ⚠️  earnings 取得エラー ({edinet_code}): {str(e)[:60]}")
+        return None
 
 def get_sector_data(tickers: list, cfg,
                     max_companies: int = 2,
