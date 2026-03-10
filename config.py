@@ -781,3 +781,16 @@ ALERT_MIN_IDEA_SCORE: float = 70.0   # この値以上のアイデアが生成�
 # ④ 強いマクロ逆風（ENABLE_MACRO=True 時に有効）
 ALERT_ON_MACRO_HEADWIND: bool = True
 ALERT_HEADWIND_THRESHOLD: int = 2    # この件数以上の headwind シグナルで通知
+
+# EdinetDB取得をスキップする業種コード
+# （優先度低・APIコール節約のため）
+EDINET_SKIP_SECTORS: list = [
+#    "1001",  # 水産・農林業
+#    "1002",  # 鉱業
+#    "1006",  # パルプ・紙
+#    "1010",  # ゴム製品
+#    "1011",  # ガラス・土石製品
+#    "1014",  # 金属製品
+#    "1019",  # その他製品
+#    "1024",  # 倉庫・運輸関連
+]
