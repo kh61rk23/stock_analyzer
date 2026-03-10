@@ -689,6 +689,7 @@ DAILY_MODULES = [
     "news",          # ニュースRSSパイプライン（Step B）
     "screener",      # スキャナーの追加
     "excel_export",  # Excel ダッシュボード CSV エクスポート（Step D）
+    "us_screener",   # 米国株スクリーニング0310
 ]
 
 # ── ウィークリーサイクル（月曜朝に追加実行）───────────────────
