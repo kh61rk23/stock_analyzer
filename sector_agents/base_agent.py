@@ -458,15 +458,20 @@ def build_result(
                 data_dir   = getattr(cfg, "DATA_DIR", None)
                 cache_dir  = (Path(data_dir) / "edinet_cache") if data_dir else None
                 print(f"    📄 EdinetDB 取得中（最大 {max_co} 社）...")
-                result_data = _edinet.get_sector_data(ok_tickers, cfg, max_co, cache_dir)
-                edinet_data = result_data.get("ticker_data", {})
-                calls_used  = result_data.get("calls_used", 0)
-                print(f"    ✅ EdinetDB: {len(edinet_data)} 社取得 | 本日コール数: {calls_used}/80")
-                # 後方互換: risk_factors リストに変換
-                for ticker, tdata in edinet_data.items():
-                    a = tdata.get("analysis", {})
-                    if a and a.get("risk_factors"):
-                        edinet_risks[ticker] = a["risk_factors"]
+                # スキップ対象業種はEdinetDBを叩かない
+                skip_sectors = getattr(cfg, "EDINET_SKIP_SECTORS", [])
+                if sector_code in skip_sectors:
+                    print(f"    ⏩ {sector_name}: EdinetDB スキップ（優先度低）")
+                else:
+                    result_data = _edinet.get_sector_data(ok_tickers, cfg, max_co, cache_dir)
+                    edinet_data = result_data.get("ticker_data", {})
+                    calls_used  = result_data.get("calls_used", 0)
+                    print(f"    ✅ EdinetDB: {len(edinet_data)} 社取得 | 本日コール数: {calls_used}/80")
+                    # 後方互換: risk_factors リストに変換
+                    for ticker, tdata in edinet_data.items():
+                        a = tdata.get("analysis", {})
+                        if a and a.get("risk_factors"):
+                             edinet_risks[ticker] = a["risk_factors"]
         except Exception as e:
             print(f"    ⚠️  EdinetDB 取得エラー（スキップ）: {str(e)[:80]}")
 
