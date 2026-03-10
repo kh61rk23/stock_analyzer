@@ -52,6 +52,21 @@ def fetch_financials(tickers: list, max_retries: int = 2) -> list:
         print("  ⚠️  yfinance が未インストールです")
         return []
 
+    # viewer の data_bridge 経由で取得を試みる（フォールバック豊富）
+    _db = _load_data_bridge()
+    if _db:
+        results = []
+        for ticker in tickers:
+            try:
+                raw = _db.fetch_stock_data(ticker)
+                if raw and not raw.get("error"):
+                    results.append(_normalize_viewer_data(ticker, raw))
+            except Exception:
+                pass
+        if results:
+            return results
+    # data_bridge 失敗時は以降の yfinance 処理に流れる
+    
     results = []
 
     for ticker in tickers:
@@ -538,3 +553,87 @@ def _load_edinet_client(cfg):
             return module
     print("    ⚠️  edinet_client.py が見つかりません")
     return None
+
+def _load_data_bridge(cfg=None):
+    """viewer の data_bridge.py を動的 import する"""
+    import importlib.util
+    candidates = [
+        Path(__file__).parents[1] / "viewer" / "data_bridge.py",
+        Path("/content/viewer/data_bridge.py"),
+        Path("/content/data_bridge.py"),
+    ]
+    for path in candidates:
+        if path.exists():
+            spec   = importlib.util.spec_from_file_location("data_bridge", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+    return None
+
+def _normalize_viewer_data(ticker: str, raw: dict) -> dict:
+    """
+    viewer の fetch_stock_data() 戻り値を
+    base_agent の fetch_financials() 戻り値形式に変換する。
+    """
+    return {
+        # 識別
+        "ticker":       ticker,
+        "name":         raw.get("name", ticker),
+        "fetch_ok":     True,
+
+        # 株価
+        "current_price":      raw.get("price"),
+        "market_cap":         raw.get("market_cap"),
+        "week52_high":        raw.get("w52_high"),
+        "week52_low":         raw.get("w52_low"),
+        "week52_change":      raw.get("dev_from_low"),  # 近似値
+
+        # バリュエーション
+        "per":                raw.get("per"),
+        "pbr":                raw.get("pbr"),
+        "psr":                raw.get("_psr"),          # compute_psr済みなら
+        "eps_trailing":       None,
+        "book_value":         None,
+
+        # 利益率
+        "op_margin":          None,
+        "net_margin":         None,
+        "gross_margin":       None,
+
+        # 成長率
+        "revenue_growth":     None,
+
+        # 収益性
+        "roe":                raw.get("roe"),
+        "roa":                raw.get("roa"),
+
+        # 財務健全性
+        "free_cashflow":      raw.get("fcf"),
+        "operating_cashflow": raw.get("op_cf"),
+        "total_cash":         raw.get("cash"),
+        "total_debt":         raw.get("total_debt"),
+        "total_revenue":      raw.get("revenue"),
+        "current_ratio":      raw.get("current_ratio"),
+        "debt_to_equity":     raw.get("debt_to_equity"),
+
+        # 配当
+        "dividend_yield":     raw.get("div_yield"),
+        "payout_ratio":       raw.get("payout_ratio"),
+
+        # アクルーアル（viewer が計算済み）
+        "accrual_ratio":      raw.get("accrual_ratio"),
+
+        # EdinetDB拡張
+        "credit_score":       raw.get("_credit_score"),
+        "credit_rating":      raw.get("_credit_rating"),
+
+        # アナリスト（viewerはAlphaVantage経由なのでNone多め）
+        "rec_mean":           None,
+        "rec_key":            None,
+        "analyst_upside":     None,
+        "analyst_count":      None,
+
+        # その他
+        "beta":               None,
+        "inst_ownership":     None,
+    }
