@@ -524,6 +524,15 @@ EDINET_MAX_COMPANIES = 2
 # EDINET キャッシュ有効期間（日）: この日数以内に取得済みなら再取得しない
 EDINET_CACHE_DAYS = 100
 
+# ── EdinetDB ローテーション設定（BLOCK 19）────────────────────
+ENABLE_EDINET_ROTATION: bool   = True
+EDINET_ROTATION_PER_DAY: int   = 33   # 1日あたりのローテーション取得社数
+EDINET_ROTATION_CACHE_DAYS: int = 30  # analysis再取得間隔（日）
+EDINET_DAILY_BUDGET: int        = 80  # 1日の最大APIコール数（バッファ20）
+EDINET_RETRY_BUDGET: int        = 5   # リトライ用予備コール数
+EDINET_WATCHLIST_TICKERS: list  = []  # 空ならPRIORITY_TICKERSを参照
+EDINET_SCREENER_CANDIDATES: list = [] # 前日screener通過銘柄（自動注入される）
+
 # EDINET を有効化するフラグ（APIキーが設定されていれば自動的に有効）
 ENABLE_EDINET: bool = True  # APIキー設定後に True に変更
 
@@ -690,6 +699,7 @@ DAILY_MODULES = [
     "screener",      # スキャナーの追加
     "excel_export",  # Excel ダッシュボード CSV エクスポート（Step D）
     "us_screener",   # 米国株スクリーニング0310
+    "edinet_rotation",  #edinetのローテーション
 ]
 
 # ── ウィークリーサイクル（月曜朝に追加実行）───────────────────
