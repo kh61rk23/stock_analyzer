@@ -640,6 +640,14 @@ def get_sector_data(tickers: list, cfg,
         except Exception as e:
             print(f"      ⚠️  {ticker} 取得エラー: {str(e)[:60]}")
 
+    # ── ランキング取得（2コール固定）────────────────────────────
+    if _budget_ok(daily_cache) and cache_dir:
+        for metric in ["roe", "dividend-yield"]:
+            fetch_rankings(metric, db_api_key, limit=50, cache_dir=cache_dir)
+            _increment_budget(daily_cache)
+            print(f"    📊 rankings/{metric}: 上位50社取得完了")
+            time.sleep(0.3)
+    
     if cache_dir:
         _save_daily_cache(cache_dir, daily_cache)
 
@@ -850,3 +858,56 @@ if __name__ == "__main__":
 
     if data["gov_meta"]:
         print(f"有報提出日: {data['gov_meta']['submit_date']}")
+
+# ADD 0310
+def fetch_rankings(metric: str, api_key: str,
+                   limit: int = 50,
+                   cache_dir: Optional[Path] = None) -> list:
+    """
+    EdinetDB /rankings/{metric} から指標別ランキングを取得する。
+    1コールで全上場企業の上位N社を取得できる。
+
+    metric の選択肢:
+      roe, roa, operating-margin, net-margin, equity-ratio,
+      per, eps, dividend-yield, payout-ratio,
+      revenue, health-score,
+      revenue-cagr-3y, oi-cagr-3y, ni-cagr-3y, eps-cagr-3y
+
+    Returns:
+        list of dict: [{edinet_code, name, sec_code, value, rank}, ...]
+    """
+    import requests
+
+    # 長期キャッシュ（1日）
+    if cache_dir:
+        today = datetime.now().strftime("%Y-%m-%d")
+        cp = cache_dir / f"ranking_{metric}_{today}.json"
+        if cp.exists():
+            try:
+                return json.loads(cp.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
+    try:
+        resp = requests.get(
+            f"{EDINETDB_BASE}/rankings/{metric}",
+            headers=_headers_db(api_key),
+            params={"limit": limit},
+            timeout=20,
+        )
+        if resp.status_code != 200:
+            return []
+
+        data = resp.json().get("data", [])
+
+        if cache_dir:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            cp.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+        return data
+
+    except Exception as e:
+        print(f"      ⚠️  rankings 取得エラー ({metric}): {str(e)[:60]}")
+        return []
