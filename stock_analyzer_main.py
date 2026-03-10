@@ -839,6 +839,31 @@ def run_all_tasks(mode: str = "all") -> dict:
     print(f"{'='*60}")
     logger.tail(n=5)
 
+    # ── 米国株スクリーニング（us_stock_screener）──────────────
+    if getattr(cfg, "ENABLE_US_SCREENER", False) and _in_mode("us_screener"):
+        print("\n  🇺🇸 米国株スクリーニング...")
+        try:
+            _us = _load_local_module(
+                "us_stock_screener",
+                "/content/us_stock_screener.py",
+                cfg.DRIVE_BASE / "us_stock_screener.py",
+            )
+            if _us:
+                us_screen_result = _us.run_us_stock_screener(cfg, results)
+                results["us_screener"] = us_screen_result
+                logger.add("us_screener", "success",
+                           f"通過:{us_screen_result.get('pass_count',0)}社 "
+                           f"スクリーニング:{us_screen_result.get('screened_count',0):,}社 "
+                           f"所要:{us_screen_result.get('elapsed_min',0):.1f}分")
+            else:
+                print("  ⚠️  us_stock_screener.py が見つかりません")
+        except Exception as e:
+            logger.add("us_screener", "error", str(e)[:100])
+            print(f"  ⚠️  米国株スクリーニングエラー: {str(e)[:80]}")
+    else:
+        if not getattr(cfg, "ENABLE_US_SCREENER", False):
+            print("  ⏩ 米国株スクリーニング: スキップ（ENABLE_US_SCREENER=False）")
+    
     # ── Step E代替: 事業概要フェッチャー（BizSummary）──────────
     if getattr(cfg, "ENABLE_BIZ_SUMMARY", False) and _in_mode("biz_summary"):
         print("\n  📋 事業概要フェッチャー (Step E代替)...")
