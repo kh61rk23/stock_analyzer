@@ -698,6 +698,8 @@ WEEKLY_MODULES = [
     "idea",          # アイデア生成
     "evaluation",    # アイデア評価・週次集計
     "sec_summary",   # SEC 10-K / 有報 Claude API 日本語3行要約（Step E）
+    "biz_summary",   # Step E代替: yfinance事業概要 + DeepL翻訳
+    "weekly_report", # Step F: 週次投資判断サマリー自動生成
 ]
 
 # ウィークリー実行の曜日（0=月曜 〜 6=日曜）
@@ -709,6 +711,33 @@ WEEKLY_RUN_WEEKDAY: int = 0
 
 # アラート通知を有効化するマスタフラグ
 ENABLE_ALERT: bool = True
+
+# ==============================================================
+# BLOCK 15: Step E代替 - 事業概要フェッチャー設定
+# ==============================================================
+
+# 有効化フラグ（DeepL APIキーなしでも英語原文モードで動作）
+ENABLE_BIZ_SUMMARY: bool = True
+
+# DeepL API 無料キー（末尾が :fx のもの）
+# 取得: https://www.deepl.com/pro-api （無料枠: 50万字/月）
+DEEPL_API_KEY: str = "REDACTED_DEEPL_API_KEY"  # 例: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx"
+
+# 業種あたり取得社数（2社 × 33業種 = 66社/日 → DeepL約20,000字/月）
+BIZ_SUMMARY_MAX_COMPANIES: int = 2
+
+# キャッシュ有効日数（事業概要は頻繁に変わらないため長め）
+BIZ_SUMMARY_CACHE_DAYS: int = 90
+
+# ==============================================================
+# BLOCK 16: Step F - 週次投資判断レポート設定
+# ==============================================================
+
+# 週次レポート有効化（WEEKLY_MODESで "weekly_report" が必要）
+ENABLE_WEEKLY_REPORT: bool = True
+
+# LINE/Gmail 配信は既存の ENABLE_ALERT / ALERT_* 設定を流用
+# （週次レポートアラートは alert_notifier.py が自動追加）
 
 # ── v2.0 追加アラート設定 ────────────────────────────────────
 # 高配当アラート（配当利回りがこの値以上の銘柄を通知）
