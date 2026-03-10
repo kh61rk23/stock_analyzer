@@ -838,6 +838,54 @@ def run_all_tasks(mode: str = "all") -> dict:
     print(f"  📝 知見: {cfg.INSIGHT_DIR}")
     print(f"{'='*60}")
     logger.tail(n=5)
+
+    # ── Step E代替: 事業概要フェッチャー（BizSummary）──────────
+    if getattr(cfg, "ENABLE_BIZ_SUMMARY", False) and _in_mode("biz_summary"):
+        print("\n  📋 事業概要フェッチャー (Step E代替)...")
+        try:
+            _bs = _load_local_module(
+                "business_summary_fetcher",
+                "/content/business_summary_fetcher.py",
+                cfg.DRIVE_BASE / "business_summary_fetcher.py",
+            )
+            if _bs:
+                bs_result = _bs.run_business_summary_fetcher(cfg, results)
+                results["biz_summaries"] = bs_result
+                logger.add("biz_summary", "success",
+                           f"{len(bs_result.get('ticker_summaries', {}))}社取得 "
+                           f"DeepL:{bs_result.get('total_chars_used', 0):,}字")
+            else:
+                print("  ⚠️  business_summary_fetcher.py が見つかりません")
+        except Exception as e:
+            logger.add("biz_summary", "error", str(e)[:100])
+            print(f"  ⚠️  事業概要フェッチャーエラー: {str(e)[:80]}")
+    else:
+        if not getattr(cfg, "ENABLE_BIZ_SUMMARY", False):
+            print("  ⏩ 事業概要取得: スキップ（ENABLE_BIZ_SUMMARY=False）")
+
+    # ── Step F: 週次投資判断レポート ─────────────────────────────
+    if getattr(cfg, "ENABLE_WEEKLY_REPORT", True) and _in_mode("weekly_report"):
+        print("\n  📊 週次投資判断レポート生成 (Step F)...")
+        try:
+            _wr = _load_local_module(
+                "weekly_report_generator",
+                "/content/weekly_report_generator.py",
+                cfg.DRIVE_BASE / "weekly_report_generator.py",
+            )
+            if _wr:
+                wr_result = _wr.run_weekly_report(cfg, results)
+                results["weekly_report"] = wr_result
+                if not wr_result.get("skipped"):
+                    logger.add("weekly_report", "success",
+                               f"レポート生成: {wr_result.get('report_path','')}")
+            else:
+                print("  ⚠️  weekly_report_generator.py が見つかりません")
+        except Exception as e:
+            logger.add("weekly_report", "error", str(e)[:100])
+            print(f"  ⚠️  週次レポートエラー: {str(e)[:80]}")
+    else:
+        if not getattr(cfg, "ENABLE_WEEKLY_REPORT", True):
+            print("  ⏩ 週次レポート: スキップ（ENABLE_WEEKLY_REPORT=False）")
     
     # ── Excel ダッシュボード CSV エクスポート（Step D）────────
     if getattr(cfg, "ENABLE_EXCEL_EXPORT", False) and _in_mode("excel_export"):
