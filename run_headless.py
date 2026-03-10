@@ -169,6 +169,10 @@ def main():
     )
     args = parser.parse_args()
 
+    # ── 単体テストモード: 環境変数 SINGLE_MODULE が設定されていれば
+    #    そのモジュールだけ実行するよう mode を上書きする
+    single_mod = os.environ.get("SINGLE_MODULE", "").strip()
+    
     print(f"\n{'='*60}")
     print(f"  Stock Analyzer ヘッドレス実行")
     print(f"  モード: {args.mode.upper()}")
@@ -208,6 +212,15 @@ def main():
 
     main_mod.cfg = cfg_mod
 
+    # 単体テストモード: SINGLE_MODULE が設定されている場合は
+    # DAILY_MODULES / WEEKLY_MODULES をそのモジュールだけに上書きする
+    single_mod = os.environ.get("SINGLE_MODULE", "").strip()
+    if single_mod:
+        cfg_mod.DAILY_MODULES  = [single_mod]
+        cfg_mod.WEEKLY_MODULES = [single_mod]
+        args.mode = "all"   # all にすることで _in_mode() が必ず True を返す
+        print(f"  🧪 単体テストモード: [{single_mod}] のみ実行")
+    
     print(f"\n  RUN run_all_tasks(mode='{args.mode}') 開始...")
     try:
         results   = main_mod.run_all_tasks(mode=args.mode)
