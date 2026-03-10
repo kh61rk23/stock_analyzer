@@ -794,3 +794,17 @@ EDINET_SKIP_SECTORS: list = [
 #    "1019",  # その他製品
 #    "1024",  # 倉庫・運輸関連
 ]
+
+# ==============================================================
+# BLOCK 18: stock_viewer Googleスプレッドシート連携
+# ==============================================================
+
+# viewer と共有しているスプレッドシートID
+# （viewer の サイドバー → SpreadsheetID に表示されているもの）
+VIEWER_SPREADSHEET_ID: str = "1IedVe2bSPerao6oGvhOX-nZKtQbR_M6c"  # 例: "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"
+
+# service_account.json のパス（GitHub Actionsではシークレットから生成）
+VIEWER_SERVICE_ACCOUNT_PATH: str = "service_account.json"
+
+# ウォッチリストのシート名（viewer側のシート名に合わせる）
+VIEWER_WATCHLIST_SHEET: str = "watchlist"
