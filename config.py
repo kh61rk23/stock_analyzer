@@ -710,6 +710,17 @@ WEEKLY_RUN_WEEKDAY: int = 0
 # アラート通知を有効化するマスタフラグ
 ENABLE_ALERT: bool = True
 
+# ── v2.0 追加アラート設定 ────────────────────────────────────
+# 高配当アラート（配当利回りがこの値以上の銘柄を通知）
+ALERT_ON_HIGH_DIVIDEND: bool = True
+ALERT_MIN_DIVIDEND_YIELD: float = 0.04   # 4%以上
+
+# アナリスト強気推奨アラート
+ALERT_ON_STRONG_BUY: bool = True
+
+# 財務リスクウォッチ（高負債・FCFマイナス・低流動比率）
+ALERT_ON_FINANCIAL_RISK: bool = True
+
 # ── LINE Messaging API ─────────────────────────────────────────
 # LINE Notify は 2025年3月終了。Messaging API を使用する。
 # 取得方法:
