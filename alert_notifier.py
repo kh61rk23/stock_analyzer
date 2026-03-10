@@ -213,31 +213,148 @@ def extract_alerts(cfg, results: dict) -> list:
                 "severity": "high" if hot_themes else "info",
             })
             
-    # ── ⑦ 注目業種トップ3（根拠付き）─────────────────────────
-    # score_explainer.py の enrich_result_with_reason() で
-    # "reason_text" が付与されていれば根拠文も表示する
+    # ── ⑥ 注目業種トップ3（根拠・代表銘柄・EdinetDB情報付き） ────
     sector_results = results.get("sectors", results.get("sector_results", {}))
     if sector_results:
         sorted_sectors = sorted(
             sector_results.items(),
-            key=lambda x: x[1].get("composite_score", 0),
+            key=lambda x: x[1].get("composite_score", 0) if isinstance(x[1], dict) else 0,
             reverse=True,
         )
         lines = []
         for code, r in sorted_sectors[:3]:
+            if not isinstance(r, dict):
+                continue
             name   = r.get("sector_name_ja", code)
             score  = r.get("composite_score", 0)
             reason = r.get("reason_text", "")
             line   = f"  {name}: {score:.0f}点"
             if reason:
-                line += f"\n    {reason}"
+                line += f"\n    💬 {reason}"
+
+            # 代表銘柄の財務ハイライト（yfinance全フィールドから抽出）
+            top_cos = r.get("top_companies", [])
+            for c in top_cos[:2]:
+                if not c.get("fetch_ok"):
+                    continue
+                cname = c.get("name", c.get("ticker", ""))[:12]
+                per_s = f"PER:{c['per']:.1f}x" if c.get("per") else ""
+                dy_s  = f"配当:{c['dividend_yield']*100:.1f}%" if c.get("dividend_yield") else ""
+                up_s  = f"目標株価乖離:{c['analyst_upside']*100:+.0f}%" if c.get("analyst_upside") is not None else ""
+                rec_s = c.get("rec_key", "")
+                de_s  = f"D/E:{c['debt_to_equity']:.1f}" if c.get("debt_to_equity") else ""
+                parts = [x for x in [per_s, dy_s, up_s, rec_s, de_s] if x]
+                if parts:
+                    line += f"\n    📌 {cname}: {' | '.join(parts)}"
+
+            # EdinetDB 信用スコア（v3.0対応）
+            edinet_data = r.get("edinet_data", {})
+            for ticker, tdata in list(edinet_data.items())[:1]:
+                if not tdata:
+                    continue
+                analysis = tdata.get("analysis", {})
+                if analysis:
+                    cs = analysis.get("credit_score", 0)
+                    cr = analysis.get("credit_rating", "")
+                    r_icon = {"excellent": "💚", "good": "🟡", "fair": "🟠", "poor": "🔴"}.get(cr, "⚪")
+                    line += f"\n    {r_icon} 信用スコア: {cs}/100"
+                    risks = analysis.get("risk_factors", [])
+                    if risks:
+                        line += f"\n    ⚠️  主要リスク: {risks[0][:60]}"
+                fin = tdata.get("financials", {})
+                if fin:
+                    rev_cagr = fin.get("revenue_cagr")
+                    if rev_cagr is not None:
+                        line += f"\n    📈 売上CAGR(3年): {rev_cagr*100:+.1f}%/年"
+                gov = tdata.get("gov_meta", {})
+                if gov:
+                    line += f"\n    📋 有報提出: {gov.get('submit_date','N/A')}"
+
             lines.append(line)
+
         if lines:
             alerts.append({
                 "trigger":  "top_sectors",
                 "title":    "🏆 注目業種トップ3（本日）",
                 "body":     "\n".join(lines),
                 "severity": "info",
+            })
+
+    # ── ⑦ 高配当銘柄アラート（新規） ──────────────────────────
+    min_dy = getattr(cfg, "ALERT_MIN_DIVIDEND_YIELD", 0.04)  # デフォルト4%
+    if getattr(cfg, "ALERT_ON_HIGH_DIVIDEND", True):
+        high_div_lines = []
+        for code, r in sector_results.items():
+            if not isinstance(r, dict):
+                continue
+            for c in r.get("top_companies", []):
+                if not c.get("fetch_ok"):
+                    continue
+                dy = c.get("dividend_yield")
+                if dy and dy >= min_dy:
+                    pr = c.get("payout_ratio")
+                    pr_s = f"配当性向:{pr*100:.0f}%" if pr else ""
+                    high_div_lines.append(
+                        f"  {c.get('name','')[:14]}: {dy*100:.1f}% {pr_s}"
+                    )
+        if high_div_lines:
+            alerts.append({
+                "trigger":  "high_dividend",
+                "title":    f"💰 高配当銘柄 {len(high_div_lines)}社（{min_dy*100:.0f}%以上）",
+                "body":     "\n".join(high_div_lines[:8]),
+                "severity": "info",
+            })
+
+    # ── ⑧ アナリスト強気推奨アラート（新規） ─────────────────
+    if getattr(cfg, "ALERT_ON_STRONG_BUY", True):
+        buy_lines = []
+        for code, r in sector_results.items():
+            if not isinstance(r, dict):
+                continue
+            for c in r.get("top_companies", []):
+                if not c.get("fetch_ok"):
+                    continue
+                rec = c.get("rec_mean")
+                upside = c.get("analyst_upside")
+                if rec and rec <= 2.0 and upside and upside >= 0.15:
+                    buy_lines.append(
+                        f"  {c.get('name','')[:14]}: 推奨{rec:.1f} / 目標株価乖離{upside*100:+.0f}%"
+                    )
+        if buy_lines:
+            alerts.append({
+                "trigger":  "analyst_strong_buy",
+                "title":    f"🎯 アナリスト強気推奨 {len(buy_lines)}社",
+                "body":     "\n".join(buy_lines[:8]),
+                "severity": "info",
+            })
+
+    # ── ⑨ 財務悪化ウォッチ（D/E高・FCFマイナス）（新規） ────────
+    if getattr(cfg, "ALERT_ON_FINANCIAL_RISK", True):
+        risk_lines = []
+        for code, r in sector_results.items():
+            if not isinstance(r, dict):
+                continue
+            sec_name = r.get("sector_name_ja", code)
+            for c in r.get("top_companies", []):
+                if not c.get("fetch_ok"):
+                    continue
+                de  = c.get("debt_to_equity")
+                fcf = c.get("free_cashflow")
+                cr  = c.get("current_ratio")
+                flags = []
+                if de and de > 200:     flags.append(f"D/E:{de:.0f}(高負債)")
+                if fcf and fcf < 0:     flags.append(f"FCF:{fmt_cap(fcf)}(マイナス)")
+                if cr and cr < 1.0:     flags.append(f"流動比率:{cr:.2f}(1未満)")
+                if flags:
+                    risk_lines.append(
+                        f"  [{sec_name}] {c.get('name','')[:12]}: {' / '.join(flags)}"
+                    )
+        if risk_lines:
+            alerts.append({
+                "trigger":  "financial_risk",
+                "title":    f"⚠️  財務リスクウォッチ {len(risk_lines)}社",
+                "body":     "\n".join(risk_lines[:8]),
+                "severity": "medium",
             })
 
     return alerts
@@ -266,29 +383,78 @@ def build_message(alerts: list, mode: str = "line") -> str:
         return "\n".join(parts).strip()
 
     else:  # email HTML
-        rows = ""
         severity_color = {"high": "#ef4444", "medium": "#f59e0b", "info": "#3b82f6"}
+        severity_label = {"high": "🔴 重要", "medium": "🟡 注意", "info": "ℹ️  情報"}
+        rows = ""
         for al in alerts:
             color = severity_color.get(al["severity"], "#6b7280")
+            label = severity_label.get(al["severity"], "")
+            # body の改行を <br> に変換（pre タグより視認性が高い）
+            body_html = al["body"].replace("\n", "<br>").replace("    ", "&nbsp;&nbsp;&nbsp;&nbsp;")
             rows += f"""
 <tr>
-  <td style="padding:8px;border-bottom:1px solid #e5e7eb;">
-    <span style="color:{color};font-weight:bold;">{al['title']}</span><br>
-    <pre style="margin:4px 0;font-size:12px;color:#374151;">{al['body']}</pre>
+  <td style="padding:12px 8px;border-bottom:1px solid #e5e7eb;vertical-align:top;">
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+      <span style="background:{color};color:white;font-size:11px;
+                   padding:2px 6px;border-radius:3px;">{label}</span>
+      <span style="color:{color};font-weight:bold;font-size:14px;">{al['title']}</span>
+    </div>
+    <div style="font-size:13px;color:#374151;line-height:1.7;
+                padding-left:8px;border-left:3px solid {color};">
+      {body_html}
+    </div>
   </td>
 </tr>"""
 
+        # EdinetDB API使用状況バッジ
+        edinet_info = ""
+        try:
+            from pathlib import Path
+            import json, datetime
+            # 日次キャッシュからAPI使用状況を読み込む（あれば表示）
+            # DATA_DIRは環境依存なので存在しない場合はスキップ
+            pass
+        except Exception:
+            pass
+
         return f"""
-<html><body>
-<h2 style="color:#1f2937;">📊 投資AIエージェント アラート</h2>
-<p style="color:#6b7280;">{now_str}</p>
-<table style="border-collapse:collapse;width:100%;max-width:600px;">
-{rows}
-</table>
-<hr>
-<p style="color:#9ca3af;font-size:11px;">
-  このメールは stock_analyzer_main.py から自動送信されました。
-</p>
+<html>
+<head><meta charset="UTF-8"></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+             background:#f9fafb;margin:0;padding:16px;">
+<div style="max-width:640px;margin:0 auto;background:white;
+            border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.1);overflow:hidden;">
+
+  <!-- ヘッダー -->
+  <div style="background:linear-gradient(135deg,#1e3a5f,#2563eb);
+              padding:20px 24px;color:white;">
+    <h2 style="margin:0;font-size:18px;">📊 投資AIエージェント デイリーレポート</h2>
+    <p style="margin:6px 0 0;font-size:12px;opacity:.85;">{now_str} 自動生成</p>
+  </div>
+
+  <!-- アラート件数バッジ -->
+  <div style="padding:12px 24px;background:#f0f7ff;border-bottom:1px solid #dbeafe;">
+    <span style="font-size:13px;color:#1d4ed8;">
+      本日のシグナル: <strong>{len(alerts)}件</strong>
+      &nbsp;|&nbsp;
+      高重要度: <strong style="color:#ef4444;">{sum(1 for a in alerts if a['severity']=='high')}件</strong>
+      &nbsp;|&nbsp;
+      注意: <strong style="color:#f59e0b;">{sum(1 for a in alerts if a['severity']=='medium')}件</strong>
+    </span>
+  </div>
+
+  <!-- アラート本文 -->
+  <table style="border-collapse:collapse;width:100%;padding:0 16px;">
+    {rows}
+  </table>
+
+  <!-- フッター -->
+  <div style="padding:16px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;">
+    <p style="margin:0;font-size:11px;color:#9ca3af;">
+      stock_analyzer_main.py より自動送信 | データソース: yfinance / EdinetDB / 金融庁EDINET / IMF
+    </p>
+  </div>
+</div>
 </body></html>
 """
 
