@@ -1,0 +1,33 @@
+{
+  "category": "metaverse",
+  "business_model": "subscription",
+  "description": "メタバース・AR/VR・空間コンピューティング・XR",
+  "updated": "2026-03-10",
+  "tickers": [
+    "AAPL",
+    "AMD",
+    "CEVA",
+    "COIN",
+    "EA",
+    "EPAM",
+    "GOOGL",
+    "HIMX",
+    "IMMR",
+    "KOPN",
+    "MANA",
+    "META",
+    "METV",
+    "MSFT",
+    "NVDA",
+    "NXTP",
+    "QCOM",
+    "RBLX",
+    "SE",
+    "SNAP",
+    "TTWO",
+    "U",
+    "VUZI",
+    "XR",
+    "ZNGA"
+  ]
+}

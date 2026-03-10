@@ -1,0 +1,29 @@
+{
+  "category": "uranium",
+  "business_model": "commodity",
+  "description": "ウラン採掘・原子力発電・核融合・SMR",
+  "updated": "2026-03-10",
+  "tickers": [
+    "BWX",
+    "BWXT",
+    "CCJ",
+    "CEG",
+    "DNN",
+    "DUK",
+    "ETR",
+    "EXC",
+    "LEU",
+    "NLR",
+    "NNE",
+    "OKLO",
+    "PEG",
+    "SMR",
+    "TPVG",
+    "UEC",
+    "URA",
+    "URG",
+    "URNM",
+    "UUUU",
+    "VST"
+  ]
+}

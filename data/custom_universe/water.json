@@ -1,0 +1,31 @@
+{
+  "category": "water",
+  "business_model": "asset_heavy",
+  "description": "水処理・水インフラ・海水淡水化",
+  "updated": "2026-03-10",
+  "tickers": [
+    "A",
+    "ARTNA",
+    "AWK",
+    "CWT",
+    "CWTR",
+    "DHR",
+    "ERII",
+    "FELE",
+    "FIW",
+    "GWRS",
+    "HACH",
+    "HLIO",
+    "ITRI",
+    "MSEX",
+    "NTIC",
+    "PHO",
+    "PNR",
+    "REXNORD",
+    "SJW",
+    "TTEK",
+    "WTRG",
+    "XYL",
+    "YORW"
+  ]
+}

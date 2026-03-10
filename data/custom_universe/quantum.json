@@ -1,0 +1,25 @@
+{
+  "category": "quantum",
+  "business_model": "hardware",
+  "description": "量子コンピューター・量子通信・量子暗号",
+  "updated": "2026-03-10",
+  "tickers": [
+    "AMZN",
+    "ARQQ",
+    "GOOGL",
+    "HONE",
+    "IBM",
+    "INTC",
+    "IONQ",
+    "ISRG",
+    "MSFT",
+    "NVDA",
+    "QBTS",
+    "QCLN",
+    "QFTA",
+    "QMCO",
+    "QTUM",
+    "QUBT",
+    "RGTI"
+  ]
+}
