@@ -863,6 +863,24 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         if not getattr(cfg, "ENABLE_US_SCREENER", False):
             print("  ⏩ 米国株スクリーニング: スキップ（ENABLE_US_SCREENER=False）")
+
+    # ── EdinetDB ローテーション取得 ──────────────────────────
+    if getattr(cfg, "ENABLE_EDINET_ROTATION", False) and _in_mode("edinet_rotation"):
+        print("\n  🔄 EdinetDB ローテーション...")
+        try:
+            _erm = _load_local_module(
+                "edinet_rotation_manager",
+                "/content/edinet_rotation_manager.py",
+                cfg.DRIVE_BASE / "edinet_rotation_manager.py",
+            )
+            if _erm:
+                erm_result = _erm.run_edinet_rotation(cfg, results)
+                results["edinet_rotation"] = erm_result
+                logger.add("edinet_rotation", "success",
+                           f"取得:{erm_result.get('ok_count',0)}社 "
+                           f"カバレッジ:{erm_result.get('db_coverage',0):.1f}%")
+        except Exception as e:
+            logger.add("edinet_rotation", "error", str(e)[:100])
     
     # ── Step E代替: 事業概要フェッチャー（BizSummary）──────────
     if getattr(cfg, "ENABLE_BIZ_SUMMARY", False) and _in_mode("biz_summary"):
