@@ -822,5 +822,7 @@ US_SCREENER_CATEGORIES: list = [
     "biotech", "adr", "fintech", "healthcare_svc", "reit",
     "clean_energy", "defense_cyber", "consumer_dtc",
     "infrastructure", "materials_agtech", "media_entertainment",
+    "quantum", "lithium", "uranium", "water", "genomics", "robotics",
+    "metaverse", "blockchain", "longevity", "supply_chain"
 ]
-US_SCREENER_TOP_N: int = 10
+US_SCREENER_TOP_N: int = 25
