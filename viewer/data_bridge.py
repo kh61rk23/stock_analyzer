@@ -1215,7 +1215,7 @@ def check_watchlist_submissions(tickers: list, date_str: str = None) -> list:
 ANTHROPIC_API_KEY_ENV = "ANTHROPIC_API_KEY"
 ANTHROPIC_API_BASE    = "https://api.anthropic.com/v1"
 ANTHROPIC_MODEL       = "claude-haiku-4-5-20251001"   # 要約用: 速い・安い
-os.environ.setdefault(ANTHROPIC_API_KEY_ENV, "REDACTED_ANTHROPIC")
+
 SUMMARY_MAX_INPUT     = 3000   # 要約に渡すテキストの最大文字数
 SUMMARY_MAX_TOKENS    = 300    # 要約の最大トークン数
 
