@@ -740,6 +740,7 @@ DAILY_MODULES = [
     "policy",        # 政策金利トラッカー
     "us_sector",     # 米国S&P500 11セクター分析
     "bond_commodity",  # 債券イールドカーブ + 全コモディティ分析
+    "anomaly",         # 統計的異常値検出（価格・出来高・スコア）
     "imf",           # IMF グローバルマクロパイプライン
     "etf_tracker",   # テーマETFトラッキング（Step C'）
     "news",          # ニュースRSSパイプライン（Step B）
@@ -775,6 +776,31 @@ ENABLE_ALERT: bool = True
 # ==============================================================
 
 ENABLE_BOND_COMMODITY: bool = True   # True=有効 / False=スキップ
+
+# ==============================================================
+# BLOCK 21: 異常検知設定
+# ==============================================================
+
+ENABLE_ANOMALY_DETECTOR: bool = True
+
+# 価格変動率閾値（絶対値）
+ANOMALY_PRICE_CHANGE_HIGH:   float = 0.05   # ±5% 以上 = HIGH
+ANOMALY_PRICE_CHANGE_MEDIUM: float = 0.03   # ±3% 以上 = MEDIUM
+
+# 出来高急増倍率（過去 20 日平均比）
+ANOMALY_VOLUME_SPIKE_RATIO:  float = 3.0    # 3倍以上 = 急増
+
+# Z スコア閾値
+ANOMALY_Z_HIGH:              float = 2.5    # HIGH 異常
+ANOMALY_Z_MEDIUM:            float = 2.0    # MEDIUM 異常
+
+# セクタースコア異常閾値
+ANOMALY_SCORE_TOP:           float = 75.0   # この値以上 = 高スコア異常
+ANOMALY_SCORE_BOTTOM:        float = 30.0   # この値以下 = 低スコア異常
+
+# アラート通知するかどうか（HIGH/CRITICAL のみ通知）
+ALERT_ON_ANOMALY:            bool  = True
+ALERT_ANOMALY_MIN_SEVERITY:  str   = "high"  # "medium" | "high" | "critical"
 
 # Colabローカルパス（run_headless.py 経由では DRIVE_BASE 配下が使われる）
 BOND_COMMODITY_CACHE_DAYS: int = 1   # コモディティデータキャッシュ日数
