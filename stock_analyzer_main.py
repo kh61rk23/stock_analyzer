@@ -650,6 +650,33 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ 米国セクター分析: スキップ（config.ENABLE_US_SECTOR=False）")
 
+        # ── 債券・コモディティ分析（フェーズ2追加）────────────────
+    if getattr(cfg, "ENABLE_BOND_COMMODITY", False) and _in_mode("bond_commodity"):
+        print("\n  📊 債券・コモディティパイプライン実行中...")
+        try:
+            _bc = _load_local_module(
+                "bond_commodity_pipeline",
+                "/content/bond_commodity_pipeline.py",
+                cfg.DRIVE_BASE / "bond_commodity_pipeline.py",
+            )
+            if _bc:
+                bc_result = _bc.run_bond_commodity_pipeline(cfg, logger)
+                results["bond_commodity"] = bc_result
+                logger.add(
+                    "bond_commodity", "success",
+                    f"コモディティ:{bc_result.get('ok_count',0)}銘柄 "
+                    f"リセッションスコア:{bc_result.get('recession_score',0)}/100 "
+                    f"JP補正:{len(bc_result.get('sector_deltas',{}).get('jp',{}))}業種"
+                )
+            else:
+                print("  ⚠️  bond_commodity_pipeline.py が見つかりません")
+                logger.add("bond_commodity", "warn", "ファイルが見つかりません")
+        except Exception as e:
+            logger.add("bond_commodity", "error", str(e)[:100])
+            print(f"  ⚠️  債券・コモディティエラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ 債券・コモディティ: スキップ（ENABLE_BOND_COMMODITY=False）")
+        
     # ── 個別銘柄スクリーニング（Step C）─────────────────────
     if getattr(cfg, "ENABLE_SCREENER", False) and _in_mode("screener"):
         print("\n  📋 個別銘柄スクリーニングを実行中...")
