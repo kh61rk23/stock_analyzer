@@ -408,6 +408,55 @@ def extract_alerts(cfg, results: dict) -> list:
             "body":  f"イールドカーブが注意水準です。カーブ形状: "
                      f"{bc_result.get('curve_analysis',{}).get('shape_ja','不明')}",
         })
+        
+     # ── ⑤ 異常検知アラート ───────────────────────────────────
+    if getattr(cfg, "ALERT_ON_ANOMALY", True):
+        min_sev = getattr(cfg, "ALERT_ANOMALY_MIN_SEVERITY", "high")
+        sev_rank = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+        min_rank = sev_rank.get(min_sev, 2)
+
+        anomaly_result = results.get("anomaly", {})
+        all_anomalies  = anomaly_result.get("all_anomalies", [])
+
+        # 閾値以上の重要度の異常のみ抽出
+        trigger_items = [
+            a for a in all_anomalies
+            if sev_rank.get(a.get("severity", "low"), 0) >= min_rank
+        ]
+
+        if trigger_items:
+            # 複合異常を先頭に
+            combined = [a for a in trigger_items if a.get("anomaly_type") == "combined"]
+            others   = [a for a in trigger_items if a.get("anomaly_type") != "combined"]
+
+            lines = []
+            if combined:
+                lines.append("【複合異常 🚨】")
+                for a in combined[:3]:
+                    lines.append(
+                        f"  {a.get('ticker','?')} ({a.get('label','')}) "
+                        f"— {a.get('summary','')}"
+                    )
+            if others:
+                lines.append("【その他異常】")
+                for a in others[:5]:
+                    ticker_or_sector = a.get("ticker") or a.get("sector_code", "?")
+                    lines.append(
+                        f"  [{a.get('severity','?').upper()}] "
+                        f"{ticker_or_sector} ({a.get('label', a.get('sector_name',''))}) "
+                        f"— {a.get('summary','')}"
+                    )
+
+            severity_level = "high" if any(
+                a.get("severity") == "critical" for a in trigger_items
+            ) else "medium"
+
+            alerts.append({
+                "trigger":  "anomaly_detection",
+                "title":    f"🔍 異常検知: {len(trigger_items)}件の統計的外れ値",
+                "body":     "\n".join(lines),
+                "severity": severity_level,
+            })
     return alerts
 
 
