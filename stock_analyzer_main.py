@@ -786,6 +786,33 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ アイデアエバリュエーター: スキップ（config.ENABLE_IDEA_EVALUATOR=False）")
 
+    # ── 異常検知スキャン（フェーズ2追加）──────────────────────
+    if getattr(cfg, "ENABLE_ANOMALY_DETECTOR", False) and _in_mode("anomaly"):
+        print("\n  🔍 異常検知スキャン実行中...")
+        try:
+            _ad = _load_local_module(
+                "anomaly_detector",
+                "/content/anomaly_detector.py",
+                cfg.DRIVE_BASE / "anomaly_detector.py",
+            )
+            if _ad:
+                ad_result = _ad.run_anomaly_detector(cfg, results, logger)
+                results["anomaly"] = ad_result
+                logger.add(
+                    "anomaly_detector", "success",
+                    f"スキャン:{ad_result.get('scan_count',0)}銘柄 "
+                    f"異常:{ad_result.get('anomaly_count',0)}件 "
+                    f"（複合:{len(ad_result.get('combined_anomalies',[]))}件）"
+                )
+            else:
+                print("  ⚠️  anomaly_detector.py が見つかりません")
+                logger.add("anomaly_detector", "warn", "ファイルが見つかりません")
+        except Exception as e:
+            logger.add("anomaly_detector", "error", str(e)[:100])
+            print(f"  ⚠️  異常検知エラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ 異常検知: スキップ（ENABLE_ANOMALY_DETECTOR=False）")
+        
     # ── アラート通知（5-B 追加）────────────────────────────────
     if getattr(cfg, "ENABLE_ALERT", False):
         try:
