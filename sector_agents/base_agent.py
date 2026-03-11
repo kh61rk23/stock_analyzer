@@ -341,6 +341,8 @@ def build_insight_text(
         acr_str = f"{acr*100:+.1f}%" if acr is not None else "N/A"
         acr_icon = "⚠️" if acr and acr > 0.05 else ("✅" if acr and acr < -0.02 else "")
         rec_str = c.get("rec_key", "N/A")
+        upside_v = c.get("analyst_upside")
+        upside_str = f"{upside_v*100:+.1f}%" if upside_v is not None else "N/A"
         lines.append(
             f"| {c['name'][:14]} "
             f"| {fmt_cap(c.get('market_cap'))} "
