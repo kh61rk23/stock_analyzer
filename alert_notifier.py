@@ -510,7 +510,7 @@ def build_message(alerts: list, mode: str = "line") -> str:
         edinet_info = ""
         try:
             from pathlib import Path
-            import json, datetime
+            import json
             # 日次キャッシュからAPI使用状況を読み込む（あれば表示）
             # DATA_DIRは環境依存なので存在しない場合はスキップ
             pass

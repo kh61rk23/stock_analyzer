@@ -137,6 +137,9 @@ def search_company(sec_code: str, api_key: str,
     検索APIは認証不要で予算消費しない（search はノーカウント）。
     結果は長期キャッシュ（100日）に保存する。
     """
+    # add by gemini 20260311
+    sec_code = str(sec_code).replace(".T", "").replace(".OS", "").strip()
+    # add by gemini 20260311
     try:
         import requests
     except ImportError:
@@ -270,7 +273,10 @@ def _fetch_financials(edinet_code: str, api_key: str) -> Optional[dict]:
             return None
 
         raw = resp.json().get("data", {})
-        records = raw.get("records", raw.get("financials", []))
+        if isinstance(raw, list):
+            records = raw
+        else:
+            records = raw.get("records", raw.get("financials", []))
 
         if not records:
             return None
@@ -588,9 +594,11 @@ def _fetch_earnings(edinet_code: str, api_key: str) -> Optional[dict]:
         if resp.status_code != 200:
             return None
         data = resp.json().get("data", [])
-        if not data:
+        if not data or not isinstance(data, list):
             return None
-        latest = data[0]
+        latest = data[0] if data else None
+        if latest is None:
+            return None
         return {
             "disclosure_date":  latest.get("disclosure_date"),
             "disclosure_time":  latest.get("disclosure_time"),
@@ -692,6 +700,14 @@ def _parse_risk_items(risk_text: str, max_items: int = 7) -> list:
 # ==============================================================
 # BLOCK 9: レガシー互換 API（v2.0 呼び出しとの後方互換）
 # ==============================================================
+
+# add by gemini20260311
+def get_analysis(edinet_code: str, api_key: str) -> Optional[dict]:
+    return _fetch_analysis(edinet_code, api_key)
+
+def get_financials(edinet_code: str, api_key: str) -> Optional[dict]:
+    return _fetch_financials(edinet_code, api_key)
+# add by gemini20260311
 
 def get_risk_factors(ticker: str, cfg) -> list:
     """v2.0 互換: base_agent.py からの既存呼び出しをサポート"""

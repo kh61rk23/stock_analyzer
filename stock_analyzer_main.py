@@ -51,6 +51,12 @@ _install()
 import schedule
 import pandas as pd
 
+# add by gemini20260311
+import logging
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+logging.getLogger("streamlit.runtime.caching.cache_data_api").setLevel(logging.ERROR)
+# add by gemini20260311
+
 # ── config.py をロード（パス解決付き） ────────────────────────
 def _load_config():
     try:
