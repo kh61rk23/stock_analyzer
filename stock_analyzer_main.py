@@ -824,14 +824,14 @@ def run_all_tasks(mode: str = "all") -> dict:
             if _an and isinstance(results, dict):
                 an_result = _an.run_alert_notifier(cfg, results)
                 results["alerts"] = an_result
-            elif _an:
-                print(f"  ⚠️ アラート通知をスキップ: results が辞書型ではありません (型: {type(results).__name__})")
                 if not an_result.get("skipped"):
                     logger.add("alert_notifier", "success",
                                f"送信:{an_result.get('alerts_sent',0)}件 "
                                f"チャネル:{','.join(an_result.get('channels',[]))}")
                 for err in an_result.get("errors", []):
                     logger.add("alert_notifier", "warn", err[:80])
+            elif _an:
+                print(f"  ⚠️ アラート通知をスキップ: results が辞書型ではありません (型: {type(results).__name__})")
             else:
                 print("  ⚠️  alert_notifier.py が見つかりません")
                 logger.add("alert_notifier", "warn", "alert_notifier.py not found")
