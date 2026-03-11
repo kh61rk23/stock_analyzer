@@ -739,6 +739,7 @@ DAILY_MODULES = [
     "timeline",      # 月次トレンド＋デイリー騰落
     "policy",        # 政策金利トラッカー
     "us_sector",     # 米国S&P500 11セクター分析
+    "bond_commodity",  # 債券イールドカーブ + 全コモディティ分析
     "imf",           # IMF グローバルマクロパイプライン
     "etf_tracker",   # テーマETFトラッキング（Step C'）
     "news",          # ニュースRSSパイプライン（Step B）
