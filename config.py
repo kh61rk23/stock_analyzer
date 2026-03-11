@@ -802,8 +802,9 @@ ANOMALY_SCORE_BOTTOM:        float = 30.0   # この値以下 = 低スコア異�
 ALERT_ON_ANOMALY:            bool  = True
 ALERT_ANOMALY_MIN_SEVERITY:  str   = "high"  # "medium" | "high" | "critical"
 
-# Colabローカルパス（run_headless.py 経由では DRIVE_BASE 配下が使われる）
-BOND_COMMODITY_CACHE_DAYS: int = 1   # コモディティデータキャッシュ日数
+# このファイルは GitHub リポジトリ直下に置けば自動検出される
+# （GitHub Actions = ③ / Colab直接実行 = ① or ② の順で探す）
+BOND_COMMODITY_CACHE_DAYS: int = 1   # コモディティデータキャッシュ保持日数
 
 # コモディティ → composite_score 補正の最大値（業種ごとの上限）
 BOND_COMMODITY_DELTA_CAP: float = 15.0
