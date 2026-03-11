@@ -386,6 +386,28 @@ def extract_alerts(cfg, results: dict) -> list:
                 "severity": "info",
             })
     
+    # ──11 債券・コモディティ: リセッション警戒アラート ──────────
+    bc_result = results.get("bond_commodity", {})
+    recession_score = bc_result.get("recession_score", 0)
+    if recession_score >= 70:
+        alerts.append({
+            "type":    "recession_warning",
+            "level":   "HIGH",
+            "title":   f"⚠️ リセッション警戒: スコア {recession_score}/100",
+            "body":    (
+                f"イールドカーブ分析によりリセッションリスクが高まっています。\n"
+                f"スコア: {recession_score}/100\n"
+                f"カーブ形状: {bc_result.get('curve_analysis',{}).get('shape_ja','不明')}"
+            ),
+        })
+    elif recession_score >= 45:
+        alerts.append({
+            "type":  "recession_watch",
+            "level": "MEDIUM",
+            "title": f"📊 リセッション注視: スコア {recession_score}/100",
+            "body":  f"イールドカーブが注意水準です。カーブ形状: "
+                     f"{bc_result.get('curve_analysis',{}).get('shape_ja','不明')}",
+        })
     return alerts
 
 
