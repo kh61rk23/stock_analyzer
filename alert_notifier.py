@@ -38,6 +38,22 @@ from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+# ── fmt_cap: 時価総額・FCF等の大数値フォーマット ──────────────
+def fmt_cap(val) -> str:
+    """大きな数値を兆・億単位で整形（finance_logic.fmt_large 相当）"""
+    if val is None:
+        return "―"
+    try:
+        v = float(val)
+        if abs(v) >= 1e12:
+            return f"{v/1e12:.2f}兆"
+        if abs(v) >= 1e8:
+            return f"{v/1e8:.1f}億"
+        if abs(v) >= 1e6:
+            return f"{v/1e6:.2f}M"
+        return f"{v:,.0f}"
+    except Exception:
+        return "―"
 
 # ==============================================================
 # BLOCK 1: アラート条件判定

@@ -650,8 +650,10 @@ def get_sector_data(tickers: list, cfg,
 
     # ── ランキング取得（2コール固定）────────────────────────────
     if _budget_ok(daily_cache) and cache_dir:
+        _db_api_key = (getattr(cfg, "EDINETDB_API_KEY", "")
+                       or getattr(cfg, "EDINET_API_KEY", ""))
         for metric in ["roe", "dividend-yield"]:
-            fetch_rankings(metric, db_api_key, limit=50, cache_dir=cache_dir)
+            fetch_rankings(metric, _db_api_key, limit=50, cache_dir=cache_dir)
             _increment_budget(daily_cache)
             print(f"    📊 rankings/{metric}: 上位50社取得完了")
             time.sleep(0.3)

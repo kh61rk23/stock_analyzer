@@ -314,6 +314,118 @@ def load_sector_agent(sector_code: str):
         print(f"  ⚠️  エージェントロード失敗 ({sector_code}): {e}")
         return None
 
+# ==============================================================
+# BLOCK X: スコア履歴・スクリーナー履歴 蓄積
+# ==============================================================
+
+def _append_score_history(cfg, sector_results: dict) -> None:
+    """
+    業種別composite_scoreを日次で蓄積する。
+    保存先: DATA_DIR/score_history.json
+    形式:   {"YYYY-MM-DD": {"1001": {"score": 72.0, "risk": "low"}, ...}}
+    保持:   直近180日分（古い日付から自動削除）
+    """
+    import json
+    try:
+        path = Path(cfg.DATA_DIR) / "score_history.json"
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        # 既存データ読み込み
+        history = {}
+        if path.exists():
+            try:
+                history = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                history = {}
+
+        # 今日のスコアを追記
+        today_data = {}
+        for code, r in sector_results.items():
+            if not isinstance(r, dict):
+                continue
+            score = r.get("composite_score")
+            risk  = r.get("risk_level", "N/A")
+            if score is not None:
+                today_data[code] = {
+                    "score": round(float(score), 1),
+                    "risk":  risk,
+                }
+        if today_data:
+            history[today] = today_data
+
+        # 180日分だけ保持（古いものを削除）
+        keys = sorted(history.keys())
+        if len(keys) > 180:
+            for old_key in keys[:-180]:
+                del history[old_key]
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(history, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+        print(f"  ✅ score_history: {len(today_data)}業種を記録（累計{len(history)}日分）")
+    except Exception as e:
+        print(f"  ⚠️  score_history 保存失敗: {str(e)[:60]}")
+
+# ==============================================================
+# BLOCK X: スコア履歴・スクリーナー履歴 蓄積
+# ==============================================================
+def _append_screener_history(cfg, screener_result: dict) -> None:
+    """
+    screener通過銘柄を日次で蓄積する。
+    保存先: DATA_DIR/screener_history.json
+    形式:   {"YYYY-MM-DD": [{"ticker": "8306.T", "sector": "1028",
+                             "composite_score": 72.0, "per": 12.3, ...}]}
+    保持:   直近365日分（バックテストに使うため長め）
+    用途:   「N日前にscreenerを通過した銘柄のその後のリターン」検証
+    """
+    import json
+    try:
+        path = Path(cfg.DATA_DIR) / "screener_history.json"
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        # 既存データ読み込み
+        history = {}
+        if path.exists():
+            try:
+                history = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                history = {}
+
+        # 通過銘柄リストを抽出
+        candidates = screener_result.get("candidates", [])
+        passed = [
+            {
+                "ticker":          c.get("ticker", ""),
+                "sector_code":     c.get("sector_code", ""),
+                "composite_score": c.get("composite_score"),
+                "per":             c.get("per"),
+                "pbr":             c.get("pbr"),
+                "roe":             c.get("roe"),
+                "market_cap":      c.get("market_cap"),
+            }
+            for c in candidates
+            if c.get("pass_filters")
+        ]
+
+        if passed:
+            history[today] = passed
+
+        # 365日分だけ保持
+        keys = sorted(history.keys())
+        if len(keys) > 365:
+            for old_key in keys[:-365]:
+                del history[old_key]
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(history, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+        print(f"  ✅ screener_history: {len(passed)}銘柄を記録（累計{len(history)}日分）")
+    except Exception as e:
+        print(f"  ⚠️  screener_history 保存失敗: {str(e)[:60]}")
 
 def run_sector_analysis(sector_code: str, macro_snapshot: dict) -> dict:
     """
@@ -329,7 +441,8 @@ def run_sector_analysis(sector_code: str, macro_snapshot: dict) -> dict:
 
     if agent and hasattr(agent, "run_analysis"):
         try:
-            return agent.run_analysis(sector_code, cfg)
+            return agent.run_analysis(sector_code, cfg,
+                                      macro_snapshot=macro_snapshot)
         except Exception as e:
             print(f"  ⚠️  エージェント実行失敗 ({sector_code}): {e}")
 
@@ -347,14 +460,15 @@ def run_sector_analysis(sector_code: str, macro_snapshot: dict) -> dict:
     ]
 
     return {
-        "sector_code":    sector_code,
-        "sector_name_ja": sector_info.get("name_ja", sector_code),
-        "analysis_date":  datetime.now().strftime("%Y-%m-%d"),
-        "macro_signals":  sector_signals,
-        "top_companies":  [],   # Step 2 で実装
-        "arxiv_papers":   [],   # Step 2 で実装
-        "insight_text":   "",   # Step 2 で実装
-        "risk_level":     "N/A",# Step 2 で実装
+        "sector_code":     sector_code,
+        "sector_name_ja":  sector_info.get("name_ja", sector_code),
+        "analysis_date":   datetime.now().strftime("%Y-%m-%d"),
+        "composite_score": 0.0,   # BUG-01修正: エージェント未実装時のデフォルト値
+        "macro_signals":   sector_signals,
+        "top_companies":   [],
+        "arxiv_papers":    [],
+        "insight_text":    "",
+        "risk_level":      "N/A",
     }
 
 
@@ -1016,6 +1130,14 @@ def run_all_tasks(mode: str = "all") -> dict:
         if not getattr(cfg, "ENABLE_EXCEL_EXPORT", False):
             print("  ⏩ Excelエクスポート: スキップ（ENABLE_EXCEL_EXPORT=False）")
     
+    # ── スコア履歴・スクリーナー履歴の蓄積 ────────────────
+        try:
+            if results.get("sectors"):
+                _append_score_history(cfg, results["sectors"])
+            if results.get("screener"):
+                _append_screener_history(cfg, results["screener"])
+        except Exception as e:
+            print(f"  ⚠️  履歴蓄積エラー（スキップ）: {str(e)[:60]}")
     return results
 
 

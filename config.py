@@ -543,24 +543,6 @@ US_SCREENER_CATEGORIES: list    = [
 US_SCREENER_TOP_N: int          = 10
 
 # ==============================================================
-# BLOCK 18: stock_viewer Googleスプレッドシート連携
-# ==============================================================
-VIEWER_SPREADSHEET_ID: str      = ""   # ← 設定済みなら値を入れる
-VIEWER_SERVICE_ACCOUNT_PATH: str = "service_account.json"
-VIEWER_WATCHLIST_SHEET: str     = "watchlist"
-
-# ==============================================================
-# BLOCK 19: EdinetDB ローテーション設定
-# ==============================================================
-ENABLE_EDINET_ROTATION: bool    = True
-EDINET_ROTATION_PER_DAY: int    = 33
-EDINET_ROTATION_CACHE_DAYS: int = 30
-EDINET_DAILY_BUDGET: int        = 80
-EDINET_RETRY_BUDGET: int        = 5
-EDINET_WATCHLIST_TICKERS: list  = []
-EDINET_SCREENER_CANDIDATES: list = []
-
-# ==============================================================
 # BLOCK 20: Step E代替・Step F 設定
 # ==============================================================
 ENABLE_BIZ_SUMMARY: bool        = True
@@ -570,8 +552,10 @@ BIZ_SUMMARY_CACHE_DAYS: int     = 90
 
 ENABLE_WEEKLY_REPORT: bool      = True
 
-# ── EdinetDB ローテーション設定（BLOCK 19）────────────────────
-ENABLE_EDINET_ROTATION: bool   = True
+# ==============================================================
+# BLOCK 19: EdinetDB ローテーション設定
+# ==============================================================
+ENABLE_EDINET_ROTATION: bool   = True # ローテーション実行中
 EDINET_ROTATION_PER_DAY: int   = 33   # 1日あたりのローテーション取得社数
 EDINET_ROTATION_CACHE_DAYS: int = 30  # analysis再取得間隔（日）
 EDINET_DAILY_BUDGET: int        = 80  # 1日の最大APIコール数（バッファ20）
@@ -579,9 +563,11 @@ EDINET_RETRY_BUDGET: int        = 5   # リトライ用予備コール数
 EDINET_WATCHLIST_TICKERS: list  = []  # 空ならPRIORITY_TICKERSを参照
 EDINET_SCREENER_CANDIDATES: list = [] # 前日screener通過銘柄（自動注入される）
 
-# EDINET を有効化するフラグ（APIキーが設定されていれば自動的に有効）
-ENABLE_EDINET: bool = True  # APIキー設定後に True に変更
-
+# EDINETDB を有効化するフラグ（APIキーが設定されていれば自動的に有効）
+ENABLE_EDINET: bool = False  
+# APIキー設定後に True に変更。
+# 現在はEDINETDBの業種ごとの検索を止めており、
+# 別フラグの箇所にて、EDINETDBを動かしている。
 
 # ==============================================================
 # BLOCK 9: タイムライン（二時間軸）設定（3-A 追加）
@@ -882,14 +868,14 @@ ALERT_HEADWIND_THRESHOLD: int = 2    # この件数以上の headwind シグナ�
 # EdinetDB取得をスキップする業種コード
 # （優先度低・APIコール節約のため）
 EDINET_SKIP_SECTORS: list = [
-#    "1001",  # 水産・農林業
+     "1001",  # 水産・農林業
 #    "1002",  # 鉱業
-#    "1006",  # パルプ・紙
+     "1006",  # パルプ・紙
 #    "1010",  # ゴム製品
 #    "1011",  # ガラス・土石製品
 #    "1014",  # 金属製品
 #    "1019",  # その他製品
-#    "1024",  # 倉庫・運輸関連
+     "1024",  # 倉庫・運輸関連
 ]
 
 # ==============================================================

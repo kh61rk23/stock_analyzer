@@ -374,11 +374,7 @@ def _fetch_one_ticker(ticker: str, cfg, edinet_client,
     # ── Step2: AI分析取得（1コール） ─────────────────────────
     # rotation managerでは edinet_client のキャッシュを使わず
     # 独自DBに保存するため、cache_dir=None で直接APIを叩く
-    analysis = edinet_client.get_analysis(
-        edinet_code, api_key,
-        cache_dir=None,     # ← DBは独自管理するのでキャッシュしない
-        cache_days=cache_days,
-    )
+    analysis = edinet_client.get_analysis(edinet_code, api_key)
     if not analysis:
         return {"ok": False, "ticker": ticker,
                 "edinet_code": edinet_code,

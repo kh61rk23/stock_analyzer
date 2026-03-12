@@ -424,14 +424,19 @@ def fetch_commodity_prices() -> dict:
         try:
             # 一括取得データから該当ティッカーの系列を取得
             if data is not None and not data.empty:
-                if len(tickers_list) == 1:
-                    hist_close = data["Close"]
-                elif ticker in data.columns.get_level_values(0):
-                    hist_close = data["Close"][ticker]
-                else:
+                try:
+                    if len(tickers_list) == 1:
+                        # 単一銘柄: Closeが直接Series
+                        hist_close = data["Close"] if "Close" in data.columns else None
+                    else:
+                        # 複数銘柄: data["Close"] がDataFrame、列名がティッカー
+                        close_df = data["Close"] if "Close" in data.columns else None
+                        if close_df is not None and hasattr(close_df, "columns") and ticker in close_df.columns:
+                            hist_close = close_df[ticker]
+                        else:
+                            hist_close = None
+                except Exception:
                     hist_close = None
-            else:
-                hist_close = None
 
             # fallback: 個別取得
             if hist_close is None or hist_close.dropna().empty:
