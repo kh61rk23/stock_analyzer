@@ -40,12 +40,12 @@ SECTOR_NOTE = """
 - **注目指標**: 新幹線・在来線輸送量、宅配便取扱数量、インバウンド訪日客数、軽油価格。
 """
 
-
-def run_analysis(sector_code: str, cfg) -> dict:
+def run_analysis(sector_code: str, cfg,
+                 macro_snapshot: dict = None) -> dict:
     print(f"  🚚 [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
 
     companies     = fetch_financials(TARGET_TICKERS)
-    macro_signals = build_macro_signals(SECTOR_CODE, cfg)
+    macro_signals = build_macro_signals(SECTOR_CODE, cfg, macro_snapshot)
 
     ok = sum(1 for c in companies if c.get("fetch_ok"))
     tw = sum(1 for s in macro_signals if s["signal"] == "tailwind")

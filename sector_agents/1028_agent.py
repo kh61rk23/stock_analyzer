@@ -42,22 +42,23 @@ SECTOR_NOTE = """
 - **海外収益**: メガバンクは米国・アジア向け与信が大きく、ドル金利・景気に連動。
 - **注目指標**: 貸出金利回り、預金金利、貸倒引当金、BIS 自己資本比率。
 """
+"""
+銀行業の分析を実行する。
+stock_analyzer_main.py の run_sector_analysis() から動的ロードで呼ばれる。
 
+Args:
+    sector_code: "1028"
+    cfg: config モジュール
 
-def run_analysis(sector_code: str, cfg) -> dict:
-    """
-    銀行業の分析を実行する。
-    stock_analyzer_main.py の run_sector_analysis() から動的ロードで呼ばれる。
-
-    Args:
-        sector_code: "1028"
-        cfg: config モジュール
-
-    Returns:
-        SECTOR_AGENT_RESULT_SCHEMA 準拠の辞書
-    """
-    result = {}
+Returns:
+    SECTOR_AGENT_RESULT_SCHEMA 準拠の辞書
+"""
+def run_analysis(sector_code: str, cfg,
+                 macro_snapshot: dict = None) -> dict:
     print(f"  🏦 [{SECTOR_CODE}] {SECTOR_NAME} 分析開始...")
+
+    companies     = fetch_financials(TARGET_TICKERS)
+    macro_signals = build_macro_signals(SECTOR_CODE, cfg, macro_snapshot)
 
     # 財務データ取得
     companies = fetch_financials(TARGET_TICKERS)

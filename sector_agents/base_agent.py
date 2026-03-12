@@ -73,6 +73,15 @@ def fetch_financials(tickers: list, max_retries: int = 2) -> list:
         for attempt in range(1, max_retries + 1):
             try:
                 info = yf.Ticker(ticker).info or {}
+                # ── 空dictチェック（yfinance が無効ティッカーで {} を返す場合） ──
+                # quoteType が存在しない = 上場廃止・ティッカー誤り・API障害
+                if not info or not info.get("quoteType"):
+                    if attempt < max_retries:
+                        time.sleep(3)
+                        continue  # リトライ
+                    print(f"    ⚠️  {ticker}: yfinance が空データを返しました（上場廃止・ティッカー誤りの可能性）")
+                    results.append({"ticker": ticker, "name": ticker, "fetch_ok": False})
+                    break
 
                 def _f(key: str) -> Optional[float]:
                     v = info.get(key)
@@ -223,9 +232,37 @@ def _safe_avg(values: list) -> Optional[float]:
 # BLOCK 3: マクロシグナル評価
 # ==============================================================
 
-def build_macro_signals(sector_code: str, cfg) -> list:
+def build_macro_signals(sector_code: str, cfg,
+                        macro_snapshot: dict = None) -> list:
+    """
+    macro_snapshot が渡された場合はライブ相場で条件判定する。
+    渡されない場合（後方互換）は全ルールをスキャンして返す。
+    """
+    # ライブ相場値
+    snap     = macro_snapshot or {}
+    usdjpy   = snap.get("usdjpy")
+    us10y    = snap.get("us10y")
+    oil      = snap.get("oil_wti")
+    vix      = snap.get("vix")
+
+    # どのファクターが「現在アクティブか」を判定
+    active_factors = set()
+    if us10y  is not None:
+        active_factors.add("interest_rate_rise" if us10y > 4.0
+                           else "interest_rate_fall")
+    if usdjpy is not None:
+        active_factors.add("yen_depreciation"   if usdjpy > 140
+                           else "yen_appreciation")
+    if oil    is not None and oil > 80:
+        active_factors.add("oil_price_rise")
+    if vix    is not None and vix > 25:
+        active_factors.add("us_recession_risk")
+
     signals = []
     for factor, rule in cfg.MACRO_RULES.items():
+        # macro_snapshot が渡されていれば現在アクティブなルールのみ処理
+        if macro_snapshot is not None and factor not in active_factors:
+            continue
         for sig_type, codes in rule.get("signal", {}).items():
             if sector_code in codes:
                 signals.append({
