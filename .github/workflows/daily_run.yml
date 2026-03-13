@@ -153,6 +153,9 @@ jobs:
             git add stock_data/data/score_history.json    2>/dev/null || true
             git add stock_data/data/screener_history.json 2>/dev/null || true
             git add momentum_factor.py 2>/dev/null || true
+            git add stock_data/data/fed_calendar_cache.json
+            stock_data/data/screener_history.json
+            stock_data/data/performance_history.json
             git diff --staged --quiet || \
               git commit -m "📊 dashboard + DB update $(date -u '+%Y-%m-%d')"
             git push
