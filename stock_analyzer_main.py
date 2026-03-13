@@ -34,7 +34,8 @@
 import subprocess, sys, os, json, time, shutil
 from pathlib import Path
 from datetime import datetime, timedelta
-
+# momentum_factor（動的ロード）
+# ← 直接importはせず、BLOCK X で動的ロードする
 
 def _install():
     pkgs = [
@@ -687,6 +688,56 @@ def run_all_tasks(mode: str = "all") -> dict:
             except Exception as e:
                 logger.add("sector_agent", "error", f"[{code}] {str(e)[:80]}")
         results["sectors"] = sector_results
+          # ── [D-4] モメンタムファクター計算 ─────────────────────────
+        if cfg.ENABLE_SECTOR and sector_results:
+          try:
+              import sys as _sys, importlib as _imp
+              _sys.path.insert(0, str(Path(__file__).parent))
+              _mf = _imp.import_module("momentum_factor")
+              _sector_names = {
+                  c: info.get("name_ja", c)
+                  for c, info in cfg.JAPAN_SECTORS.items()
+              }
+              _mom_result = _mf.run_momentum_factor(
+                  sector_results = sector_results,
+                  data_dir       = cfg.DATA_DIR,
+                  sector_names   = _sector_names,
+                  top_n          = 5,
+              )
+              results["momentum"] = _mom_result
+          except Exception as _e:
+              print(f"  ⚠️  momentum_factor エラー（スキップ）: {_e}")
+              results["momentum"] = {}
+          # [S-0] factor_breakdown を score_history を使って後付け付与
+        try:
+            _score_hist_path = Path("stock_data/data/score_history.json")
+            if _score_hist_path.exists():
+                import json as _json
+                _score_hist_all = _json.loads(_score_hist_path.read_text())
+            else:
+                _score_hist_all = []
+            
+            import sys as _sys, importlib as _imp
+            _sys.path.insert(0, str(Path(__file__).parent))
+            _se = _imp.import_module("score_explainer")
+            _snapshot = results.get("macro_snapshot", {})
+            
+            for _code, _res in sector_results.items():
+                # score_history から該当業種の系列を抽出
+                _hist = [
+                    {"date": h["date"], "composite_score": h.get("scores", {}).get(_code)}
+                    for h in _score_hist_all
+                    if isinstance(h.get("scores"), dict) and h["scores"].get(_code) is not None
+                ]
+                _res["factor_breakdown"] = _se.factor_breakdown(
+                    result         = _res,
+                    score_history  = _hist,
+                    macro_snapshot = _snapshot,
+                )
+            print("  ✅ factor_breakdown 付与完了")
+        except Exception as _e:
+            print(f"  ⚠️  factor_breakdown 付与エラー: {_e}")
+        
         print(f"  ✅ セクター分析完了: {len(sector_results)} 業種")
 
     # ── タイムライン分析（3-A 追加）───────────────────────────

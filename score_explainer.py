@@ -1,35 +1,55 @@
 # ==============================================================
-# score_explainer.py  v1.0
+# score_explainer.py  v2.0
 # ==============================================================
-# 【ステップ2: 判断根拠の説明強化】
+# 【変更履歴】
+#   v1.0: build_reason_text() - 1行根拠文生成
+#   v2.0: factor_breakdown()  - ツリー形式の詳細因子分解（S-0実装）
 #
 # 機能:
-#   セクタースコアの「主因」を自動抽出し、1行の根拠文を生成する。
+#   BLOCK 1: build_reason_text()              - 1行サマリー（後方互換）
+#   BLOCK 2: enrich_result_with_reason()      - result辞書への自動付与
+#   BLOCK 3: format_sector_summary_line()     - Gmailアラート用1行フォーマッタ
+#            format_top_sectors_block()       - 上位N業種ブロック
+#   BLOCK 4: factor_breakdown()               - 因子分解辞書生成（v2.0新規）
+#   BLOCK 5: _calc_trend()                    - score_historyトレンド計算
+#   BLOCK 6: format_factor_breakdown_text()   - ツリー形式テキスト整形
+#            format_factor_breakdown_block()  - 複数業種まとめ出力
 #
-# 出力例:
-#   電気機器 [スコア:45点]
-#   主因: 鉱工業生産+1.2%(追い風) / 機械受注+39.5%(追い風) / 米10年債4.1%(逆風)
-#
-# 組み込み方法:
-#   stock_analyzer_main.py の run_sector_analysis() の戻り値に
-#   "reason_text" フィールドを追加する。
-#   レポートやGmailアラートにそのまま使える。
+# 出力例 (format_factor_breakdown_text):
+#   電気機器: 72点
+#   ├ ROE優良(+15): 平均ROE=12.5% → 収益性確認
+#   ├ 円安追い風(+10): USD/JPY=149.2 → 輸出採算改善
+#   ├ 金利上昇逆風(-10): 米10年債=4.52%
+#   └ 判断: 「3ヶ月前比+18点・上昇加速中」
 # ==============================================================
 
+from __future__ import annotations
+import re
+from datetime import datetime, timedelta
 from typing import Optional
 
 
 # ==============================================================
-# BLOCK 1: 根拠文の生成
+# 内部ユーティリティ
+# ==============================================================
+
+def _safe_avg(values: list) -> Optional[float]:
+    """Noneを除いた平均。全Noneの場合はNoneを返す。"""
+    valid = [v for v in values if v is not None]
+    return sum(valid) / len(valid) if valid else None
+
+
+# ==============================================================
+# BLOCK 1: 根拠文の生成（v1.0後方互換）
 # ==============================================================
 
 def build_reason_text(
-    sector_code:    str,
+    sector_code:     str,
     composite_score: float,
-    macro_signals:  list,
-    gov_signals:    Optional[dict] = None,
-    us_macro:       Optional[dict] = None,
-    max_factors:    int = 3,
+    macro_signals:   list,
+    gov_signals:     Optional[dict] = None,
+    us_macro:        Optional[dict] = None,
+    max_factors:     int = 3,
 ) -> str:
     """
     スコアに最も影響した要因を抽出して1行の根拠文を生成する。
@@ -37,60 +57,62 @@ def build_reason_text(
     Args:
         sector_code:      業種コード（例: "1016"）
         composite_score:  総合スコア
-        macro_signals:    evaluate_macro_signals() の戻り値リスト
+        macro_signals:    マクロシグナルリスト
+                          [{"factor":str, "label":str, "signal":"tailwind"/"headwind",
+                            "trigger":str}, ...]
+                          または evaluate_macro_signals() の戻り値形式
                           [{"factor":str, "label":str, "trigger_value":str,
                             "sector_signals": {code: "tailwind"/"headwind"}}, ...]
-        gov_signals:      aggregate_sector_signals() の戻り値から
-                          該当sector_codeのエントリ
-                          {"score":int, "tailwinds":[], "headwinds":[]}
+        gov_signals:      政府統計シグナル {"score":int, "tailwinds":[], "headwinds":[]}
         us_macro:         米国マクロ指標 {"us10y": float, "usdjpy": float, ...}
         max_factors:      表示する要因の最大数
 
     Returns:
         "主因: [追い風要因] / [逆風要因]" 形式の文字列
     """
-    factors = []  # (重要度スコア, ラベル文字列, tailwind/headwind)
+    factors = []  # (重要度スコア, ラベル文字列, "tailwind"/"headwind")
 
-    # ── マクロシグナルから要因を収集 ─────────────────────────
     for sig in macro_signals:
-        direction = sig.get("sector_signals", {}).get(sector_code)
-        if not direction:
+        # base_agent形式 {"signal": "tailwind"/"headwind", "label": ..., "trigger": ...}
+        if "signal" in sig and sig["signal"] in ("tailwind", "headwind"):
+            direction = sig["signal"]
+            label     = sig.get("label", sig.get("factor", ""))
+            trigger   = sig.get("trigger", sig.get("trigger_value", ""))
+            display   = f"{label}({trigger})" if trigger else label
+            weight    = 1 if direction == "tailwind" else -1
+            factors.append((weight, display, direction))
             continue
-        label     = sig.get("label", sig.get("factor", ""))
-        trigger   = sig.get("trigger_value", "")
-        display   = f"{label}({trigger})" if trigger else label
-        # 追い風は+1、逆風は-1
-        weight    = 1 if direction == "tailwind" else -1
-        factors.append((weight, display, direction))
+        # evaluate_macro_signals形式 {"sector_signals": {code: "tailwind"/"headwind"}}
+        direction = sig.get("sector_signals", {}).get(sector_code)
+        if direction:
+            label   = sig.get("label", sig.get("factor", ""))
+            trigger = sig.get("trigger_value", "")
+            display = f"{label}({trigger})" if trigger else label
+            weight  = 1 if direction == "tailwind" else -1
+            factors.append((weight, display, direction))
 
-    # ── 政府統計シグナルから要因を収集 ───────────────────────
     if gov_signals:
         for tw in gov_signals.get("tailwinds", []):
-            # "消費者物価指数（CPI）: 前年比+1.6%（上昇＝逆風）" 形式
-            name_part = tw.split(":")[0].strip() if ":" in tw else tw
+            name_part  = tw.split(":")[0].strip() if ":" in tw else tw
             value_part = tw.split(":", 1)[1].strip() if ":" in tw else ""
-            # 値部分を短縮（"前年比+X.X%（上昇＝追い風）" → "+X.X%"）
-            short_val = ""
+            short_val  = ""
             if "前年比" in value_part:
-                import re
                 m = re.search(r"前年比([+\-\d\.]+%)", value_part)
                 if m:
                     short_val = m.group(1)
             display = f"{name_part}{short_val}" if short_val else name_part
             factors.append((1, display, "tailwind"))
         for hw in gov_signals.get("headwinds", []):
-            name_part = hw.split(":")[0].strip() if ":" in hw else hw
+            name_part  = hw.split(":")[0].strip() if ":" in hw else hw
             value_part = hw.split(":", 1)[1].strip() if ":" in hw else ""
-            short_val = ""
+            short_val  = ""
             if "前年比" in value_part:
-                import re
                 m = re.search(r"前年比([+\-\d\.]+%)", value_part)
                 if m:
                     short_val = m.group(1)
             display = f"{name_part}{short_val}" if short_val else name_part
             factors.append((-1, display, "headwind"))
 
-    # ── 米国マクロから主要指標を追加 ─────────────────────────
     if us_macro:
         us10y = us_macro.get("us10y")
         if us10y is not None:
@@ -105,17 +127,12 @@ def build_reason_text(
     if not factors:
         return f"スコア{composite_score:.0f}点（シグナルなし）"
 
-    # 重要度でソート（追い風はプラス、逆風はマイナス、絶対値大が上位）
     factors.sort(key=lambda x: abs(x[0]), reverse=True)
-
-    # 上位max_factors件を選択
-    top = factors[:max_factors]
-
-    # 追い風・逆風を分類して表示
+    top        = factors[:max_factors]
     tail_parts = [f"△{f[1]}" for f in top if f[2] == "tailwind"]
     head_parts = [f"▽{f[1]}" for f in top if f[2] == "headwind"]
+    all_parts  = tail_parts + head_parts
 
-    all_parts = tail_parts + head_parts
     if not all_parts:
         return f"スコア{composite_score:.0f}点"
 
@@ -126,25 +143,34 @@ def build_reason_text(
 # BLOCK 2: base_agent.py の build_result() に差し込む統合関数
 # ==============================================================
 
-def enrich_result_with_reason(result: dict, gov_sector_signals: Optional[dict],
-                               macro_snapshot: Optional[dict]) -> dict:
+def enrich_result_with_reason(
+    result:             dict,
+    gov_sector_signals: Optional[dict],
+    macro_snapshot:     Optional[dict],
+    score_history:      Optional[list] = None,
+) -> dict:
     """
-    build_result() の戻り値 result に "reason_text" を追加して返す。
+    build_result() の戻り値 result に reason_text / factor_breakdown を追加して返す。
 
-    使い方（base_agent.py の build_result 末尾に追加）:
-        from score_explainer import enrich_result_with_reason
-        result = enrich_result_with_reason(result, gov_signals, macro_snapshot)
-        return result
+    Args:
+        result:             build_result() の戻り値辞書
+        gov_sector_signals: aggregate_sector_signals() の全業種出力辞書
+        macro_snapshot:     {"usdjpy":float, "us10y":float, "vix":float, ...}
+        score_history:      [{"date":"YYYY-MM-DD", "composite_score":float}, ...]
+                            渡すと factor_breakdown にトレンド文が付与される
+
+    Returns:
+        reason_text / factor_breakdown を追加した result
     """
     sector_code     = result.get("sector_code", "")
     composite_score = result.get("composite_score", 0)
     macro_signals   = result.get("macro_signals", [])
 
-    # gov_sector_signals は aggregate_sector_signals() の出力から該当コードを取り出す
     gov_entry = (gov_sector_signals.get(sector_code, {})
                  if isinstance(gov_sector_signals, dict) else None)
 
-    reason = build_reason_text(
+    # reason_text（1行サマリー、v1.0互換）
+    result["reason_text"] = build_reason_text(
         sector_code     = sector_code,
         composite_score = composite_score,
         macro_signals   = macro_signals,
@@ -152,7 +178,14 @@ def enrich_result_with_reason(result: dict, gov_sector_signals: Optional[dict],
         us_macro        = macro_snapshot,
         max_factors     = 3,
     )
-    result["reason_text"] = reason
+
+    # factor_breakdown（ツリー形式辞書、v2.0）
+    result["factor_breakdown"] = factor_breakdown(
+        result         = result,
+        score_history  = score_history or [],
+        macro_snapshot = macro_snapshot,
+    )
+
     return result
 
 
@@ -166,12 +199,12 @@ def format_sector_summary_line(result: dict) -> str:
 
     例: 📈 電気機器 [45点] 主因: △機械受注+39.5% / △鉱工業生産+1.2% / ▽米10年債4.1%
     """
-    score     = result.get("composite_score", 0)
-    name      = result.get("sector_name_ja", result.get("sector_code", ""))
-    reason    = result.get("reason_text", "")
-    risk      = result.get("risk_level", "")
-    icon      = "📈" if score >= 60 else ("📉" if score < 40 else "➡️")
-    risk_str  = f" [{risk}]" if risk else ""
+    score    = result.get("composite_score", 0)
+    name     = result.get("sector_name_ja", result.get("sector_code", ""))
+    reason   = result.get("reason_text", "")
+    risk     = result.get("risk_level", "")
+    icon     = "📈" if score >= 60 else ("📉" if score < 40 else "➡️")
+    risk_str = f" [{risk}]" if risk else ""
     return f"{icon} {name} [{score:.0f}点{risk_str}] {reason}"
 
 
@@ -179,10 +212,401 @@ def format_top_sectors_block(results: list, top_n: int = 5) -> str:
     """
     上位N業種のサマリーブロックを生成する（Gmailアラート・レポート用）。
     """
-    sorted_r = sorted(results, key=lambda x: x.get("composite_score", 0),
-                      reverse=True)
-    lines = ["## 🏆 注目業種トップ{}".format(top_n), ""]
+    sorted_r = sorted(results, key=lambda x: x.get("composite_score", 0), reverse=True)
+    lines    = [f"## 🏆 注目業種トップ{top_n}", ""]
     for i, r in enumerate(sorted_r[:top_n], 1):
         lines.append(f"{i}. {format_sector_summary_line(r)}")
     lines.append("")
     return "\n".join(lines)
+
+
+# ==============================================================
+# BLOCK 4: factor_breakdown() - 因子分解辞書生成（v2.0新規）
+# ==============================================================
+
+def factor_breakdown(
+    result:         dict,
+    score_history:  list,
+    macro_snapshot: Optional[dict] = None,
+) -> dict:
+    """
+    composite_score を因子ごとに分解した辞書を生成する。
+
+    Args:
+        result:         build_result() の戻り値辞書。以下キーを使用:
+                          composite_score, sector_name_ja, sector_code,
+                          macro_signals, top_companies, risk_level
+        score_history:  [{date:"YYYY-MM-DD", composite_score:float}, ...]
+                        直近90日分を渡すとトレンド文が生成される
+        macro_snapshot: {"usdjpy":float, "us10y":float, "vix":float, ...}
+
+    Returns:
+        {
+          "sector_name_ja": str,
+          "composite_score": float,
+          "risk_level": str,
+          "items": [
+            {
+              "label":     str,   # 表示ラベル（例: "ROE優良"）
+              "points":    float, # 寄与点数（正=追い風、負=逆風）
+              "rationale": str,   # 根拠詳細（例: "平均ROE=12.5% → 収益性確認"）
+              "category":  str,   # "financial" / "macro" / "analyst"
+              "direction": str,   # "tailwind" / "headwind" / "neutral"
+            }, ...
+          ],
+          "trend_text": str,      # 例: "3ヶ月前比+18点・上昇加速中"
+          "generated_at": str,    # ISO8601
+        }
+    """
+    sector_name     = result.get("sector_name_ja", result.get("sector_code", ""))
+    composite_score = result.get("composite_score", 0.0)
+    macro_signals   = result.get("macro_signals", [])
+    companies       = result.get("top_companies", [])
+    risk_level      = result.get("risk_level", "N/A")
+
+    items: list[dict] = []
+
+    # ── 財務スコア因子 ────────────────────────────────────────
+    ok_companies = [c for c in companies if c.get("fetch_ok")]
+    if ok_companies:
+        avg_roe = _safe_avg([c.get("roe")        for c in ok_companies])
+        avg_roa = _safe_avg([c.get("roa")        for c in ok_companies])
+        avg_opm = _safe_avg([c.get("op_margin")  for c in ok_companies])
+
+        # ROE (+15 / +8 / 0)
+        if avg_roe is not None:
+            if avg_roe >= 0.10:
+                pts = 15.0
+                lbl = "ROE優良"
+                rat = f"平均ROE={avg_roe*100:.1f}% → 収益性確認（基準10%超）"
+                drn = "tailwind"
+            elif avg_roe >= 0.05:
+                pts = 8.0
+                lbl = "ROE標準"
+                rat = f"平均ROE={avg_roe*100:.1f}% → 許容水準（5〜10%）"
+                drn = "neutral"
+            else:
+                pts = 0.0
+                lbl = "ROE低水準"
+                rat = f"平均ROE={avg_roe*100:.1f}% → 5%未満・収益性懸念"
+                drn = "headwind"
+            items.append({"label": lbl, "points": pts, "rationale": rat,
+                          "category": "financial", "direction": drn})
+
+        # ROA (+10 / +5 / 0)
+        if avg_roa is not None:
+            if avg_roa >= 0.05:
+                pts = 10.0
+                lbl = "ROA優良"
+                rat = f"平均ROA={avg_roa*100:.1f}% → 資産効率良好（基準5%超）"
+                drn = "tailwind"
+            elif avg_roa >= 0.02:
+                pts = 5.0
+                lbl = "ROA標準"
+                rat = f"平均ROA={avg_roa*100:.1f}% → 許容水準（2〜5%）"
+                drn = "neutral"
+            else:
+                pts = 0.0
+                lbl = "ROA低水準"
+                rat = f"平均ROA={avg_roa*100:.1f}% → 2%未満・資産効率懸念"
+                drn = "headwind"
+            items.append({"label": lbl, "points": pts, "rationale": rat,
+                          "category": "financial", "direction": drn})
+
+        # 営業利益率 (+15 / +8 / 0)
+        if avg_opm is not None:
+            if avg_opm >= 0.10:
+                pts = 15.0
+                lbl = "営業利益率優良"
+                rat = f"平均OPM={avg_opm*100:.1f}% → 高収益構造（基準10%超）"
+                drn = "tailwind"
+            elif avg_opm >= 0.05:
+                pts = 8.0
+                lbl = "営業利益率標準"
+                rat = f"平均OPM={avg_opm*100:.1f}% → 許容水準（5〜10%）"
+                drn = "neutral"
+            else:
+                pts = 0.0
+                lbl = "営業利益率低水準"
+                rat = f"平均OPM={avg_opm*100:.1f}% → 5%未満・コスト構造懸念"
+                drn = "headwind"
+            items.append({"label": lbl, "points": pts, "rationale": rat,
+                          "category": "financial", "direction": drn})
+
+        # アクルーアル比率 (+8 / +4 / 0 / -8)
+        ok_accrual = [c.get("accrual_ratio") for c in ok_companies
+                      if c.get("accrual_ratio") is not None]
+        if ok_accrual:
+            avg_ac = sum(ok_accrual) / len(ok_accrual)
+            if avg_ac < -0.02:
+                pts = 8.0
+                lbl = "利益の質：超優良"
+                rat = f"平均アクルーアル={avg_ac:.3f} → キャッシュ裏付け十分"
+                drn = "tailwind"
+            elif avg_ac < 0.02:
+                pts = 4.0
+                lbl = "利益の質：良好"
+                rat = f"平均アクルーアル={avg_ac:.3f} → 標準的な利益品質"
+                drn = "neutral"
+            elif avg_ac > 0.05:
+                pts = -8.0
+                lbl = "利益の質：要注意"
+                rat = f"平均アクルーアル={avg_ac:.3f} → 利益水増し疑い（0.05超）"
+                drn = "headwind"
+            else:
+                pts = 0.0
+                lbl = "利益の質：許容範囲"
+                rat = f"平均アクルーアル={avg_ac:.3f}"
+                drn = "neutral"
+            items.append({"label": lbl, "points": pts, "rationale": rat,
+                          "category": "financial", "direction": drn})
+
+        # アナリスト推奨 (+5/+3/0 + 上方修正+2)
+        avg_rec    = _safe_avg([c.get("rec_mean")       for c in ok_companies])
+        avg_upside = _safe_avg([c.get("analyst_upside") for c in ok_companies])
+        analyst_pts = 0.0
+        analyst_parts = []
+        if avg_rec is not None:
+            if avg_rec <= 2.0:
+                analyst_pts += 5.0
+                analyst_parts.append(f"推奨平均={avg_rec:.2f}（Buy相当）")
+            elif avg_rec <= 2.5:
+                analyst_pts += 3.0
+                analyst_parts.append(f"推奨平均={avg_rec:.2f}（Outperform相当）")
+            else:
+                analyst_parts.append(f"推奨平均={avg_rec:.2f}（中立以下）")
+        if avg_upside is not None and avg_upside >= 0.20:
+            analyst_pts += 2.0
+            analyst_parts.append(f"目標上振れ余地={avg_upside*100:.0f}%（+2点）")
+        if analyst_parts:
+            drn = "tailwind" if analyst_pts >= 4 else ("neutral" if analyst_pts > 0 else "headwind")
+            items.append({
+                "label":     "アナリスト評価",
+                "points":    analyst_pts,
+                "rationale": " / ".join(analyst_parts),
+                "category":  "analyst",
+                "direction": drn,
+            })
+
+    # ── マクロシグナル因子 ────────────────────────────────────
+    for sig in macro_signals:
+        direction = sig.get("signal", "neutral")
+        if direction not in ("tailwind", "headwind"):
+            continue
+        pts     = 10.0 if direction == "tailwind" else -10.0
+        label   = sig.get("label", sig.get("factor", ""))
+        trigger = sig.get("trigger", sig.get("trigger_value", ""))
+        rat     = sig.get("rationale", "")
+        if trigger and rat:
+            rationale = f"{trigger} → {rat}"
+        elif trigger:
+            rationale = trigger
+        elif rat:
+            rationale = rat
+        else:
+            rationale = ""
+        # マクロスナップショットから実値を補完
+        if macro_snapshot:
+            factor = sig.get("factor", "")
+            snap_map = {
+                "yen_depreciation": ("usdjpy", "USD/JPY={:.1f}"),
+                "yen_appreciation": ("usdjpy", "USD/JPY={:.1f}"),
+                "interest_rate_rise": ("us10y", "米10年債={:.2f}%"),
+                "interest_rate_fall": ("us10y", "米10年債={:.2f}%"),
+                "oil_price_rise":    ("oil_wti", "WTI={:.1f}ドル"),
+                "us_recession_risk": ("vix",    "VIX={:.0f}"),
+            }
+            if factor in snap_map:
+                key, fmt_str = snap_map[factor]
+                val = macro_snapshot.get(key)
+                if val is not None:
+                    snap_str = fmt_str.format(val)
+                    rationale = f"{snap_str}" + (f" → {rat}" if rat else "")
+        items.append({
+            "label":     label,
+            "points":    pts,
+            "rationale": rationale,
+            "category":  "macro",
+            "direction": direction,
+        })
+
+    # ── 点数0の財務項目は出力から除外（不要ノイズ削減）────────
+    # 寄与がゼロかつneutralな項目は折り畳む
+    items = [it for it in items if not (it["points"] == 0.0 and it["direction"] == "neutral")]
+
+    # 寄与の絶対値が大きい順にソート
+    items.sort(key=lambda x: abs(x["points"]), reverse=True)
+
+    # ── トレンド計算 ──────────────────────────────────────────
+    trend_text = _calc_trend(composite_score, score_history)
+
+    return {
+        "sector_name_ja":  sector_name,
+        "composite_score": composite_score,
+        "risk_level":      risk_level,
+        "items":           items,
+        "trend_text":      trend_text,
+        "generated_at":    datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+
+
+# ==============================================================
+# BLOCK 5: _calc_trend() - score_historyトレンド計算
+# ==============================================================
+
+def _calc_trend(current_score: float, score_history: list) -> str:
+    """
+    score_history から過去比較トレンド文を生成する。
+
+    Args:
+        current_score: 本日の composite_score
+        score_history: [{"date":"YYYY-MM-DD", "composite_score":float}, ...]
+                       日付降順・昇順どちらでも可
+
+    Returns:
+        例: "3ヶ月前比+18点・上昇加速中"
+             "先月比-5点・下落傾向"
+             "履歴データなし"
+    """
+    if not score_history:
+        return "履歴データなし"
+
+    # date文字列でソート（昇順）
+    try:
+        hist_sorted = sorted(
+            [h for h in score_history if h.get("date") and h.get("composite_score") is not None],
+            key=lambda h: h["date"]
+        )
+    except Exception:
+        return "履歴データなし"
+
+    if not hist_sorted:
+        return "履歴データなし"
+
+    today = datetime.now().date()
+
+    def _find_closest(days_ago: int) -> Optional[float]:
+        """days_ago日前に最も近いスコアを返す（±7日以内）"""
+        target = today - timedelta(days=days_ago)
+        best   = None
+        best_d = 9999
+        for h in hist_sorted:
+            try:
+                d = datetime.strptime(h["date"], "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            diff = abs((d - target).days)
+            if diff < best_d and diff <= 7:
+                best_d = diff
+                best   = h["composite_score"]
+        return best
+
+    # 比較対象を優先順で探す: 3ヶ月前 → 1ヶ月前 → 2週間前 → 1週間前
+    comparisons = [
+        (90, "3ヶ月前"),
+        (30, "先月"),
+        (14, "2週間前"),
+        (7,  "先週"),
+    ]
+    ref_score = None
+    ref_label = None
+    for days, label in comparisons:
+        s = _find_closest(days)
+        if s is not None:
+            ref_score = s
+            ref_label = label
+            break
+
+    if ref_score is None:
+        return "比較対象データなし"
+
+    diff = current_score - ref_score
+    sign = "+" if diff >= 0 else ""
+
+    # 傾向判定（直近3〜5件の方向性）
+    recent = hist_sorted[-5:]
+    if len(recent) >= 3:
+        diffs = [recent[i+1]["composite_score"] - recent[i]["composite_score"]
+                 for i in range(len(recent)-1)]
+        avg_d = sum(diffs) / len(diffs)
+        if avg_d >= 3:
+            trend = "上昇加速中"
+        elif avg_d >= 1:
+            trend = "緩やか上昇"
+        elif avg_d <= -3:
+            trend = "下落加速中"
+        elif avg_d <= -1:
+            trend = "緩やか下落"
+        else:
+            trend = "横ばい"
+    else:
+        trend = "上昇中" if diff > 0 else ("下落中" if diff < 0 else "横ばい")
+
+    return f"{ref_label}比{sign}{diff:.0f}点・{trend}"
+
+
+# ==============================================================
+# BLOCK 6: テキスト整形関数
+# ==============================================================
+
+def format_factor_breakdown_text(bd: dict, max_items: int = 6) -> str:
+    """
+    factor_breakdown() の戻り値辞書をツリー形式テキストに整形する。
+
+    Args:
+        bd:        factor_breakdown() の戻り値
+        max_items: 表示する因子の最大数（デフォルト6）
+
+    Returns:
+        例:
+          電気機器: 72点 [medium]
+          ├ ROE優良(+15): 平均ROE=12.5% → 収益性確認
+          ├ 円安追い風(+10): USD/JPY=149.2 → 輸出採算改善
+          ├ 金利上昇逆風(-10): 米10年債=4.52%
+          └ 判断: 「3ヶ月前比+18点・上昇加速中」
+    """
+    name    = bd.get("sector_name_ja", "")
+    score   = bd.get("composite_score", 0)
+    risk    = bd.get("risk_level", "")
+    items   = bd.get("items", [])
+    trend   = bd.get("trend_text", "")
+
+    risk_str = f" [{risk}]" if risk else ""
+    lines    = [f"{name}: {score:.0f}点{risk_str}"]
+
+    show_items = items[:max_items]
+    for i, it in enumerate(show_items):
+        pts = it["points"]
+        lbl = it["label"]
+        rat = it["rationale"]
+        sign     = "+" if pts >= 0 else ""
+        pts_str  = f"({sign}{pts:.0f})"
+        rat_part = f": {rat}" if rat else ""
+        is_last  = (i == len(show_items) - 1) and not trend
+        prefix   = "└" if is_last else "├"
+        lines.append(f"  {prefix} {lbl}{pts_str}{rat_part}")
+
+    if trend:
+        lines.append(f"  └ 判断: 「{trend}」")
+
+    return "\n".join(lines)
+
+
+def format_factor_breakdown_block(results: list, top_n: int = 5,
+                                   max_items: int = 4) -> str:
+    """
+    複数業種の factor_breakdown をスコア順に整形したブロックを返す。
+
+    Args:
+        results:   factor_breakdown() の戻り値リスト
+        top_n:     表示する業種数
+        max_items: 1業種あたりの因子最大表示数
+
+    Returns:
+        複数業種分のツリーテキストを空行区切りで結合した文字列
+    """
+    sorted_r = sorted(results, key=lambda x: x.get("composite_score", 0), reverse=True)
+    blocks   = []
+    for bd in sorted_r[:top_n]:
+        blocks.append(format_factor_breakdown_text(bd, max_items=max_items))
+    return "\n\n".join(blocks)
