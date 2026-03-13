@@ -570,7 +570,12 @@ def build_result(
         import sys, importlib
         sys.path.insert(0, str(Path(__file__).parent.parent))
         _se = importlib.import_module("score_explainer")
-        result = _se.enrich_result_with_reason(result, gov_sector_signals=None, macro_snapshot=None)
+        result = _se.enrich_result_with_reason(
+          result,
+          gov_sector_signals = None,
+          macro_snapshot     = macro_snapshot,   # ← Noneから実値に変更
+          score_history      = [],               # ← 新規引数（空リストで安全）
+      )
     except Exception as e:
         print(f"    ⚠️  score_explainer連携エラー: {e}")
 
