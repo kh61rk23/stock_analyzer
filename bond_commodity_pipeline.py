@@ -592,6 +592,116 @@ def analyze_yield_curve(yields: dict) -> dict:
         "recession_label":    recession_label,
     }
 
+# ==============================================================
+# BLOCK 5.5: [F-1] イールドカーブ逆転 → 業種 composite_score 補正
+# ==============================================================
+# Sloan(1996)アクルーアル補正と並ぶ「算出優位型アルファ」の核心。
+# FRED 2Y/10Y スプレッドは広く知られているが、
+# 「業種別定量補正」への自動換算は手作業では困難 → 情報優位が発生する。
+
+# ── 金利感応業種の補正マップ ──────────────────────────────────
+# 各タプル: (high_adj, medium_adj, inversion_extra)
+#   recession_score >= 70 → high_adj を加算
+#   recession_score >= 45 → medium_adj を加算
+#   is_inverted_2y10y=True → inversion_extra を追加加算
+# 根拠:
+#   銀行(1028): 逆イールド=利鞘圧縮→利益直撃。貸倒引当金増。
+#   不動産(1032): 金利上昇・信用収縮で物件価格下落リスク。
+#   保険(1030): 長短スプレッド縮小で運用益低下。
+#   電気ガス(1020): 景気後退で工場稼働減→需要減退。
+#   小売(1027): リセッション時の消費抑制直撃。
+#   電気機器(1016): 景気敏感株。リセッション懸念で最初に売られる。
+#   輸送機器(1017): 耐久財消費減退。機械(1015): 設備投資凍結。
+#   医薬品(1008)/食料品(1004): ディフェンシブ→相対優位でプラス。
+RECESSION_SECTOR_IMPACT: dict = {
+    "1028": {"high": -12, "medium": -6, "inversion_extra": -5},   # 銀行
+    "1032": {"high": -10, "medium": -5, "inversion_extra": -3},   # 不動産
+    "1030": {"high":  -8, "medium": -4, "inversion_extra": -2},   # 保険
+    "1020": {"high":  -7, "medium": -3, "inversion_extra":  0},   # 電気・ガス
+    "1027": {"high":  -6, "medium": -3, "inversion_extra":  0},   # 小売
+    "1016": {"high":  -5, "medium": -2, "inversion_extra":  0},   # 電気機器
+    "1017": {"high":  -5, "medium": -2, "inversion_extra":  0},   # 輸送用機器
+    "1015": {"high":  -4, "medium": -2, "inversion_extra":  0},   # 機械
+    "1031": {"high":  -4, "medium": -2, "inversion_extra": -2},   # その他金融
+    "1029": {"high":  -4, "medium": -2, "inversion_extra": -2},   # 証券
+    "1008": {"high":   3, "medium":  1, "inversion_extra":  2},   # 医薬品（ディフェンシブ）
+    "1004": {"high":   2, "medium":  1, "inversion_extra":  1},   # 食料品（ディフェンシブ）
+    "1033": {"high":   1, "medium":  0, "inversion_extra":  1},   # サービス
+}
+
+
+def apply_recession_score_to_sectors(
+    recession_score: int,
+    curve_analysis:  dict,
+    sector_results:  dict,
+) -> dict:
+    """
+    [F-1] イールドカーブ逆転・リセッションスコアを業種 composite_score に反映する。
+
+    Args:
+        recession_score: analyze_yield_curve() の recession_score (0〜100)
+        curve_analysis:  analyze_yield_curve() の戻り値辞書
+        sector_results:  {sector_code: result_dict} ← in-place 更新
+
+    Returns:
+        sector_results（in-place 変更済み・同一オブジェクト）
+
+    副作用:
+        各 result_dict に以下のキーを追加:
+          composite_score_pre_recession: float  元スコア（ロールバック用）
+          composite_score:               float  補正後スコア（上書き）
+          recession_adjustment:          float  加算量（正=プラス補正）
+    """
+    is_inv_2y10y = curve_analysis.get("is_inverted_2y10y", False)
+    is_inv_3m10y = curve_analysis.get("is_inverted_3m10y", False)
+    sp_2y10y     = curve_analysis.get("spread_2y10y")
+
+    applied = []
+
+    for code, impact in RECESSION_SECTOR_IMPACT.items():
+        res = sector_results.get(code)
+        if not isinstance(res, dict):
+            continue
+
+        base_score = float(res.get("composite_score", 0))
+
+        # ① リセッションスコアによる基本補正
+        if recession_score >= 70:
+            adj = float(impact["high"])
+        elif recession_score >= 45:
+            adj = float(impact["medium"])
+        else:
+            adj = 0.0
+
+        # ② 逆イールド追加補正（2y10y逆転 OR 3m10y逆転）
+        if (is_inv_2y10y or is_inv_3m10y) and impact.get("inversion_extra", 0) != 0:
+            adj += float(impact["inversion_extra"])
+
+        # ③ 深刻な逆転（スプレッド -0.5% 未満）は補正を30%増幅
+        if sp_2y10y is not None and sp_2y10y < -0.5 and adj < 0:
+            adj *= 1.3
+
+        adj = round(adj, 1)
+        if adj == 0.0:
+            continue
+
+        new_score = round(max(-30.0, min(100.0, base_score + adj)), 1)
+
+        # 元スコアを保存してから上書き
+        res["composite_score_pre_recession"] = base_score
+        res["composite_score"]               = new_score
+        res["recession_adjustment"]          = adj
+
+        name = res.get("sector_name_ja", code)
+        sign = "+" if adj >= 0 else ""
+        applied.append(f"{name}:{sign}{adj:.0f}")
+
+    if applied:
+        print(f"    📉 [F-1] リセッション補正: {', '.join(applied)}")
+    elif recession_score < 20:
+        print(f"    ✅ [F-1] リセッションスコア{recession_score}/100: 補正なし（低リスク）")
+
+    return sector_results
 
 # ==============================================================
 # BLOCK 6: コモディティ変動 → セクタースコア補正量算出
@@ -979,7 +1089,12 @@ def run_bond_commodity_pipeline(cfg, logger=None) -> dict:
         "losers":  [{"key": k, "name": v["name_ja"],
                      "ret_1m": v["ret_1m"]} for k, v in top_losers],
     }
-
+    # ── [F-1] リセッションスコア → 業種 composite_score 補正 ─────────
+    # sector_results は run_all_tasks() 側にあるため、
+    # ここでは curve_analysis と recession_score を戻り値に含める。
+    # 実際の apply_recession_score_to_sectors() 呼び出しは
+    # stock_analyzer_main.py の bond_commodity 実行ブロック直後で行う。
+    # （sector_results が確定した後に呼ぶ必要があるため）
     print(f"  ✅ 債券・コモディティパイプライン完了")
 
     return {

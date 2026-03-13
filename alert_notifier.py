@@ -449,18 +449,41 @@ def extract_alerts(cfg, results: dict) -> list:
             if combined:
                 lines.append("【複合異常 🚨】")
                 for a in combined[:3]:
+                    z   = a.get("z_score")
+                    z_s = f" Z={z:.2f}" if z is not None else ""
+                    # 複合異常は価格+出来高の両根拠を表示
+                    sub = []
+                    if a.get("price_change"):
+                        sub.append(f"価格{a['price_change']*100:+.1f}%")
+                    if a.get("volume_ratio"):
+                        sub.append(f"出来高{a['volume_ratio']:.1f}倍")
+                    detail = f"({', '.join(sub)})" if sub else ""
                     lines.append(
                         f"  {a.get('ticker','?')} ({a.get('label','')}) "
-                        f"— {a.get('summary','')}"
+                        f"— {a.get('summary','')}{z_s} {detail}"
                     )
             if others:
                 lines.append("【その他異常】")
                 for a in others[:5]:
                     ticker_or_sector = a.get("ticker") or a.get("sector_code", "?")
+                    z   = a.get("z_score")
+                    z_s = f" Z={z:.2f}" if z is not None else ""
+                    # anomaly_type 別の補足情報
+                    atype = a.get("anomaly_type", "")
+                    if atype == "volume":
+                        ratio = a.get("volume_ratio") or a.get("spike_ratio")
+                        extra = f" {ratio:.1f}倍急増" if ratio else ""
+                    elif atype == "price":
+                        chg = a.get("price_change")
+                        extra = f" {chg*100:+.1f}%" if chg is not None else ""
+                    elif atype == "score":
+                        extra = f" スコア急変"
+                    else:
+                        extra = ""
                     lines.append(
                         f"  [{a.get('severity','?').upper()}] "
-                        f"{ticker_or_sector} ({a.get('label', a.get('sector_name',''))}) "
-                        f"— {a.get('summary','')}"
+                        f"{ticker_or_sector} ({a.get('label', a.get('sector_name',''))})"
+                        f"{extra}{z_s} — {a.get('summary','')}"
                     )
 
             severity_level = "high" if any(
@@ -473,6 +496,101 @@ def extract_alerts(cfg, results: dict) -> list:
                 "body":     "\n".join(lines),
                 "severity": severity_level,
             })
+
+    # ── [D-3新規] セクタースコア急変検知 ─────────────────────────────
+    # score_history.json の前日スコアと今日のスコアを比較し、
+    # SCORE_JUMP_THRESHOLD 点以上の変動があれば通知する。
+    # 依存: score_history.json（1-6実装後に蓄積）
+    if getattr(cfg, "ALERT_ON_SCORE_JUMP", True):
+        jump_threshold = getattr(cfg, "ALERT_SCORE_JUMP_THRESHOLD", 15.0)
+        sector_results_sj = results.get("sectors", {})
+
+        try:
+            import json as _json
+            from pathlib import Path as _Path
+            from datetime import datetime as _dt, timedelta as _td
+
+            sh_path = _Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / "score_history.json"
+            if sh_path.exists() and sector_results_sj:
+                history = _json.loads(sh_path.read_text(encoding="utf-8"))
+                # 前日エントリを探す（直近7日以内）
+                today_s = _dt.now().strftime("%Y-%m-%d")
+                prev_entry = None
+                for i in range(1, 8):
+                    cand = (_dt.now() - _td(days=i)).strftime("%Y-%m-%d")
+                    if cand in history and cand != today_s:
+                        prev_entry = history[cand]
+                        prev_date  = cand
+                        break
+
+                if prev_entry:
+                    jump_lines = []
+                    for code, res in sector_results_sj.items():
+                        if not isinstance(res, dict):
+                            continue
+                        curr_score = res.get("composite_score", 0)
+                        prev_raw   = prev_entry.get(code)
+                        if prev_raw is None:
+                            continue
+                        prev_score = (prev_raw.get("score") if isinstance(prev_raw, dict)
+                                      else float(prev_raw))
+                        if prev_score is None:
+                            continue
+                        diff = curr_score - prev_score
+                        if abs(diff) >= jump_threshold:
+                            name  = res.get("sector_name_ja", code)
+                            sign  = "+" if diff >= 0 else ""
+                            icon  = "📈" if diff > 0 else "📉"
+                            jump_lines.append(
+                                (abs(diff), f"  {icon} {name}: {prev_score:.0f}→{curr_score:.0f}点 ({sign}{diff:.0f}pt)")
+                            )
+                    if jump_lines:
+                        jump_lines.sort(key=lambda x: -x[0])
+                        alerts.append({
+                            "trigger":  "score_jump",
+                            "title":    f"⚡ 業種スコア急変: {len(jump_lines)}業種（前日比±{jump_threshold:.0f}点超）",
+                            "body":     f"  基準日: {prev_date}\n" + "\n".join(l for _, l in jump_lines[:8]),
+                            "severity": "high" if any(d >= 20 for d, _ in jump_lines) else "medium",
+                        })
+        except Exception as _e:
+            pass  # score_history未蓄積の場合は静かにスキップ
+
+    # ── [2-5新規] FEDカレンダー接近アラート ──────────────────────────
+    fed_cal = results.get("fed_calendar", {})
+    if fed_cal:
+        fomc = fed_cal.get("fomc", {})
+        boj  = fed_cal.get("boj", {})
+        fed_adj  = fed_cal.get("macro_adjustment", 0)
+        fed_prob = fed_cal.get("fed", {})
+
+        alert_lines = []
+
+        # FOMC 3日前アラート
+        fomc_days = fomc.get("days_until_meeting")
+        if fomc_days is not None and fomc_days <= 3:
+            cut  = fed_prob.get("cut_prob_25bp")
+            hold = fed_prob.get("hold_prob")
+            prob_s = f" (利下げ{cut:.0f}% / 据え置き{hold:.0f}%)" if cut is not None else ""
+            alert_lines.append(f"  🏛️ FOMC {fomc_days}日後{prob_s}")
+
+        # 日銀 3日前アラート
+        boj_days = boj.get("days_until_meeting")
+        if boj_days is not None and boj_days <= 3:
+            alert_lines.append(f"  🏦 日銀金融政策決定会合 {boj_days}日後")
+
+        # FED マクロ調整値が大きい場合
+        if abs(fed_adj) >= 4:
+            reason = fed_cal.get("adjustment_rationale", "")
+            alert_lines.append(f"  📊 マクロ調整: {fed_adj:+.1f}pt（{reason}）")
+
+        if alert_lines:
+            alerts.append({
+                "trigger":  "fed_calendar",
+                "title":    "📅 中央銀行イベント接近",
+                "body":     "\n".join(alert_lines),
+                "severity": "medium",
+            })
+
     return alerts
 
 

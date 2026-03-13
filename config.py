@@ -610,6 +610,8 @@ SHORT_TERM_TOP_N: int = 5
 
 # 政策金利トラッカーを有効化するフラグ
 ENABLE_POLICY_TRACKER: bool = True
+# FEDカレンダー / CME FedWatch取得
+ENABLE_FED_CALENDAR:   bool = True
 # 米国セクター分析（S&P500 11セクター）
 ENABLE_US_SECTOR: bool = True
 
@@ -669,9 +671,10 @@ EVAL_FORCE_WEEKLY: bool = False
 # → INSIGHT_DIR を共用（BLOCK 1 で定義済み）
 
 ENABLE_SCREENER: bool = True   # スクリーニング有効化フラグ
+if getattr(cfg, "ENABLE_PERFORMANCE_TRACKER", True): # パフォーマンストラッカー有効化
 
 # IMF グローバルマクロパイプライン設定
-ENABLE_IMF: bool = True
+ ENABLE_IMF: bool = True
 IMF_INDICATORS = [
     "NGDP_RPCH", "PCPIPCH", "LUR", "BCA_NGDPD", "GGXWDG_NGDP"
 ]
@@ -768,6 +771,9 @@ ENABLE_BOND_COMMODITY: bool = True   # True=有効 / False=スキップ
 # ==============================================================
 
 ENABLE_ANOMALY_DETECTOR: bool = True
+
+ALERT_ON_SCORE_JUMP:          bool  = True   # 業種スコア急変アラート
+ALERT_SCORE_JUMP_THRESHOLD:   float = 15.0   # 急変判定閾値（点）
 
 # 価格変動率閾値（絶対値）
 ANOMALY_PRICE_CHANGE_HIGH:   float = 0.05   # ±5% 以上 = HIGH

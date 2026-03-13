@@ -797,6 +797,36 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ 政策金利トラッカー: スキップ（config.ENABLE_POLICY_TRACKER=False）")
 
+    # ── [2-5] FEDカレンダー取得 ────────────────────────────────────
+    if getattr(cfg, "ENABLE_FED_CALENDAR", True) and _in_mode("policy"):
+        print("\n  📅 FEDカレンダー取得中...")
+        try:
+            _fc = _load_local_module(
+                "fed_calendar_fetcher",
+                "/content/fed_calendar_fetcher.py",
+                cfg.DRIVE_BASE / "fed_calendar_fetcher.py",
+            )
+            if _fc:
+                fc_result = _fc.run_fed_calendar(cfg)
+                results["fed_calendar"] = fc_result
+                adj   = fc_result.get("macro_adjustment", 0)
+                reason = fc_result.get("adjustment_rationale", "")
+                fomc_days = fc_result.get("fomc", {}).get("days_until_meeting")
+                boj_days  = fc_result.get("boj",  {}).get("days_until_meeting")
+                logger.add(
+                    "fed_calendar", "success",
+                    f"FOMC:{fomc_days}日後 / 日銀:{boj_days}日後 "
+                    f"| macro調整:{adj:+.1f}pt（{reason}）"
+                )
+            else:
+                print("  ⚠️  fed_calendar_fetcher.py が見つかりません")
+                logger.add("fed_calendar", "warn", "fed_calendar_fetcher.py not found")
+        except Exception as e:
+            logger.add("fed_calendar", "error", str(e)[:100])
+            print(f"  ⚠️  FEDカレンダーエラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ FEDカレンダー: スキップ（ENABLE_FED_CALENDAR=False）")
+
     # ── 米国セクター分析（新規追加）────────────────────────
     if getattr(cfg, "ENABLE_US_SECTOR", False) and _in_mode("us_sector"):
         print("\n  🇺🇸 米国セクター分析を実行中...")
@@ -847,7 +877,22 @@ def run_all_tasks(mode: str = "all") -> dict:
             print(f"  ⚠️  債券・コモディティエラー: {str(e)[:80]}")
     else:
         print("  ⏩ 債券・コモディティ: スキップ（ENABLE_BOND_COMMODITY=False）")
-        
+    # ── [F-1] イールドカーブ → セクタースコア反映 ───────────────────
+    _bc_result = results.get("bond_commodity", {})
+    _sector_res_for_f1 = results.get("sectors", {})
+    if _bc_result and _sector_res_for_f1:
+        try:
+            import sys as _sys, importlib as _imp
+            _sys.path.insert(0, str(Path(__file__).parent))
+            _bc_mod = _imp.import_module("bond_commodity_pipeline")
+            _bc_mod.apply_recession_score_to_sectors(
+                recession_score = _bc_result.get("recession_score", 0),
+                curve_analysis  = _bc_result.get("curve_analysis", {}),
+                sector_results  = _sector_res_for_f1,
+            )
+            results["sectors"] = _sector_res_for_f1
+        except Exception as _e:
+            print(f"  ⚠️  [F-1] リセッション補正エラー（スキップ）: {_e}")
     # ── 個別銘柄スクリーニング（Step C）─────────────────────
     if getattr(cfg, "ENABLE_SCREENER", False) and _in_mode("screener"):
         print("\n  📋 個別銘柄スクリーニングを実行中...")
@@ -867,6 +912,14 @@ def run_all_tasks(mode: str = "all") -> dict:
                 print("  ⚠️  stock_screener.py が見つかりません")
         except Exception as e:
             logger.add("stock_screener", "error", str(e)[:100])
+            # [2-3] screener_history.json に追記
+            try:
+                import sys as _sys, importlib as _imp
+                _sys.path.insert(0, str(Path(__file__).parent))
+                _pt_mod = _imp.import_module("performance_tracker")
+                _pt_mod.append_screener_history(cfg, screen_result)
+            except Exception as _e:
+                print(f"  ⚠️  screener_history 追記失敗（スキップ）: {_e}")
             print(f"  ⚠️  スクリーニングエラー: {str(e)[:80]}")
     else:
         if not getattr(cfg, "ENABLE_SCREENER", False):

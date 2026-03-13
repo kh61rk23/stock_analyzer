@@ -340,6 +340,13 @@ def _section_news(results: dict) -> list:
     lines.append("")
     return lines
 
+# [2-3] パフォーマンストラッカーセクション
+def _section_performance(results: dict) -> list:
+    perf = results.get("performance", {})
+    if not perf or perf.get("skipped"):
+        return []
+    text = perf.get("summary_text", "")
+    return text.split("\n") if text else []
 
 # ==============================================================
 # BLOCK 9: アクション候補（来週の投資判断ガイド）
@@ -431,6 +438,7 @@ def generate_weekly_report(cfg, results: dict) -> dict:
     sections.append(_section_us_sectors(results))
     sections.append(_section_etf(results))
     sections.append(_section_screener(results))
+    sections.append(_section_performance(results))
     sections.append(_section_biz_summaries(results))
     sections.append(_section_news(results))
     sections.append(_section_action_guide(results))
@@ -685,7 +693,15 @@ def run_weekly_report(cfg, results: dict) -> dict:
     if not getattr(cfg, "ENABLE_WEEKLY_REPORT", True):
         print("  ⏩ 週次レポート: スキップ（ENABLE_WEEKLY_REPORT=False）")
         return {"skipped": True}
-
+# [2-3] パフォーマンストラッカー（月曜日のみ、+20秒/週）
+    try:
+        import sys as _sys, importlib as _imp
+        _sys.path.insert(0, str(Path(__file__).parent))
+        _pt_mod = _imp.import_module("performance_tracker")
+        results["performance"] = _pt_mod.run_performance_tracker(cfg)
+    except Exception as _e:
+        print(f"  ⚠️  performance_tracker エラー（スキップ）: {_e}")
+        results["performance"] = {}
     report_result = generate_weekly_report(cfg, results)
     report_md     = report_result.get("report_md", "")
     summary       = report_result.get("summary", {})
