@@ -144,21 +144,22 @@ jobs:
 
             git config user.name  "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add stock_data/data/dashboard/
-            git add stock_data/data/edinet_db/          || true
-            git add stock_data/data/edinet_cache/        || true
-            git add stock_data/data/biz_summary_cache/   || true
-            git add stock_data/data/imf_cache.json        2>/dev/null || true
-            git add stock_data/insights/ideas/evaluations.json 2>/dev/null || true
-            git add stock_data/data/score_history.json    2>/dev/null || true
-            git add stock_data/data/screener_history.json 2>/dev/null || true
-            git add momentum_factor.py 2>/dev/null || true
-            git add stock_data/data/fed_calendar_cache.json
-            stock_data/data/screener_history.json
-            stock_data/data/performance_history.json
-            git diff --staged --quiet || \
-              git commit -m "📊 dashboard + DB update $(date -u '+%Y-%m-%d')"
-            git push
+            git add stock_data/data/dashboard/ || true
+            git add stock_data/data/score_history.json || true
+            git add stock_data/data/screener_history.json || true
+            git add stock_data/data/performance_history.json || true
+            git add stock_data/data/fed_calendar_cache.json || true
+            git add stock_data/data/edinet_db/ || true
+            git add stock_data/data/edinet_cache/ || true
+            git add stock_data/data/biz_summary_cache/ || true
+            git add stock_data/data/imf_cache.json || true
+            git add stock_data/insights/ideas/evaluations.json || true
+            git add stock_data/logs/ || true
+            git add stock_data/data/earnings_surprise_cache.json || true
+            git add stock_data/data/multi_currency_cache.json || true
+            git add stock_data/data/portfolio_holdings.csv || true
+            git diff --cached --quiet || git commit -m "auto: daily update $(date '+%Y-%m-%d')"
+            git push || true
             echo "✅ dashboard_latest.csv + dashboard.iqy をコミットしました"
             echo "   URL: ${RAW_URL}"
           else
