@@ -590,7 +590,25 @@ def extract_alerts(cfg, results: dict) -> list:
                 "body":     "\n".join(alert_lines),
                 "severity": "medium",
             })
-
+    # ── ⑭ 決算サプライズアラート [A-7] ────────────────────────────
+    es_result = results.get("earnings_surprise", {})
+    if es_result and getattr(cfg, "ENABLE_EARNINGS_SURPRISE", True):
+        try:
+            import sys as _sys, importlib as _imp
+            _sys.path.insert(0, str(Path(__file__).parent))
+            _es_mod = _imp.import_module("earnings_surprise")
+            alert_text = _es_mod.format_surprise_alert(es_result, top_n=5)
+            hit_pos = es_result.get("hit_pos", 0)
+            hit_neg = es_result.get("hit_neg", 0)
+            if hit_pos > 0 or hit_neg > 0:
+                alerts.append({
+                    "trigger":  "earnings_surprise",
+                    "title":    f"📋 決算サプライズ: ポジ{hit_pos}社 / ネガ{hit_neg}社",
+                    "body":     alert_text,
+                    "severity": "medium" if hit_pos >= 2 else "info",
+                })
+        except Exception:
+            pass
     return alerts
 
 

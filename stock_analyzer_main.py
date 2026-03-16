@@ -796,7 +796,41 @@ def run_all_tasks(mode: str = "all") -> dict:
             print(f"  ⚠️  政策金利トラッカーエラー: {str(e)[:80]}")
     else:
         print("  ⏩ 政策金利トラッカー: スキップ（config.ENABLE_POLICY_TRACKER=False）")
-
+    # ── [A-6] 多通貨モニタリング ──────────────────────────────────
+    if getattr(cfg, "ENABLE_MULTI_CURRENCY", True) and _in_mode("policy"):
+        try:
+            _mc = _load_local_module(
+                "multi_currency_monitor",
+                "/content/multi_currency_monitor.py",
+                cfg.DRIVE_BASE / "multi_currency_monitor.py",
+            )
+            if _mc:
+                mc_result = _mc.run_multi_currency(cfg)
+                results["multi_currency"] = mc_result
+                n_sig = len(mc_result.get("signals", []))
+                n_adj = len(mc_result.get("macro_adjustment", {}))
+                logger.add("multi_currency", "success",
+                           f"{n_sig}シグナル / {n_adj}業種補正")
+                # 多通貨補正を sector_results に反映
+                mc_adj = mc_result.get("macro_adjustment", {})
+                _sr    = results.get("sectors", {})
+                for _code, _delta in mc_adj.items():
+                    if _code in _sr and isinstance(_sr[_code], dict) and _delta != 0:
+                        _sr[_code]["composite_score"] = round(
+                            max(-30, min(100,
+                                _sr[_code].get("composite_score", 0) + _delta
+                            )), 1
+                        )
+                        _sr[_code]["currency_adjustment"] = _delta
+                if mc_adj:
+                    results["sectors"] = _sr
+            else:
+                print("  ⚠️  multi_currency_monitor.py が見つかりません")
+        except Exception as e:
+            logger.add("multi_currency", "error", str(e)[:100])
+            print(f"  ⚠️  多通貨モニタリングエラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ 多通貨モニタリング: スキップ（ENABLE_MULTI_CURRENCY=False）")
     # ── [2-5] FEDカレンダー取得 ────────────────────────────────────
     if getattr(cfg, "ENABLE_FED_CALENDAR", True) and _in_mode("policy"):
         print("\n  📅 FEDカレンダー取得中...")
@@ -877,6 +911,28 @@ def run_all_tasks(mode: str = "all") -> dict:
             print(f"  ⚠️  債券・コモディティエラー: {str(e)[:80]}")
     else:
         print("  ⏩ 債券・コモディティ: スキップ（ENABLE_BOND_COMMODITY=False）")
+        # ── [F-1] イールドカーブ → セクタースコア反映 ───────────────────
+    _bc_result     = results.get("bond_commodity", {})
+    _sector_res_f1 = results.get("sectors", {})
+    if _bc_result and _sector_res_f1:
+        try:
+            _bc_mod = _load_local_module(
+                "bond_commodity_pipeline",
+                "/content/bond_commodity_pipeline.py",
+                cfg.DRIVE_BASE / "bond_commodity_pipeline.py",
+            )
+            if _bc_mod and hasattr(_bc_mod, "apply_recession_score_to_sectors"):
+                _bc_mod.apply_recession_score_to_sectors(
+                    recession_score = _bc_result.get("recession_score", 0),
+                    curve_analysis  = _bc_result.get("curve_analysis", {}),
+                    sector_results  = _sector_res_f1,
+                )
+                results["sectors"] = _sector_res_f1
+                logger.add("bond_commodity", "success",
+                           f"[F-1] リセッション補正適用: "
+                           f"recession_score={_bc_result.get('recession_score',0)}/100")
+        except Exception as _e:
+            print(f"  ⚠️  [F-1] リセッション補正エラー（スキップ）: {_e}")
     # ── [F-1] イールドカーブ → セクタースコア反映 ───────────────────
     _bc_result = results.get("bond_commodity", {})
     _sector_res_for_f1 = results.get("sectors", {})
@@ -921,6 +977,26 @@ def run_all_tasks(mode: str = "all") -> dict:
             except Exception as _e:
                 print(f"  ⚠️  screener_history 追記失敗（スキップ）: {_e}")
             print(f"  ⚠️  スクリーニングエラー: {str(e)[:80]}")
+             # [A-7] 決算サプライズ分析（screener通過銘柄を対象に実行）
+            try:
+                _es = _load_local_module(
+                    "earnings_surprise",
+                    "/content/earnings_surprise.py",
+                    cfg.DRIVE_BASE / "earnings_surprise.py",
+                )
+                if _es and getattr(cfg, "ENABLE_EARNINGS_SURPRISE", True):
+                    _es_tickers = [
+                        c["ticker"] for c in screen_result.get("candidates", [])
+                        if c.get("pass_filters")
+                    ]
+                    if _es_tickers:
+                        es_result = _es.run_earnings_surprise(cfg, _es_tickers)
+                        results["earnings_surprise"] = es_result
+                        logger.add("earnings_surprise", "success",
+                                    f"ポジ{es_result.get('hit_pos',0)}社/"
+                                    f"ネガ{es_result.get('hit_neg',0)}社")
+            except Exception as _e:
+                print(f"  ⚠️  earnings_surprise エラー（スキップ）: {_e}")
     else:
         if not getattr(cfg, "ENABLE_SCREENER", False):
             print("  ⏩ 個別株スクリーニング: スキップ（ENABLE_SCREENER=False）")
@@ -1183,7 +1259,36 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         if not getattr(cfg, "ENABLE_BIZ_SUMMARY", False):
             print("  ⏩ 事業概要取得: スキップ（ENABLE_BIZ_SUMMARY=False）")
-
+    # ── [フェーズ3] シナリオ分析（月曜日のみ・週次レポートに統合） ─────
+    if getattr(cfg, "ENABLE_SCENARIO_ANALYSIS", True) and _in_mode("weekly_report"):
+        try:
+            _sa = _load_local_module(
+                "scenario_analyzer",
+                "/content/scenario_analyzer.py",
+                cfg.DRIVE_BASE / "scenario_analyzer.py",
+            )
+            if _sa:
+                _macro_snap = results.get("macro_snapshot", {})
+                _sector_res = results.get("sectors", {})
+                if _macro_snap and _sector_res:
+                    sa_result = _sa.run_scenario_analysis(
+                        cfg         = cfg,
+                        sector_results   = _sector_res,
+                        macro_snapshot   = _macro_snap,
+                        scenario_keys    = ["bear_case", "base_case", "bull_case",
+                                            "weak_yen", "china_shock"],
+                        fetch_portfolio_prices = False,  # 速度優先: Trueにすると+20秒
+                    )
+                    results["scenario_analysis"] = sa_result
+                    logger.add("scenario_analysis", "success",
+                               f"{len(sa_result.get('scenarios', {}))}シナリオ完了")
+                else:
+                    print("  ⏩ シナリオ分析: macro_snapshot または sectors がなし")
+            else:
+                print("  ⚠️  scenario_analyzer.py が見つかりません")
+        except Exception as e:
+            logger.add("scenario_analysis", "error", str(e)[:100])
+            print(f"  ⚠️  シナリオ分析エラー: {str(e)[:80]}")
     # ── Step F: 週次投資判断レポート ─────────────────────────────
     if getattr(cfg, "ENABLE_WEEKLY_REPORT", True) and _in_mode("weekly_report"):
         print("\n  📊 週次投資判断レポート生成 (Step F)...")

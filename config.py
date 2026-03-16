@@ -477,6 +477,11 @@ MACRO_TICKERS = {
     "vix":     "^VIX",        # VIX 恐怖指数
     "sp500":   "^GSPC",       # S&P500
     "nikkei":  "^N225",       # 日経平均
+    # [A-6] 多通貨モニタリング追加（日次で自動取得）
+    "eurjpy":  "EURJPY=X",    # EUR/JPY
+    "cnyjpy":  "CNYJPY=X",    # CNY/JPY（人民元）
+    "audjpy":  "AUDJPY=X",    # AUD/JPY（リスクオン/オフ先行指標）
+    "gbpjpy":  "GBPJPY=X",    # GBP/JPY（英国系製薬・金融）
 }
 
 # 業種代表銘柄（逆風・追い風アイコン表示のデフォルト対象）
@@ -670,11 +675,14 @@ EVAL_FORCE_WEEKLY: bool = False
 # 週次レポート: INSIGHT_DIR/ideas/weekly_summary_YYYY-WXX.md
 # → INSIGHT_DIR を共用（BLOCK 1 で定義済み）
 
-ENABLE_SCREENER: bool = True   # スクリーニング有効化フラグ
-if getattr(cfg, "ENABLE_PERFORMANCE_TRACKER", True): # パフォーマンストラッカー有効化
+ENABLE_SCREENER: bool = True                 # スクリーニング有効化フラグ
+ENABLE_SCENARIO_ANALYSIS: bool = True   # シナリオ分析（フェーズ3）
+ENABLE_PERFORMANCE_TRACKER: bool = True      # パフォーマンストラッカー有効化（2-3追加）
+ENABLE_MULTI_CURRENCY:    bool = True   # 多通貨モニタリング [A-6]
+ENABLE_EARNINGS_SURPRISE: bool = True   # 決算サプライズ検出 [A-7]
 
 # IMF グローバルマクロパイプライン設定
- ENABLE_IMF: bool = True
+ENABLE_IMF: bool = True
 IMF_INDICATORS = [
     "NGDP_RPCH", "PCPIPCH", "LUR", "BCA_NGDPD", "GGXWDG_NGDP"
 ]
@@ -736,7 +744,8 @@ DAILY_MODULES = [
     "screener",      # スキャナーの追加
     "excel_export",  # Excel ダッシュボード CSV エクスポート（Step D）
     "us_screener",   # 米国株スクリーニング0310
-    "edinet_rotation",  #edinetのローテーション
+    "edinet_rotation", # edinetのローテーション
+    "multi_currency", # 多通貨モニタリング [A-6]
 ]
 
 # ── ウィークリーサイクル（月曜朝に追加実行）───────────────────

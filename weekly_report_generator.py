@@ -351,6 +351,13 @@ def _section_performance(results: dict) -> list:
 # ==============================================================
 # BLOCK 9: アクション候補（来週の投資判断ガイド）
 # ==============================================================
+def _section_scenario(results: dict) -> list:
+    """シナリオ分析セクションを生成する。"""
+    sa = results.get("scenario_analysis", {})
+    if not sa:
+        return []
+    text = sa.get("summary_text", "")
+    return text.split("\n") if text else []
 
 def _section_action_guide(results: dict) -> list:
     lines = ["## 🎯 来週のアクション候補", ""]
@@ -438,6 +445,7 @@ def generate_weekly_report(cfg, results: dict) -> dict:
     sections.append(_section_us_sectors(results))
     sections.append(_section_etf(results))
     sections.append(_section_screener(results))
+    sections.append(_section_scenario(results))
     sections.append(_section_performance(results))
     sections.append(_section_biz_summaries(results))
     sections.append(_section_news(results))
