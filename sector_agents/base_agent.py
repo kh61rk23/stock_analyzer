@@ -278,9 +278,19 @@ def build_macro_signals(sector_code: str, cfg,
 # BLOCK 4: 総合スコア計算（v2.0 アナリスト推奨加算）
 # ==============================================================
 
-def calc_composite_score(companies: list, macro_signals: list) -> tuple:
+def calc_composite_score(
+    companies:            list,
+    macro_signals:        list,
+    edinet_credit_bonus:  float = 0.0,
+) -> tuple:
     """
-    財務スコア(40) + マクロスコア(30) + アナリストスコア(5) の合計。
+    財務スコア(40) + マクロスコア(30) + アナリストスコア(5) + EDINET信用ボーナス(最大+5/-5) の合計。
+
+    edinet_credit_bonus:
+      edinet_rotation_manager の蓄積DBから取得した credit_score を
+      業種内平均に変換して加算する補正値。
+      build_result() 側で計算して渡す。データ未取得時は 0.0。
+    """
 
     アナリストスコア:
       recommendationMean ≤ 2.0 (Buy相当): +5点
@@ -325,7 +335,7 @@ def calc_composite_score(companies: list, macro_signals: list) -> tuple:
         if s["signal"] == "tailwind":   macro_score += 10
         elif s["signal"] == "headwind": macro_score -= 10
 
-    total = fin_score + macro_score + analyst_score
+    total = fin_score + macro_score + analyst_score + edinet_credit_bonus
 
     headwinds = sum(1 for s in macro_signals if s["signal"] == "headwind")
     if headwinds >= 2 or total < 10:    risk_level = "high"
@@ -485,15 +495,49 @@ def build_result(
     cfg,
 ) -> dict:
     """
-    SECTOR_AGENT_RESULT_SCHEMA に準拠した辞書を組み立てる。
+#    SECTOR_AGENT_RESULT_SCHEMA に準拠した辞書を組み立てる。
 
-    【v2.0変更】
-    edinet_client.get_sector_data() を使用:
-      - analysis + financials + gov_meta を一括取得
-      - 日次キャッシュを利用して1日1回のみAPIを叩く
-      - 予算残がなければスキップ（エラーにしない）
+#    【v2.0変更】
+#    edinet_client.get_sector_data() を使用:
+#      - analysis + financials + gov_meta を一括取得
+#      - 日次キャッシュを利用して1日1回のみAPIを叩く
+#      - 予算残がなければスキップ（エラーにしない）
     """
-    score, risk_level = calc_composite_score(companies, macro_signals)
+    # ── [S-2残] EDINET credit_score → quality補正（edinet_rotation DBから取得）────
+    edinet_credit_bonus = 0.0
+    if getattr(cfg, "ENABLE_EDINET_ROTATION", False):
+        try:
+            import sys as _sys, importlib as _imp
+            _sys.path.insert(0, str(Path(__file__).parent.parent))
+            _erm = _imp.import_module("edinet_rotation_manager")
+            _db  = _erm.load_db(cfg)
+            _analysis = _db.get("analysis", {})   # {ticker: analysis_dict}
+
+            # 業種内対象銘柄の credit_score を収集
+            _ok_tickers = [c["ticker"] for c in companies if c.get("fetch_ok")]
+            _credit_scores = []
+            for _tk in _ok_tickers:
+                _adict = _analysis.get(_tk, {})
+                _cs = _adict.get("credit_score") if isinstance(_adict, dict) else None
+                if _cs is not None:
+                    try:
+                        _credit_scores.append(float(_cs))
+                    except (TypeError, ValueError):
+                        pass
+
+            if _credit_scores:
+                avg_credit = sum(_credit_scores) / len(_credit_scores)
+                # tier補正: credit_score は 0〜100点スケール（EdinetDB）
+                if   avg_credit >= 80:  edinet_credit_bonus =  5.0   # 信用優良
+                elif avg_credit >= 60:  edinet_credit_bonus =  2.0   # 信用良好
+                elif avg_credit >= 40:  edinet_credit_bonus =  0.0   # 中立
+                else:                   edinet_credit_bonus = -5.0   # 信用懸念
+                print(f"    📋 EDINET信用補正: avg_credit={avg_credit:.0f}/100 "
+                      f"→ {edinet_credit_bonus:+.0f}pt（{len(_credit_scores)}社）")
+        except Exception as _e:
+            print(f"    ⚠️  EDINET信用補正エラー（スキップ）: {str(_e)[:60]}")
+
+    score, risk_level = calc_composite_score(companies, macro_signals, edinet_credit_bonus)
 
     # ── EdinetDB + 政府EDINET 一括取得 ──────────────────────────
     edinet_data  = {}  # {ticker: full_company_data}
