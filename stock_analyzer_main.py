@@ -1338,7 +1338,54 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         if not getattr(cfg, "ENABLE_EXCEL_EXPORT", False):
             print("  ⏩ Excelエクスポート: スキップ（ENABLE_EXCEL_EXPORT=False）")
-    
+        # ── [3-2] 相関ヒートマップ計算（C-4） ──────────────────────────
+    if getattr(cfg, "ENABLE_CORRELATION_HEATMAP", True) and _in_mode("excel_export"):
+        try:
+            _ch = _load_local_module(
+                "correlation_heatmap",
+                "/content/correlation_heatmap.py",
+                cfg.DRIVE_BASE / "correlation_heatmap.py",
+            )
+            if _ch:
+                ch_result = _ch.run_correlation_heatmap(cfg)
+                results["correlation_heatmap"] = ch_result
+                conc = ch_result.get("concentration", {})
+                logger.add("correlation_heatmap", "success",
+                           f"{len(ch_result.get('tickers', []))}銘柄 "
+                           f"集中リスク:{conc.get('risk_level','N/A')} "
+                           f"{conc.get('summary','')[:40]}")
+        except Exception as e:
+            logger.add("correlation_heatmap", "error", str(e)[:100])
+            print(f"  ⚠️  相関ヒートマップエラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ 相関ヒートマップ: スキップ（ENABLE_CORRELATION_HEATMAP=False）")
+    # ── [3-3] ポジションサイジング（C-3）─────────────────────────
+    if getattr(cfg, "ENABLE_POSITION_SIZER", True) and _in_mode("weekly_report"):
+        try:
+            _ps = _load_local_module(
+                "position_sizer",
+                "/content/position_sizer.py",
+                cfg.DRIVE_BASE / "position_sizer.py",
+            )
+            if _ps:
+                ps_result = _ps.run_position_sizer(
+                    cfg            = cfg,
+                    total_assets_jpy = getattr(cfg, "TOTAL_ASSETS_JPY", 10_000_000),
+                    risk_pct       = getattr(cfg, "POSITION_RISK_PCT", 0.01),
+                    atr_multiplier = getattr(cfg, "POSITION_ATR_MULT", 2.0),
+                    sector_results = results.get("sectors", {}),
+                )
+                results["position_sizer"] = ps_result
+                valid = [p for p in ps_result.get("positions", []) if not p.get("error")]
+                logger.add("position_sizer", "success",
+                           f"{len(valid)}銘柄 サイジング完了")
+            else:
+                print("  ⚠️  position_sizer.py が見つかりません")
+        except Exception as e:
+            logger.add("position_sizer", "error", str(e)[:100])
+            print(f"  ⚠️  ポジションサイジングエラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ ポジションサイジング: スキップ（週次/無効）")
     # ── スコア履歴・スクリーナー履歴の蓄積 ────────────────
         try:
             if results.get("sectors"):

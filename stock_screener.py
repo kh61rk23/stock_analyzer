@@ -331,6 +331,7 @@ def _calc_scores(
     sector_score:     float,
     edinet_accrual:   Optional[float] = None,
     sector_accrual_mean: Optional[float] = None,
+    surprise_bonus: float = 0.0
 ) -> dict:
     """
     バリュースコア / クォリティスコア / 総合スコアを算出する。
@@ -372,6 +373,8 @@ def _calc_scores(
         quality_base = max(0, min(100, roe / 0.30 * 100))
     else:
         quality_base = 50.0
+    # [A-7] 決算サプライズボーナス（+5 〜 -5pt）
+    quality_score = round(max(0, min(100, quality_base + surprise_bonus)), 1)
 
     # [S-2] アクルーアル補正（Sloan 1996）
     # - 銘柄個別のアクルーアルtierでボーナス算出
@@ -406,6 +409,7 @@ def _calc_scores(
         "accrual_ratio":   edinet_accrual,   # v3.0追加
         "accrual_tier":    acr_tier,         # v3.0追加
         "accrual_bonus":   round(acr_bonus + relative_bonus, 1),  # v3.0追加
+        "surprise_bonus":   surprise_bonus,
     }
 
 
@@ -490,28 +494,18 @@ def _calc_discovery_score(
 
 
 # ==============================================================
-# BLOCK 3: 業種スクリーニング（v3.0: EDINET & discovery統合）
+# BLOCK 3: 業種スクリーニング（v3.1: 決算サプライズ & EDINET統合版）
 # ==============================================================
 
-def _screen_sector(
-    sector_code:      str,
-    sector_name:      str,
-    sector_score:     float,
-    tickers:          list,
-    cfg,
-    market:           str = "JP",
-    edinet_accruals:  Optional[dict] = None,
-    all_scores_ref:   Optional[list] = None,
-) -> list:
+def _screen_sector(sector_code: str, sector_name: str,
+                   sector_score: float, tickers: list,
+                   cfg, market: str = "JP",
+                   surprise_cache: dict = None,
+                   edinet_accruals: dict = None,  # 引数追加
+                   all_scores_ref: list = None    # 引数追加
+                   ) -> list:
     """
     1 業種の銘柄リストをスクリーニングする。
-
-    v3.0変更:
-        edinet_accruals: {ticker: accrual_ratio} を受け取り _calc_scores() に渡す
-        all_scores_ref:  全銘柄のcomposite_scoreを蓄積するリスト（[S-3]閾値計算用）
-
-    Returns:
-        Candidate 辞書のリスト
     """
     accruals    = edinet_accruals or {}
     candidates  = []
@@ -519,8 +513,7 @@ def _screen_sector(
     # 業種平均アクルーアル（S-2: 相対評価用）
     sector_accrual_mean = _calc_sector_accrual_mean(tickers, accruals)
 
-    # 業種平均出来高（S-3: 低出来高判定用）
-    # 先にデータ取得してから平均を計算するため、一旦収集してから判定
+    # 1. 業種内全銘柄の基礎データを収集
     raw_data_list = []
     print(f"    [{sector_code}] {sector_name}: {len(tickers)}銘柄チェック中...")
 
@@ -530,18 +523,53 @@ def _screen_sector(
             raw_data_list.append((ticker, data))
         time.sleep(0.2)
 
-    # 業種平均出来高算出
+    # 業種平均出来高算出（S-3: 未発見スコア用）
     vols = [d.get("avg_volume", 0) for (_, d) in raw_data_list if d.get("avg_volume")]
     sector_vol_mean = sum(vols) / len(vols) if vols else None
 
+    # 2. 決算サプライズ用モジュールの動的読み込み（ループ外で1回のみ）
+    es_module = None
+    if surprise_cache:
+        try:
+            import sys as _sys, importlib as _imp
+            _sys.path.insert(0, str(Path(__file__).parent))
+            es_module = _imp.import_module("earnings_surprise")
+        except Exception:
+            pass
+
+    # 3. メインループ：フィルタリングとスコアリング
     for ticker, data in raw_data_list:
+        # A. フィルター判定（PER/PBR/ROE/時価総額/出来高）
         passed, detail = _apply_filters(data, cfg)
-        edinet_acr     = accruals.get(ticker)
-        scores         = _calc_scores(
+        
+        # B. 決算サプライズボーナスの取得
+        es_bonus = 0.0
+        if es_module and surprise_cache:
+            try:
+                es_bonus = es_module.get_screener_bonus(ticker, surprise_cache)
+            except Exception:
+                pass
+        
+        # C. EDINETアクルーアルの取得
+        edinet_acr = accruals.get(ticker)
+        passed, detail = _apply_filters(data, cfg)
+        # [A-7] 決算サプライズボーナス取得
+        es_bonus = 0.0
+        if surprise_cache:
+            try:
+                import sys as _sys, importlib as _imp
+                _sys.path.insert(0, str(Path(__file__).parent))
+                _es_mod = _imp.import_module("earnings_surprise")
+                es_bonus = _es_mod.get_screener_bonus(ticker, surprise_cache)
+            except Exception:
+                pass
+        # D. 総合スコア計算（すべてのボーナスを統合）
+        scores = _calc_scores(
             data                = data,
             sector_score        = sector_score,
             edinet_accrual      = edinet_acr,
             sector_accrual_mean = sector_accrual_mean,
+            surprise_bonus      = es_bonus     # ← 追加ロジックを統合
         )
 
         candidate = {
@@ -555,20 +583,21 @@ def _screen_sector(
             "roe":            round(data["roe"] * 100, 1) if data.get("roe") is not None else None,
             "market_cap_b":   data.get("market_cap_b"),
             "avg_volume":     data.get("avg_volume"),
-            "analyst_count":  data.get("analyst_count"),   # v3.0追加
+            "analyst_count":  data.get("analyst_count"),
             "pass_filters":   passed,
             "filter_detail":  detail,
             **scores,
-            # discovery_score は run_stock_screener で後付け（全銘柄スコア参照のため）
-            "discovery_score": 0.0,
+            "surprise_bonus":  es_bonus,
+            "discovery_score": 0.0, # run_stock_screenerで後付け
             "discovery_flags": [],
         }
         candidates.append(candidate)
 
-        # 全スコア参照リストに追加
+        # 全銘柄スコア参照リストに追加
         if all_scores_ref is not None:
             all_scores_ref.append(scores["composite_score"])
 
+    # ログ出力
     passed_list = [c for c in candidates if c["pass_filters"]]
     print(f"      → 通過: {len(passed_list)}/{len(candidates)}銘柄"
           + (f" | EDINET accrual: {sum(1 for t,_ in raw_data_list if t in accruals)}銘柄"
@@ -674,6 +703,20 @@ def run_stock_screener(cfg, sector_results: dict) -> dict:
     print("\n  📋 個別銘柄スクリーニング（Step C v3.0）開始...")
     t0 = datetime.now()
 
+    # [A-7] 決算サプライズキャッシュ読み込み（当日分 / 24時間有効）
+    surprise_cache = {}
+    if getattr(cfg, "ENABLE_EARNINGS_SURPRISE", True):
+        try:
+            import sys as _sys, importlib as _imp
+            _sys.path.insert(0, str(Path(__file__).parent))
+            _es_mod = _imp.import_module("earnings_surprise")
+            _es_cache = _es_mod._load_cache(cfg)
+            if _es_cache:
+                surprise_cache = _es_cache
+                print(f"    📋 決算サプライズキャッシュ: {len(surprise_cache)}銘柄")
+        except Exception:
+            pass
+
     top_n_sectors = getattr(cfg, "SCREEN_TOP_N_SECTORS", 5)
 
     if not sector_results:
@@ -690,7 +733,26 @@ def run_stock_screener(cfg, sector_results: dict) -> dict:
         edinet_accruals = _load_edinet_accruals(cfg)
     except Exception as e:
         print(f"  ⚠️  EDINET accrual ロード失敗（スキップ）: {e}")
-
+    # --- [A-7] 追加: 決算サプライズキャッシュ読み込み ---
+    surprise_cache = {}
+    try:
+        import sys as _sys
+        from pathlib import Path
+        import importlib as _imp
+        # 実行ファイルと同じディレクトリをパスに追加
+        current_dir = str(Path(__file__).parent)
+        if current_dir not in _sys.path:
+            _sys.path.insert(0, current_dir)
+            
+        _es = _imp.import_module("earnings_surprise")
+        # earnings_surprise.py 内に _load_cache(cfg) が定義されている想定
+        _cache = _es._load_cache(cfg)
+        if _cache:
+            surprise_cache = _cache
+            print(f"    📋 決算サプライズキャッシュ: {len(surprise_cache)}銘柄")
+    except Exception as e:
+        # モジュールがない場合などは静かにスキップ
+        pass
     # セクタースコア上位 N 業種を選択
     sorted_sectors = sorted(
         sector_results.items(),
@@ -727,6 +789,7 @@ def run_stock_screener(cfg, sector_results: dict) -> dict:
             market          = "JP",
             edinet_accruals = edinet_accruals,
             all_scores_ref  = all_comp_scores,
+            surprise_cache = surprise_cache,
         )
         all_candidates.extend(candidates)
 

@@ -609,6 +609,25 @@ def extract_alerts(cfg, results: dict) -> list:
                 })
         except Exception:
             pass
+    # ── ⑮ 相関集中リスクアラート [3-2] ────────────────────────────
+    ch_result = results.get("correlation_heatmap", {})
+    if ch_result and not ch_result.get("skipped"):
+        conc = ch_result.get("concentration", {})
+        risk_level = conc.get("risk_level", "low")
+        if risk_level in ("high", "medium"):
+            risk_pairs = conc.get("risk_pairs", [])
+            lines = [f"  {conc.get('summary', '')}"]
+            for p in risk_pairs[:5]:
+                lines.append(
+                    f"  {p.get('label1', p['t1'])} ×"
+                    f" {p.get('label2', p['t2'])}: r={p['corr']:.2f}"
+                )
+            alerts.append({
+                "trigger":  "correlation_risk",
+                "title":    f"⚠️ ポートフォリオ集中リスク検出（{len(risk_pairs)}ペア）",
+                "body":     "\n".join(lines),
+                "severity": "high" if risk_level == "high" else "medium",
+            })
     return alerts
 
 

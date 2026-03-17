@@ -340,6 +340,14 @@ def _section_news(results: dict) -> list:
     lines.append("")
     return lines
 
+# [n-n] ポジションサイジングセクション
+def _section_position_sizer(results: dict) -> list:
+    ps = results.get("position_sizer", {})
+    if not ps or ps.get("skipped"):
+        return []
+    text = ps.get("summary_text", "")
+    return text.split("\n") if text else []
+
 # [2-3] パフォーマンストラッカーセクション
 def _section_performance(results: dict) -> list:
     perf = results.get("performance", {})
@@ -447,6 +455,7 @@ def generate_weekly_report(cfg, results: dict) -> dict:
     sections.append(_section_screener(results))
     sections.append(_section_scenario(results))
     sections.append(_section_performance(results))
+    sections.append(_section_position_sizer(results))
     sections.append(_section_biz_summaries(results))
     sections.append(_section_news(results))
     sections.append(_section_action_guide(results))

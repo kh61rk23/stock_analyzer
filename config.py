@@ -676,6 +676,7 @@ EVAL_FORCE_WEEKLY: bool = False
 # → INSIGHT_DIR を共用（BLOCK 1 で定義済み）
 
 ENABLE_SCREENER: bool = True                 # スクリーニング有効化フラグ
+ENABLE_CORRELATION_HEATMAP: bool = True   # 相関ヒートマップ [3-2]
 ENABLE_SCENARIO_ANALYSIS: bool = True   # シナリオ分析（フェーズ3）
 ENABLE_PERFORMANCE_TRACKER: bool = True      # パフォーマンストラッカー有効化（2-3追加）
 ENABLE_MULTI_CURRENCY:    bool = True   # 多通貨モニタリング [A-6]
@@ -923,3 +924,11 @@ US_SCREENER_CATEGORIES: list = [
     "metaverse", "blockchain", "longevity", "supply_chain"
 ]
 US_SCREENER_TOP_N: int = 25
+
+# ==============================================================
+# BLOCK 20: ポジションサイズ設定（BLOCK 20）
+# ==============================================================
+TOTAL_ASSETS_JPY:       float = 10_000_000.0  # 総資産額（円）← 実際の金額に変更
+POSITION_RISK_PCT:      float = 0.10          # 1トレードのリスク許容率（10%）
+POSITION_ATR_MULT:      float = 2.0           # 逆指値 = 現在価格 - ATR × この倍率
+ENABLE_POSITION_SIZER:  bool  = True          # ポジションサイジング [3-3]
