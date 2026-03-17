@@ -158,6 +158,10 @@ jobs:
             git add stock_data/data/earnings_surprise_cache.json || true
             git add stock_data/data/multi_currency_cache.json || true
             git add stock_data/data/portfolio_holdings.csv || true
+            git add stock_data/data/dashboard/correlation_heatmap.csv || true
+            git add stock_data/data/dashboard/correlation_high_pairs.csv || true
+            git add stock_data/data/correlation_latest.json || true
+            git add stock_data/data/dashboard/position_sizing_*.csv || true
             git diff --cached --quiet || git commit -m "auto: daily update $(date '+%Y-%m-%d')"
             git push || true
             echo "✅ dashboard_latest.csv + dashboard.iqy をコミットしました"
