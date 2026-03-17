@@ -290,12 +290,11 @@ def calc_composite_score(
       edinet_rotation_manager の蓄積DBから取得した credit_score を
       業種内平均に変換して加算する補正値。
       build_result() 側で計算して渡す。データ未取得時は 0.0。
-    """
 
     アナリストスコア:
-      recommendationMean ≤ 2.0 (Buy相当): +5点
-      recommendationMean ≤ 2.5 (Outperform相当): +3点
-      analyst_upside ≥ 20%: +2点追加
+      recommendationMean <= 2.0 (Buy相当): +5点
+      recommendationMean <= 2.5 (Outperform相当): +3点
+      analyst_upside >= 20%: +2点追加
     """
     fin_score     = 0.0
     macro_score   = 0.0
