@@ -57,7 +57,8 @@ def run_analysis(sector_code: str, cfg,
     hw = sum(1 for s in macro_signals if s["signal"] == "headwind")
     print(f"    財務データ: {ok}/{len(TARGET_TICKERS)} 成功 | マクロ: 追い風 {tw} / 逆風 {hw}")
 
-    result = build_result(SECTOR_CODE, SECTOR_NAME, companies, macro_signals, cfg)
+    result = build_result(SECTOR_CODE, SECTOR_NAME, companies, macro_signals, cfg,
+                          macro_snapshot=macro_snapshot)
     result["insight_text"] += "\n" + SECTOR_NOTE
     result["sector_note"]   = SECTOR_NOTE
 

@@ -72,7 +72,8 @@ def run_analysis(sector_code: str, cfg,
     print(f"    マクロシグナル: 追い風 {tw}件 / 逆風 {hw}件")
 
     # 結果を組み立てて返す
-    result = build_result(SECTOR_CODE, SECTOR_NAME, companies, macro_signals, cfg)
+    result = build_result(SECTOR_CODE, SECTOR_NAME, companies, macro_signals, cfg,
+                          macro_snapshot=macro_snapshot)
 
     # 業種固有のノートを追記
     result["insight_text"] += "\n" + SECTOR_NOTE

@@ -335,6 +335,7 @@ def calc_composite_score(
         elif s["signal"] == "headwind": macro_score -= 10
 
     total = fin_score + macro_score + analyst_score + edinet_credit_bonus
+    total = max(-30.0, min(100.0, total))   # ★追い風多数/逆風多数時の異常値防止
 
     headwinds = sum(1 for s in macro_signals if s["signal"] == "headwind")
     if headwinds >= 2 or total < 10:    risk_level = "high"
@@ -487,11 +488,12 @@ def build_insight_text(
 # ==============================================================
 
 def build_result(
-    sector_code:   str,
-    sector_name:   str,
-    companies:     list,
-    macro_signals: list,
+    sector_code:    str,
+    sector_name:    str,
+    companies:      list,
+    macro_signals:  list,
     cfg,
+    macro_snapshot: dict = None,   # ★追加: score_explainer に渡すライブ相場値
 ) -> dict:
     """
 #    SECTOR_AGENT_RESULT_SCHEMA に準拠した辞書を組み立てる。
