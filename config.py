@@ -530,34 +530,6 @@ EDINET_MAX_COMPANIES = 2
 EDINET_CACHE_DAYS = 100
 
 # ==============================================================
-# BLOCK 17: 米国株スクリーニング設定
-# ==============================================================
-ENABLE_US_SCREENER: bool        = True
-US_SCREENER_MAX_WORKERS: int    = 5
-US_SCREENER_MAX_TICKERS: int    = 5500
-US_CUSTOM_UNIVERSE_DIR: str     = "data/custom_universe"
-US_SCREENER_CATEGORIES: list    = [
-    "sp500", "nasdaq_growth", "saas_cloud", "ai_semicon",
-    "biotech", "adr", "fintech", "healthcare_svc", "reit",
-    "clean_energy", "defense_cyber", "consumer_dtc",
-    "infrastructure", "materials_agtech", "media_entertainment",
-    "quantum", "lithium", "uranium", "water", "genomics",
-    "robotics", "metaverse", "blockchain", "longevity",
-    "supply_chain",
-]
-US_SCREENER_TOP_N: int          = 10
-
-# ==============================================================
-# BLOCK 20: Step E代替・Step F 設定
-# ==============================================================
-ENABLE_BIZ_SUMMARY: bool        = True
-DEEPL_API_KEY: str              = "REDACTED_DEEPL_API_KEY"   # ← GitHub Secretsから注入
-BIZ_SUMMARY_MAX_COMPANIES: int  = 2
-BIZ_SUMMARY_CACHE_DAYS: int     = 90
-
-ENABLE_WEEKLY_REPORT: bool      = True
-
-# ==============================================================
 # BLOCK 19: EdinetDB ローテーション設定
 # ==============================================================
 ENABLE_EDINET_ROTATION: bool   = True # ローテーション実行中
@@ -575,7 +547,7 @@ ENABLE_EDINET: bool = False
 # 別フラグの箇所にて、EDINETDBを動かしている。
 
 # ==============================================================
-# BLOCK 9: タイムライン（二時間軸）設定（3-A 追加）
+# BLOCK 9: タイムライン設定（3-A）
 # ==============================================================
 
 # タイムライン分析を有効化するマスタフラグ
@@ -675,7 +647,15 @@ EVAL_FORCE_WEEKLY: bool = False
 # 週次レポート: INSIGHT_DIR/ideas/weekly_summary_YYYY-WXX.md
 # → INSIGHT_DIR を共用（BLOCK 1 で定義済み）
 
-ENABLE_SCREENER: bool = True                 # スクリーニング有効化フラグ
+ENABLE_SCREENER: bool = True         # スクリーニング有効化フラグ
+ENABLE_RULE_OPTIMIZER:      bool = True   # ルール重み最適化 [4-8]
+ENABLE_JP_US_BRIDGE:        bool = True   # JP×US横断分析
+ENABLE_SCREENER_FEEDBACK:   bool = True   # screenerフィードバックループ
+ENABLE_ANOMALY_SEASON:  bool = True   # 季節アノマリー [4-4]
+ENABLE_MARKET_BREADTH: bool = True   # 市場幅指標 [3-7]
+ENABLE_CREDIT_DATA:      bool  = True    # 信用残高データ取得 [3-5]
+CREDIT_SQUEEZE_THRESH:   float = 1.0     # 踏み上げ候補の倍率閾値
+CREDIT_OVERHEAT_THRESH:  float = 10.0   # 過熱（崩落リスク）の倍率閾値
 ENABLE_CORRELATION_HEATMAP: bool = True   # 相関ヒートマップ [3-2]
 ENABLE_SCENARIO_ANALYSIS: bool = True   # シナリオ分析（フェーズ3）
 ENABLE_PERFORMANCE_TRACKER: bool = True      # パフォーマンストラッカー有効化（2-3追加）
@@ -744,20 +724,40 @@ DAILY_MODULES = [
     "news",          # ニュースRSSパイプライン（Step B）
     "screener",      # スキャナーの追加
     "excel_export",  # Excel ダッシュボード CSV エクスポート（Step D）
+    "signal_aggregator",  # 統合シグナル [4-9]
+    "inference",          # 推論エンジン [4-10]
     "us_screener",   # 米国株スクリーニング0310
     "edinet_rotation", # edinetのローテーション
     "multi_currency", # 多通貨モニタリング [A-6]
+    "options_monitor", # オプション市場センチメント [4-5]
+    "support_resistance",   # サポート・レジスタンス検出 [4-6]
+    "volume_profile",   # 出来高プロファイル分析 [4-7]
+    "notion_obsidian",   # Notion/Obsidian書き込み [6-4]（毎日実行）
 ]
 
 # ── ウィークリーサイクル（月曜朝に追加実行）───────────────────
 WEEKLY_MODULES = [
     "arxiv",         # ArXiv 論文取得
     "correlation",   # 米国債×業種 相関監査
+    "credit_data",   # 信用残高週次取得 [3-5]
     "idea",          # アイデア生成
     "evaluation",    # アイデア評価・週次集計
     "sec_summary",   # SEC 10-K / 有報 Claude API 日本語3行要約（Step E）
     "biz_summary",   # Step E代替: yfinance事業概要 + DeepL翻訳
     "weekly_report", # Step F: 週次投資判断サマリー自動生成
+    "market_breadth",   # 市場幅指標（マーケットブレス）[3-7]
+    "stress_test",   # ストレステスト / VaR [3-6]
+    "insider_monitor",   # インサイダー取引モニター [4-2]
+    "dividend_calendar",   # 配当権利確定カレンダー [4-3]
+    "anomaly_season",   # 季節アノマリー検出 [4-4]
+    "rule_optimizer",     # マクロルール重み最適化 [4-8]
+    "jp_us_bridge",       # JP×US横断相関
+    "screener_feedback",  # screenerフィードバック
+    "backtester",   # バックテスト [5-3]
+    "self_evaluator",    # パフォーマンス自己検証 [5-5]
+    "screener_heatmap",  # セクターヒートマップ
+    "portfolio_optimizer",   # ポートフォリオ最適化 [6-1]
+    "dcf",               # DCF理論株価 [6-3]（週次のみ / 7日キャッシュ）
 ]
 
 # ウィークリー実行の曜日（0=月曜 〜 6=日曜）
@@ -926,9 +926,50 @@ US_SCREENER_CATEGORIES: list = [
 US_SCREENER_TOP_N: int = 25
 
 # ==============================================================
-# BLOCK 20: ポジションサイズ設定（BLOCK 20）
+# BLOCK 22: ポジションサイズ設定 / ストレステスト / フェーズ4〜6 フラグ群
 # ==============================================================
 TOTAL_ASSETS_JPY:       float = 10_000_000.0  # 総資産額（円）← 実際の金額に変更
 POSITION_RISK_PCT:      float = 0.10          # 1トレードのリスク許容率（10%）
 POSITION_ATR_MULT:      float = 2.0           # 逆指値 = 現在価格 - ATR × この倍率
 ENABLE_POSITION_SIZER:  bool  = True          # ポジションサイジング [3-3]
+ENABLE_STRESS_TEST:  bool  = True       # ストレステスト [3-6]
+USDJPY_DEFAULT:      float = 150.0      # USD/JPY デフォルト値（snapshot取得失敗時）
+# TOTAL_ASSETS_JPY は position_sizer.py で追加済みのものを共用
+ENABLE_TECHNICAL_SCORER: bool = True   # テクニカルスコア [4-1]
+ENABLE_INSIDER_MONITOR: bool = True   # インサイダーモニター [4-2]
+ENABLE_DIVIDEND_CALENDAR: bool = True   # 配当カレンダー [4-3]
+ENABLE_OPTIONS_MONITOR: bool = True   # オプション市場センチメント [4-5]
+ENABLE_SUPPORT_RESISTANCE: bool = True   # SR自動検出 [4-6]
+ENABLE_VOLUME_PROFILE: bool = True   # 出来高プロファイル [4-7]
+ENABLE_STOCK_DETAIL_REPORT: bool = True   # 銘柄詳細レポート [5-1]
+ENABLE_COMPS_ANALYZER:      bool = True   # 同業種内比較 [5-2]
+ENABLE_BACKTESTER:          bool = True   # バックテスト [5-3]
+ENABLE_SIGNAL_AGGREGATOR: bool = True   # 統合シグナル [4-9]
+ENABLE_INFERENCE_ENGINE:  bool = True   # 推論エンジン [4-10]
+ENABLE_SELF_EVALUATOR:    bool = True   # 自己検証 [5-5]
+ENABLE_SCREENER_HEATMAP:  bool = True   # セクターヒートマップ
+ENABLE_PORTFOLIO_OPTIMIZER: bool = True   # ポートフォリオ最適化 [6-1]
+ENABLE_DCF_VALUATION:      bool = True    # DCF理論株価 [6-3]
+ENABLE_NOTION_OBSIDIAN:    bool = True    # Notion/Obsidian連携 [6-4]
+
+# Notion API設定（未設定でもObsidianのみ動作）
+NOTION_API_KEY:            str  = "REDACTED_NOTION"     # Notion Integration Secret
+NOTION_DATABASE_ID:        str  = "331b571e4f7e8092b27dded753e5c3fe"     # スクリーナー銘柄DB の ID
+
+# Obsidian Vault パス（Google Drive上）
+# 例: DRIVE_BASE / "obsidian_vault"
+OBSIDIAN_VAULT_DIR:        str  = ""     # 空の場合DRIVE_BASE/stock_analyzer_vaultを使用
+OBSIDIAN_VAULT_DIR = str(DRIVE_BASE / "obsidian_vault")
+
+# signal_aggregatorのデフォルト重み（rule_optimizerが月次で調整）
+SIGNAL_WEIGHTS = {
+    "sector_score":      0.30,
+    "macro_signals":     0.18,
+    "technical_score":   0.15,
+    "market_breadth":    0.10,
+    "options_sentiment": 0.08,
+    "anomaly_season":    0.06,
+    "us_lead_signal":    0.07,
+    "etf_heat":          0.03,
+    "yield_curve":       0.03,
+}

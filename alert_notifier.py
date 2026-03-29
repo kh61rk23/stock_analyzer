@@ -628,6 +628,178 @@ def extract_alerts(cfg, results: dict) -> list:
                 "body":     "\n".join(lines),
                 "severity": "high" if risk_level == "high" else "medium",
             })
+    # ── ⑯ 信用残高週報アラート [3-5] ────────────────────────────
+    cd_result = results.get("credit_data", {})
+    if cd_result and not cd_result.get("skipped"):
+        sq = cd_result.get("flag_short_squeeze", [])
+        oh = cd_result.get("flag_overheated", [])
+        if sq or oh:
+            alerts.append({
+                "trigger":  "credit_data",
+                "title":    f"📊 信用残高週報: 踏み上げ{len(sq)}件 / 過熱{len(oh)}件",
+                "body":     cd_result.get("summary_text", "")[:500],
+                "severity": "medium" if oh else "info",
+            })
+    # ── ⑰ 市場幅ダイバージェンスアラート [3-7] ─────────────────────
+    mb_result = results.get("market_breadth", {})
+    if mb_result:
+        div   = mb_result.get("divergence", {})
+        score = mb_result.get("breadth_score_jp", 50.0)
+        if div.get("detected") and div.get("severity") == "high":
+            alerts.append({
+                "trigger":  "market_breadth_divergence",
+                "title":    f"⚠️ 市場幅ダイバージェンス検出（JPスコア:{score:.0f}）",
+                "body":     f"  {div.get('description','')}\n"
+                            f"  上位業種の composite_score に{abs(DIVERGENCE_PENALTY):.0f}pt ペナルティ適用",
+                "severity": "high",
+            })
+        elif score <= 30:
+            alerts.append({
+                "trigger":  "market_breadth_weak",
+                "title":    f"🔴 市場幅悪化（スコア:{score:.0f}/100）",
+                "body":     mb_result.get("summary_text", "")[:300],
+                "severity": "medium",
+            })
+    # ── ⑱ インサイダー取引アラート [4-2] ──────────────────────────
+    im_result = results.get("insider_monitor", {})
+    if im_result and im_result.get("alert_items"):
+        try:
+            import sys as _sys, importlib as _imp
+            _sys.path.insert(0, str(Path(__file__).parent))
+            _im_mod = _imp.import_module("insider_monitor")
+            alert_text = _im_mod.format_insider_alert(im_result)
+            alerts.append({
+                "trigger":  "insider_monitor",
+                "title":    f"🔍 インサイダー活動: {len(im_result['alert_items'])}銘柄",
+                "body":     alert_text,
+                "severity": "medium",
+            })
+        except Exception:
+            pass
+    # ── ⑲ 配当権利確定アラート [4-3] ───────────────────────────────
+    dc_result = results.get("dividend_calendar", {})
+    if dc_result:
+        upcoming = dc_result.get("upcoming_30d", [])
+        urgent   = dc_result.get("urgent_7d", [])
+        if upcoming:
+            sev = "high" if urgent else "info"
+            alerts.append({
+                "trigger":  "dividend_calendar",
+                "title":    f"📅 配当権利確定: {len(upcoming)}銘柄"
+                            + (f"（🚨 {len(urgent)}銘柄が7日以内）" if urgent else ""),
+                "body":     dc_result.get("alert_text", "")[:400],
+                "severity": sev,
+            })
+    # ── ⑳ 季節アノマリーアラート [4-4] ─────────────────────────────
+    as_result = results.get("anomaly_season", {})
+    if as_result:
+        adj = as_result.get("adjustments", {})
+        n_sig = sum(1 for v in adj.values() if v != 0)
+        if n_sig > 0:
+            month = as_result.get("current_month", 0)
+            from anomaly_season import MONTH_NAMES_JP, KNOWN_ANOMALIES
+            month_name = MONTH_NAMES_JP.get(month, f"{month}月")
+            known = KNOWN_ANOMALIES.get(month, "")
+            alerts.append({
+                "trigger":  "anomaly_season",
+                "title":    f"📅 {month_name}アノマリー検出: {n_sig}業種に補正適用"
+                            + (f"（{known}）" if known else ""),
+                "body":     as_result.get("calendar_md", "")[:400],
+                "severity": "info",
+            })
+    # ── ㉑ オプション市場極端値アラート [4-5] ────────────────────────
+    om_result = results.get("options_monitor", {})
+    if om_result:
+        sent = om_result.get("sentiment", {})
+        score  = sent.get("score", 50)
+        label  = sent.get("label", "")
+        signal = sent.get("signal", "neutral")
+        # 極端値のみアラート（スコア < 25 or > 75）
+        if score < 25 or score > 75:
+            alerts.append({
+                "trigger":  "options_sentiment",
+                "title":    f"📊 市場センチメント極端値: {score:.0f}/100 {label}",
+                "body":     om_result.get("summary_text", "")[:400],
+                "severity": "high" if (score < 20 or score > 80) else "medium",
+            })
+    # ── ㉒ ブレイクアウトシグナルアラート [4-6] ────────────────────
+    sr_result = results.get("support_resistance", {})
+    breakouts = sr_result.get("top_breakout", [])
+    if breakouts:
+        items = " / ".join(
+            f"{b.get('ticker','?')}(pos={b.get('position_pct',0):.0f}%)"
+            for b in breakouts[:3]
+        )
+        alerts.append({
+            "trigger":  "breakout_signal",
+            "title":    f"🚀 ブレイクアウト候補: {len(breakouts)}銘柄 — {items}",
+            "body":     "\n".join(
+                f"  {b.get('ticker','?')} {b.get('label','')} "
+                f"位置{b.get('position_pct',0):.0f}% bonus={b.get('sr_bonus',0):+.1f}pt"
+                for b in breakouts[:5]
+            ),
+            "severity": "medium",
+        })
+    # ── 24 推論エンジン警告アラート [4-10] ──────────────────────
+    ie_result = results.get("inference", {})
+    if ie_result:
+        phase = ie_result.get("phase_code", "neutral")
+        if phase == "crisis":
+            alerts.append({
+                "trigger":  "inference_crisis",
+                "title":    f"🚨 危機的状況 — {ie_result.get('phase_label','')}",
+                "body":     ie_result.get("primary_action", {}).get("action", ""),
+                "severity": "critical",
+            })
+        elif phase == "risk_off":
+            action = ie_result.get("primary_action", {})
+            if action.get("confidence", 0) >= 0.70:
+                alerts.append({
+                    "trigger":  "inference_risk_off",
+                    "title":    f"⚠️ リスクオフ推奨 — {ie_result.get('phase_label','')}",
+                    "body":     action.get("action", ""),
+                    "severity": "high",
+                })
+
+    # ── ㉓ 統合シグナル極端値アラート [4-9] ─────────────────────
+    sa_result = results.get("signal_aggregator", {})
+    if sa_result and not sa_result.get("skipped"):
+        top_buy  = sa_result.get("top_buy", [])
+        top_avd  = sa_result.get("top_avoid", [])
+        regime   = sa_result.get("market_regime", "")
+        if len(top_buy) >= 4 and "リスクオン" in regime:
+            alerts.append({
+                "trigger":  "signal_agg_bullish",
+                "title":    f"📊 統合シグナル強気: {', '.join(top_buy[:3])} など{len(top_buy)}業種",
+                "body":     sa_result.get("summary_text", "")[:400],
+                "severity": "medium",
+            })
+    # ── ㉔ 自己検証精度劣化アラート [5-5] ────────────────────────
+    se_result = results.get("self_evaluator", {})
+    if se_result and not se_result.get("skipped"):
+        s = se_result.get("summary", {})
+        if s.get("trend") == "degrading":
+            alerts.append({
+                "trigger":  "self_eval_degrading",
+                "title":    f"⚠️ screener精度劣化検出 — "
+                            f"通算勝率{s.get('lifetime_win_rate',0):.1%}",
+                "body":     f"悪因子: {s.get('worst_factor','N/A')} "
+                            f"(miss率{s.get('worst_factor_miss_rate',0):.0%})\n"
+                            f"rule_optimizer.py の実行を推奨",
+                "severity": "medium",
+            })
+    # ── ㉕ ポートフォリオリバランシングアラート [6-1] ─────────────
+    po_result = results.get("portfolio_optimizer", {})
+    if po_result and not po_result.get("skipped"):
+        n_rebal = sum(1 for r in po_result.get("rebalance", [])
+                      if r.get("action") != "HOLD")
+        if n_rebal >= 2:
+            alerts.append({
+                "trigger":  "portfolio_rebalance",
+                "title":    f"💼 リバランシング推奨: {n_rebal}銘柄に乖離",
+                "body":     po_result.get("report_md", "")[:400],
+                "severity": "medium",
+            })
     return alerts
 
 

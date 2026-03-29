@@ -694,6 +694,23 @@ def run_us_sector_pipeline(cfg, macro_snapshot: Optional[dict] = None) -> dict:
         "bottom3":     bottom3,
         "skipped":     False,
     }
+    # US セクタースコアを日次ファイルに保存（jp_us_bridge が参照）
+    today = datetime.now().strftime("%Y-%m-%d")
+    out_dir = Path(cfg.DATA_DIR).parent / "insights" / "us_sectors"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"us_sector_scores_{today}.json"
+    try:
+        out_path.write_text(
+            json.dumps({
+                "date": today,
+                "sectors": {
+                    etf: {"composite_score": data.get("composite_score", 0)}
+                    for etf, data in (result.get("sectors") or {}).items()
+                }
+            }, ensure_ascii=False), encoding="utf-8")
+        print(f"  💾 us_sector_scores_{today}.json 出力")
+    except Exception as e:
+        print(f"  ⚠️  USセクタースコア保存失敗: {e}")
 
 
 def main(cfg=None, macro_snapshot=None):

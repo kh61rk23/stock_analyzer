@@ -176,7 +176,7 @@ def fetch_macro_snapshot() -> dict:
     return snapshot
 
 
-def evaluate_macro_signals(snapshot: dict) -> list:
+def evaluate_macro_signals(snapshot: dict, weights: dict = None) -> list:
     """
     マクロスナップショットから cfg.MACRO_RULES に基づき
     現在アクティブなマクロ要因とシグナルを評価する。
@@ -196,7 +196,7 @@ def evaluate_macro_signals(snapshot: dict) -> list:
         ]
     """
     active_signals = []
-
+    weights = weights or {}   # None ガード。rule_optimizer 未実行時は空辞書で動作
     usdjpy = snapshot.get("usdjpy")
     us10y  = snapshot.get("us10y")
     oil    = snapshot.get("oil_wti")
@@ -213,6 +213,7 @@ def evaluate_macro_signals(snapshot: dict) -> list:
                 "trigger_value":  f"米10年債: {us10y:.2f}%",
                 "sector_signals": _build_sector_signals(rule),
                 "rationale":      rule.get("rationale", {}),
+                "weight":         weights.get(factor, 1.0),
             })
 
     # ── 為替判定 ─────────────────────────────────────────────
@@ -226,6 +227,7 @@ def evaluate_macro_signals(snapshot: dict) -> list:
                 "trigger_value":  f"USD/JPY: {usdjpy:.2f}",
                 "sector_signals": _build_sector_signals(rule),
                 "rationale":      rule.get("rationale", {}),
+                "weight":         weights.get(factor, 1.0),
             })
 
     # ── 原油判定 ─────────────────────────────────────────────
@@ -238,6 +240,7 @@ def evaluate_macro_signals(snapshot: dict) -> list:
                 "trigger_value":  f"WTI: ${oil:.1f}",
                 "sector_signals": _build_sector_signals(rule),
                 "rationale":      rule.get("rationale", {}),
+                "weight":         weights.get(factor, 1.0),
             })
 
     # ── VIX 判定 ─────────────────────────────────────────────
@@ -250,6 +253,7 @@ def evaluate_macro_signals(snapshot: dict) -> list:
                 "trigger_value":  f"VIX: {vix:.1f}",
                 "sector_signals": _build_sector_signals(rule),
                 "rationale":      rule.get("rationale", {}),
+                "weight":         weights.get(factor, 1.0),
             })
 
     return active_signals
@@ -368,65 +372,6 @@ def _append_score_history(cfg, sector_results: dict) -> None:
         print(f"  ✅ score_history: {len(today_data)}業種を記録（累計{len(history)}日分）")
     except Exception as e:
         print(f"  ⚠️  score_history 保存失敗: {str(e)[:60]}")
-
-# ==============================================================
-# BLOCK X: スコア履歴・スクリーナー履歴 蓄積
-# ==============================================================
-def _append_screener_history(cfg, screener_result: dict) -> None:
-    """
-    screener通過銘柄を日次で蓄積する。
-    保存先: DATA_DIR/screener_history.json
-    形式:   {"YYYY-MM-DD": [{"ticker": "8306.T", "sector": "1028",
-                             "composite_score": 72.0, "per": 12.3, ...}]}
-    保持:   直近365日分（バックテストに使うため長め）
-    用途:   「N日前にscreenerを通過した銘柄のその後のリターン」検証
-    """
-    import json
-    try:
-        path = Path(cfg.DATA_DIR) / "screener_history.json"
-        today = datetime.now().strftime("%Y-%m-%d")
-
-        # 既存データ読み込み
-        history = {}
-        if path.exists():
-            try:
-                history = json.loads(path.read_text(encoding="utf-8"))
-            except Exception:
-                history = {}
-
-        # 通過銘柄リストを抽出
-        candidates = screener_result.get("candidates", [])
-        passed = [
-            {
-                "ticker":          c.get("ticker", ""),
-                "sector_code":     c.get("sector_code", ""),
-                "composite_score": c.get("composite_score"),
-                "per":             c.get("per"),
-                "pbr":             c.get("pbr"),
-                "roe":             c.get("roe"),
-                "market_cap":      c.get("market_cap"),
-            }
-            for c in candidates
-            if c.get("pass_filters")
-        ]
-
-        if passed:
-            history[today] = passed
-
-        # 365日分だけ保持
-        keys = sorted(history.keys())
-        if len(keys) > 365:
-            for old_key in keys[:-365]:
-                del history[old_key]
-
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(history, ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
-        print(f"  ✅ screener_history: {len(passed)}銘柄を記録（累計{len(history)}日分）")
-    except Exception as e:
-        print(f"  ⚠️  screener_history 保存失敗: {str(e)[:60]}")
 
 def run_sector_analysis(sector_code: str, macro_snapshot: dict) -> dict:
     """
@@ -648,6 +593,9 @@ def run_all_tasks(mode: str = "all") -> dict:
     print(f"{'='*60}")
 
     results = {}
+    # 下流モジュールが参照するため ENABLE_SECTOR/ENABLE_MACRO=False 時も定義しておく
+    macro_snapshot_for_sector = {}
+    sector_results            = {}
 
     if cfg.ENABLE_GOV_PIPELINE and _in_mode("gov"):
         results["gov"] = run_gov_pipeline()
@@ -668,7 +616,10 @@ def run_all_tasks(mode: str = "all") -> dict:
         snapshot = fetch_macro_snapshot()
         signals  = evaluate_macro_signals(snapshot)
         _save_macro_report(snapshot, signals)
-        results["macro"] = True
+        results["macro_snapshot"]     = snapshot   # 下流モジュール（inference/stress_tester等）用
+        results["macro_signals"]      = signals    # idea_generator / signal_aggregator 用
+        results["macro"]              = True
+        macro_snapshot_for_sector     = snapshot   # sector_agents に渡す実値で上書き
     else:
         print("  ⏩ マクロ分析: スキップ（config.ENABLE_MACRO=False / Step 2 で有効化）")
 
@@ -676,70 +627,217 @@ def run_all_tasks(mode: str = "all") -> dict:
     if cfg.ENABLE_SECTOR and cfg.IMPLEMENTED_AGENTS and _in_mode("sector"):
         print(f"\n  🏭 セクター分析を実行中（{len(cfg.IMPLEMENTED_AGENTS)} 業種）...")
         macro_snapshot_for_sector = results.get("macro_snapshot", {})
-        sector_results = {}
-        for code in cfg.IMPLEMENTED_AGENTS:
-            try:
-                res = run_sector_analysis(code, macro_snapshot_for_sector)
-                sector_results[code] = res
-                logger.add("sector_agent", "success",
-                           f"[{code}]{res.get('sector_name_ja','')} "
-                           f"スコア:{res.get('composite_score','N/A')} "
-                           f"リスク:{res.get('risk_level','N/A')}")
-            except Exception as e:
-                logger.add("sector_agent", "error", f"[{code}] {str(e)[:80]}")
-        results["sectors"] = sector_results
-          # ── [D-4] モメンタムファクター計算 ─────────────────────────
-        if cfg.ENABLE_SECTOR and sector_results:
-          try:
-              import sys as _sys, importlib as _imp
-              _sys.path.insert(0, str(Path(__file__).parent))
-              _mf = _imp.import_module("momentum_factor")
-              _sector_names = {
-                  c: info.get("name_ja", c)
-                  for c, info in cfg.JAPAN_SECTORS.items()
-              }
-              _mom_result = _mf.run_momentum_factor(
-                  sector_results = sector_results,
-                  data_dir       = cfg.DATA_DIR,
-                  sector_names   = _sector_names,
-                  top_n          = 5,
-              )
-              results["momentum"] = _mom_result
-          except Exception as _e:
-              print(f"  ⚠️  momentum_factor エラー（スキップ）: {_e}")
-              results["momentum"] = {}
-          # [S-0] factor_breakdown を score_history を使って後付け付与
+        _macro_weights = results.get("_macro_weights") or {}
+    sector_results = {}   # ★ if _macro_weights の外に移動（常に初期化）
+    if _macro_weights:
+        # 重みを snapshot に埋め込んで sector_agents に伝達
+        macro_snapshot_for_sector["_weights"] = _macro_weights
+    for code in cfg.IMPLEMENTED_AGENTS:
         try:
-            _score_hist_path = Path("stock_data/data/score_history.json")
-            if _score_hist_path.exists():
-                import json as _json
-                _score_hist_all = _json.loads(_score_hist_path.read_text())
-            else:
-                _score_hist_all = []
-            
+            res = run_sector_analysis(code, macro_snapshot_for_sector)
+            sector_results[code] = res
+            logger.add("sector_agent", "success",
+                        f"[{code}]{res.get('sector_name_ja','')} "
+                        f"スコア:{res.get('composite_score','N/A')} "
+                        f"リスク:{res.get('risk_level','N/A')}")
+        except Exception as e:
+            logger.add("sector_agent", "error", f"[{code}] {str(e)[:80]}")
+    results["sectors"] = sector_results
+    # ── [D-4] モメンタムファクター計算 ─────────────────────────
+    if cfg.ENABLE_SECTOR and sector_results:
+        try:
             import sys as _sys, importlib as _imp
             _sys.path.insert(0, str(Path(__file__).parent))
-            _se = _imp.import_module("score_explainer")
-            _snapshot = results.get("macro_snapshot", {})
-            
-            for _code, _res in sector_results.items():
-                # score_history から該当業種の系列を抽出
-                _hist = [
-                    {"date": h["date"], "composite_score": h.get("scores", {}).get(_code)}
-                    for h in _score_hist_all
-                    if isinstance(h.get("scores"), dict) and h["scores"].get(_code) is not None
-                ]
-                _res["factor_breakdown"] = _se.factor_breakdown(
-                    result         = _res,
-                    score_history  = _hist,
-                    macro_snapshot = _snapshot,
-                )
-            print("  ✅ factor_breakdown 付与完了")
+            _mf = _imp.import_module("momentum_factor")
+            _sector_names = {
+                c: info.get("name_ja", c)
+                for c, info in cfg.JAPAN_SECTORS.items()
+            }
+            _mom_result = _mf.run_momentum_factor(
+                sector_results = sector_results,
+                data_dir       = cfg.DATA_DIR,
+                sector_names   = _sector_names,
+                top_n          = 5,
+            )
+            results["momentum"] = _mom_result
         except Exception as _e:
-            print(f"  ⚠️  factor_breakdown 付与エラー: {_e}")
-        
-        print(f"  ✅ セクター分析完了: {len(sector_results)} 業種")
+            print(f"  ⚠️  momentum_factor エラー（スキップ）: {_e}")
+            results["momentum"] = {}
+    # [S-0] factor_breakdown を score_history を使って後付け付与
+    try:
+        _score_hist_path = Path(cfg.DATA_DIR) / "score_history.json"  # HIGH-3修正: cfg.DATA_DIR 使用
+        if _score_hist_path.exists():
+            import json as _json
+            _score_hist_all = _json.loads(_score_hist_path.read_text())
+        else:
+            _score_hist_all = []
 
+        import sys as _sys, importlib as _imp
+        _sys.path.insert(0, str(Path(__file__).parent))
+        _se = _imp.import_module("score_explainer")
+        _snapshot = results.get("macro_snapshot", {})
+
+        for _code, _res in sector_results.items():
+            _hist = [
+                {"date": h["date"], "composite_score": h.get("scores", {}).get(_code)}
+                for h in _score_hist_all
+                if isinstance(h.get("scores"), dict) and h["scores"].get(_code) is not None
+            ]
+            _res["factor_breakdown"] = _se.factor_breakdown(
+                result         = _res,
+                score_history  = _hist,
+                macro_snapshot = _snapshot,
+            )
+        print("  ✅ factor_breakdown 付与完了")
+    except Exception as _e:
+        print(f"  ⚠️  factor_breakdown 付与エラー: {_e}")
+
+    print(f"  ✅ セクター分析完了: {len(sector_results)} 業種")
+
+    # ── [NEW] JP×US横断相関 + ローテーション検出 ─────────────────
+    if getattr(cfg, "ENABLE_JP_US_BRIDGE", True) and _in_mode("jp_us_bridge"):
+        try:
+            _bridge = _load_local_module(
+                "jp_us_sector_bridge",
+                "/content/jp_us_sector_bridge.py",
+                cfg.DRIVE_BASE / "jp_us_sector_bridge.py",
+            )
+            if _bridge:
+                bridge_result = _bridge.run_jp_us_bridge(cfg, sector_results)
+                results["jp_us_bridge"] = bridge_result
+
+                # 先行シグナル補正を sector_results に適用
+                for _code, _delta in bridge_result.get("lead_adjustments", {}).items():
+                    if _code in sector_results and isinstance(sector_results[_code], dict):
+                        sector_results[_code]["composite_score"] = round(
+                            max(-30, min(100,
+                                sector_results[_code].get("composite_score", 0) + _delta)), 1)
+                        sector_results[_code]["us_lead_adjustment"] = _delta
+                if bridge_result.get("lead_adjustments"):
+                    results["sectors"] = sector_results
+
+                n_adj = len(bridge_result.get("lead_adjustments", {}))
+                n_sig = sum(1 for d in bridge_result.get("lagged_correlations", {}).values()
+                            if d.get("significant"))
+                logger.add("jp_us_bridge", "success",
+                           f"有意相関:{n_sig}ペア 先行補正:{n_adj}業種")
+        except Exception as e:
+            logger.add("jp_us_bridge", "error", str(e)[:100])
+            print(f"  ⚠️  JP×US横断分析エラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ JP×US横断分析: スキップ（週次以外）")
+
+    # ── [3-7] 市場幅指標（マーケットブレス / B-4） ─────────────────
+    # 注: sector分析直後に実行してcomposite_scoreを補正する
+    if getattr(cfg, "ENABLE_MARKET_BREADTH", True) and _in_mode("market_breadth"):
+        try:
+            _mb = _load_local_module(
+                "market_breadth",
+                "/content/market_breadth.py",
+                cfg.DRIVE_BASE / "market_breadth.py",
+            )
+            if _mb:
+                mb_result = _mb.run_market_breadth(
+                    cfg            = cfg,
+                    sector_results = sector_results,
+                    macro_snapshot = results.get("macro_snapshot", {}),
+                )
+                results["market_breadth"] = mb_result
+
+                # composite_score に市場幅補正を適用
+                mb_adj = mb_result.get("macro_adjustment", {})
+                for _code, _delta in mb_adj.items():
+                    if _code in sector_results and isinstance(sector_results[_code], dict) and _delta != 0:
+                        sector_results[_code]["composite_score"] = round(
+                            max(-30, min(100,
+                                sector_results[_code].get("composite_score", 0) + _delta
+                            )), 1
+                        )
+                        sector_results[_code]["breadth_adjustment"] = _delta
+                if mb_adj:
+                    results["sectors"] = sector_results
+
+                score = mb_result.get("breadth_score_jp", 50)
+                div   = mb_result.get("divergence", {})
+                logger.add("market_breadth", "success",
+                           f"JPスコア:{score:.0f}/100 "
+                           f"補正:{len(mb_adj)}業種 "
+                           f"ダイバージェンス:{div.get('detected', False)}")
+            else:
+                print("  ⚠️  market_breadth.py が見つかりません")
+        except Exception as e:
+            logger.add("market_breadth", "error", str(e)[:100])
+            print(f"  ⚠️  市場幅指標エラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ 市場幅指標: スキップ（ENABLE_MARKET_BREADTH=False / 非週次）")
+    # ── [4-4] 季節アノマリー補正（D-1 / 週次） ──────────────────────
+    if getattr(cfg, "ENABLE_ANOMALY_SEASON", True) and _in_mode("anomaly_season"):
+        try:
+            _as_mod = _load_local_module(
+                "anomaly_season",
+                "/content/anomaly_season.py",
+                cfg.DRIVE_BASE / "anomaly_season.py",
+            )
+            if _as_mod:
+                as_result = _as_mod.run_anomaly_season(cfg, sector_results)
+                results["anomaly_season"] = as_result
+
+                # composite_score に季節補正を適用
+                for _code, _delta in as_result.get("adjustments", {}).items():
+                    if _code in sector_results and isinstance(sector_results[_code], dict) and _delta != 0:
+                        sector_results[_code]["composite_score"] = round(
+                            max(-30, min(100,
+                                sector_results[_code].get("composite_score", 0) + _delta)), 1)
+                        sector_results[_code]["season_adjustment"] = _delta
+                if as_result.get("adjustments"):
+                    results["sectors"] = sector_results
+
+                n_sig = sum(1 for v in as_result.get("adjustments", {}).values() if v != 0)
+                logger.add("anomaly_season", "success",
+                           f"{as_result.get('current_month')}月 / 有意補正:{n_sig}業種")
+            else:
+                print("  ⚠️  anomaly_season.py が見つかりません")
+        except Exception as e:
+            logger.add("anomaly_season", "error", str(e)[:100])
+            print(f"  ⚠️  季節アノマリーエラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ 季節アノマリー: スキップ（週次以外）")
+    # ── [4-5] オプション市場センチメント（A-1 / 日次） ───────────────
+    if getattr(cfg, "ENABLE_OPTIONS_MONITOR", True) and _in_mode("options_monitor"):
+        try:
+            _om = _load_local_module(
+                "options_monitor",
+                "/content/options_monitor.py",
+                cfg.DRIVE_BASE / "options_monitor.py",
+            )
+            if _om:
+                om_result = _om.run_options_monitor(
+                    cfg,
+                    sector_results=sector_results,
+                )
+                results["options_monitor"] = om_result
+
+                # composite_score にオプション補正を適用
+                for _code, _delta in om_result.get("adjustments", {}).items():
+                    if _code in sector_results and isinstance(sector_results[_code], dict) and _delta != 0:
+                        sector_results[_code]["composite_score"] = round(
+                            max(-30, min(100,
+                                sector_results[_code].get("composite_score", 0) + _delta)), 1)
+                        sector_results[_code]["options_adjustment"] = _delta
+                if om_result.get("adjustments"):
+                    results["sectors"] = sector_results
+
+                sent = om_result.get("sentiment", {})
+                logger.add("options_monitor", "success",
+                           f"センチメント:{sent.get('score',50):.0f}/100 "
+                           f"signal={sent.get('signal','neutral')}")
+            else:
+                print("  ⚠️  options_monitor.py が見つかりません")
+        except Exception as e:
+            logger.add("options_monitor", "error", str(e)[:100])
+            print(f"  ⚠️  オプションモニターエラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ オプションセンチメント: スキップ（ENABLE_OPTIONS_MONITOR=False）")
     # ── タイムライン分析（3-A 追加）───────────────────────────
     if getattr(cfg, "ENABLE_TIMELINE", False) and _in_mode("timeline"):
         print("\n  ⏳ タイムライン分析を実行中...")
@@ -797,7 +895,7 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ 政策金利トラッカー: スキップ（config.ENABLE_POLICY_TRACKER=False）")
     # ── [A-6] 多通貨モニタリング ──────────────────────────────────
-    if getattr(cfg, "ENABLE_MULTI_CURRENCY", True) and _in_mode("policy"):
+    if getattr(cfg, "ENABLE_MULTI_CURRENCY", True) and _in_mode("multi_currency"):
         try:
             _mc = _load_local_module(
                 "multi_currency_monitor",
@@ -911,7 +1009,7 @@ def run_all_tasks(mode: str = "all") -> dict:
             print(f"  ⚠️  債券・コモディティエラー: {str(e)[:80]}")
     else:
         print("  ⏩ 債券・コモディティ: スキップ（ENABLE_BOND_COMMODITY=False）")
-        # ── [F-1] イールドカーブ → セクタースコア反映 ───────────────────
+    # ── [F-1] イールドカーブ → セクタースコア反映 ───────────────────
     _bc_result     = results.get("bond_commodity", {})
     _sector_res_f1 = results.get("sectors", {})
     if _bc_result and _sector_res_f1:
@@ -933,22 +1031,6 @@ def run_all_tasks(mode: str = "all") -> dict:
                            f"recession_score={_bc_result.get('recession_score',0)}/100")
         except Exception as _e:
             print(f"  ⚠️  [F-1] リセッション補正エラー（スキップ）: {_e}")
-    # ── [F-1] イールドカーブ → セクタースコア反映 ───────────────────
-    _bc_result = results.get("bond_commodity", {})
-    _sector_res_for_f1 = results.get("sectors", {})
-    if _bc_result and _sector_res_for_f1:
-        try:
-            import sys as _sys, importlib as _imp
-            _sys.path.insert(0, str(Path(__file__).parent))
-            _bc_mod = _imp.import_module("bond_commodity_pipeline")
-            _bc_mod.apply_recession_score_to_sectors(
-                recession_score = _bc_result.get("recession_score", 0),
-                curve_analysis  = _bc_result.get("curve_analysis", {}),
-                sector_results  = _sector_res_for_f1,
-            )
-            results["sectors"] = _sector_res_for_f1
-        except Exception as _e:
-            print(f"  ⚠️  [F-1] リセッション補正エラー（スキップ）: {_e}")
     # ── 個別銘柄スクリーニング（Step C）─────────────────────
     if getattr(cfg, "ENABLE_SCREENER", False) and _in_mode("screener"):
         print("\n  📋 個別銘柄スクリーニングを実行中...")
@@ -964,39 +1046,184 @@ def run_all_tasks(mode: str = "all") -> dict:
                 results["screener"] = screen_result
                 logger.add("stock_screener", "success",
                            f"通過:{screen_result.get('pass_count',0)}銘柄")
+
+                # ── screener 成功後フロー ─────────────────────────────
+                passed_tickers = [
+                    c["ticker"] for c in screen_result.get("candidates", [])
+                    if c.get("pass_filters")
+                ]
+
+                # [4-1] テクニカルスコア
+                try:
+                    _ts = _load_local_module(
+                        "technical_scorer",
+                        "/content/technical_scorer.py",
+                        cfg.DRIVE_BASE / "technical_scorer.py",
+                    )
+                    if _ts and getattr(cfg, "ENABLE_TECHNICAL_SCORER", True) and passed_tickers:
+                        ts_result = _ts.run_technical_scorer(cfg, passed_tickers)
+                        results["technical_scorer"] = ts_result
+                        logger.add("technical_scorer", "success",
+                                   f"{len(ts_result.get('results',{}))}銘柄スコア算出")
+                except Exception as _e:
+                    print(f"  ⚠️  テクニカルスコアエラー（スキップ）: {_e}")
+
+                # [5-2] 同業種内相対評価（comps_analyzer）
+                try:
+                    _ca = _load_local_module(
+                        "comps_analyzer",
+                        "/content/comps_analyzer.py",
+                        cfg.DRIVE_BASE / "comps_analyzer.py",
+                    )
+                    if _ca and getattr(cfg, "ENABLE_COMPS_ANALYZER", True):
+                        ca_result = _ca.run_comps_analyzer(cfg, screen_result)
+                        results["comps_analyzer"] = ca_result
+                        comps_cache = ca_result.get("results", {})
+                        if comps_cache:
+                            for c in screen_result.get("candidates", []):
+                                t = c.get("ticker", "")
+                                cb = _ca.get_comps_bonus(t, comps_cache)
+                                if cb != 0:
+                                    c["comps_bonus"] = cb
+                                    old_vs = c.get("value_score", 50) or 50
+                                    new_vs = round(
+                                        old_vs * 0.7
+                                        + comps_cache[t].get("comps_score", 50) * 0.3, 1)
+                                    c["value_score"]     = new_vs
+                                    c["composite_score"] = round(
+                                        c.get("sector_score", 50)     * 0.35
+                                        + new_vs                      * 0.25
+                                        + c.get("quality_score", 50)  * 0.20
+                                        + c.get("technical_score", 50)* 0.20, 1)
+                        n_cheap = len(ca_result.get("top_cheap", []))
+                        logger.add("comps_analyzer", "success", f"割安候補: {n_cheap}銘柄")
+                except Exception as _e:
+                    print(f"  ⚠️  comps_analyzerエラー（スキップ）: {_e}")
+
+                # [4-6] サポート・レジスタンス分析
+                try:
+                    _sr = _load_local_module(
+                        "support_resistance",
+                        "/content/support_resistance.py",
+                        cfg.DRIVE_BASE / "support_resistance.py",
+                    )
+                    if _sr and getattr(cfg, "ENABLE_SUPPORT_RESISTANCE", True) and passed_tickers:
+                        sr_result = _sr.run_support_resistance(cfg, passed_tickers)
+                        results["support_resistance"] = sr_result
+                        breakouts = len(sr_result.get("top_breakout", []))
+                        logger.add("support_resistance", "success",
+                                   f"{len(sr_result.get('results',{}))}銘柄 "
+                                   f"ブレイクアウト候補{breakouts}件")
+                except Exception as _e:
+                    print(f"  ⚠️  SR分析エラー（スキップ）: {_e}")
+
+                # [4-7] 出来高プロファイル分析
+                try:
+                    _vp = _load_local_module(
+                        "volume_profile",
+                        "/content/volume_profile.py",
+                        cfg.DRIVE_BASE / "volume_profile.py",
+                    )
+                    if _vp and getattr(cfg, "ENABLE_VOLUME_PROFILE", True) and passed_tickers:
+                        vp_result = _vp.run_volume_profile(cfg, passed_tickers)
+                        results["volume_profile"] = vp_result
+                        poc_cheap = len(vp_result.get("top_poc_cheap", []))
+                        logger.add("volume_profile", "success",
+                                   f"{len(vp_result.get('results',{}))}銘柄 "
+                                   f"POC割安候補{poc_cheap}件")
+                except Exception as _e:
+                    print(f"  ⚠️  VP分析エラー（スキップ）: {_e}")
+
+                # [6-3] DCF理論株価計算（週次のみ）
+                if _in_mode("dcf"):
+                    try:
+                        _dcf = _load_local_module(
+                            "dcf_valuation",
+                            "/content/dcf_valuation.py",
+                            cfg.DRIVE_BASE / "dcf_valuation.py",
+                        )
+                        if _dcf and getattr(cfg, "ENABLE_DCF_VALUATION", True) and passed_tickers:
+                            dcf_result = _dcf.run_dcf_valuation(cfg, passed_tickers)
+                            results["dcf_valuation"] = dcf_result
+                            dcf_cache = dcf_result.get("results", {})
+                            for c in screen_result.get("candidates", []):
+                                t = c.get("ticker", "")
+                                bonus = _dcf.get_dcf_bonus(t, dcf_cache)
+                                if bonus != 0:
+                                    c["dcf_bonus"] = bonus
+                                    old_vs = c.get("value_score", 50) or 50
+                                    c["value_score"] = round(max(0, min(100, old_vs + bonus)), 1)
+                                    c["composite_score"] = round(
+                                        c.get("sector_score", 50)     * 0.35
+                                        + c["value_score"]            * 0.25
+                                        + c.get("quality_score", 50)  * 0.20
+                                        + c.get("technical_score", 50)* 0.20, 1)
+                            n_under = len(dcf_result.get("top_undervalued", []))
+                            logger.add("dcf_valuation", "success",
+                                       f"理論株価算出:{len(dcf_cache)}銘柄 割安:{n_under}件")
+                    except Exception as _e:
+                        print(f"  ⚠️  DCF計算エラー（スキップ）: {_e}")
+
+                # [NEW] screenerフィードバックループ（EDINET品質スコア統合）
+                try:
+                    _sfl = _load_local_module(
+                        "screener_feedback_loop",
+                        "/content/screener_feedback_loop.py",
+                        cfg.DRIVE_BASE / "screener_feedback_loop.py",
+                    )
+                    if _sfl and getattr(cfg, "ENABLE_SCREENER_FEEDBACK", True):
+                        sfl_result = _sfl.run_screener_feedback_loop(cfg, screen_result)
+                        results["screener_feedback"] = sfl_result
+                        quality_cache = sfl_result.get("quality_cache", {})
+                        if quality_cache:
+                            for c in screen_result.get("candidates", []):
+                                t = c.get("ticker", "")
+                                bonus = _sfl.get_edinet_bonus(t, quality_cache)
+                                if bonus != 0:
+                                    c["edinet_bonus"] = bonus
+                                    c["composite_score"] = round(
+                                        max(0, min(100,
+                                            c.get("composite_score", 50) + bonus * 0.2
+                                        )), 1)
+                except Exception as _e:
+                    print(f"  ⚠️  screenerフィードバックエラー（スキップ）: {_e}")
+
+                # [A-7] 決算サプライズ分析（screener通過銘柄対象）
+                try:
+                    _es = _load_local_module(
+                        "earnings_surprise",
+                        "/content/earnings_surprise.py",
+                        cfg.DRIVE_BASE / "earnings_surprise.py",
+                    )
+                    if _es and getattr(cfg, "ENABLE_EARNINGS_SURPRISE", True) and passed_tickers:
+                        es_result = _es.run_earnings_surprise(cfg, passed_tickers)
+                        results["earnings_surprise"] = es_result
+                        logger.add("earnings_surprise", "success",
+                                   f"ポジ{es_result.get('hit_pos',0)}社/"
+                                   f"ネガ{es_result.get('hit_neg',0)}社")
+                except Exception as _e:
+                    print(f"  ⚠️  earnings_surprise エラー（スキップ）: {_e}")
+
+                # [5-1] 銘柄詳細スコアカード生成
+                try:
+                    _sdr = _load_local_module(
+                        "stock_detail_report",
+                        "/content/stock_detail_report.py",
+                        cfg.DRIVE_BASE / "stock_detail_report.py",
+                    )
+                    if _sdr and getattr(cfg, "ENABLE_STOCK_DETAIL_REPORT", True):
+                        sdr_result = _sdr.run_stock_detail_report(cfg, screen_result, results)
+                        results["stock_detail_report"] = sdr_result
+                        logger.add("stock_detail_report", "success",
+                                   f"{sdr_result.get('generated',0)}銘柄レポート生成")
+                except Exception as _e:
+                    print(f"  ⚠️  stock_detail_reportエラー（スキップ）: {_e}")
+
             else:
                 print("  ⚠️  stock_screener.py が見つかりません")
         except Exception as e:
             logger.add("stock_screener", "error", str(e)[:100])
-            # [2-3] screener_history.json に追記
-            try:
-                import sys as _sys, importlib as _imp
-                _sys.path.insert(0, str(Path(__file__).parent))
-                _pt_mod = _imp.import_module("performance_tracker")
-                _pt_mod.append_screener_history(cfg, screen_result)
-            except Exception as _e:
-                print(f"  ⚠️  screener_history 追記失敗（スキップ）: {_e}")
             print(f"  ⚠️  スクリーニングエラー: {str(e)[:80]}")
-             # [A-7] 決算サプライズ分析（screener通過銘柄を対象に実行）
-            try:
-                _es = _load_local_module(
-                    "earnings_surprise",
-                    "/content/earnings_surprise.py",
-                    cfg.DRIVE_BASE / "earnings_surprise.py",
-                )
-                if _es and getattr(cfg, "ENABLE_EARNINGS_SURPRISE", True):
-                    _es_tickers = [
-                        c["ticker"] for c in screen_result.get("candidates", [])
-                        if c.get("pass_filters")
-                    ]
-                    if _es_tickers:
-                        es_result = _es.run_earnings_surprise(cfg, _es_tickers)
-                        results["earnings_surprise"] = es_result
-                        logger.add("earnings_surprise", "success",
-                                    f"ポジ{es_result.get('hit_pos',0)}社/"
-                                    f"ネガ{es_result.get('hit_neg',0)}社")
-            except Exception as _e:
-                print(f"  ⚠️  earnings_surprise エラー（スキップ）: {_e}")
     else:
         if not getattr(cfg, "ENABLE_SCREENER", False):
             print("  ⏩ 個別株スクリーニング: スキップ（ENABLE_SCREENER=False）")
@@ -1184,14 +1411,6 @@ def run_all_tasks(mode: str = "all") -> dict:
             print(f"  ⚠️  要約エラー: {str(e)[:80]}")
     else:
         print("  ⏩ SEC/有報要約: スキップ（ENABLE_SEC_SUMMARIZER=False）")
-    
-    elapsed = (datetime.now() - start).seconds
-    print(f"\n{'='*60}")
-    print(f"  ✅ 全タスク完了（{elapsed}秒）")
-    print(f"  📁 結果: {cfg.RESULT_DIR}")
-    print(f"  📝 知見: {cfg.INSIGHT_DIR}")
-    print(f"{'='*60}")
-    logger.tail(n=5)
 
     # ── 米国株スクリーニング（us_stock_screener）──────────────
     if getattr(cfg, "ENABLE_US_SCREENER", False) and _in_mode("us_screener"):
@@ -1289,6 +1508,234 @@ def run_all_tasks(mode: str = "all") -> dict:
         except Exception as e:
             logger.add("scenario_analysis", "error", str(e)[:100])
             print(f"  ⚠️  シナリオ分析エラー: {str(e)[:80]}")
+     # ── [3-5] 信用残高データ取得（A-2 / 週次） ──────────────────────
+    if getattr(cfg, "ENABLE_CREDIT_DATA", True) and _in_mode("credit_data"):
+        try:
+            _cd = _load_local_module(
+                "credit_data",
+                "/content/credit_data.py",
+                cfg.DRIVE_BASE / "credit_data.py",
+            )
+            if _cd:
+                cd_result = _cd.run_credit_data(cfg)
+                results["credit_data"] = cd_result
+                sq = len(cd_result.get("flag_short_squeeze", []))
+                oh = len(cd_result.get("flag_overheated", []))
+                logger.add("credit_data", "success",
+                           f"踏み上げ候補:{sq}件 / 過熱:{oh}件 "
+                           f"({cd_result.get('total',0)}銘柄)")
+            else:
+                print("  ⚠️  credit_data.py が見つかりません")
+        except Exception as e:
+            logger.add("credit_data", "error", str(e)[:100])
+            print(f"  ⚠️  信用残高取得エラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ 信用残高: スキップ（ENABLE_CREDIT_DATA=False / 週次）")
+    # ── [3-6] ストレステスト（C-5 / 週次・月次Gmail） ──────────────
+    if getattr(cfg, "ENABLE_STRESS_TEST", True) and _in_mode("weekly_report"):
+        try:
+            _st = _load_local_module(
+                "stress_tester",
+                "/content/stress_tester.py",
+                cfg.DRIVE_BASE / "stress_tester.py",
+            )
+            if _st:
+                st_result = _st.run_stress_test(
+                    cfg            = cfg,
+                    macro_snapshot = results.get("macro_snapshot", {}),
+                )
+                results["stress_test"] = st_result
+                var_d = st_result.get("var_95_1day", {})
+                logger.add("stress_test", "success",
+                           f"VaR(95%): {var_d.get('var_pct',0):.2f}% "
+                           f"月次Mail: {st_result.get('mail_sent', False)}")
+            else:
+                print("  ⚠️  stress_tester.py が見つかりません")
+        except Exception as e:
+            logger.add("stress_test", "error", str(e)[:100])
+            print(f"  ⚠️  ストレステストエラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ ストレステスト: スキップ（週次以外）")
+    # ── [4-2] インサイダー取引モニター（A-3 / 週次） ─────────────────
+    if getattr(cfg, "ENABLE_INSIDER_MONITOR", True) and _in_mode("insider_monitor"):
+        try:
+            _im = _load_local_module(
+                "insider_monitor",
+                "/content/insider_monitor.py",
+                cfg.DRIVE_BASE / "insider_monitor.py",
+            )
+            if _im:
+                # screener通過銘柄を優先対象に
+                screener_tickers = [
+                    c["ticker"]
+                    for c in results.get("screener", {}).get("candidates", [])
+                    if c.get("pass_filters")
+                ]
+                im_result = _im.run_insider_monitor(cfg, screener_tickers or None)
+                results["insider_monitor"] = im_result
+                logger.add("insider_monitor", "success",
+                           f"US:{im_result.get('total_us',0)}件 "
+                           f"JP:{im_result.get('total_jp',0)}件 "
+                           f"ボーナス適用:{len(im_result.get('bonuses',{}))}銘柄")
+        except Exception as e:
+            logger.add("insider_monitor", "error", str(e)[:100])
+            print(f"  ⚠️  インサイダーモニターエラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ インサイダーモニター: スキップ（週次以外）")
+    # ── [4-3] 配当権利確定カレンダー（A-4 / 週次） ───────────────────
+    if getattr(cfg, "ENABLE_DIVIDEND_CALENDAR", True) and _in_mode("dividend_calendar"):
+        try:
+            _dc = _load_local_module(
+                "dividend_calendar",
+                "/content/dividend_calendar.py",
+                cfg.DRIVE_BASE / "dividend_calendar.py",
+            )
+            if _dc:
+                dc_result = _dc.run_dividend_calendar(cfg)
+                results["dividend_calendar"] = dc_result
+                upcoming = len(dc_result.get("upcoming_30d", []))
+                urgent   = len(dc_result.get("urgent_7d", []))
+                logger.add("dividend_calendar", "success",
+                           f"30日以内:{upcoming}銘柄 / 7日以内緊急:{urgent}銘柄")
+        except Exception as e:
+            logger.add("dividend_calendar", "error", str(e)[:100])
+            print(f"  ⚠️  配当カレンダーエラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ 配当カレンダー: スキップ（週次以外）")
+    # ── [4-8] ルール重み最適化（月末のみ / WEEKLY_MODULES） ──────────
+    if getattr(cfg, "ENABLE_RULE_OPTIMIZER", True) and _in_mode("rule_optimizer"):
+        try:
+            _ro = _load_local_module(
+                "rule_optimizer",
+                "/content/rule_optimizer.py",
+                cfg.DRIVE_BASE / "rule_optimizer.py",
+            )
+            if _ro:
+                ro_result = _ro.run_rule_optimizer(cfg)
+                results["rule_optimizer"] = ro_result
+
+                # 更新有無に関わらず有効な重みを常に results に注入する
+                # 月末: 今回更新した新重みを使用
+                # 月末以外: rule_weights.json に保存済みの重みを読み込む
+                if ro_result.get("updated"):
+                    effective_weights = ro_result.get("weights", {})
+                    n_changed = sum(
+                        1 for d in effective_weights.values()
+                        if abs(d.get("delta", 0)) > 0.01
+                    )
+                    logger.add("rule_optimizer", "success",
+                               f"重み更新: {n_changed}ファクター変化")
+                else:
+                    effective_weights = _ro.load_weights(cfg)
+                    logger.add("rule_optimizer", "skipped",
+                               ro_result.get("reason", "月末以外"))
+
+                if effective_weights:
+                    results["_macro_weights"] = effective_weights
+                    print(f"    📐 rule_weights 注入: {len(effective_weights)}ファクター")
+        except Exception as e:
+            logger.add("rule_optimizer", "error", str(e)[:100])
+            print(f"  ⚠️  ルールオプティマイザーエラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ ルールオプティマイザー: スキップ")
+    # ── [5-3] バックテスト（C-2 / 週次） ────────────────────────
+    if getattr(cfg, "ENABLE_BACKTESTER", True) and _in_mode("backtester"):
+        try:
+            _bt = _load_local_module(
+                "backtester",
+                "/content/backtester.py",
+                cfg.DRIVE_BASE / "backtester.py",
+            )
+            if _bt:
+                bt_result = _bt.run_backtester(cfg)
+                results["backtest"] = bt_result
+                if not bt_result.get("skipped"):
+                    ov = bt_result.get("overall", {})
+                    logger.add("backtester", "success",
+                               f"評価:{bt_result.get('evaluated_count',0)}銘柄 "
+                               f"α={ov.get('avg_alpha',0):+.2f}% "
+                               f"勝率={ov.get('win_rate',0):.1%}")
+                else:
+                    logger.add("backtester", "skipped",
+                               bt_result.get("reason", "データ不足"))
+        except Exception as e:
+            logger.add("backtester", "error", str(e)[:100])
+            print(f"  ⚠️  バックテストエラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ バックテスト: スキップ（週次以外）")
+            # ── [5-5] パフォーマンス自己検証 ────────────────────────────
+    if getattr(cfg, "ENABLE_SELF_EVALUATOR", True) and _in_mode("self_evaluator"):
+        try:
+            _se = _load_local_module(
+                "self_evaluator",
+                "/content/self_evaluator.py",
+                cfg.DRIVE_BASE / "self_evaluator.py",
+            )
+            if _se:
+                se_result = _se.run_self_evaluator(cfg)
+                results["self_evaluator"] = se_result
+                if not se_result.get("skipped"):
+                    s = se_result.get("summary", {})
+                    logger.add("self_evaluator", "success",
+                               f"通算勝率:{s.get('lifetime_win_rate',0):.1%} "
+                               f"トレンド:{s.get('trend','—')} "
+                               f"悪因子:{s.get('worst_factor','—')}")
+                else:
+                    logger.add("self_evaluator", "skipped",
+                               se_result.get("reason", "データ不足"))
+        except Exception as e:
+            logger.add("self_evaluator", "error", str(e)[:100])
+            print(f"  ⚠️  自己検証エラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ 自己検証: スキップ（週次以外）")
+
+    # ── [c] screenerセクターヒートマップ ─────────────────────────
+    if getattr(cfg, "ENABLE_SCREENER_HEATMAP", True) and _in_mode("screener_heatmap"):
+        try:
+            _ssh = _load_local_module(
+                "screener_sector_heatmap",
+                "/content/screener_sector_heatmap.py",
+                cfg.DRIVE_BASE / "screener_sector_heatmap.py",
+            )
+            if _ssh:
+                ssh_result = _ssh.run_screener_sector_heatmap(cfg)
+                results["screener_heatmap"] = ssh_result
+                if not ssh_result.get("skipped"):
+                    rot_in  = ssh_result.get("rotation_in", [])
+                    rot_out = ssh_result.get("rotation_out", [])
+                    logger.add("screener_heatmap", "success",
+                               f"流入:{rot_in[:3]} 流出:{rot_out[:3]}")
+        except Exception as e:
+            logger.add("screener_heatmap", "error", str(e)[:100])
+            print(f"  ⚠️  ヒートマップエラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ セクターヒートマップ: スキップ（週次以外）")
+    # ── [6-1] ポートフォリオ最適化（C-1 / 週次） ────────────────
+    if getattr(cfg, "ENABLE_PORTFOLIO_OPTIMIZER", True) and _in_mode("portfolio_optimizer"):
+        try:
+            _po = _load_local_module(
+                "portfolio_optimizer",
+                "/content/portfolio_optimizer.py",
+                cfg.DRIVE_BASE / "portfolio_optimizer.py",
+            )
+            if _po:
+                po_result = _po.run_portfolio_optimizer(cfg)
+                results["portfolio_optimizer"] = po_result
+                if not po_result.get("skipped"):
+                    total   = po_result.get("current", {}).get("total_value_jpy", 0)
+                    n_rebal = sum(1 for r in po_result.get("rebalance", [])
+                                  if r.get("action") != "HOLD")
+                    logger.add("portfolio_optimizer", "success",
+                               f"総時価:{total:,.0f}円 "
+                               f"リバランシング推奨:{n_rebal}銘柄")
+                else:
+                    logger.add("portfolio_optimizer", "skipped",
+                               po_result.get("reason", "ポートフォリオデータなし"))
+        except Exception as e:
+            logger.add("portfolio_optimizer", "error", str(e)[:100])
+            print(f"  ⚠️  ポートフォリオ最適化エラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ ポートフォリオ最適化: スキップ（週次以外）")
     # ── Step F: 週次投資判断レポート ─────────────────────────────
     if getattr(cfg, "ENABLE_WEEKLY_REPORT", True) and _in_mode("weekly_report"):
         print("\n  📊 週次投資判断レポート生成 (Step F)...")
@@ -1313,31 +1760,6 @@ def run_all_tasks(mode: str = "all") -> dict:
         if not getattr(cfg, "ENABLE_WEEKLY_REPORT", True):
             print("  ⏩ 週次レポート: スキップ（ENABLE_WEEKLY_REPORT=False）")
     
-    # ── Excel ダッシュボード CSV エクスポート（Step D）────────
-    if getattr(cfg, "ENABLE_EXCEL_EXPORT", False) and _in_mode("excel_export"):
-        print("\n  📊 Excel ダッシュボード CSV エクスポート中...")
-        try:
-            _ex = _load_local_module(
-                "excel_dashboard_exporter",
-                "/content/excel_dashboard_exporter.py",
-                cfg.DRIVE_BASE / "excel_dashboard_exporter.py",
-            )
-            if _ex:
-                export_result = _ex.run_excel_exporter(cfg, results)
-                results["excel_export"] = export_result
-                logger.add("excel_export", "success",
-                           f"{export_result.get('row_count',0)}行出力 "
-                           f"JP:{export_result['breakdown'].get('JP',0)} "
-                           f"US:{export_result['breakdown'].get('US',0)} "
-                           f"ETF:{export_result['breakdown'].get('ETF',0)}")
-            else:
-                print("  ⚠️  excel_dashboard_exporter.py が見つかりません")
-        except Exception as e:
-            logger.add("excel_export", "error", str(e)[:100])
-            print(f"  ⚠️  Excelエクスポートエラー: {str(e)[:80]}")
-    else:
-        if not getattr(cfg, "ENABLE_EXCEL_EXPORT", False):
-            print("  ⏩ Excelエクスポート: スキップ（ENABLE_EXCEL_EXPORT=False）")
         # ── [3-2] 相関ヒートマップ計算（C-4） ──────────────────────────
     if getattr(cfg, "ENABLE_CORRELATION_HEATMAP", True) and _in_mode("excel_export"):
         try:
@@ -1386,14 +1808,124 @@ def run_all_tasks(mode: str = "all") -> dict:
             print(f"  ⚠️  ポジションサイジングエラー: {str(e)[:80]}")
     else:
         print("  ⏩ ポジションサイジング: スキップ（週次/無効）")
-    # ── スコア履歴・スクリーナー履歴の蓄積 ────────────────
+    # ── Excel ダッシュボード CSV エクスポート（Step D）────────
+    if getattr(cfg, "ENABLE_EXCEL_EXPORT", False) and _in_mode("excel_export"):
+        print("\n  📊 Excel ダッシュボード CSV エクスポート中...")
         try:
-            if results.get("sectors"):
-                _append_score_history(cfg, results["sectors"])
-            if results.get("screener"):
-                _append_screener_history(cfg, results["screener"])
+            _ex = _load_local_module(
+                "excel_dashboard_exporter",
+                "/content/excel_dashboard_exporter.py",
+                cfg.DRIVE_BASE / "excel_dashboard_exporter.py",
+            )
+            if _ex:
+                export_result = _ex.run_excel_exporter(cfg, results)
+                results["excel_export"] = export_result
+                logger.add("excel_export", "success",
+                           f"{export_result.get('row_count',0)}行出力 "
+                           f"JP:{export_result['breakdown'].get('JP',0)} "
+                           f"US:{export_result['breakdown'].get('US',0)} "
+                           f"ETF:{export_result['breakdown'].get('ETF',0)}")
+            else:
+                print("  ⚠️  excel_dashboard_exporter.py が見つかりません")
         except Exception as e:
-            print(f"  ⚠️  履歴蓄積エラー（スキップ）: {str(e)[:60]}")
+            logger.add("excel_export", "error", str(e)[:100])
+            print(f"  ⚠️  Excelエクスポートエラー: {str(e)[:80]}")
+    else:
+        if not getattr(cfg, "ENABLE_EXCEL_EXPORT", False):
+            print("  ⏩ Excelエクスポート: スキップ（ENABLE_EXCEL_EXPORT=False）")
+
+    # ── スコア履歴・スクリーナー履歴の蓄積（Excel出力の有無に関わらず毎回実行）──
+    try:
+        if results.get("sectors"):
+            _append_score_history(cfg, results["sectors"])
+        if results.get("screener"):
+            # performance_tracker 版に一本化（_append_screener_history は C-1 で削除）
+            _pt_hist = _load_local_module(
+                "performance_tracker",
+                "/content/performance_tracker.py",
+                cfg.DRIVE_BASE / "performance_tracker.py",
+            )
+            if _pt_hist:
+                _pt_hist.append_screener_history(cfg, results["screener"])
+    except Exception as e:
+        print(f"  ⚠️  履歴蓄積エラー（スキップ）: {str(e)[:60]}")
+    # ── [4-9] 統合シグナルアグリゲーター ─────────────────────────
+    if getattr(cfg, "ENABLE_SIGNAL_AGGREGATOR", True) and _in_mode("signal_aggregator"):
+        try:
+            _sa_mod = _load_local_module(
+                "signal_aggregator",
+                "/content/signal_aggregator.py",
+                cfg.DRIVE_BASE / "signal_aggregator.py",
+            )
+            if _sa_mod:
+                sa_result = _sa_mod.run_signal_aggregator(cfg, results)
+                results["signal_aggregator"] = sa_result
+                if not sa_result.get("skipped"):
+                    top = sa_result.get("top_buy", [])
+                    regime = sa_result.get("market_regime", "不明")
+                    logger.add("signal_aggregator", "success",
+                               f"レジーム:{regime} / 買い推奨:{len(top)}業種")
+            else:
+                print("  ⚠️  signal_aggregator.py が見つかりません")
+        except Exception as e:
+            logger.add("signal_aggregator", "error", str(e)[:100])
+            print(f"  ⚠️  シグナルアグリゲーターエラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ シグナルアグリゲーター: スキップ（ENABLE_SIGNAL_AGGREGATOR=False）")
+
+    # ── [4-10] 推論エンジン ───────────────────────────────────────
+    if getattr(cfg, "ENABLE_INFERENCE_ENGINE", True) and _in_mode("inference"):
+        try:
+            _ie_mod = _load_local_module(
+                "inference_engine",
+                "/content/inference_engine.py",
+                cfg.DRIVE_BASE / "inference_engine.py",
+            )
+            if _ie_mod:
+                ie_result = _ie_mod.run_inference_engine(cfg, results)
+                results["inference"] = ie_result
+                phase = ie_result.get("phase_label", "不明")
+                n_scen = len(ie_result.get("active_scenarios", []))
+                logger.add("inference_engine", "success",
+                           f"フェーズ:{phase} / シナリオ:{n_scen}件")
+            else:
+                print("  ⚠️  inference_engine.py が見つかりません")
+        except Exception as e:
+            logger.add("inference_engine", "error", str(e)[:100])
+            print(f"  ⚠️  推論エンジンエラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ 推論エンジン: スキップ（ENABLE_INFERENCE_ENGINE=False）")
+     # ── [6-4] Notion / Obsidian 書き込み ──────────────────────────
+    if getattr(cfg, "ENABLE_NOTION_OBSIDIAN", True) and _in_mode("notion_obsidian"):
+        try:
+            _now = _load_local_module(
+                "notion_obsidian_writer",
+                "/content/notion_obsidian_writer.py",
+                cfg.DRIVE_BASE / "notion_obsidian_writer.py",
+            )
+            if _now:
+                now_result = _now.run_notion_obsidian_writer(cfg, results)
+                results["notion_obsidian"] = now_result
+                obs = now_result.get("obsidian", {})
+                ntf = now_result.get("notion", {})
+                logger.add("notion_obsidian", "success",
+                           f"Obsidian:{len(obs.get('tickers',[]))}件 "
+                           f"Notion:{ntf.get('success',0)}件")
+        except Exception as e:
+            logger.add("notion_obsidian", "error", str(e)[:100])
+            print(f"  ⚠️  Notion/Obsidian書き込みエラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ Notion/Obsidian: スキップ（ENABLE_NOTION_OBSIDIAN=False）")
+    
+    # 全タスク完了ログ（全モジュール実行後に出力）
+    elapsed = (datetime.now() - start).seconds
+    print(f"\n{'='*60}")
+    print(f"  ✅ 全タスク完了（{elapsed}秒）")
+    print(f"  📁 結果: {cfg.RESULT_DIR}")
+    print(f"  📝 知見: {cfg.INSIGHT_DIR}")
+    print(f"{'='*60}")
+    logger.tail(n=5)
+
     return results
 
 

@@ -144,7 +144,18 @@ def _fetch_ticker_data(ticker: str) -> Optional[dict]:
         market_cap = info.get("marketCap") or 0
         name       = info.get("longName") or info.get("shortName") or ticker
         avg_vol    = info.get("averageVolume") or info.get("averageVolume10days") or 0
-
+        # 在庫回転率 = 売上高 / 棚卸資産（製造業・小売業で有効）
+        revenue   = info.get("totalRevenue")
+        inventory = info.get("inventory")
+        inv_turn  = None
+        if revenue and inventory:
+            try:
+                inv_f = float(inventory)
+                rev_f = float(revenue)
+                if inv_f > 0:
+                    inv_turn = round(rev_f / inv_f, 2)
+            except (TypeError, ValueError):
+                pass
         # [S-3] アナリストカバレッジ数
         analyst_count = info.get("numberOfAnalystOpinions")
         if analyst_count is not None:
@@ -171,6 +182,7 @@ def _fetch_ticker_data(ticker: str) -> Optional[dict]:
             "market_cap_b":   round(market_cap / 1e8, 1),
             "avg_volume":     int(avg_vol),
             "analyst_count":  analyst_count,   # v3.0追加
+            "inventory_turnover": inv_turn,
         }
     except Exception:
         return None
@@ -367,15 +379,19 @@ def _calc_scores(
         pbr_score = 50
 
     value_score = round((per_score * 0.6 + pbr_score * 0.4), 1)
-
+    inv_bonus = 0.0   # if roe ブロック外で初期化（ROEなし銘柄でも参照できるよう）
     # クォリティスコア base (0-100): ROEベース
     if roe is not None:
         quality_base = max(0, min(100, roe / 0.30 * 100))
     else:
         quality_base = 50.0
     # [A-7] 決算サプライズボーナス（+5 〜 -5pt）
-    quality_score = round(max(0, min(100, quality_base + surprise_bonus)), 1)
-
+    # 在庫回転率ボーナス（製造・小売に有意 / 金融・サービスはN/A）
+        inv_turn  = data.get("inventory_turnover")
+        if inv_turn is not None:
+            if   inv_turn >= 12: inv_bonus =  4.0   # 月1回転以上 = 優良
+            elif inv_turn >= 6:  inv_bonus =  2.0   # 2ヶ月に1回転 = 良好
+            elif inv_turn <= 2:  inv_bonus = -3.0   # 半年に1回転 = 過剰在庫
     # [S-2] アクルーアル補正（Sloan 1996）
     # - 銘柄個別のアクルーアルtierでボーナス算出
     # - 業種平均より低い場合（=相対的に優良）はさらに+5pt上乗せ
@@ -389,7 +405,10 @@ def _calc_scores(
         relative_bonus = 5.0
 
     quality_score = round(
-        max(0, min(100, quality_base + acr_bonus + relative_bonus)),
+        max(0, min(100,
+            quality_base + acr_bonus + relative_bonus
+            + surprise_bonus + inv_bonus   # ★ surprise_bonus と inv_bonus を統合
+        )),
         1,
     )
 
@@ -501,8 +520,17 @@ def _screen_sector(sector_code: str, sector_name: str,
                    sector_score: float, tickers: list,
                    cfg, market: str = "JP",
                    surprise_cache: dict = None,
-                   edinet_accruals: dict = None,  # 引数追加
-                   all_scores_ref: list = None    # 引数追加
+                   edinet_accruals: dict = None,
+                   all_scores_ref: list = None,
+                   credit_cache: dict = None,
+                   tech_cache: dict = None,
+                   insider_cache: dict = None,   # ← 追加
+                   dividend_cache: dict = None,  # ← 追加
+                   sr_cache: dict = None,
+                   vp_cache: dict = None,
+                   edinet_quality_cache: dict = None,
+                   comps_cache: dict = None,
+                   dcf_cache: dict = None
                    ) -> list:
     """
     1 業種の銘柄リストをスクリーニングする。
@@ -519,6 +547,7 @@ def _screen_sector(sector_code: str, sector_name: str,
 
     for ticker in tickers:
         data = _fetch_ticker_data(ticker)
+        "current_price": _clean(info.get("regularMarketPrice")),
         if data is not None:
             raw_data_list.append((ticker, data))
         time.sleep(0.2)
@@ -539,21 +568,15 @@ def _screen_sector(sector_code: str, sector_name: str,
 
     # 3. メインループ：フィルタリングとスコアリング
     for ticker, data in raw_data_list:
-        # A. フィルター判定（PER/PBR/ROE/時価総額/出来高）
+        # A. フィルター判定（1回のみ実行）
         passed, detail = _apply_filters(data, cfg)
         
-        # B. 決算サプライズボーナスの取得
-        es_bonus = 0.0
-        if es_module and surprise_cache:
-            try:
-                es_bonus = es_module.get_screener_bonus(ticker, surprise_cache)
-            except Exception:
-                pass
+        # B. 各種ボーナスの集計
+        total_bonus = 0.0
+        cr_label = ""
+        inv_bonus = 0.0
         
-        # C. EDINETアクルーアルの取得
-        edinet_acr = accruals.get(ticker)
-        passed, detail = _apply_filters(data, cfg)
-        # [A-7] 決算サプライズボーナス取得
+        # 決算サプライズボーナス
         es_bonus = 0.0
         if surprise_cache:
             try:
@@ -561,16 +584,136 @@ def _screen_sector(sector_code: str, sector_name: str,
                 _sys.path.insert(0, str(Path(__file__).parent))
                 _es_mod = _imp.import_module("earnings_surprise")
                 es_bonus = _es_mod.get_screener_bonus(ticker, surprise_cache)
+                total_bonus += es_bonus
             except Exception:
                 pass
-        # D. 総合スコア計算（すべてのボーナスを統合）
+
+        # 信用倍率ボーナス
+        if credit_cache:
+            try:
+                _cd_mod = _imp.import_module("credit_data")
+                cr_bonus, cr_label = _cd_mod.get_credit_bonus(ticker, credit_cache)
+                total_bonus += cr_bonus
+            except Exception:
+                pass
+        # [NEW] EDINET品質ボーナス
+        eq_bonus = 0.0
+        if edinet_quality_cache and ticker in edinet_quality_cache:
+            try:
+                _sfl_mod = _imp.import_module("screener_feedback_loop")
+                eq_bonus = _sfl_mod.get_edinet_bonus(ticker, edinet_quality_cache)
+            except Exception:
+                pass
+        scores = _calc_scores(data, sector_score,
+                              surprise_bonus=es_bonus + cr_bonus + im_bonus
+                                             + div_bonus + eq_bonus)
+        # [5-2] comps相対バリューボーナス（value_scoreのブレンド）
+        if comps_cache and ticker in comps_cache:
+            try:
+                _ca_mod = _imp.import_module("comps_analyzer")
+                cb = _ca_mod.get_comps_bonus(ticker, comps_cache)
+                if cb != 0:
+                    old_vs = scores.get("value_score", 50) or 50
+                    new_vs = round(old_vs * 0.7 + comps_cache[ticker].get("comps_score", 50) * 0.3, 1)
+                    scores["value_score"] = new_vs
+                    scores["comps_bonus"] = cb
+                    scores["composite_score"] = round(
+                        scores.get("sector_score", 50)    * 0.35
+                        + new_vs                          * 0.25
+                        + scores.get("quality_score", 50) * 0.20
+                        + scores.get("technical_score", 50) * 0.20, 1)
+            except Exception:
+                pass
+        # [6-3] DCFボーナス（value_scoreに直接加算）
+        if dcf_cache and ticker in dcf_cache:
+            try:
+                _dcf_mod = _imp.import_module("dcf_valuation")
+                db = _dcf_mod.get_dcf_bonus(ticker, dcf_cache)
+                if db != 0:
+                    scores["dcf_bonus"]   = db
+                    scores["value_score"] = round(
+                        max(0, min(100, scores.get("value_score", 50) + db)), 1)
+                    scores["composite_score"] = round(
+                        scores.get("sector_score", 50)    * 0.35
+                        + scores["value_score"]           * 0.25
+                        + scores.get("quality_score", 50) * 0.20
+                        + scores.get("technical_score",50) * 0.20, 1)
+            except Exception:
+                pass
+
+        # インサイダーボーナス
+        if insider_cache:
+            try:
+                _im_mod = _imp.import_module("insider_monitor")
+                total_bonus += _im_mod.get_insider_bonus(ticker, insider_cache)
+            except Exception:
+                pass
+
+        # 配当ボーナス
+        if dividend_cache:
+            try:
+                _dc_mod = _imp.import_module("dividend_calendar")
+                total_bonus += _dc_mod.get_dividend_bonus(ticker, dividend_cache)
+            except Exception:
+                pass
+
+        # C. EDINETアクルーアルの取得
+        edinet_acr = accruals.get(ticker)
+
+        # D. 総合スコア計算（すべてのボーナスを統合して1回だけ実行）
         scores = _calc_scores(
             data                = data,
             sector_score        = sector_score,
             edinet_accrual      = edinet_acr,
             sector_accrual_mean = sector_accrual_mean,
-            surprise_bonus      = es_bonus     # ← 追加ロジックを統合
+            surprise_bonus      = total_bonus
         )
+
+        # [4-6] SR ボーナスを technical_score に加算
+        if sr_cache and ticker in sr_cache:
+            try:
+                _sr_mod = _imp.import_module("support_resistance")
+                sr_bonus = _sr_mod.get_sr_bonus(ticker, sr_cache)
+                if sr_bonus != 0:
+                    # technical_score に sr_bonus を加算して composite_score を再計算
+                    ts = scores.get("technical_score", 50.0) or 50.0
+                    new_ts = round(max(0, min(100, ts + sr_bonus)), 1)
+                    scores["technical_score"] = new_ts
+                    scores["sr_bonus"] = sr_bonus
+                    scores["composite_score"] = round(
+                        scores.get("sector_score", 50) * 0.35
+                        + scores.get("value_score",  50) * 0.25
+                        + scores.get("quality_score", 50) * 0.20
+                        + new_ts * 0.20, 1)
+            except Exception:
+                pass
+        # [4-7] VP ボーナスを technical_score に加算
+        if vp_cache and ticker in vp_cache:
+            try:
+                _vp_mod = _imp.import_module("volume_profile")
+                vp_bonus = _vp_mod.get_vp_bonus(ticker, vp_cache)
+                if vp_bonus != 0:
+                    ts_current = scores.get("technical_score", 50.0) or 50.0
+                    new_ts_vp  = round(max(0, min(100, ts_current + vp_bonus)), 1)
+                    scores["technical_score"] = new_ts_vp
+                    scores["vp_bonus"] = vp_bonus
+                    scores["composite_score"] = round(
+                        scores.get("sector_score", 50) * 0.35
+                        + scores.get("value_score",  50) * 0.25
+                        + scores.get("quality_score", 50) * 0.20
+                        + new_ts_vp * 0.20, 1)
+            except Exception:
+                pass
+
+        # テクニカルスコア統合
+        if tech_cache and ticker in tech_cache:
+            try:
+                _ts_mod = _imp.import_module("technical_scorer")
+                scores = _ts_mod.integrate_technical_score(
+                    {**data, **scores}, tech_cache[ticker]
+                )
+            except Exception:
+                pass
 
         candidate = {
             "ticker":         ticker,
@@ -587,9 +730,18 @@ def _screen_sector(sector_code: str, sector_name: str,
             "pass_filters":   passed,
             "filter_detail":  detail,
             **scores,
-            "surprise_bonus":  es_bonus,
-            "discovery_score": 0.0, # run_stock_screenerで後付け
+            "surprise_bonus": es_bonus,
+            "discovery_score": 0.0,
             "discovery_flags": [],
+            "credit_flag":    cr_label,
+            "inventory_turnover": data.get("inventory_turnover"),
+            "inv_bonus":      scores.get("inv_bonus", 0.0), # scoresから取得するか、別途計算するか仕様に合わせて調整
+            "sr_bonus":  scores.get("sr_bonus", 0.0),
+            "vp_bonus":     scores.get("vp_bonus", 0.0),
+            "edinet_bonus": eq_bonus,
+            "current_price": data.get("current_price"),
+            "comps_bonus": scores.get("comps_bonus", 0.0),
+            "dcf_bonus": scores.get("dcf_bonus", 0.0),
         }
         candidates.append(candidate)
 
@@ -702,18 +854,90 @@ def run_stock_screener(cfg, sector_results: dict) -> dict:
     """
     print("\n  📋 個別銘柄スクリーニング（Step C v3.0）開始...")
     t0 = datetime.now()
+    # _imp を先頭で一括 import（line 863/873 での NameError を防ぐ）
+    import sys as _sys, importlib as _imp
+    _sys.path.insert(0, str(Path(__file__).parent))
+    # [4-2] インサイダーボーナスキャッシュ
+    insider_cache = {}
+    if getattr(cfg, "ENABLE_INSIDER_MONITOR", True):
+        try:
+            _im_mod = _imp.import_module("insider_monitor")
+            _im_raw = _im_mod._load_cache(cfg)
+            if _im_raw:
+                insider_cache = _im_raw
+        except Exception:
+            pass
+    # [4-3] 配当ボーナスキャッシュ
+    dividend_cache = {}
+    if getattr(cfg, "ENABLE_DIVIDEND_CALENDAR", True):
+        try:
+            _dc_mod = _imp.import_module("dividend_calendar")
+            _dc_raw = _dc_mod._load_cache(cfg)
+            if _dc_raw:
+                dividend_cache = _dc_raw
+        except Exception:
+            pass
 
     # [A-7] 決算サプライズキャッシュ読み込み（当日分 / 24時間有効）
     surprise_cache = {}
     if getattr(cfg, "ENABLE_EARNINGS_SURPRISE", True):
         try:
-            import sys as _sys, importlib as _imp
-            _sys.path.insert(0, str(Path(__file__).parent))
             _es_mod = _imp.import_module("earnings_surprise")
             _es_cache = _es_mod._load_cache(cfg)
             if _es_cache:
                 surprise_cache = _es_cache
                 print(f"    📋 決算サプライズキャッシュ: {len(surprise_cache)}銘柄")
+        except Exception:
+            pass
+    # [NEW] EDINETフィードバック品質キャッシュ読み込み
+    edinet_quality_cache = {}
+    if getattr(cfg, "ENABLE_SCREENER_FEEDBACK", True):
+        try:
+            _sfl_mod = _imp.import_module("screener_feedback_loop")
+            edinet_quality_cache = _sfl_mod._load_cache(cfg)
+            if edinet_quality_cache:
+                print(f"    🔄 EDINET品質キャッシュ: {len(edinet_quality_cache)}銘柄")
+        except Exception:
+            pass
+    # [5-2] comps キャッシュ読み込み
+    comps_cache = {}
+    if getattr(cfg, "ENABLE_COMPS_ANALYZER", True):
+        try:
+            _ca_mod = _imp.import_module("comps_analyzer")
+            comps_cache = _ca_mod._load_cache(cfg)
+            if comps_cache:
+                print(f"    📊 compsキャッシュ: {len(comps_cache)}銘柄")
+        except Exception:
+            pass
+    # [6-3] DCFキャッシュ読み込み
+    dcf_cache = {}
+    if getattr(cfg, "ENABLE_DCF_VALUATION", True):
+        try:
+            _dcf_mod = _imp.import_module("dcf_valuation")
+            dcf_cache = _dcf_mod._load_cache(cfg)
+            if dcf_cache:
+                print(f"    📐 DCFキャッシュ: {len(dcf_cache)}銘柄")
+        except Exception:
+            pass
+    
+    # [4-6] SR キャッシュ読み込み
+    sr_cache = {}
+    if getattr(cfg, "ENABLE_SUPPORT_RESISTANCE", True):
+        try:
+            _sr_mod = _imp.import_module("support_resistance")
+            sr_cache = _sr_mod._load_cache(cfg)
+            if sr_cache:
+                print(f"    📐 SRキャッシュ: {len(sr_cache)}銘柄")
+        except Exception:
+            pass
+    # [4-7] VP キャッシュ読み込み
+    vp_cache = {}
+    if getattr(cfg, "ENABLE_VOLUME_PROFILE", True):
+        try:
+            _vp_mod = _imp.import_module("volume_profile")
+            vp_cache = _vp_mod._load_cache(cfg)
+            if vp_cache:
+                print(f"    📊 VPキャッシュ: {len(vp_cache)}銘柄")
         except Exception:
             pass
 
@@ -726,33 +950,37 @@ def run_stock_screener(cfg, sector_results: dict) -> dict:
             "top_sectors": [], "discovery_top": [],
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
-
-    # [S-2] EDINETアクルーアルデータを事前ロード
+    # [3-5] 信用残高キャッシュ読み込み（週次データ / 7日有効）
+    credit_cache = {}
+    if getattr(cfg, "ENABLE_CREDIT_DATA", True):
+        try:
+            import sys as _sys, importlib as _imp
+            _sys.path.insert(0, str(Path(__file__).parent))
+            _cd_mod = _imp.import_module("credit_data")
+            _cd_raw = _cd_mod._load_cache(cfg)
+            if _cd_raw:
+                credit_cache = _cd_raw.get("records", {})
+                print(f"    📊 信用残高キャッシュ: {len(credit_cache)}銘柄")
+        except Exception:
+            pass
+    # [4-1] テクニカルスコアキャッシュ読み込み
+    tech_cache = {}
+    if getattr(cfg, "ENABLE_TECHNICAL_SCORER", True):
+        try:
+            import sys as _sys, importlib as _imp
+            _sys.path.insert(0, str(Path(__file__).parent))
+            _ts_mod = _imp.import_module("technical_scorer")
+            tech_cache = _ts_mod._load_cache(cfg)
+            if tech_cache:
+                print(f"    📈 テクニカルキャッシュ: {len(tech_cache)}銘柄")
+        except Exception:
+            pass
+# [S-2] EDINETアクルーアルデータを事前ロード
     edinet_accruals = {}
     try:
         edinet_accruals = _load_edinet_accruals(cfg)
     except Exception as e:
         print(f"  ⚠️  EDINET accrual ロード失敗（スキップ）: {e}")
-    # --- [A-7] 追加: 決算サプライズキャッシュ読み込み ---
-    surprise_cache = {}
-    try:
-        import sys as _sys
-        from pathlib import Path
-        import importlib as _imp
-        # 実行ファイルと同じディレクトリをパスに追加
-        current_dir = str(Path(__file__).parent)
-        if current_dir not in _sys.path:
-            _sys.path.insert(0, current_dir)
-            
-        _es = _imp.import_module("earnings_surprise")
-        # earnings_surprise.py 内に _load_cache(cfg) が定義されている想定
-        _cache = _es._load_cache(cfg)
-        if _cache:
-            surprise_cache = _cache
-            print(f"    📋 決算サプライズキャッシュ: {len(surprise_cache)}銘柄")
-    except Exception as e:
-        # モジュールがない場合などは静かにスキップ
-        pass
     # セクタースコア上位 N 業種を選択
     sorted_sectors = sorted(
         sector_results.items(),
@@ -790,6 +1018,15 @@ def run_stock_screener(cfg, sector_results: dict) -> dict:
             edinet_accruals = edinet_accruals,
             all_scores_ref  = all_comp_scores,
             surprise_cache = surprise_cache,
+            credit_cache   = credit_cache,
+            tech_cache     = tech_cache,
+            insider_cache  = insider_cache,   # ← この行を追加
+            dividend_cache = dividend_cache,  # ← この行を追加
+            sr_cache       = sr_cache,
+            vp_cache       = vp_cache,
+            edinet_quality_cache = edinet_quality_cache,
+            comps_cache    = comps_cache,
+            dcf_cache      = dcf_cache,
         )
         all_candidates.extend(candidates)
 

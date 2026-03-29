@@ -168,37 +168,37 @@ def _section_etf(results: dict) -> list:
     if not etf or etf.get("skipped"):
         lines.append("*データなし*"); lines.append(""); return lines
 
-    etf_list = etf.get("etfs", etf.get("results", []))
+    # ★修正: thematic_etf_tracker の出力は "themes" キー / 各要素は theme_name / heat_score
+    etf_list = etf.get("themes", [])
     if not etf_list:
         lines.append("*データなし*"); lines.append(""); return lines
 
-    # スコア or リターンでソート
     sorted_etf = sorted(
         [e for e in etf_list if isinstance(e, dict)],
-        key=lambda x: x.get("score", x.get("return_1m", 0)) or 0,
+        key=lambda x: x.get("heat_score", 0) or 0,
         reverse=True,
     )
 
-    hot   = sorted_etf[:3]
-    cool  = sorted_etf[-3:] if len(sorted_etf) >= 6 else []
+    hot  = [e for e in sorted_etf if e.get("signal") == "hot"][:3]
+    cool = [e for e in sorted_etf if e.get("signal") == "cooling"][:3]
 
+    SIGNAL_ICONS = {"hot": "🔥", "warming": "📈", "neutral": "➡️", "cooling": "❄️"}
     if hot:
         lines.append("**🔥 ホット テーマ**")
         for e in hot:
-            name  = e.get("name", e.get("ticker", ""))[:20]
-            ret1m = e.get("return_1m", e.get("perf_1m"))
-            score = e.get("score")
-            ret_s = f"{ret1m:+.1f}%" if ret1m is not None else ""
-            sc_s  = f"スコア:{score:.0f}" if score is not None else ""
-            lines.append(f"  🔥 {name}: {ret_s} {sc_s}".strip())
+            name  = e.get("theme_name", "")[:20]
+            score = e.get("heat_score")
+            etfs  = "/".join(e.get("etfs", []))
+            sc_s  = f"熱量:{score:.0f}" if score is not None else ""
+            lines.append(f"  🔥 {name}（{etfs}）: {sc_s}".strip())
 
     if cool:
         lines.append("**❄️  クール テーマ**")
         for e in cool:
-            name  = e.get("name", e.get("ticker", ""))[:20]
-            ret1m = e.get("return_1m", e.get("perf_1m"))
-            ret_s = f"{ret1m:+.1f}%" if ret1m is not None else ""
-            lines.append(f"  ❄️  {name}: {ret_s}".strip())
+            name  = e.get("theme_name", "")[:20]
+            score = e.get("heat_score")
+            sc_s  = f"熱量:{score:.0f}" if score is not None else ""
+            lines.append(f"  ❄️  {name}: {sc_s}".strip())
 
     lines.append("")
     return lines
@@ -293,15 +293,15 @@ def _section_macro(results: dict) -> list:
             lines.append("")
 
     # マクロシグナル（macro結果から）
-    macro = results.get("macro")
-    if isinstance(macro, dict):
-        signals = macro.get("signals", [])
-        headwinds = [s for s in signals if s.get("signal") == "headwind"]
-        tailwinds = [s for s in signals if s.get("signal") == "tailwind"]
+    # BATCH-A修正後: macro_signals は results["macro_signals"] に格納される
+    macro_signals_list = results.get("macro_signals", [])
+    if macro_signals_list:
+        headwinds = [s for s in macro_signals_list if s.get("signal") == "headwind"]
+        tailwinds = [s for s in macro_signals_list if s.get("signal") == "tailwind"]
         if tailwinds:
-            lines.append(f"💚 **追い風シグナル**: {' / '.join(s['label'] for s in tailwinds[:4])}")
+            lines.append(f"💚 **追い風シグナル**: {' / '.join(s.get('label','') for s in tailwinds[:4])}")
         if headwinds:
-            lines.append(f"🔴 **逆風シグナル**: {' / '.join(s['label'] for s in headwinds[:4])}")
+            lines.append(f"🔴 **逆風シグナル**: {' / '.join(s.get('label','') for s in headwinds[:4])}")
         lines.append("")
 
     # IMF（imfキーがあれば）
@@ -348,6 +348,14 @@ def _section_position_sizer(results: dict) -> list:
     text = ps.get("summary_text", "")
     return text.split("\n") if text else []
 
+# [n-n] ストレステストセクション
+def _section_stress_test(results: dict) -> list:
+    st = results.get("stress_test", {})
+    if not st or st.get("skipped"):
+        return []
+    text = st.get("summary_text", "")
+    return text.split("\n") if text else []
+
 # [2-3] パフォーマンストラッカーセクション
 def _section_performance(results: dict) -> list:
     perf = results.get("performance", {})
@@ -356,6 +364,149 @@ def _section_performance(results: dict) -> list:
     text = perf.get("summary_text", "")
     return text.split("\n") if text else []
 
+# [n-n] 市場幅指標セクション
+def _section_market_breadth(results: dict) -> list:
+    mb = results.get("market_breadth", {})
+    if not mb:
+        return []
+    text = mb.get("summary_text", "")
+    return text.split("\n") if text else []
+
+# [n-n] 分割カレンダーセクション
+def _section_dividend_calendar(results: dict) -> list:
+    dc = results.get("dividend_calendar", {})
+    if not dc:
+        return []
+    text = dc.get("alert_text", "")
+    return text.split("\n") if text else []
+
+# [n-n] 季節アノマリーセクション
+def _section_anomaly_season(results: dict) -> list:
+    a = results.get("anomaly_season", {})
+    if not a:
+        return []
+    text = a.get("calendar_md", "")
+    return text.split("\n") if text else []
+
+# [n-n] オプション市場センチメントセクション
+def _section_options_monitor(results: dict) -> list:
+    om = results.get("options_monitor", {})
+    if not om:
+        return []
+    text = om.get("summary_text", "")
+    return text.split("\n") if text else []
+# [n-n] SR/VP サマリーセクション
+def _section_sr_vp(results: dict) -> list:
+    lines = []
+    sr = results.get("support_resistance", {})
+    vp = results.get("volume_profile", {})
+
+    breakouts = sr.get("top_breakout", [])
+    if breakouts:
+        lines.append("## 🚀 ブレイクアウト候補（SR分析）")
+        for b in breakouts[:5]:
+            lines.append(
+                f"  {b.get('ticker','?')}: 位置{b.get('position_pct',0):.0f}% "
+                f"{b.get('label','')} bonus={b.get('sr_bonus',0):+.1f}pt"
+            )
+        lines.append("")
+
+    poc_cheap = vp.get("top_poc_cheap", [])
+    if poc_cheap:
+        lines.append("## 📊 VP割安候補（出来高プロファイル）")
+        for p in poc_cheap[:5]:
+            lines.append(
+                f"  {p.get('ticker','?')}: POC乖離{p.get('poc_gap_pct',0):+.1f}% "
+                f"zone={p.get('current_zone','?')} {p.get('label','')}"
+            )
+        lines.append("")
+    return lines   # ★追加
+
+def _section_jp_us_bridge(results: dict) -> list:
+    bridge = results.get("jp_us_bridge", {})
+    if not bridge or bridge.get("skipped"):
+        return []
+    return bridge.get("summary_text", "").split("\n")
+
+def _section_rule_optimizer(results: dict) -> list:
+    ro = results.get("rule_optimizer", {})
+    if not ro or not ro.get("updated"):
+        return []
+    return ro.get("report_md", "").split("\n")
+
+def _section_backtest(results: dict) -> list:
+    bt = results.get("backtest", {})
+    if not bt or bt.get("skipped"):
+        return []
+    return bt.get("report_md", "").split("\n")
+
+#推論エンジン — 今週の投資判断サマリー（最重要セクション）
+def _section_inference(results: dict) -> list:
+    ie = results.get("inference", {})
+    if not ie:
+        return []
+    text = ie.get("summary_md", "")
+    return text.split("\n") if text else []
+
+#統合シグナル — 業種別スコア表
+def _section_signal_aggregator(results: dict) -> list:
+    sa = results.get("signal_aggregator", {})
+    if not sa or sa.get("skipped"):
+        return []
+    text = sa.get("summary_text", "")
+    return text.split("\n") if text else []
+
+def _section_comps(results: dict) -> list:
+    ca = results.get("comps_analyzer", {})
+    top = ca.get("top_cheap", [])
+    if not top:
+        return []
+    lines = ["## 📊 同業種内割安候補（comps分析）", ""]
+    lines += ["| 銘柄 | compsスコア | ボーナス | 評価 |",
+              "|-----|-----------|---------|-----|"]
+    for d in top[:10]:
+        lines.append(
+            f"| {d.get('ticker','?')} | {d.get('comps_score',50):.0f} "
+            f"| {d.get('comps_bonus',0):+.1f}pt | {d.get('label','')} |")
+    return lines
+
+#    自己検証レポート — llm_rule_generator 連携の核心データ
+def _section_self_evaluator(results: dict) -> list:
+    se = results.get("self_evaluator", {})
+    if not se or se.get("skipped"):
+        return []
+    return se.get("report_md", "").split("\n")
+
+#    screenerセクターヒートマップ
+def _section_screener_heatmap(results: dict) -> list:
+    ssh = results.get("screener_heatmap", {})
+    if not ssh or ssh.get("skipped"):
+        return []
+    return ssh.get("heatmap_md", "").split("\n")
+
+def _section_portfolio_optimizer(results: dict) -> list:
+    po = results.get("portfolio_optimizer", {})
+    if not po or po.get("skipped"):
+        return []
+    return po.get("report_md", "").split("\n")
+
+def _section_dcf(results: dict) -> list:
+    dcf = results.get("dcf_valuation", {})
+    top = dcf.get("top_undervalued", [])
+    if not top:
+        return []
+    lines = ["## 📐 DCF割安候補（理論株価ベース）", ""]
+    lines += ["| 銘柄 | 理論株価 | 現在株価 | 割引率 | ボーナス |",
+              "|-----|--------|--------|-------|-------|"]
+    for d in top[:5]:
+        intr = d.get("dcf",{}).get("intrinsic_per_share",0)
+        curr = d.get("inputs",{}).get("current_price",0)
+        disc = d.get("discount_pct",0)
+        bonus = d.get("dcf_bonus",0)
+        lines.append(f"| {d.get('name','')[:10]} "
+                     f"| {intr:,.0f}円 | {curr:,.0f}円 "
+                     f"| {disc:+.1f}% | {bonus:+.0f}pt |")
+    return lines
 # ==============================================================
 # BLOCK 9: アクション候補（来週の投資判断ガイド）
 # ==============================================================
@@ -440,6 +591,7 @@ def generate_weekly_report(cfg, results: dict) -> dict:
 
     # 全セクションを構築
     sections = []
+    # ★修正: タイトルを先頭、推論・signal_aggregatorをその直後に配置
     sections.append([
         f"# 📊 週次投資判断レポート",
         f"**{today}（第{week_num}週）** — stock_analyzer 自動生成",
@@ -447,8 +599,11 @@ def generate_weekly_report(cfg, results: dict) -> dict:
         "---",
         "",
     ])
-
+    sections.append(_section_inference(results))
+    sections.append(_section_signal_aggregator(results))
     sections.append(_section_macro(results))
+    sections.append(_section_anomaly_season(results))
+    sections.append(_section_market_breadth(results))
     sections.append(_section_jp_sectors(results))
     sections.append(_section_us_sectors(results))
     sections.append(_section_etf(results))
@@ -459,6 +614,18 @@ def generate_weekly_report(cfg, results: dict) -> dict:
     sections.append(_section_biz_summaries(results))
     sections.append(_section_news(results))
     sections.append(_section_action_guide(results))
+    sections.append(_section_stress_test(results))
+    sections.append(_section_dividend_calendar(results))
+    sections.append(_section_options_monitor(results))
+    sections.append(_section_sr_vp(results))
+    sections.append(_section_jp_us_bridge(results))
+    sections.append(_section_rule_optimizer(results))
+    sections.append(_section_backtest(results))
+    sections.append(_section_comps(results))
+    sections.append(_section_self_evaluator(results))
+    sections.append(_section_screener_heatmap(results))
+    sections.append(_section_portfolio_optimizer(results))
+    sections.append(_section_dcf(results))
 
     # フッター
     sections.append([
@@ -710,7 +877,7 @@ def run_weekly_report(cfg, results: dict) -> dict:
     if not getattr(cfg, "ENABLE_WEEKLY_REPORT", True):
         print("  ⏩ 週次レポート: スキップ（ENABLE_WEEKLY_REPORT=False）")
         return {"skipped": True}
-# [2-3] パフォーマンストラッカー（月曜日のみ、+20秒/週）
+    # [2-3] パフォーマンストラッカー（月曜日のみ、+20秒/週）
     try:
         import sys as _sys, importlib as _imp
         _sys.path.insert(0, str(Path(__file__).parent))
@@ -758,28 +925,32 @@ def run_weekly_report(cfg, results: dict) -> dict:
             print(f"    ⚠️  {err}")
 
     # ── LINE 送信 ───────────────────────────────────────────────
-    line_token = getattr(cfg, "ALERT_LINE_TOKEN", "")
-    if line_token:
+    line_token   = getattr(cfg, "ALERT_LINE_TOKEN",   "")
+    line_user_id = getattr(cfg, "ALERT_LINE_USER_ID", "")
+    if line_token and line_user_id:
         try:
-            import urllib.request, urllib.parse
+            import urllib.request
+            import json as _json
             line_msg = build_weekly_line_message(summary)
-            data     = urllib.parse.urlencode({"message": line_msg}).encode("utf-8")
+            payload  = _json.dumps({
+                "to":       line_user_id,
+                "messages": [{"type": "text", "text": line_msg}],
+            }).encode("utf-8")
             req = urllib.request.Request(
-                "https://notify-api.line.me/api/notify",
-                data=data,
+                "https://api.line.me/v2/bot/message/push",
+                data=payload,
                 headers={
-                    "Authorization": f"Bearer {line_token}",
-                    "Content-Type":  "application/x-www-form-urlencoded",
+                    "Authorization":  f"Bearer {line_token}",
+                    "Content-Type":   "application/json",
                 },
                 method="POST",
             )
             with urllib.request.urlopen(req, timeout=10) as resp:
-                body = resp.read().decode("utf-8")
-                if '"status":200' in body:
+                if resp.status == 200:
                     sent_channels.append("LINE")
                     print("    ✅ 週次レポート LINE 送信成功")
                 else:
-                    errors.append(f"LINE: {body[:60]}")
+                    errors.append(f"LINE: status={resp.status}")
         except Exception as e:
             errors.append(f"LINE: {str(e)[:60]}")
             print(f"    ⚠️  LINE送信エラー: {str(e)[:60]}")
