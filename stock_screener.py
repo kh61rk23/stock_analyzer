@@ -181,6 +181,9 @@ def _fetch_ticker_data(ticker: str) -> Optional[dict]:
             "roe":            _clean(roe),
             "market_cap_b":   round(market_cap / 1e8, 1),
             "avg_volume":     int(avg_vol),
+            # [I-1] EPS成長率（加速度計算用）
+            "earnings_growth":  _clean(info.get("earningsGrowth")),        # 直近年率成長率
+            "earnings_qgrowth": _clean(info.get("earningsQuarterlyGrowth")), # 直近四半期成長率
             "analyst_count":  analyst_count,   # v3.0追加
             "inventory_turnover": inv_turn,
         }
@@ -380,6 +383,26 @@ def _calc_scores(
 
     value_score = round((per_score * 0.6 + pbr_score * 0.4), 1)
     inv_bonus = 0.0   # if roe ブロック外で初期化（ROEなし銘柄でも参照できるよう）
+    # [I-1] EPS加速度スコア計算
+    # earnings_growth（直近年率）と earnings_qgrowth（直近四半期）の差から加速度を算出
+    acc_bonus = 0.0
+    eg_annual  = data.get("earnings_growth")    # 例: 0.25 = 25%
+    eg_quarter = data.get("earnings_qgrowth")   # 例: 0.40 = 40%（四半期）
+    if eg_annual is not None and eg_quarter is not None:
+        # 四半期成長率（年換算）と年率成長率の差 = 加速度の近似
+        # 四半期成長率を年換算: (1+q)^4 - 1 の近似として q*4 を使用
+        eg_quarter_annualized = eg_quarter * 4
+        acceleration = eg_quarter_annualized - eg_annual
+        # 加速度をボーナスに変換（±10pt を上限）
+        if acceleration > 0.30:    acc_bonus = 10.0   # 強加速（年換算30%以上上振れ）
+        elif acceleration > 0.15:  acc_bonus =  7.0
+        elif acceleration > 0.05:  acc_bonus =  4.0
+        elif acceleration < -0.30: acc_bonus = -10.0  # 強減速
+        elif acceleration < -0.15: acc_bonus =  -7.0
+        elif acceleration < -0.05: acc_bonus =  -4.0
+    elif eg_quarter is not None and eg_quarter > 0.30:
+        # 年率データなしでも四半期成長率が30%超なら加速シグナルとして扱う
+        acc_bonus = 5.0
     # クォリティスコア base (0-100): ROEベース
     if roe is not None:
         quality_base = max(0, min(100, roe / 0.30 * 100))
@@ -407,7 +430,7 @@ def _calc_scores(
     quality_score = round(
         max(0, min(100,
             quality_base + acr_bonus + relative_bonus
-            + surprise_bonus + inv_bonus   # ★ surprise_bonus と inv_bonus を統合
+            + surprise_bonus + inv_bonus + acc_bonus  # ★ I-1追加
         )),
         1,
     )
@@ -425,10 +448,14 @@ def _calc_scores(
         "value_score":     value_score,
         "quality_score":   quality_score,
         "composite_score": composite,
-        "accrual_ratio":   edinet_accrual,   # v3.0追加
-        "accrual_tier":    acr_tier,         # v3.0追加
-        "accrual_bonus":   round(acr_bonus + relative_bonus, 1),  # v3.0追加
-        "surprise_bonus":   surprise_bonus,
+        "accrual_ratio":   edinet_accrual,
+        "accrual_tier":    acr_tier,
+        "accrual_bonus":   round(acr_bonus + relative_bonus, 1),
+        "surprise_bonus":  surprise_bonus,
+        "acc_bonus":       round(acc_bonus, 1),   # ★ I-1追加（EPS加速度）
+        "earnings_acceleration": round(eg_quarter * 4 - eg_annual, 3)
+                                 if (eg_annual is not None and eg_quarter is not None)
+                                 else None,       # ★ I-1追加（生値保存）
     }
 
 
@@ -742,6 +769,8 @@ def _screen_sector(sector_code: str, sector_name: str,
             "current_price": data.get("current_price"),
             "comps_bonus": scores.get("comps_bonus", 0.0),
             "dcf_bonus": scores.get("dcf_bonus", 0.0),
+            "acc_bonus": scores.get("acc_bonus", 0.0),   # ★ I-1追加
+            "earnings_acceleration": scores.get("earnings_acceleration"),  # ★ I-1追加
         }
         candidates.append(candidate)
 

@@ -714,6 +714,7 @@ DAILY_MODULES = [
     "gov",           # 政府データパイプライン
     "macro",         # マクロ指標取得
     "sector",        # セクターエージェント
+    "economic_cycle",  # 経済サイクルフェーズ判定（D-1 / ダリオ4象限）
     "timeline",      # 月次トレンド＋デイリー騰落
     "policy",        # 政策金利トラッカー
     "us_sector",     # 米国S&P500 11セクター分析
@@ -973,3 +974,44 @@ SIGNAL_WEIGHTS = {
     "etf_heat":          0.03,
     "yield_curve":       0.03,
 }
+
+# ==============================================================
+# BLOCK I-1: EPS加速度スコア設定
+# ==============================================================
+ENABLE_EARNINGS_ACCELERATION: bool = True   # EPS加速度スコアを有効化
+# 加速度の閾値（四半期年換算成長率 - 年率成長率）
+# この値以上で加速判定
+ACCEL_STRONG_UP:   float =  0.30   # 強加速 → +10pt
+ACCEL_MID_UP:      float =  0.15   # 中加速 → +7pt
+ACCEL_MILD_UP:     float =  0.05   # 軽加速 → +4pt
+ACCEL_MILD_DOWN:   float = -0.05   # 軽減速 → -4pt
+ACCEL_MID_DOWN:    float = -0.15   # 中減速 → -7pt
+ACCEL_STRONG_DOWN: float = -0.30   # 強減速 → -10pt
+
+# ==============================================================
+# BLOCK D-1: 経済サイクルフェーズ判定設定（D-1 / ダリオ4象限）
+# ==============================================================
+
+# 経済サイクルフェーズ判定を有効化するフラグ
+ENABLE_ECONOMIC_CYCLE: bool = True
+
+# GDP成長率の「成長/後退」境界値（前期比%）
+# この値を上回れば「成長↑」、下回れば「成長↓」
+CYCLE_GDP_GROWTH_THRESHOLD: float = 0.0
+
+# CPI変化率の「インフレ/デフレ」境界値（前期比%）
+# この値を上回れば「インフレ↑」、下回れば「インフレ↓」
+CYCLE_CPI_CHANGE_THRESHOLD: float = 2.0
+
+# フェーズ別セクター補正量（空辞書の場合はモジュールのデフォルト値を使用）
+# カスタマイズする場合は以下のように定義する:
+# CYCLE_PHASE_SECTOR_ADJUSTMENTS = {
+#     "A": {"1009": +8, "1028": +4, "1004": -4, ...},
+#     "B": {"1016": +5, "1017": +5, "1025": +5, ...},
+#     "C": {"1008": +3, "1016": -8, "1017": -8, ...},
+#     "D": {"1008": +5, "1004": +4, "1017": -6, ...},
+# }
+CYCLE_PHASE_SECTOR_ADJUSTMENTS: dict = {}  # 空=economic_cycle_detector のデフォルト値を使用
+
+# フェーズ判定結果のキャッシュファイル名
+CYCLE_PHASE_HISTORY_FILE: str = "cycle_phase_history.json"

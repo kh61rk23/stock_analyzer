@@ -623,6 +623,37 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ マクロ分析: スキップ（config.ENABLE_MACRO=False / Step 2 で有効化）")
 
+    # ── 経済サイクルフェーズ判定（D-1 / ダリオ4象限）────────────
+    if getattr(cfg, "ENABLE_ECONOMIC_CYCLE", True) and _in_mode("economic_cycle"):
+        try:
+            _ec = _load_local_module(
+                "economic_cycle_detector",
+                "/content/economic_cycle_detector.py",
+                cfg.DRIVE_BASE / "economic_cycle_detector.py",
+            )
+            if _ec:
+                ec_result = _ec.run_economic_cycle_detector(cfg, results)
+                results["economic_cycle"] = ec_result
+                phase = ec_result.get("phase", "B")
+                # macro_snapshot_for_sector に象限情報を埋め込む
+                # → sector_agents が build_result() 内で参照できる
+                macro_snapshot_for_sector["_macro_phase"] = phase
+                conf  = ec_result.get("confidence", 0)
+                trans = ec_result.get("transition_alert", False)
+                logger.add(
+                    "economic_cycle", "success",
+                    f"象限{phase}: {ec_result.get('phase_label','')} "
+                    f"確信度{conf*100:.0f}% "
+                    f"{'⚠️フェーズ遷移' if trans else ''}",
+                )
+            else:
+                print("  ⚠️  economic_cycle_detector.py が見つかりません")
+        except Exception as e:
+            logger.add("economic_cycle", "error", str(e)[:100])
+            print(f"  ⚠️  経済サイクル判定エラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ 経済サイクル判定: スキップ（ENABLE_ECONOMIC_CYCLE=False）")
+
     # ── セクター分析（2-A 追加）─────────────────────────────────
     if cfg.ENABLE_SECTOR and cfg.IMPLEMENTED_AGENTS and _in_mode("sector"):
         print(f"\n  🏭 セクター分析を実行中（{len(cfg.IMPLEMENTED_AGENTS)} 業種）...")
@@ -636,6 +667,18 @@ def run_all_tasks(mode: str = "all") -> dict:
         try:
             res = run_sector_analysis(code, macro_snapshot_for_sector)
             sector_results[code] = res
+            # ── [D-1] 経済サイクル象限補正を適用 ──────────────
+            ec_adj = results.get("economic_cycle", {}).get(
+                "sector_adjustments", {}
+            )
+            if ec_adj and isinstance(res, dict) and code in ec_adj:
+                _delta = ec_adj[code]
+                old_s  = res.get("composite_score", 0)
+                res["composite_score"] = round(
+                    max(-30, min(100, old_s + _delta)), 1
+                )
+                res["cycle_phase_adjustment"] = _delta
+            # ─────────────────────────────────────────────────
             logger.add("sector_agent", "success",
                         f"[{code}]{res.get('sector_name_ja','')} "
                         f"スコア:{res.get('composite_score','N/A')} "
