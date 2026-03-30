@@ -182,6 +182,8 @@ jobs:
             git add "stock_data/insights/screener/backtest_*.md" || true
             git add stock_data/data/portfolio_optimizer_cache.json || true
             git add "stock_data/insights/screener/dcf_*.md" || true
+            git add stock_data/data/cycle_phase_history.json || true
+            git add stock_data/data/rule_weights.json || true
             git diff --cached --quiet || git commit -m "auto: daily update $(date '+%Y-%m-%d')"
             git push || true
             echo "✅ dashboard_latest.csv + dashboard.iqy をコミットしました"
