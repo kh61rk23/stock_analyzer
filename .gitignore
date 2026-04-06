@@ -1,2 +1,5 @@
 # FinBERT モデルキャッシュ（初回DL後ローカルに保存・git管理外）
 stock_data/models/
+
+# US財務DB（CIK別財務JSONは大量ファイルのため除外）
+stock_data/data/us_fundamentals_db/
