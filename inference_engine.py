@@ -443,6 +443,14 @@ def run_inference_engine(cfg, results: dict) -> dict:
     print("\n  🧠 推論エンジン実行中...")
 
     ctx = _Ctx(results)
+    # ── [US-4] term structure による crisis 判定強化 ────────
+    options_mon = results.get("options_monitor", {})
+    if options_mon.get("crisis_signal"):
+        self.crisis_override = True
+        self.term_score      = options_mon.get("term_score", 50.0)
+    else:
+        self.crisis_override = False
+        self.term_score      = options_mon.get("term_score", 50.0)
 
     # Layer 1: 市場フェーズ
     phase_code, phase_label = _detect_phase(ctx)

@@ -72,6 +72,25 @@ VIX_CALM          = 15  # 落ち着き（楽観注意）
 
 CACHE_FILENAME  = "options_monitor_cache.json"
 CACHE_HOURS     = 4     # オプションデータは4時間キャッシュ（日中変動が大きい）
+# ── [Phase US-4] VIX term structure ティッカー ───────────────
+VIX9D_TICKER   = "^VIX9D"    # 9日VIX（超短期）
+VIX3M_TICKER   = "^VIX3M"    # 3ヶ月VIX
+VIX6M_TICKER   = "^VIX6M"    # 6ヶ月VIX
+SKEW_TICKER    = "^SKEW"     # CBOE SKEW指数（テールリスク）
+
+# term structure のコンタンゴ/バックワーデーション閾値
+TERM_CONTANGO_RATIO  = 0.90  # VIX9D/VIX < 0.90 → 通常（コンタンゴ）
+TERM_BACKWD_RATIO    = 1.10  # VIX9D/VIX > 1.10 → バックワーデーション（即時リスクオフ）
+
+# SKEW 指数閾値
+SKEW_EXTREME = 145   # 145超 = テールリスク極大（ブラックスワン警戒）
+SKEW_ELEVATED =130  # 130超 = テールリスク高め
+
+# 個別株IV急騰しきい値（IV Rank）
+IV_SPIKE_THRESHOLD = 70    # IV Rank 70%ile超 = IV急騰（イベント前シグナル）
+
+# term_structure_score の signal_aggregator カテゴリE寄与
+TERM_SCORE_WEIGHT   = 0.20  # カテゴリEの既存VIXスコア(0.35)に補完
 FETCH_DELAY     = 0.4
 
 # センチメントスコアによる業種補正マップ
@@ -212,6 +231,227 @@ def _fetch_vix_data() -> dict:
         return {}
 
 
+def _fetch_vix_term_structure() -> dict:
+    """
+    [Phase US-4] VIX term structure を取得する。
+
+    VIX9D / VIX / VIX3M / VIX6M を yfinance で取得し、
+    term structure の形状（コンタンゴ / バックワーデーション）を判定する。
+
+    Returns:
+        {
+          "vix9d":       float | None,
+          "vix":         float | None,
+          "vix3m":       float | None,
+          "vix6m":       float | None,
+          "ts_ratio_9d": float,   # VIX9D / VIX（< 1.0 = コンタンゴ）
+          "ts_ratio_3m": float,   # VIX3M / VIX
+          "shape":       "contango" | "backwardation" | "flat",
+          "crisis_signal": bool,  # 即時リスクオフシグナル
+          "term_score":  float,   # 0〜100（高=安心/低=警戒）
+        }
+    """
+    try:
+        import yfinance as yf
+        tickers = {
+            "vix9d": VIX9D_TICKER,
+            "vix":   VIX_TICKER,
+            "vix3m": VIX3M_TICKER,
+            "vix6m": VIX6M_TICKER,
+        }
+        values = {}
+        for name, ticker in tickers.items():
+            try:
+                info = yf.Ticker(ticker).info or {}
+                price = (info.get("regularMarketPrice") or
+                         info.get("currentPrice") or
+                         info.get("previousClose"))
+                values[name] = round(float(price), 2) if price else None
+                time.sleep(0.1)
+            except Exception:
+                values[name] = None
+
+        vix9d = values.get("vix9d")
+        vix   = values.get("vix")
+        vix3m = values.get("vix3m")
+        vix6m = values.get("vix6m")
+
+        # term structure 判定
+        ts_ratio_9d = round(vix9d / vix, 4) if (vix9d and vix and vix > 0) else None
+        ts_ratio_3m = round(vix3m / vix, 4) if (vix3m and vix and vix > 0) else None
+
+        # 形状判定
+        if ts_ratio_9d is None:
+            shape = "unknown"
+        elif ts_ratio_9d >= TERM_BACKWD_RATIO:
+            shape = "backwardation"   # 短期 > 長期 → 即時パニック
+        elif ts_ratio_9d <= TERM_CONTANGO_RATIO:
+            shape = "contango"        # 短期 < 長期 → 通常
+        else:
+            shape = "flat"
+
+        # 即時リスクオフシグナル
+        crisis_signal = (
+            shape == "backwardation" or
+            (vix is not None and vix >= VIX_EXTREME_FEAR)
+        )
+
+        # term_score（0〜100 / 高=安心）
+        if ts_ratio_9d is not None:
+            # ratio 0.80 = score 100（完全コンタンゴ）/ ratio 1.20 = score 0（強バックワーデーション）
+            term_score = max(0.0, min(100.0, (TERM_BACKWD_RATIO - ts_ratio_9d) /
+                                     (TERM_BACKWD_RATIO - TERM_CONTANGO_RATIO) * 100))
+        else:
+            term_score = 50.0
+
+        return {
+            "vix9d":         vix9d,
+            "vix":           vix,
+            "vix3m":         vix3m,
+            "vix6m":         vix6m,
+            "ts_ratio_9d":   ts_ratio_9d,
+            "ts_ratio_3m":   ts_ratio_3m,
+            "shape":         shape,
+            "crisis_signal": crisis_signal,
+            "term_score":    round(term_score, 1),
+        }
+    except Exception as e:
+        print(f"    ⚠️  VIX term structure 取得失敗: {str(e)[:50]}")
+        return {"shape": "unknown", "crisis_signal": False, "term_score": 50.0}
+
+
+def _fetch_skew_index() -> dict:
+    """
+    [Phase US-4] CBOE SKEW 指数を取得する。
+
+    SKEW は OTM プット需要から計算される「テールリスク」の市場評価。
+    通常 100〜150 の範囲。145 超 = ブラックスワン警戒水準。
+
+    Returns:
+        {
+          "value":        float | None,
+          "level":        "extreme" | "elevated" | "normal",
+          "tail_risk":    "high" | "medium" | "low",
+          "skew_score":   float,   # 0〜100（100=テールリスク無し）
+        }
+    """
+    try:
+        import yfinance as yf
+        info  = yf.Ticker(SKEW_TICKER).info or {}
+        price = (info.get("regularMarketPrice") or
+                 info.get("previousClose"))
+        if not price:
+            return {"value": None, "level": "unknown", "tail_risk": "unknown", "skew_score": 50.0}
+
+        value = round(float(price), 2)
+        if value >= SKEW_EXTREME:
+            level      = "extreme"
+            tail_risk  = "high"
+            skew_score = max(0.0, 100 - (value - 100) / 0.6)   # 145 → ~17
+        elif value >= SKEW_ELEVATED:
+            level      = "elevated"
+            tail_risk  = "medium"
+            skew_score = max(20.0, 100 - (value - 100) / 0.45)
+        else:
+            level      = "normal"
+            tail_risk  = "low"
+            skew_score = min(100.0, 100 - (value - 100) / 0.3)
+
+        return {
+            "value":      value,
+            "level":      level,
+            "tail_risk":  tail_risk,
+            "skew_score": round(skew_score, 1),
+        }
+    except Exception:
+        return {"value": None, "level": "unknown", "tail_risk": "unknown", "skew_score": 50.0}
+
+
+def detect_iv_spikes(
+    screener_tickers: list,
+    threshold: int = IV_SPIKE_THRESHOLD,
+) -> list[dict]:
+    """
+    [Phase US-4] screener 通過銘柄の個別 IV を取得し、IV急騰銘柄を検知する。
+
+    決算前・重要イベント前の IV 急騰 = イベントドリブン戦略のトリガー。
+    us_8k_monitor.py の screener_hits と組み合わせて使用する。
+
+    Args:
+        screener_tickers: 対象ティッカーリスト（上限10社・API負荷対策）
+        threshold:        IV Rank がこれ超 = 急騰判定
+
+    Returns:
+        [{
+          "ticker":    str,
+          "iv_rank":   float,
+          "avg_iv":    float,
+          "signal":    "iv_spike",
+          "note":      str,
+        }, ...]
+    """
+    try:
+        import yfinance as yf
+    except ImportError:
+        return []
+
+    spike_list = []
+    for ticker in screener_tickers[:10]:
+        try:
+            t    = yf.Ticker(ticker)
+            exp_dates = t.options
+            if not exp_dates:
+                continue
+            # 直近の満期を使用
+            chain = t.option_chain(exp_dates[0])
+            calls = chain.calls
+            if calls is None or calls.empty:
+                continue
+
+            iv_vals = calls["impliedVolatility"].replace(0, None).dropna().tolist()
+            if not iv_vals:
+                continue
+
+            avg_iv = sum(iv_vals) / len(iv_vals) * 100
+
+            # yfinance では historical IV が取れないため
+            # 過去1年のヒストリカルボラティリティで IV Rank を近似する
+            hist   = t.history(period="1y", auto_adjust=True)
+            if hist is None or hist.empty:
+                continue
+            closes = hist["Close"].dropna().tolist()
+            if len(closes) < 20:
+                continue
+
+            import math
+            returns = [(closes[i] - closes[i-1]) / closes[i-1]
+                       for i in range(1, len(closes))]
+            mean_r = sum(returns) / len(returns)
+            std_r  = math.sqrt(sum((r - mean_r) ** 2 for r in returns) / len(returns))
+            hv_ann = std_r * math.sqrt(252) * 100  # 年率換算%
+
+            # IV / HV の比（1.5超 = IV 過剰プレミアム）
+            iv_hv_ratio = avg_iv / hv_ann if hv_ann > 0 else 1.0
+
+            # IV Rank の近似（IV/HV比 1.0 → 50%ile / 2.0 → 100%ile）
+            iv_rank_approx = min(100, max(0, (iv_hv_ratio - 0.5) / 1.5 * 100))
+
+            if iv_rank_approx >= threshold:
+                spike_list.append({
+                    "ticker":      ticker,
+                    "iv_rank":     round(iv_rank_approx, 1),
+                    "avg_iv":      round(avg_iv, 1),
+                    "hv_annual":   round(hv_ann, 1),
+                    "iv_hv_ratio": round(iv_hv_ratio, 2),
+                    "signal":      "iv_spike",
+                    "note":        f"IV{avg_iv:.0f}% / HV{hv_ann:.0f}% / ratio={iv_hv_ratio:.2f}",
+                })
+            time.sleep(FETCH_DELAY)
+        except Exception:
+            continue
+
+    return sorted(spike_list, key=lambda x: x["iv_rank"], reverse=True)
+
 # ==============================================================
 # BLOCK 2: センチメントスコア算出
 # ==============================================================
@@ -284,6 +524,29 @@ def calc_sentiment_score(
             "value": round(iv_skew, 2),
             "score": round(skew_score, 1),
             "weight": 0.15,
+        }
+    # ── [Phase US-4] term structure スコアを追加 ──────────────
+    ts_data = vix_data.get("term_structure", {})
+    ts_score = ts_data.get("term_score")
+    if ts_score is not None:
+        raw_scores.append(("term_structure", ts_score, TERM_SCORE_WEIGHT))
+        components["term_structure"] = {
+            "value": ts_data.get("ts_ratio_9d"),
+            "score": round(ts_score, 1),
+            "shape": ts_data.get("shape", "unknown"),
+            "weight": TERM_SCORE_WEIGHT,
+        }
+
+    # ── [Phase US-4] SKEW スコアを追加 ────────────────────────
+    skew_data = vix_data.get("skew", {})
+    skew_score = skew_data.get("skew_score")
+    if skew_score is not None:
+        raw_scores.append(("skew", skew_score, 0.10))
+        components["skew"] = {
+            "value":  skew_data.get("value"),
+            "score":  round(skew_score, 1),
+            "level":  skew_data.get("level", "normal"),
+            "weight": 0.10,
         }
 
     if not raw_scores:
@@ -483,6 +746,28 @@ def run_options_monitor(cfg, sector_results: Optional[dict] = None) -> dict:
     # VIX データ取得
     print("    VIX / VVIX 取得中...")
     vix_data = _fetch_vix_data()
+    # ── [Phase US-4] VIX term structure & SKEW ───────────────
+    print("    VIX term structure / SKEW 取得中...")
+    ts_data   = _fetch_vix_term_structure()
+    skew_data = _fetch_skew_index()
+    vix_data["term_structure"] = ts_data
+    vix_data["skew"]           = skew_data
+
+    # crisis_signal 即時判定（バックワーデーション = リスクオフ強）
+    if ts_data.get("crisis_signal"):
+        shape = ts_data.get("shape", "")
+        vix9d = ts_data.get("vix9d", "N/A")
+        vix_c = ts_data.get("vix", "N/A")
+        print(f"    ⚠️  [US-4] VIX バックワーデーション検知: "
+              f"VIX9D={vix9d} / VIX={vix_c} (ratio={ts_data.get('ts_ratio_9d','?')})")
+    else:
+        ts_shape = ts_data.get("shape", "unknown")
+        ts_score = ts_data.get("term_score", 50)
+        print(f"    term structure: {ts_shape} (score={ts_score:.0f})")
+
+    skew_val = skew_data.get("value")
+    if skew_val:
+        print(f"    SKEW: {skew_val:.0f} ({skew_data.get('level','?')})")
     if vix_data.get("vix"):
         vix_val = vix_data["vix"]["current"]
         iv_rank = vix_data["vix"]["iv_rank"]
@@ -513,11 +798,29 @@ def run_options_monitor(cfg, sector_results: Optional[dict] = None) -> dict:
             adj_str = " / ".join(f"{k}:{v:+.0f}" for k, v in list(adjustments.items())[:4])
             print(f"    業種補正: {adj_str}")
 
+    # ── [Phase US-4] IV急騰銘柄検知 ─────────────────────────
+    iv_spikes = []
+    if sector_results:
+        # sector_results から US screener 通過銘柄を取得（パスされた場合）
+        us_tickers = []
+        if isinstance(sector_results, dict) and "_us_screener_tickers" in sector_results:
+            us_tickers = sector_results["_us_screener_tickers"][:10]
+        if us_tickers:
+            print(f"    IV急騰チェック: {len(us_tickers)}銘柄...")
+            iv_spikes = detect_iv_spikes(us_tickers)
+            if iv_spikes:
+                print(f"    ⚡ IV急騰銘柄: {[s['ticker'] for s in iv_spikes[:3]]}")
+
     result = {
         "option_data":  option_data,
         "vix_data":     vix_data,
         "sentiment":    sentiment,
         "adjustments":  adjustments,
+        "term_structure":   ts_data,          # ★ US-4追加
+        "skew":             skew_data,        # ★ US-4追加
+        "iv_spikes":        iv_spikes,        # ★ US-4追加
+        "term_score":       ts_data.get("term_score", 50.0),  # ★ signal_aggregator用
+        "crisis_signal":    ts_data.get("crisis_signal", False),  # ★ inference_engine用
         "timestamp":    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
     result["summary_text"] = format_options_report(result)

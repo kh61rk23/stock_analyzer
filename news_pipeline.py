@@ -618,6 +618,10 @@ def run_news_pipeline(cfg) -> dict:
     }
 
     _save_news_report(result, cfg)
+    # ── [RESEARCH-5] sentiment フィールドの初期化（FinBERT が後から上書き）──
+    for a in enriched:
+        a.setdefault("sentiment_label", "NEUTRAL")
+        a.setdefault("sentiment_score", 0.5)
     _save_news_cache(enriched, cfg)
     return result
 
