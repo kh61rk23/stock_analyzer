@@ -297,7 +297,9 @@ def _determine_phase(
         phase = "C" if inflation_up else "D"
         confidence *= 0.7
         print(f"    ⚠️  recession_score={recession_score}により象限を{phase}に補正")
-
+    # ── [RESEARCH-1] NOTE: confidence は regime_detector.py が後段で補正する ──
+    # main.py の HMM ブロックで d1_confidence_adj を加算するため
+    # ここでは D-1 単独の信頼度のみを返す（変更不要）
     return phase, round(confidence, 2)
 
 

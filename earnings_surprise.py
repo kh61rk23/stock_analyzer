@@ -74,7 +74,65 @@ PENALTY_CONSEC_NEG1 = -2.0  # 1四半期ネガサプライズ
 # キャッシュパス（DATA_DIR から計算）
 CACHE_FILENAME = "earnings_surprise_cache.json"
 
+# [I-2] 保守度スコア設定
+CONSERVATISM_QUARTERS  = 8     # 保守度計算に使う四半期数（最大8）
+CONSERVATISM_CACHE_FILE = "conservatism_cache.json"
 
+# 保守度スコア閾値
+CONS_HIGH_MEAN   =  15.0   # 平均乖離率+15%超 = 非常に保守的
+CONS_MID_MEAN    =  10.0   # 平均乖離率+10%超 = 保守的
+CONS_LOW_MEAN    =   0.0   # 平均乖離率+0%超  = やや保守的
+CONS_HIGH_STD    =  10.0   # σ < 10%  = 高精度
+CONS_MID_STD     =  15.0   # σ < 15%  = 中精度
+CONS_LOW_STD     =  20.0   # σ < 20%  = 低精度
+
+# I-1 × I-2 複合フラグ閾値
+SURPRISE_COMBO_ACCEL_MIN    = 70.0   # I-1 earnings_accel_score 閾値
+SURPRISE_COMBO_CONSERV_MIN  = 70.0   # I-2 conservatism_score 閾値
+SURPRISE_COMBO_NEG_ACCEL    = 30.0   # ネガティブ複合フラグ閾値
+SURPRISE_COMBO_NEG_CONSERV  = 30.0   # I-2 conservatism_score 閾値
+
+def _fetch_earnings_history_extended(ticker: str, n_quarters: int = CONSERVATISM_QUARTERS) -> list:
+    """
+    [I-2] 最大8四半期の EPS 予想 vs 実績を取得する（保守度計算用）。
+    _fetch_earnings_history() と同様だが取得件数を最大8件に拡張。
+    """
+    try:
+        import yfinance as yf
+        t    = yf.Ticker(ticker)
+        hist = t.earnings_history
+        if hist is None or (hasattr(hist, 'empty') and hist.empty):
+            return []
+
+        records = []
+        for _, row in hist.iterrows():
+            try:
+                est = row.get("epsEstimate") or row.get("EPSEstimate")
+                act = row.get("epsActual")   or row.get("EPSActual")
+                dt  = row.get("quarter")     or row.get("Quarter")
+                if est is None or act is None:
+                    continue
+                est_f = float(est)
+                act_f = float(act)
+                if abs(est_f) < 0.001:
+                    surp_pct = None
+                else:
+                    surp_pct = round((act_f - est_f) / abs(est_f) * 100, 2)
+                records.append({
+                    "quarter":      str(dt)[:10] if dt else "",
+                    "eps_estimate": round(est_f, 4),
+                    "eps_actual":   round(act_f, 4),
+                    "surprise_pct": surp_pct,
+                    "beat":         surp_pct > 3.0 if surp_pct is not None else None,
+                })
+            except (TypeError, ValueError):
+                continue
+
+        records.sort(key=lambda x: x["quarter"], reverse=True)
+        return records[:n_quarters]
+    except Exception:
+        return []
+    
 # ==============================================================
 # BLOCK 1: yfinance から決算サプライズデータ取得
 # ==============================================================
@@ -305,25 +363,52 @@ def analyze_ticker(ticker: str) -> Optional[dict]:
     label          = _surprise_label(score, consec_pos, consec_neg)
     bonus          = _calc_screener_bonus(consec_pos, consec_neg)
 
+    # [I-2] 保守度スコアを同時計算（拡張履歴で）
+    history_ext    = _fetch_earnings_history_extended(ticker)
+    conserv_result = calc_conservatism_score(ticker, history_ext)
+    conserv_score  = conserv_result["conservatism_score"]
+
+    # conservatism_bonus: screener_bonus に上乗せ
+    if conserv_score >= 80:    conserv_bonus = 5.0
+    elif conserv_score >= 65:  conserv_bonus = 3.0
+    elif conserv_score <= 25:  conserv_bonus = -4.0
+    elif conserv_score <= 40:  conserv_bonus = -2.0
+    else:                      conserv_bonus = 0.0
+
+    # I-1 加速スコアは screener 側から渡されないため仮の0で複合フラグを生成
+    # 実際の組み合わせは stock_screener.py の _screen_sector() 内で評価
+    combo = calc_surprise_combo_flag(ticker, conserv_score, 50.0)
+
     return {
-        "ticker":           ticker,
-        "name":             name[:30],
-        "surprise_score":   score,
-        "surprise_label":   label,
-        "consecutive_pos":  consec_pos,
-        "consecutive_neg":  consec_neg,
-        "screener_bonus":   bonus,
-        "latest_q":         history[0] if history else {},
-        "history":          history,
+        "ticker":             ticker,
+        "name":               name[:30],
+        "surprise_score":     score,
+        "surprise_label":     label,
+        "consecutive_pos":    consec_pos,
+        "consecutive_neg":    consec_neg,
+        "screener_bonus":     bonus,
+        "latest_q":           history[0] if history else {},
+        "history":            history,
+        # [I-2] 追加フィールド
+        "conservatism_score": conserv_score,
+        "conservatism_label": conserv_result["label"],
+        "avg_beat_pct":       conserv_result["avg_beat_pct"],
+        "std_beat_pct":       conserv_result["std_beat_pct"],
+        "beat_count":         conserv_result["beat_count"],
+        "is_conservative":    conserv_result["is_conservative"],
+        "conservatism_bonus": conserv_bonus,
+        "combo_flag":         combo,
     }
 
 
 # ==============================================================
 # BLOCK 5: screener 統合インターフェース
 # ==============================================================
-
-def get_screener_bonus(ticker: str, surprise_cache: dict) -> float:
+def get_screener_bonus(ticker: str, surprise_cache: dict,
+                       include_conservatism: bool = True) -> float:
     """
+    screener_bonus + conservatism_bonus の合計を返す。
+    include_conservatism=False の場合はサプライズボーナスのみ。
     stock_screener.py の _calc_scores() から呼び出す。
     キャッシュ済みの surprise 結果から screener_bonus を返す。
 
@@ -337,7 +422,18 @@ def get_screener_bonus(ticker: str, surprise_cache: dict) -> float:
     result = surprise_cache.get(ticker)
     if not result:
         return 0.0
-    return float(result.get("screener_bonus", 0.0))
+    base = float(result.get("screener_bonus", 0.0))
+    if include_conservatism:
+        base += float(result.get("conservatism_bonus", 0.0))
+    return round(base, 2)
+
+
+def get_conservatism_score(ticker: str, surprise_cache: dict) -> float:
+    """conservatism_score を返す。データなしは 50（中立）。"""
+    result = surprise_cache.get(ticker)
+    if not result:
+        return 50.0
+    return float(result.get("conservatism_score", 50.0))
 
 
 # ==============================================================
@@ -408,6 +504,157 @@ def run_earnings_surprise(cfg, tickers: Optional[list] = None) -> dict:
     )
     return summary
 
+# ==============================================================
+# BLOCK 2.5: [I-2] 保守度スコア計算
+# ==============================================================
+
+def calc_conservatism_score(ticker: str, history_ext: list = None) -> dict:
+    """
+    [I-2] 会社予想の保守度スコアを計算する（井村俊哉モデル）。
+
+    Step1: 過去8四半期の乖離率（実績EPS / 会社予想EPS - 1）を計算
+    Step2: 平均乖離率(μ) × 安定性(σ) でベーススコアを算出
+    Step3: 上方修正頻度を加算
+    Step4: 期初予想の弱気度を評価（将来拡張用）
+
+    Returns:
+        {
+          "conservatism_score":  float,  # 0〜100
+          "avg_beat_pct":        float,  # 平均乖離率%
+          "std_beat_pct":        float,  # 乖離率標準偏差
+          "beat_count":          int,    # ポジサプライズ回数
+          "total_quarters":      int,    # 有効四半期数
+          "revision_bonus":      float,  # 上方修正頻度ボーナス
+          "label":               str,    # 説明ラベル
+          "is_conservative":     bool,   # 70点以上 = 保守的
+        }
+    """
+    import math
+
+    # 拡張履歴を取得（渡されていなければ取得）
+    if history_ext is None:
+        history_ext = _fetch_earnings_history_extended(ticker)
+
+    # 有効な乖離率のみ抽出
+    beats = [r["surprise_pct"] for r in history_ext
+             if r.get("surprise_pct") is not None]
+
+    if len(beats) < 2:
+        return {
+            "conservatism_score": 50.0,
+            "avg_beat_pct":       None,
+            "std_beat_pct":       None,
+            "beat_count":         0,
+            "total_quarters":     len(beats),
+            "revision_bonus":     0.0,
+            "label":              "データ不足（中立）",
+            "is_conservative":    False,
+        }
+
+    # Step1: 統計計算
+    mu  = sum(beats) / len(beats)
+    var = sum((x - mu) ** 2 for x in beats) / len(beats)
+    sigma = math.sqrt(var)
+
+    # Step2: ベーススコア（μ × σ の組み合わせ）
+    base_score = 50.0
+
+    if mu > CONS_HIGH_MEAN:
+        if sigma < CONS_HIGH_STD:   base_score = 95.0
+        elif sigma < CONS_MID_STD:  base_score = 82.0
+        elif sigma < CONS_LOW_STD:  base_score = 70.0
+        else:                       base_score = 60.0
+    elif mu > CONS_MID_MEAN:
+        if sigma < CONS_HIGH_STD:   base_score = 80.0
+        elif sigma < CONS_MID_STD:  base_score = 72.0
+        elif sigma < CONS_LOW_STD:  base_score = 62.0
+        else:                       base_score = 55.0
+    elif mu > CONS_LOW_MEAN:
+        if sigma < CONS_LOW_STD:    base_score = 58.0
+        else:                       base_score = 52.0
+    elif mu < -5.0:
+        if sigma < CONS_MID_STD:    base_score = 20.0   # 楽観的かつ安定
+        else:                       base_score = 30.0
+    else:
+        base_score = 40.0
+
+    # Step3: 上方修正頻度ボーナス（直近4四半期）
+    recent4 = [r for r in history_ext[:4] if r.get("beat") is not None]
+    beat_in_4 = sum(1 for r in recent4 if r.get("beat"))
+    revision_bonus = {4: 20.0, 3: 15.0, 2: 10.0, 1: 5.0, 0: 0.0}.get(beat_in_4, 0.0)
+    base_score += revision_bonus
+
+    # クランプ
+    final_score = round(max(0.0, min(100.0, base_score)), 1)
+
+    # ラベル生成
+    if final_score >= 90:
+        label = f"🎯 超保守的（平均+{mu:.1f}%/σ={sigma:.1f}%）"
+    elif final_score >= 70:
+        label = f"📈 保守的（平均+{mu:.1f}%/σ={sigma:.1f}%）"
+    elif final_score >= 50:
+        label = f"➡️ やや保守的（平均+{mu:.1f}%）"
+    elif final_score >= 30:
+        label = f"⚠️ やや楽観的（平均{mu:.1f}%）"
+    else:
+        label = f"🔴 楽観的（平均{mu:.1f}% → ネガサプライズリスク）"
+
+    return {
+        "conservatism_score": final_score,
+        "avg_beat_pct":       round(mu, 2),
+        "std_beat_pct":       round(sigma, 2),
+        "beat_count":         sum(1 for b in beats if b > 0),
+        "total_quarters":     len(beats),
+        "revision_bonus":     revision_bonus,
+        "label":              label,
+        "is_conservative":    final_score >= SURPRISE_COMBO_CONSERV_MIN,
+    }
+
+
+def calc_surprise_combo_flag(
+    ticker: str,
+    conservatism_score: float,
+    earnings_accel_score: float,
+) -> dict:
+    """
+    [I-1 × I-2] EPS加速度スコアと保守度スコアの複合フラグを生成する。
+
+    Returns:
+        {
+          "high_prob_surprise":    bool,  # 決算サプライズ高確率候補
+          "negative_risk":         bool,  # ネガティブサプライズリスク
+          "combo_label":           str,
+          "alert_days_before":     int,   # 決算何日前にアラートするか
+        }
+    """
+    high_prob = (
+        earnings_accel_score >= SURPRISE_COMBO_ACCEL_MIN
+        and conservatism_score  >= SURPRISE_COMBO_CONSERV_MIN
+    )
+    neg_risk = (
+        earnings_accel_score <= SURPRISE_COMBO_NEG_ACCEL
+        and conservatism_score  <= SURPRISE_COMBO_NEG_CONSERV
+    )
+
+    if high_prob:
+        combo_label = (
+            f"🎯 決算サプライズ高確率候補 "
+            f"（加速{earnings_accel_score:.0f}pt×保守{conservatism_score:.0f}pt）"
+        )
+    elif neg_risk:
+        combo_label = (
+            f"🔴 ネガティブサプライズリスク "
+            f"（減速{earnings_accel_score:.0f}pt×楽観{conservatism_score:.0f}pt）"
+        )
+    else:
+        combo_label = ""
+
+    return {
+        "high_prob_surprise": high_prob,
+        "negative_risk":      neg_risk,
+        "combo_label":        combo_label,
+        "alert_days_before":  21,   # 決算3週間前にアラート
+    }
 
 def _build_summary(results: dict) -> dict:
     """results辞書から集計サマリーを構築する。"""

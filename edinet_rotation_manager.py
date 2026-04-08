@@ -224,7 +224,7 @@ def _save_analysis(cfg, edinet_code: str, data: dict):
 # BLOCK 3: 取得キュー構築
 # ==============================================================
 
-def _build_fetch_queue(cfg, meta: dict) -> list:
+def _build_fetch_queue(cfg, meta: dict, results: dict = None) -> list:
     """
     優先順位に従って本日取得すべき銘柄リストを返す。
 
@@ -284,6 +284,20 @@ def _build_fetch_queue(cfg, meta: dict) -> list:
 
     # 古い順（未取得を最優先）にソートして追加
     rotation_targets.sort(key=lambda x: -x[0])
+    # ── [問題C] sector_tier による優先度加重ソート ──────────────
+    sector_tier_map = (getattr(results, "get", lambda k, d: d)
+                       ("sector_tier", {}) if results else {})
+    tier_boost = getattr(cfg, "EDINET_TIER_TOP_BOOST",   30)
+    tier_penal = getattr(cfg, "EDINET_TIER_BOT_PENALTY", -20)
+
+    def _tier_sort_key(item):
+        days_old, ticker, sc = item
+        tier  = sector_tier_map.get(sc, "MID")
+        boost = tier_boost if tier == "TOP" else (tier_penal if tier == "BOT" else 0)
+        # days_old + tier_boost を合算してソートキーにする
+        return -(days_old + boost)
+
+    rotation_targets.sort(key=_tier_sort_key)
     for days_old, ticker, sector_code in rotation_targets:
         if len(queue) >= per_day:
             break
@@ -603,7 +617,7 @@ def run_edinet_rotation(cfg, results: dict = None) -> dict:
     print(f"    📚 既存DB: {len(meta)}社管理中")
 
     # 取得キュー構築
-    queue = _build_fetch_queue(cfg, meta)
+    queue = _build_fetch_queue(cfg, meta, results)
     if not queue:
         print("  ✅ 本日の取得対象なし（全銘柄が有効期間内）")
         return {
