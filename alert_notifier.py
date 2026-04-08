@@ -307,12 +307,16 @@ def extract_alerts(cfg, results: dict) -> list:
                 if not c.get("fetch_ok"):
                     continue
                 dy = c.get("dividend_yield")
-                if dy and dy >= min_dy:
+                # [バグ修正] yfinanceが一部銘柄で異常値を返すためバリデーション追加
+                # dividendYield は小数（0.04 = 4%）で返る。30%超は明らかなデータ異常
+                if dy and min_dy <= dy <= 0.30:
                     pr = c.get("payout_ratio")
-                    pr_s = f"配当性向:{pr*100:.0f}%" if pr else ""
+                    # payoutRatio も小数（0.49 = 49%）で返る。2.0超（200%超）は異常
+                    pr_valid = pr if (pr is not None and 0.0 <= pr <= 2.0) else None
+                    pr_s = f"配当性向:{pr_valid*100:.0f}%" if pr_valid is not None else ""
                     high_div_lines.append(
                         f"  {c.get('name','')[:14]}: {dy*100:.1f}% {pr_s}"
-                    )
+                )
         if high_div_lines:
             alerts.append({
                 "trigger":  "high_dividend",
@@ -798,6 +802,292 @@ def extract_alerts(cfg, results: dict) -> list:
                 "trigger":  "portfolio_rebalance",
                 "title":    f"💼 リバランシング推奨: {n_rebal}銘柄に乖離",
                 "body":     po_result.get("report_md", "")[:400],
+                "severity": "medium",
+            })
+    # ── ⑮ [M-4] TDnet 触媒発生アラート ───────────────────────
+    tdnet_result = results.get("tdnet", {})
+    if tdnet_result and not tdnet_result.get("skipped"):
+        # アクティビスト候補での触媒発生（最優先）
+        activist_hits = tdnet_result.get("activist_hits", [])
+        if activist_hits:
+            lines = []
+            for ev in activist_hits[:5]:
+                lines.append(
+                    f"  ⚡ {ev['name']}（{ev['ticker']}）"
+                    f"activist={ev.get('activist_score',0):.0f}pt\n"
+                    f"     📋 {ev['title'][:45]}"
+                )
+            alerts.append({
+                "trigger":  "tdnet_activist_catalyst",
+                "title":    f"🎯 触媒発生！アクティビスト候補 {len(activist_hits)}社",
+                "body":     "\n".join(lines),
+                "severity": "high",
+            })
+
+        # 自己株式取得（買い戻し）
+        buyback = tdnet_result.get("buyback", [])
+        if buyback and getattr(cfg, "ALERT_ON_BUYBACK", True):
+            lines = [
+                f"  💴 {ev['name']}（{ev['ticker']}）: {ev['title'][:40]}"
+                for ev in buyback[:6]
+            ]
+            alerts.append({
+                "trigger":  "tdnet_buyback",
+                "title":    f"💴 自己株式取得 {len(buyback)}社（本日）",
+                "body":     "\n".join(lines),
+                "severity": "medium",
+            })
+
+        # 増配・特別配当
+        div_up = tdnet_result.get("div_up", [])
+        if div_up and getattr(cfg, "ALERT_ON_DIV_UP", True):
+            lines = [
+                f"  💰 {ev['name']}（{ev['ticker']}）: {ev['title'][:40]}"
+                for ev in div_up[:6]
+            ]
+            alerts.append({
+                "trigger":  "tdnet_div_up",
+                "title":    f"💰 増配・特別配当 {len(div_up)}社（本日）",
+                "body":     "\n".join(lines),
+                "severity": "medium",
+            })
+    # ── ⑯ [I-2] 決算サプライズ高確率候補アラート ─────────────
+    screener_res = results.get("screener", {})
+    if screener_res and getattr(cfg, "ALERT_ON_HIGH_PROB_SURPRISE", True):
+        high_prob = [
+            c for c in screener_res.get("candidates", [])
+            if c.get("is_high_prob_surprise") and c.get("pass_filters")
+        ]
+        neg_risk = [
+            c for c in screener_res.get("candidates", [])
+            if c.get("is_negative_risk")
+        ]
+
+        if high_prob:
+            lines = []
+            for c in sorted(high_prob,
+                            key=lambda x: x.get("conservatism_score", 0),
+                            reverse=True)[:5]:
+                lines.append(
+                    f"  🎯 {c.get('name','')[:14]}（{c['ticker']}）"
+                    f" 加速+{c.get('acc_bonus',0):.0f}pt"
+                    f" × 保守{c.get('conservatism_score',0):.0f}pt"
+                )
+            alerts.append({
+                "trigger":  "high_prob_surprise",
+                "title":    f"🎯 決算サプライズ高確率候補 {len(high_prob)}社",
+                "body":     "\n".join(lines),
+                "severity": "high",
+            })
+
+        if neg_risk:
+            lines = [
+                f"  🔴 {c.get('name','')[:14]}（{c['ticker']}）"
+                for c in neg_risk[:3]
+            ]
+            alerts.append({
+                "trigger":  "negative_surprise_risk",
+                "title":    f"🔴 ネガティブサプライズリスク {len(neg_risk)}社",
+                "body":     "\n".join(lines),
+                "severity": "medium",
+            })
+     # ── ⑰ [R-3] miss_factor 閾値超え → ルール見直し推奨 ──────
+    if getattr(cfg, "ENABLE_MISS_FACTOR_ALERT", True):
+        try:
+            import sys as _sys, importlib as _imp
+            _sys.path.insert(0, str(Path(__file__).parent))
+            _ij = _imp.import_module("investment_journal")
+            miss_alerts = _ij.get_miss_factor_alerts(cfg)
+            if miss_alerts:
+                lines = [
+                    f"  ⚠️ {a['factor']}: {a['count']}回"
+                    for a in miss_alerts[:5]
+                ]
+                alerts.append({
+                    "trigger":  "miss_factor_review",
+                    "title":    f"📔 ルール見直し推奨: miss_factor {len(miss_alerts)}件",
+                    "body":     "\n".join(lines),
+                    "severity": "medium",
+                })
+        except Exception:
+            pass
+        # ── [GAP-1] ベイズ更新後ドリフトイベント ─────────────
+        drift_events = results.get("drift_events", [])
+        if drift_events:
+            drift_lines = []
+            for d in sorted(drift_events, key=lambda x: abs(x["drift"]), reverse=True)[:6]:
+                icon = "📈" if d["direction"] == "up" else "📉"
+                drift_lines.append(
+                    f"  {icon} [{d['code']}] {d['prev']:.0f}→{d['today']:.0f}pt "
+                    f"({'+' if d['drift']>0 else ''}{d['drift']:.0f}pt / {d['severity']})"
+                )
+            alerts.append({
+                "trigger":  "bayesian_drift",
+                "title":    f"⚡ スコア急変（ベイズ検出）: {len(drift_events)}業種",
+                "body":     "\n".join(drift_lines),
+                "severity": "high" if any(d["severity"] == "high"
+                                          for d in drift_events) else "medium",
+            })
+    # ── ⑱ [P-4] 株主構成アラート ────────────────────────────────
+    sa_result = results.get("shareholder", {})
+    if sa_result and not sa_result.get("skipped"):
+        # アクティビスト参戦（最優先）
+        activist_list = sa_result.get("activist_entries", [])
+        if activist_list:
+            sa_results_map = sa_result.get("results", {})
+            lines = []
+            for tk in activist_list[:5]:
+                sr = sa_results_map.get(tk, {})
+                detail = sr.get("activist_detail", {})
+                lines.append(
+                    f"  ⚡ {tk}: {detail.get('alert', '')}"
+                )
+            alerts.append({
+                "trigger":  "activist_entry_detected",
+                "title":    f"⚡⚡ アクティビスト参戦疑い {len(activist_list)}社",
+                "body":     "\n".join(lines),
+                "severity": "high",
+            })
+
+        # 外国人持株急増
+        foreign_spike = sa_result.get("foreign_spike", [])
+        if foreign_spike and getattr(cfg, "ALERT_ON_FOREIGN_SPIKE", True):
+            sa_results_map = sa_result.get("results", {})
+            lines = []
+            for tk in foreign_spike[:5]:
+                sr = sa_results_map.get(tk, {})
+                lines.append(
+                    f"  🌏 {tk}: 外国人{sr.get('foreign_pct', '?'):.0f}%"
+                    f" | スコア{sr.get('shareholder_score', 0):.0f}pt"
+                )
+            alerts.append({
+                "trigger":  "foreign_investor_spike",
+                "title":    f"🌏 外国人持株急増 {len(foreign_spike)}社",
+                "body":     "\n".join(lines),
+                "severity": "medium",
+            })
+        # ── [GAP-7] マクロ急変アラート ──────────────────────────────
+    delta_alerts = results.get("macro_delta_alerts", [])
+    if delta_alerts and getattr(cfg, "ALERT_ON_MACRO_DELTA", True):
+        lines = []
+        for da in delta_alerts[:5]:
+            factor = da.get("key", "")
+            icon   = "📈" if da.get("delta", 0) > 0 else "📉"
+            lines.append(f"  {icon} {da.get('delta_str', '')}")
+        alerts.append({
+            "trigger":  "macro_delta",
+            "title":    f"⚡ マクロ急変検出 {len(delta_alerts)}件（前日比）",
+            "body":     "\n".join(lines),
+            "severity": "high" if len(delta_alerts) >= 3 else "medium",
+        })
+        # ── ⑲ [I-5] 中計達成アラート ─────────────────────────────
+    mt_result = results.get("midterm_tracker", {})
+    if mt_result and not mt_result.get("skipped"):
+        # 高信頼性中計発表
+        new_plan_alerts = mt_result.get("new_plan_alerts", [])
+        if new_plan_alerts:
+            lines = []
+            for pa in new_plan_alerts[:3]:
+                alert_type = pa.get("alert_type", "")
+                icon = "🌟" if alert_type == "high_reliability" else "⚠️"
+                lines.append(
+                    f"  {icon} {pa['ticker']}: {pa['event_title'][:35]}\n"
+                    f"     {pa.get('note','')[:60]}"
+                )
+            alerts.append({
+                "trigger":  "midterm_plan_announced",
+                "title":    f"📋 中計発表 {len(new_plan_alerts)}社（達成率評価付き）",
+                "body":     "\n".join(lines),
+                "severity": "medium",
+            })
+
+        # 公約超過達成軌道
+        overtrack = mt_result.get("overtrack_list", [])
+        if overtrack:
+            alerts.append({
+                "trigger":  "midterm_overtrack",
+                "title":    f"🚀 公約超過達成軌道 {len(overtrack)}社",
+                "body":     "  " + " / ".join(overtrack[:5]),
+                "severity": "info",
+            })
+
+        # 中計未達リスク
+        risk_list = mt_result.get("risk_list", [])
+        if risk_list:
+            alerts.append({
+                "trigger":  "midterm_risk",
+                "title":    f"⚠️ 中計未達リスク {len(risk_list)}社",
+                "body":     "  " + " / ".join(risk_list[:5]),
+                "severity": "medium",
+            })
+            # ── ⑳ [RESEARCH-5] FinBERT感情急変アラート ─────────────────
+    sentiment_result = results.get("sentiment", {})
+    if sentiment_result and not sentiment_result.get("skipped"):
+        by_sector = sentiment_result.get("by_sector", {})
+        japan_sectors = getattr(cfg, "JAPAN_SECTORS", {})
+        # 感情悪化業種（deteriorating + negative_count多）
+        deteriorating = [
+            (code, d) for code, d in by_sector.items()
+            if d.get("sentiment_trend") == "deteriorating"
+            and d.get("negative_count", 0) >= 3
+        ]
+        if deteriorating:
+            lines = []
+            for code, d in sorted(deteriorating,
+                                   key=lambda x: x[1].get("avg_sentiment", 0.5))[:4]:
+                name = japan_sectors.get(code, {}).get("name_ja", code)
+                lines.append(
+                    f"  📉 {name}: "
+                    f"感情スコア{d['avg_sentiment']:.2f} "
+                    f"（ネガティブ{d['negative_count']}件）"
+                )
+            alerts.append({
+                "trigger":  "sentiment_deteriorating",
+                "title":    f"📉 ニュース感情悪化 {len(deteriorating)}業種（FinBERT）",
+                "body":     "\n".join(lines),
+                "severity": "medium",
+            })
+
+        # 感情改善業種（improving + positive_count多）
+        improving = [
+            (code, d) for code, d in by_sector.items()
+            if d.get("sentiment_trend") == "improving"
+            and d.get("positive_count", 0) >= 4
+        ]
+        if improving:
+            lines = []
+            for code, d in sorted(improving,
+                                   key=lambda x: -x[1].get("avg_sentiment", 0.5))[:4]:
+                name = japan_sectors.get(code, {}).get("name_ja", code)
+                lines.append(
+                    f"  📈 {name}: "
+                    f"感情スコア{d['avg_sentiment']:.2f} "
+                    f"（ポジティブ{d['positive_count']}件）"
+                )
+            alerts.append({
+                "trigger":  "sentiment_improving",
+                "title":    f"📈 ニュース感情改善 {len(improving)}業種（FinBERT）",
+                "body":     "\n".join(lines),
+                "severity": "info",
+            })
+    # ── [US-3] US 8-K イベントアラート ────────────────────────────
+    k8_result = results.get("us_8k", {})
+    if k8_result and not k8_result.get("skipped"):
+        screener_hits = k8_result.get("screener_hits", [])
+        earnings      = k8_result.get("earnings_tickers", [])
+        ceo_chg       = k8_result.get("ceo_change_tickers", [])
+        if screener_hits:
+            alerts.append({
+                "trigger":  "8k_screener_hit",
+                "title":    f"⚡ 8-K × screener対象銘柄 {len(screener_hits)}社",
+                "body":     "  " + " / ".join(screener_hits[:5]),
+                "severity": "high",
+            })
+        if ceo_chg:
+            alerts.append({
+                "trigger":  "8k_ceo_change",
+                "title":    f"👔 CEO交代 8-K {len(ceo_chg)}社",
+                "body":     "  " + " / ".join(ceo_chg[:5]),
                 "severity": "medium",
             })
     return alerts

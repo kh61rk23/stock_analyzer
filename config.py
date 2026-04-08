@@ -401,6 +401,378 @@ MACRO_RULES = {
     },
 }
 
+}
+
+# ==============================================================
+# BLOCK R-1: 横断産業シグナルルール（CROSS_SECTOR_RULES）
+# ==============================================================
+# 【設計思想】
+#   MACRO_RULES が「金利・為替等の外部マクロ→業種」の連鎖を定義するのに対し、
+#   CROSS_SECTOR_RULES は「業種A の変化→業種B への波及」を定義する。
+#   gov_data_pipeline / macro_snapshot の指標値を条件として評価する。
+#
+# 【構造】
+#   {
+#     "rule_id": {
+#       "label":     str,          # 表示名
+#       "trigger": {               # 発動条件
+#         "source":  str,          # "gov" / "macro" / "bond_commodity"
+#         "key":     str,          # results["source"]["key"] で取得する値
+#         "op":      str,          # ">" / ">=" / "<" / "<=" / "up3m"（3ヶ月連続上昇）
+#         "val":     float,        # 閾値
+#       },
+#       "lag_weeks": int,          # 先行週数（シグナルの遅延を記録用に保持）
+#       "signal": {
+#         "tailwind": [sector_code, ...],
+#         "headwind": [sector_code, ...],
+#       },
+#       "rationale": {sector_code: str},
+#     }
+#   }
+#
+# 【評価タイミング】
+#   run_all_tasks() の macro 完了直後・sector 分析直前に
+#   evaluate_cross_sector_signals() で評価し、
+#   results["cross_sector_signals"] に格納する。
+
+CROSS_SECTOR_RULES = {
+
+    # ── 工作機械受注↑ → 電気機器・精密機器・機械（3〜6ヶ月先行）────
+    "machine_tool_orders_up": {
+        "label": "工作機械受注↑（設備投資先行シグナル）",
+        "trigger": {
+            "source": "gov",
+            "key":    "machine_tool_orders_yoy",  # gov_data_pipeline が格納するキー
+            "op":     ">=",
+            "val":    5.0,   # 前年比+5%以上
+        },
+        "lag_weeks": 12,   # 3ヶ月先行
+        "signal": {
+            "tailwind": ["1016", "1018", "1015"],  # 電気機器・精密機器・機械
+            "headwind": [],
+        },
+        "rationale": {
+            "1016": "設備投資増 → 半導体・電子部品製造装置の受注増加（3〜6ヶ月先行）",
+            "1018": "工作機械受注は精密機器需要の3ヶ月先行指標",
+            "1015": "機械全般の設備投資需要拡大",
+        },
+    },
+
+    # ── 工作機械受注↓ → 電気機器・精密機器に逆風 ────────────────
+    "machine_tool_orders_down": {
+        "label": "工作機械受注↓（設備投資減速シグナル）",
+        "trigger": {
+            "source": "gov",
+            "key":    "machine_tool_orders_yoy",
+            "op":     "<=",
+            "val":    -10.0,  # 前年比-10%以下
+        },
+        "lag_weeks": 12,
+        "signal": {
+            "tailwind": [],
+            "headwind": ["1016", "1018", "1015"],
+        },
+        "rationale": {
+            "1016": "設備投資減速 → 製造装置受注の先行減少",
+            "1018": "精密機器需要の冷え込みを示唆",
+        },
+    },
+
+    # ── 建設着工件数↑ → 非鉄・ガラス土石・金属製品（2ヶ月先行）───
+    "construction_starts_up": {
+        "label": "建設着工件数↑（建設資材需要先行）",
+        "trigger": {
+            "source": "gov",
+            "key":    "construction_starts_yoy",  # gov_data_pipeline が格納するキー
+            "op":     ">=",
+            "val":    3.0,
+        },
+        "lag_weeks": 8,   # 2ヶ月先行
+        "signal": {
+            "tailwind": ["1013", "1011", "1014", "1003"],
+            "headwind": [],
+        },
+        "rationale": {
+            "1013": "建設着工↑ → 銅・アルミ等の非鉄金属需要増（2ヶ月先行）",
+            "1011": "ガラス・セメント等の建設資材需要増",
+            "1014": "金属製品（鋼管・建設金物）需要増",
+            "1003": "建設会社の受注増加に直結",
+        },
+    },
+
+    # ── 海運運賃（BDI代理）↑ → 鉄鋼・非鉄・化学（2週先行）────────
+    "shipping_rates_up": {
+        "label": "海運運賃↑（資源輸送需要増・2週先行）",
+        "trigger": {
+            "source": "macro",
+            "key":    "bdi",    # macro_snapshot に BDI を追加した場合
+            "op":     ">=",
+            "val":    2000,     # BDI 2000ポイント以上（活況水準）
+        },
+        "lag_weeks": 2,
+        "signal": {
+            "tailwind": ["1012", "1013", "1007", "1022"],
+            "headwind": [],
+        },
+        "rationale": {
+            "1012": "鉄鉱石・石炭輸送量増 → 鉄鋼の需給改善を示唆",
+            "1013": "非鉄金属の輸送量増 → 需要拡大の先行シグナル",
+            "1007": "化学原料輸送増 → 化学製品需要拡大",
+            "1022": "運賃上昇 → 海運会社の収益改善に直結",
+        },
+    },
+
+    # ── 米国ISM製造業↑ → JP輸出業種（即時〜2週）─────────────────
+    "us_ism_manufacturing_up": {
+        "label": "米国ISM製造業↑（JP輸出業種の受注先行）",
+        "trigger": {
+            "source": "macro",
+            "key":    "us_ism",   # macro_snapshot に ISM を追加した場合
+            "op":     ">=",
+            "val":    52.0,       # 50超=拡大、52以上=明確な拡大
+        },
+        "lag_weeks": 1,
+        "signal": {
+            "tailwind": ["1017", "1016", "1015", "1018"],
+            "headwind": [],
+        },
+        "rationale": {
+            "1017": "米国製造業拡大 → 自動車・部品の輸出受注増（即時）",
+            "1016": "電気機器の輸出受注増加",
+            "1015": "産業機械の輸出受注増加",
+            "1018": "精密機器・計測器の輸出増加",
+        },
+    },
+
+    # ── 米国ISM製造業↓ → JP輸出業種に逆風 ──────────────────────
+    "us_ism_manufacturing_down": {
+        "label": "米国ISM製造業↓（JP輸出業種の受注減速警戒）",
+        "trigger": {
+            "source": "macro",
+            "key":    "us_ism",
+            "op":     "<=",
+            "val":    48.0,       # 48以下=明確な収縮
+        },
+        "lag_weeks": 1,
+        "signal": {
+            "tailwind": [],
+            "headwind": ["1017", "1016", "1015"],
+        },
+        "rationale": {
+            "1017": "米国製造業収縮 → 自動車輸出受注の先行減少",
+            "1016": "電気機器の輸出受注減速懸念",
+        },
+    },
+
+    # ── 銀行貸出態度↑ → 不動産・建設（1〜2ヶ月先行）────────────
+    "bank_lending_attitude_up": {
+        "label": "銀行貸出態度改善（不動産・建設の資金調達緩和）",
+        "trigger": {
+            "source": "gov",
+            "key":    "bank_lending_attitude",  # 日銀短観の貸出態度DI
+            "op":     ">=",
+            "val":    5.0,   # DI +5以上（明確な緩和姿勢）
+        },
+        "lag_weeks": 6,
+        "signal": {
+            "tailwind": ["1032", "1003", "1021"],
+            "headwind": [],
+        },
+        "rationale": {
+            "1032": "融資緩和 → 不動産取得・開発資金の調達コスト低下",
+            "1003": "建設資金の調達容易化 → 新規着工増加",
+            "1021": "設備投資融資緩和 → 輸送インフラ整備加速",
+        },
+    },
+
+    # ── 消費者信頼感↑ → 小売・食料品・サービス（1〜2ヶ月先行）───
+    "consumer_confidence_up": {
+        "label": "消費者信頼感↑（内需消費先行シグナル）",
+        "trigger": {
+            "source": "gov",
+            "key":    "consumer_confidence",   # 消費者態度指数
+            "op":     ">=",
+            "val":    40.0,   # 40超 = 改善傾向（日本は低水準が続くため閾値低め）
+        },
+        "lag_weeks": 4,
+        "signal": {
+            "tailwind": ["1027", "1004", "1033"],
+            "headwind": [],
+        },
+        "rationale": {
+            "1027": "消費意欲改善 → 小売売上高の増加（1〜2ヶ月先行）",
+            "1004": "食料品への消費支出増加",
+            "1033": "サービス消費（外食・旅行等）の拡大",
+        },
+    },
+
+    # ── 半導体在庫指数↓（在庫調整完了） → 電気機器・精密機器────
+    "semiconductor_inventory_low": {
+        "label": "半導体在庫調整完了（電気機器・精密機器の回復先行）",
+        "trigger": {
+            "source": "gov",
+            "key":    "semiconductor_inventory_yoy",  # 鉱工業生産在庫指数
+            "op":     "<=",
+            "val":    -5.0,   # 前年比-5%以下 = 在庫削減完了に近い
+        },
+        "lag_weeks": 12,   # 3ヶ月先行
+        "signal": {
+            "tailwind": ["1016", "1018"],
+            "headwind": [],
+        },
+        "rationale": {
+            "1016": "半導体在庫調整の完了 → 新規受注増加の先行シグナル（3ヶ月先行）",
+            "1018": "精密機器（製造装置等）の需要回復を示唆",
+        },
+    },
+}
+
+# ==============================================================
+# BLOCK R-2: 先行指標ライブラリ（LEADING_INDICATOR_RULES）
+# ==============================================================
+# 【設計思想】
+#   政府統計・経済指標Aが、数週〜数ヶ月後に業種Bの業績に先行する
+#   統計的に確認された「先行指標ペア」を辞書で管理する。
+#   CROSS_SECTOR_RULES の trigger.op と同形式で評価可能。
+#
+# 【評価方法】
+#   evaluate_cross_sector_signals() が CROSS_SECTOR_RULES と同様に
+#   evaluate_leading_indicators() を呼び出して評価する。
+#   発動シグナルは results["leading_indicator_signals"] に格納。
+#
+# 【lag_weeks の意味】
+#   このシグナルが発動してから lag_weeks 後に対象業種に影響が出る。
+#   有効期限管理（問題A）もこれを使って自動失効させる。
+
+LEADING_INDICATOR_RULES = {
+
+    # ── 工作機械受注 → 設備投資（3〜6ヶ月先行）────────────────
+    "machine_orders_lead_capex_up": {
+        "label": "工作機械受注↑ → 設備投資拡大（3〜6ヶ月先行）",
+        "trigger": {
+            "source": "gov",
+            "key":    "machine_tool_orders_yoy",
+            "op":     ">=",
+            "val":    5.0,
+        },
+        "lag_weeks": 14,
+        "signal": {"tailwind": ["1016", "1018", "1015"], "headwind": []},
+        "rationale": {
+            "1016": "設備投資拡大 → 製造装置・半導体設備の受注が3〜6ヶ月後に増加",
+            "1018": "精密計測機器・FA機器の需要先行指標",
+            "1015": "汎用機械の受注増加が3〜4ヶ月後に顕在化",
+        },
+    },
+
+    # ── 建設着工件数 → 資材需要（2ヶ月先行）────────────────────
+    "construction_leads_materials_up": {
+        "label": "建設着工件数↑ → 建設資材需要（2ヶ月先行）",
+        "trigger": {
+            "source": "gov",
+            "key":    "construction_starts_yoy",
+            "op":     ">=",
+            "val":    3.0,
+        },
+        "lag_weeks": 8,
+        "signal": {"tailwind": ["1011", "1013", "1014", "1003"], "headwind": []},
+        "rationale": {
+            "1011": "ガラス・セメント・建設骨材の需要が着工2ヶ月後に増加",
+            "1013": "配管・電線用銅の需要が先行して増加",
+            "1014": "建設金物・鋼管の受注が1〜2ヶ月後に顕在化",
+            "1003": "着工増 → 施工量増加 → 建設会社の売上先行シグナル",
+        },
+    },
+
+    # ── 消費者態度指数 → 小売売上（1〜2ヶ月先行）─────────────
+    "consumer_confidence_leads_retail_up": {
+        "label": "消費者態度指数↑ → 小売・食料品消費（1〜2ヶ月先行）",
+        "trigger": {
+            "source": "gov",
+            "key":    "consumer_confidence",
+            "op":     ">=",
+            "val":    40.0,
+        },
+        "lag_weeks": 6,
+        "signal": {"tailwind": ["1027", "1004", "1033"], "headwind": []},
+        "rationale": {
+            "1027": "消費意欲改善 → 1〜2ヶ月後の小売売上増加に先行",
+            "1004": "食料品消費は態度指数と1ヶ月程度の相関が確認されている",
+            "1033": "外食・レジャー等のサービス消費が最も感応度が高い",
+        },
+    },
+
+    # ── 消費者態度指数↓ → 小売・サービスに逆風 ─────────────
+    "consumer_confidence_leads_retail_down": {
+        "label": "消費者態度指数↓ → 小売・サービス消費減速（1〜2ヶ月先行）",
+        "trigger": {
+            "source": "gov",
+            "key":    "consumer_confidence",
+            "op":     "<=",
+            "val":    35.0,
+        },
+        "lag_weeks": 6,
+        "signal": {"tailwind": [], "headwind": ["1027", "1033"]},
+        "rationale": {
+            "1027": "消費意欲の悪化が小売売上に1〜2ヶ月後に波及",
+            "1033": "サービス消費が最も早く反応する",
+        },
+    },
+
+    # ── 機械受注 → 鉱工業生産（2〜3ヶ月先行）──────────────────
+    "machinery_orders_lead_production_up": {
+        "label": "機械受注↑ → 鉱工業生産拡大（2〜3ヶ月先行）",
+        "trigger": {
+            "source": "gov",
+            "key":    "machinery_orders_yoy",
+            "op":     ">=",
+            "val":    5.0,
+        },
+        "lag_weeks": 10,
+        "signal": {"tailwind": ["1015", "1016", "1012"], "headwind": []},
+        "rationale": {
+            "1015": "設備受注増 → 2〜3ヶ月後の生産設備稼働率上昇",
+            "1016": "電気機器の生産量増加が受注から10週後に顕在化",
+            "1012": "鋼材需要の先行シグナル（設備製造に鋼材使用）",
+        },
+    },
+
+    # ── 有効求人倍率上昇 → 小売・サービス（1〜2ヶ月先行）──────
+    "job_ratio_leads_consumption_up": {
+        "label": "有効求人倍率↑ → 消費・小売（1〜2ヶ月先行）",
+        "trigger": {
+            "source": "gov",
+            "key":    "job_offers_ratio",   # 有効求人倍率
+            "op":     ">=",
+            "val":    1.3,
+        },
+        "lag_weeks": 6,
+        "signal": {"tailwind": ["1027", "1004", "1033"], "headwind": []},
+        "rationale": {
+            "1027": "雇用改善 → 可処分所得増 → 消費拡大が1〜2ヶ月後に現れる",
+            "1004": "食料品消費の下支え要因として機能",
+            "1033": "人材採用増加そのものがサービス業の需要拡大と連動",
+        },
+    },
+
+    # ── 鉱工業生産↑ → 非鉄・素材（即時〜1ヶ月先行）─────────
+    "industrial_production_leads_materials_up": {
+        "label": "鉱工業生産↑ → 非鉄・素材需要（即時〜1ヶ月先行）",
+        "trigger": {
+            "source": "gov",
+            "key":    "industrial_production_yoy",
+            "op":     ">=",
+            "val":    3.0,
+        },
+        "lag_weeks": 4,
+        "signal": {"tailwind": ["1013", "1007", "1012"], "headwind": []},
+        "rationale": {
+            "1013": "工業生産増 → 工業用非鉄金属（銅・アルミ）の即時需要増",
+            "1007": "化学原料需要が生産量に連動して増加",
+            "1012": "鉄鋼の需要は工業生産と高い相関を持つ",
+        },
+    },
+}
+
 # ==============================================================
 # BLOCK 5: セクターエージェント インターフェース仕様
 # ==============================================================
@@ -714,11 +1086,13 @@ DAILY_MODULES = [
     "gov",           # 政府データパイプライン
     "macro",         # マクロ指標取得
     "sector",        # セクターエージェント
+    "tdnet",           # TDnet 重要適時開示モニター（M-4）
     "economic_cycle",  # 経済サイクルフェーズ判定（D-1 / ダリオ4象限）
     "timeline",      # 月次トレンド＋デイリー騰落
     "policy",        # 政策金利トラッカー
     "us_sector",     # 米国S&P500 11セクター分析
     "bond_commodity",  # 債券イールドカーブ + 全コモディティ分析
+    "us_macro",        # ★ US マクロ拡張（Phase US-2）
     "anomaly",         # 統計的異常値検出（価格・出来高・スコア）
     "imf",           # IMF グローバルマクロパイプライン
     "etf_tracker",   # テーマETFトラッキング（Step C'）
@@ -729,11 +1103,15 @@ DAILY_MODULES = [
     "inference",          # 推論エンジン [4-10]
     "us_screener",   # 米国株スクリーニング0310
     "edinet_rotation", # edinetのローテーション
+    "us_fundamentals", # ★ US財務DBローテーター（Phase US-1）
+    "us_8k",           # ★ US 8-K リアルタイム監視（Phase US-3）
+    "us_sector_bridge",  # ★ US-5 SIC/JP業種連携
     "multi_currency", # 多通貨モニタリング [A-6]
     "options_monitor", # オプション市場センチメント [4-5]
     "support_resistance",   # サポート・レジスタンス検出 [4-6]
     "volume_profile",   # 出来高プロファイル分析 [4-7]
     "notion_obsidian",   # Notion/Obsidian書き込み [6-4]（毎日実行）
+    "policy_radar",     # ★ 政策レーダー追加
 ]
 
 # ── ウィークリーサイクル（月曜朝に追加実行）───────────────────
@@ -759,6 +1137,9 @@ WEEKLY_MODULES = [
     "screener_heatmap",  # セクターヒートマップ
     "portfolio_optimizer",   # ポートフォリオ最適化 [6-1]
     "dcf",               # DCF理論株価 [6-3]（週次のみ / 7日キャッシュ）
+    "longterm_scenario",   # 10年単位のシナリオ R-5追加
+    "google_trends",    # ★ RESEARCH-3追加
+    "finbert",          # ★ RESEARCH-5追加
 ]
 
 # ウィークリー実行の曜日（0=月曜 〜 6=日曜）
@@ -989,6 +1370,153 @@ ACCEL_MID_DOWN:    float = -0.15   # 中減速 → -7pt
 ACCEL_STRONG_DOWN: float = -0.30   # 強減速 → -10pt
 
 # ==============================================================
+# BLOCK GAP-5: EDINET DBカバレッジ割り引き設定
+# ==============================================================
+EDINET_COVERAGE_FULL: float = 0.7   # 70%以上 → bonus フル適用
+EDINET_COVERAGE_HALF: float = 0.3   # 30〜70% → bonus 50%割り引き
+                                     # 30%未満 → bonus 適用しない
+
+# ==============================================================
+# BLOCK M-3: アクティビスト候補フィルター設定
+# ==============================================================
+ENABLE_ACTIVIST_FILTER: bool  = True
+ACTIVIST_SCORE_THRESHOLD: float = 70.0   # 「触媒待ち割安」判定の閾値
+ACTIVIST_TOP_N: int            = 10      # activist_top の取得件数
+
+# alert_notifier.py との連携:
+# TDnet RSS で自社株買い/増配が検知された銘柄が
+# activist_score >= ACTIVIST_SCORE_THRESHOLD の場合に優先アラート
+ACTIVIST_CATALYST_ALERT: bool  = True
+
+# ==============================================================
+# BLOCK M-1: ネットキャッシュリッチスクリーナー設定
+# ==============================================================
+NET_CASH_RICH_THRESHOLD: float = 0.30  # ネットキャッシュ/時価総額 > 30%
+
+# ==============================================================
+# BLOCK P-3: 長期保有候補フラグ設定
+# ==============================================================
+LONGTERM_HOLD_EQUITY_RATIO_MIN: float = 0.45  # 自己資本比率45%以上
+LONGTERM_HOLD_ROE_MIN:          float = 0.08  # ROE 8%以上
+LONGTERM_HOLD_MIN_CONDITIONS:   int   =  3    # 有効条件の最低充足数
+
+# ==============================================================
+# BLOCK I-2: 会社予想保守度スコア設定
+# ==============================================================
+ENABLE_CONSERVATISM_SCORE: bool     = True
+CONSERVATISM_MIN_QUARTERS: int      = 4     # 最低何四半期で計算するか
+ALERT_ON_HIGH_PROB_SURPRISE: bool   = True  # 決算サプライズ高確率候補アラート
+ALERT_ON_NEGATIVE_RISK: bool        = True  # ネガティブリスクアラート
+
+# ==============================================================
+# BLOCK I-3: 経営者スコア設定
+# ==============================================================
+ENABLE_CEO_EVALUATOR: bool    = True
+CEO_MIN_TENURE_YEARS: int     = 2      # 何年以上で暫定スコアを出すか
+CEO_QUALITY_BONUS_HIGH: float = 10.0   # ceo_score >= 80 → quality_score +10pt
+CEO_QUALITY_BONUS_MID:  float =  5.0   # ceo_score >= 65 → quality_score +5pt
+M_A_ROIC_THRESHOLD: float     = 0.08   # M&A のROIC基準（8%以上を成功とみなす）
+
+# ==============================================================
+# BLOCK I-4: 確信度別ポジションサイジング設定
+# ==============================================================
+ENABLE_CONVICTION_SIZING: bool  = True
+# 確信度レベルの閾値（L5/L4/L3/L2の下限スコア）
+CONVICTION_THRESHOLDS: list     = [90, 75, 60, 45]
+# 各ファクターの重み（合計が1.0でなくても正規化される）
+CONVICTION_W_COMPOSITE:    float = 0.20
+CONVICTION_W_ACCEL:        float = 0.20   # I-1
+CONVICTION_W_BQ:           float = 0.15   # P-2
+CONVICTION_W_CONSERVATISM: float = 0.15   # I-2
+CONVICTION_W_ACTIVIST:     float = 0.10   # M-3
+CONVICTION_W_GOVERNANCE:   float = 0.10   # M-2（暫定: activist近似）
+CONVICTION_W_CEO:          float = 0.10   # I-3
+# ポートフォリオ制約
+MAX_SINGLE_STOCK_PCT:  float = 0.15   # 単一銘柄15%上限
+MAX_SINGLE_SECTOR_PCT: float = 0.25   # 単一業種25%上限
+MAX_LEVEL5_TOTAL_PCT:  float = 0.40   # Level5合計40%上限
+
+# ==============================================================
+# BLOCK R-3: 投資ジャーナル（知識蓄積DB）設定
+# ==============================================================
+ENABLE_INVESTMENT_JOURNAL: bool    = True
+JOURNAL_AUTO_EXIT_WEEKS: int       = 18   # 何週screenerを通過しなければ自動exit
+MISS_FACTOR_ALERT_THRESHOLD: int   =  3   # miss_factor が何回でアラートを出すか
+ENABLE_MISS_FACTOR_ALERT: bool     = True
+
+# ==============================================================
+# BLOCK GAP-1: confidence_prior / ベイズ的更新設定
+# ==============================================================
+ENABLE_BAYESIAN_UPDATE: bool    = True
+CONFIDENCE_PRIOR_MAX_DAYS: int  = 30    # 信頼度1.0になる基準日数
+DRIFT_ALERT_THRESHOLD: float    = 15.0  # 乖離アラート発動閾値（pt）
+CONFIDENCE_PRIOR_MIN_HIST: int  =  3    # 最低何日分あれば更新するか
+
+# ==============================================================
+# BLOCK GAP-8: アルファ帰属分析設定
+# ==============================================================
+ENABLE_ALPHA_ATTRIBUTION: bool = True
+FORCE_ATTRIBUTION_CALC:   bool = False   # True にすると月末以外でも IC 計算を実行
+ATTRIBUTION_MIN_FIRE:     int  = 3       # IC計算に必要な最低発動回数
+ATTRIBUTION_LOOKBACK_W:   int  = 26      # 分析対象週数（半年）
+
+# ==============================================================
+# BLOCK I-5: 中期経営計画達成率トラッカー設定
+# ==============================================================
+ENABLE_MIDTERM_TRACKER:    bool  = True
+MIDTERM_ACHIEVEMENT_HIGH:  float = 0.90   # 90%以上 → 高達成
+MIDTERM_ACHIEVEMENT_RISK:  float = 0.70   # 70%未満（最終2年前時点）→ 未達リスク
+
+# ==============================================================
+# BLOCK P-4: 株主構成分析設定
+# ==============================================================
+ENABLE_SHAREHOLDER_ANALYZER: bool   = True
+FOREIGN_INVESTOR_SPIKE_PCT:  float  = 3.0   # 外国人持株前年比+3%以上でアラート
+ACTIVIST_HOLDINGS_THRESHOLD: float  = 0.05  # 単一外国人/機関が5%超でアクティビスト参戦
+SHAREHOLDER_SCORE_TOP_N:     int    = 10    # analysis 対象の上位 N 銘柄
+
+# ==============================================================
+# BLOCK M-4: TDnet 重要適時開示モニター設定
+# ==============================================================
+ENABLE_TDNET_MONITOR: bool  = True
+# 検知カテゴリ（コメントアウトで無効化）
+TDNET_MONITOR_CATEGORIES: list = [
+    "BUYBACK",     # 自己株式取得
+    "CANCEL",      # 自己株式消却
+    "DIV_UP",      # 増配・特別配当
+    "SPLIT",       # 株式分割
+    "MBO",         # MBO/TOB
+    "MGMT_CHANGE", # 役員異動
+]
+
+# ==============================================================
+# BLOCK GAP-2: sector_tier 動的切り替え設定
+# ==============================================================
+SECTOR_TIER_TOP_THRESHOLD:  float = 65.0   # TOP_TIER: この値以上
+SECTOR_TIER_MID_THRESHOLD:  float = 45.0   # MID_TIER: この値以上 TOP未満
+# この値未満は BOT_TIER（screener対象外）
+
+# momentumによるtier格上げ条件（slope pt/週）
+SECTOR_TIER_UPGRADE_SLOPE:   float =  2.5  # MID→TOPに格上げ
+SECTOR_TIER_DOWNGRADE_SLOPE: float = -2.5  # TOP→MIDに格下げ
+
+# 危機モード時にTOP_TIERの最大業種数を制限する
+SECTOR_TIER_CRISIS_MAX_TOP:  int   =  3    # 危機時はTOP業種を3つに絞る
+
+# ==============================================================
+# BLOCK SCORE-CAP: 補正量の上限管理（問題B）
+# ==============================================================
+# composite_score への各補正の合計上限を設定する。
+# これを超えた補正は比例縮小して適用する。
+SCORE_MAX_MACRO_ADJ:   float = 20.0   # MACRO_RULES 全シグナル合計の上限
+# composite_score の下限（0未満にしない / 元の設計は -30 だったが 0 に修正）
+SCORE_MIN_COMPOSITE:   float =  0.0   # ★ -30 → 0 に変更（スケール統一）
+SCORE_MAX_COMPOSITE:   float = 100.0
+SCORE_MAX_CROSS_ADJ:   float = 10.0   # CROSS_SECTOR_RULES 合計の上限
+SCORE_MAX_CYCLE_ADJ:   float = 10.0   # D-1 経済サイクル補正の上限
+SCORE_MAX_TOTAL_ADJ:   float = 30.0   # 全補正の絶対合計上限
+
+# ==============================================================
 # BLOCK D-1: 経済サイクルフェーズ判定設定（D-1 / ダリオ4象限）
 # ==============================================================
 
@@ -1015,3 +1543,184 @@ CYCLE_PHASE_SECTOR_ADJUSTMENTS: dict = {}  # 空=economic_cycle_detector のデ�
 
 # フェーズ判定結果のキャッシュファイル名
 CYCLE_PHASE_HISTORY_FILE: str = "cycle_phase_history.json"
+
+# ==============================================================
+# BLOCK D-2: 長期債務サイクル指標設定
+# ==============================================================
+ENABLE_DEBT_CYCLE: bool = True
+
+# FRED APIで取得する系列（POLICY_FRED_API_KEYが必要）
+DEBT_CYCLE_FRED_SERIES = {
+    "hy_spread":   "BAMLH0A0HYM2",      # HYスプレッド（リスクプレミアム）
+    "credit_gdp":  "CRDQJAPABIS",        # 日本 民間信用/GDP（BIS）
+    "vix":         "VIXCLS",             # VIX（補助）
+}
+
+# debt_cycle_score の閾値
+DEBT_CYCLE_DELEVER_THRESH: int = 70  # スコア70以上 → デレバレッジ局面（全体-10pt）
+DEBT_CYCLE_EXPAND_THRESH:  int = 30  # スコア30以下 → レバレッジ拡大初期（株式+5pt）
+
+# ==============================================================
+# BLOCK A-1: IC トラッカー設定
+# ==============================================================
+ENABLE_IC_TRACKER:         bool  = True
+IC_STABLE_MIN_RATE:        float = 0.80   # 80%以上でIC > 0 = 安定シグナル
+IC_REVIEW_CONSECUTIVE_NEG: int   =  3     # 3週連続IC < 0 で見直し推奨
+
+# ==============================================================
+# BLOCK A-2: コスト控除後リターン計算設定
+# ==============================================================
+TRADE_COMMISSION_PCT: float = 0.002   # 往復手数料（0.2% = 各0.1%）
+TRADE_SPREAD_PCT:     float = 0.001   # 往復スプレッド（0.1%）
+CAPITAL_GAINS_TAX:    float = 0.20315 # 譲渡益税（20.315%）
+USE_NISA_ACCOUNT:     bool  = False   # NISA口座はTrueで非課税
+
+# ==============================================================
+# BLOCK C-1: VaR制約付きスクリーニング設定
+# ==============================================================
+ENABLE_VAR_CONSTRAINT:           bool  = True
+VAR_CONSTRAINT_THRESHOLD_PCT:    float = 3.0   # VaR%がこれ以上でBuy制限
+SCREENER_MAX_BUY_NORMAL:         int   = 10    # 通常時のBuy候補最大数
+SCREENER_MAX_BUY_CONSTRAINED:    int   =  2    # VaR超過時のBuy候補最大数
+
+# ==============================================================
+# BLOCK C-2: 相関制約設定
+# ==============================================================
+ENABLE_CORR_CONSTRAINT:           bool  = True
+MAX_CANDIDATES_PER_CORR_CLUSTER:  int   =  1     # 1クラスタから最大1銘柄
+CORR_CLUSTER_THRESHOLD:           float = 0.75   # この相関以上を同一クラスタと見なす
+
+# ==============================================================
+# BLOCK R-5: 10年シナリオプランナー設定
+# ==============================================================
+ENABLE_LONGTERM_SCENARIO: bool = True
+
+# シナリオ確率ウェイト初期値（9シナリオの合計が1.0になるよう正規化される）
+# 手動で調整する場合はここを編集する（年2回推奨）
+# キー形式: "{tech}_{geo}_{japan}"
+# tech: fast/standard/slow
+# geo:  cooperation/decoupling/conflict
+# japan: revival/stagnation/transform
+SCENARIO_WEIGHTS_INIT: dict = {
+    "fast_cooperation_revival":     0.15,
+    "fast_decoupling_revival":      0.10,
+    "fast_cooperation_transform":   0.08,
+    "standard_cooperation_revival": 0.18,
+    "standard_decoupling_stagnation": 0.12,
+    "standard_cooperation_transform": 0.10,
+    "slow_decoupling_stagnation":   0.12,
+    "slow_conflict_stagnation":     0.08,
+    "slow_conflict_transform":      0.07,
+}
+
+# 業種別長期スコアマトリクスの上書き（空の場合はデフォルト値を使用）
+LONGTERM_SECTOR_MATRIX: dict = {}
+
+# ==============================================================
+# BLOCK RESEARCH-1: HMMレジーム検知設定
+# ==============================================================
+ENABLE_REGIME_DETECTOR: bool = False    # 30日データ蓄積後に True に変更
+HMM_MIN_TRAIN_DAYS:     int  = 30       # 最低学習日数
+HMM_REFIT_WEEKLY:       bool = True     # 毎週月曜日に再学習するか
+
+# ==============================================================
+# BLOCK RESEARCH-3: Googleトレンド設定
+# ==============================================================
+ENABLE_GOOGLE_TRENDS: bool = True
+
+# 業種別キーワード（空の場合は google_trends_pipeline.py のデフォルトを使用）
+TREND_KEYWORDS: dict = {}   # 上書きしたい場合はここに定義する
+
+# LEADING_INDICATOR_RULES への統合設定
+TREND_TAILWIND_PTS:  float = 3.0    # 追い風シグナルの加算点
+TREND_MOM_THRESHOLD: float = 0.20   # 前月比+20%超でブースト判定
+
+# ==============================================================
+# BLOCK RESEARCH-4: XGBoost ML補正レイヤー設定
+# ==============================================================
+ENABLE_ML_CORRECTION: bool  = False   # 26週データ蓄積後に True に変更
+FORCE_ML_TRAIN:       bool  = False   # True で月末以外でも学習実行
+ML_CORRECTION_MAX_PT: float =  5.0   # 補正量の上限（±5pt）
+
+# ==============================================================
+# BLOCK RESEARCH-5: FinBERT感情分析設定
+# ==============================================================
+ENABLE_FINBERT:     bool  = True
+FINBERT_MODEL_NAME: str   = "ProsusAI/finbert"   # Hugging Face モデルID
+FINBERT_BATCH_SIZE: int   = 8                     # バッチサイズ（CPUメモリ制約）
+
+# ==============================================================
+# BLOCK policy_radar: 政府答弁・官僚PDF先回り予測設定
+# ==============================================================
+ENABLE_POLICY_RADAR:         bool = True
+POLICY_RADAR_MAX_FEEDS:      int  = 10         # 取得する官庁RSS源の上限
+KOKKAI_SEARCH_KEYWORDS: list = [               # 国会議事録API検索語（上限5件）
+    "半導体", "防衛費", "子育て支援", "インバウンド", "GX"
+]
+POLICY_KEYWORD_MAP: dict = {}   # 空の場合は policy_radar.py のデフォルトを使用
+GOV_RSS_FEEDS:      list = []   # 空の場合は policy_radar.py のデフォルトを使用
+
+# ==============================================================
+# BLOCK US-1: 米国株財務DBローテーター設定
+# ==============================================================
+ENABLE_US_FUNDAMENTALS:    bool  = True
+US_DAILY_FETCH_LIMIT:      int   = 20    # 1日あたり最大取得社数
+US_FUNDAMENTALS_CACHE_DAYS: int  = 30   # 財務データの再取得間隔（日）
+US_WATCHLIST_TICKERS:      list  = [    # 優先取得銘柄（watchlist）
+    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL",
+    "META", "TSLA", "BRK-B", "JPM", "V",
+]
+
+# ==============================================================
+# BLOCK US-2: 米国マクロ拡張パイプライン設定
+# ==============================================================
+ENABLE_US_MACRO: bool = True
+
+# FRED APIキーは既存の POLICY_FRED_API_KEY を共用（再設定不要）
+
+# composite_us_macro_score の sector スコアへの反映上限（pt）
+US_MACRO_MAX_SECTOR_ADJ: float = 5.0
+
+# Treasury API から国債残高を取得するか（APIキー不要）
+ENABLE_TREASURY_DATA: bool = True
+
+# ==============================================================
+# BLOCK US-3: 8-K リアルタイム監視設定
+# ==============================================================
+ENABLE_US_8K_MONITOR:   bool = True
+US_8K_MAX_ITEM_FETCH:   int  = 30    # Item検知を行う最大銘柄数（API負荷対策）
+
+# ==============================================================
+# BLOCK signal_dedup: シグナル重複排除設定
+# ==============================================================
+ENABLE_SIGNAL_DEDUP:          bool  = True
+SCORE_MAX_TOTAL_ADJ_POS:      float = 20.0   # 全シグナル合計の上限（+pt）
+SCORE_MAX_TOTAL_ADJ_NEG:      float = -20.0  # 全シグナル合計の下限（-pt）
+MAX_SAME_DIRECTION_SIGNALS:   int   =  2     # 同業種・同方向の採用上限件数
+
+# ==============================================================
+# BLOCK US-4: Cboe オプション統合設定
+# ==============================================================
+ENABLE_VIX_TERM_STRUCTURE: bool = True
+ENABLE_SKEW_INDEX:         bool = True
+ENABLE_IV_SPIKE_DETECT:    bool = True
+IV_SPIKE_THRESHOLD:        int  = 70    # IV Rank 70%ile超でiv_spike
+
+# ==============================================================
+# BLOCK US-5: SIC/CIK マッピング + JP業種連携設定
+# ==============================================================
+ENABLE_US_SECTOR_BRIDGE: bool = True
+US_SECTOR_MAPPING_CACHE_DAYS: int = 30   # SICマッピングの再取得間隔
+
+# ==============================================================
+# BLOCK 問題C: EDINET × sector_tier 連携設定
+# ==============================================================
+EDINET_TIER_TOP_BOOST:  int =  30   # TOP業種の優先度スコア加算
+EDINET_TIER_BOT_PENALTY: int = -20  # BOT業種の優先度スコア減算
+
+# ==============================================================
+# BLOCK 問題D: 動的スクリーニング候補ビルダー設定
+# ==============================================================
+ENABLE_DYNAMIC_SCREENER:     bool = True
+DYNAMIC_SCREENER_MAX_ADD:    int  = 50    # 動的追加の上限社数
+EDINET_CREDIT_THRESHOLD:     int  = 80    # 動的追加のcredit_score閾値

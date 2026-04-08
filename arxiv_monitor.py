@@ -622,8 +622,9 @@ def run_monitor(investment_threshold: int = None) -> dict:
         "investment_ideas_found": len(high_score),
         "report_path":            report_path,
         "fetch_log":              fetch_log._records,
+        "papers":                 new_papers,        # ★ thematic_etf_tracker連携用
+        "all_papers":             list(all_papers),  # ★ 全論文（キャッシュ済み含む）
     }
-
 
 # 単体テスト用
 if __name__ == "__main__":
