@@ -184,6 +184,34 @@ jobs:
             git add "stock_data/insights/screener/dcf_*.md" || true
             git add stock_data/data/cycle_phase_history.json || true
             git add stock_data/data/rule_weights.json || true
+            git add stock_data/data/cross_sector_signal_history.json || true # R-1 履歴保存実装後に有効化
+            git add stock_data/data/us_fundamentals_db/ || true
+            git add stock_data/data/us_cik_mapping.json || true
+            git add stock_data/data/tdnet_notified.json || true
+            git add stock_data/data/investment_journal.json || true
+            git add stock_data/data/score_drift_log.json || true
+            git add stock_data/data/shareholder_history.json || true
+            git add stock_data/data/score_drift_log.json || true
+            git add stock_data/data/ceo_scores.json || true
+            git add stock_data/data/macro_snapshot_prev.json || true
+            git add stock_data/data/signal_history.json || true
+            git add stock_data/data/alpha_attribution.json || true
+            git add stock_data/data/midterm_plans.json || true
+            git add stock_data/data/ic_tracker.json || true
+            git add stock_data/data/longterm_scenario_latest.json || true
+            git add stock_data/data/regime_state.json || true
+            git add stock_data/data/hmm_model_state.json || true
+            git add stock_data/data/trends_cache.json || true
+            git add stock_data/data/ml_feature_importance.json || true
+            git add stock_data/data/ml_corrections_latest.json || true
+            git add stock_data/data/sentiment_cache.json || true
+            git add stock_data/data/policy_radar_cache.json || true
+            git add stock_data/data/us_fundamentals_meta.json || true
+            git add stock_data/data/us_cik_map.json || true
+            git add stock_data/data/us_macro_cache.json || true
+            git add stock_data/data/us_8k_cache.json || true
+            git add stock_data/data/cross_sector_signal_history.json || true
+            git add stock_data/data/us_sector_mapping.json || true
             git diff --cached --quiet || git commit -m "auto: daily update $(date '+%Y-%m-%d')"
             git push || true
             echo "✅ dashboard_latest.csv + dashboard.iqy をコミットしました"
