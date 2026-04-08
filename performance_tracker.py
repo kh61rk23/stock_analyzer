@@ -552,7 +552,145 @@ def format_performance_section(result: dict) -> str:
 
     return "\n".join(lines)
 
+# ==============================================================
+# BLOCK 5.5: GAP-3 乖離ログ（スコア急変の記録）
+# ==============================================================
 
+DRIFT_LOG_FILENAME   = "score_drift_log.json"
+DRIFT_LOG_RETAIN_DAYS = 90   # 90日分保持
+
+
+def record_score_drift(cfg, sector_results: dict, prev_score_history: dict = None) -> list:
+    """
+    [GAP-3] セクタースコアの前回からの大幅変化を記録する。
+
+    sector_results の composite_score と score_history.json の前日値を比較し、
+    DRIFT_ALERT_THRESHOLD 以上の変化があった業種を drift_log.json に記録する。
+
+    呼び出しタイミング:
+        run_all_tasks() の sector 分析完了・ベイズ更新後
+        → results["sectors"] を渡す
+
+    Args:
+        cfg                : config モジュール
+        sector_results     : results["sectors"]（ベイズ更新後）
+        prev_score_history : score_history.json の全内容（省略時は自動ロード）
+
+    Returns:
+        [drift_event_dict, ...]  今回検出した乖離イベントのリスト
+    """
+    threshold = getattr(cfg, "DRIFT_ALERT_THRESHOLD", 15.0)
+    log_path  = Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / DRIFT_LOG_FILENAME
+    today_str = date.today().strftime("%Y-%m-%d")
+
+    # 前日スコアの読み込み
+    if prev_score_history is None:
+        sh_path = Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / "score_history.json"
+        try:
+            prev_score_history = (
+                json.loads(sh_path.read_text(encoding="utf-8"))
+                if sh_path.exists() else {}
+            )
+        except Exception:
+            prev_score_history = {}
+
+    # 前日エントリを探す（直近7日以内）
+    prev_entry = None
+    for i in range(1, 8):
+        cand = (date.today() - timedelta(days=i)).strftime("%Y-%m-%d")
+        if cand in prev_score_history:
+            prev_entry = prev_score_history[cand]
+            break
+
+    if prev_entry is None:
+        return []
+
+    # 乖離検出
+    drift_events = []
+    for code, res in sector_results.items():
+        if not isinstance(res, dict):
+            continue
+        today_score = res.get("composite_score")
+        if today_score is None:
+            continue
+
+        prev_raw = prev_entry.get(code)
+        if prev_raw is None:
+            continue
+        prev_score = (prev_raw.get("score") if isinstance(prev_raw, dict)
+                      else float(prev_raw))
+        if prev_score is None:
+            continue
+
+        drift = today_score - prev_score
+        if abs(drift) < threshold:
+            continue
+
+        event = {
+            "date":            today_str,
+            "code":            code,
+            "sector_name":     res.get("sector_name_ja", code),
+            "today_score":     round(today_score, 1),
+            "prev_score":      round(prev_score, 1),
+            "drift":           round(drift, 1),
+            "direction":       "up" if drift > 0 else "down",
+            "severity":        "high" if abs(drift) >= threshold * 1.5 else "medium",
+            "confidence_prior": res.get("confidence_prior"),
+            "raw_score":       res.get("composite_score_raw"),
+        }
+        drift_events.append(event)
+
+    if not drift_events:
+        return []
+
+    # drift_log.json に追記
+    try:
+        log = []
+        if log_path.exists():
+            log = json.loads(log_path.read_text(encoding="utf-8"))
+            if not isinstance(log, list):
+                log = []
+
+        log.extend(drift_events)
+
+        # 90日分保持
+        cutoff = (date.today() - timedelta(days=DRIFT_LOG_RETAIN_DAYS)).strftime("%Y-%m-%d")
+        log    = [e for e in log if e.get("date", "") >= cutoff]
+        # 同日・同コードの重複除去（最新を保持）
+        seen   = {}
+        for e in log:
+            seen[f"{e['date']}_{e['code']}"] = e
+        log = sorted(seen.values(), key=lambda x: (x["date"], x["code"]))
+
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(
+            json.dumps(log, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        print(f"  📊 [GAP-3] 乖離ログ: {len(drift_events)}件記録 "
+              f"（累積{len(log)}件）")
+
+    except Exception as e:
+        print(f"  ⚠️  [GAP-3] 乖離ログ保存失敗: {e}")
+
+    return drift_events
+
+
+def load_drift_log(cfg, days: int = 30) -> list:
+    """
+    score_drift_log.json から直近 days 日分の乖離ログを返す。
+    weekly_report / alert_notifier から参照する。
+    """
+    log_path = Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / DRIFT_LOG_FILENAME
+    if not log_path.exists():
+        return []
+    try:
+        log = json.loads(log_path.read_text(encoding="utf-8"))
+        cutoff = (date.today() - timedelta(days=days)).strftime("%Y-%m-%d")
+        return [e for e in log if e.get("date", "") >= cutoff]
+    except Exception:
+        return []
+    
 # ==============================================================
 # BLOCK 6: 実績保存（performance_history.json）
 # ==============================================================
@@ -595,6 +733,15 @@ def save_performance_record(cfg, result: dict) -> None:
         print(f"  💾 performance_history 更新: {record['week']} "
               f"勝率{(record['win_rate'] or 0)*100:.0f}% "
               f"平均{record['avg_return']:+.1f}%")
+
+    # ── [R-3] investment_journal の result セクション更新 ──
+        try:
+            import sys as _sys, importlib as _imp
+            _sys.path.insert(0, str(Path(__file__).parent))
+            _ij = _imp.import_module("investment_journal")
+            _ij.update_results(cfg, result)
+        except Exception as _e:
+            pass  # journal更新失敗はパフォーマンス記録を止めない
 
     except Exception as e:
         print(f"  ⚠️  performance_history 保存失敗: {e}")

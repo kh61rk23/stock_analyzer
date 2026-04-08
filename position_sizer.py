@@ -71,6 +71,28 @@ MAX_POSITION_PCT   = 0.15   # 最大ポジション比率（15%）
 LOT_SIZE_JP        = 100    # 日本株の単元株数
 FETCH_DELAY        = 0.3    # yfinance レート制限
 
+# [I-4] 確信度レベル設定
+CONVICTION_THRESHOLDS = [90, 75, 60, 45]   # L5/L4/L3/L2の下限（L1は45未満）
+CONVICTION_MULTIPLIERS = {5: 1.5, 4: 1.0, 3: 0.7, 2: 0.4, 1: 0.0}
+CONVICTION_PCT_RANGE = {
+    5: (0.10, 0.15),   # L5: 10〜15%
+    4: (0.06, 0.10),   # L4: 6〜10%
+    3: (0.03, 0.06),   # L3: 3〜6%
+    2: (0.01, 0.03),   # L2: 1〜3%
+    1: (0.00, 0.00),   # L1: 見送り
+}
+# ポートフォリオ制約
+MAX_SINGLE_STOCK_PCT  = 0.15   # 単一銘柄上限15%
+MAX_SINGLE_SECTOR_PCT = 0.25   # 単一業種上限25%
+MAX_LEVEL5_TOTAL_PCT  = 0.40   # Level5合計上限40%
+
+# regime_state → サイジング係数
+REGIME_SIZE_MATRIX = {
+    0:  1.0,    # リスクオン強 → フルサイズ
+    1:  0.75,   # 移行期       → 75%
+    2:  0.50,   # リスクオフ   → 50%
+    3:  0.0,    # 危機          → 新規停止
+}
 
 # ==============================================================
 # BLOCK 1: ATR 計算
@@ -142,6 +164,160 @@ def calc_atr(ticker: str, period: int = ATR_PERIOD) -> Optional[dict]:
     except Exception:
         return None
 
+# ==============================================================
+# BLOCK 0: [I-4] 確信度スコア計算
+# ==============================================================
+
+def calc_conviction_score(candidate: dict, cfg=None) -> dict:
+    """
+    [I-4] composite_score × 複数ファクターから確信度スコア（0〜100）を算出する。
+
+    conviction_score =
+        composite_score           × 0.20
+        + earnings_accel_score    × 0.20  （I-1: EPS加速度）
+        + business_quality_score  × 0.15  （P-2: 事業モデル質）
+        + conservatism_score      × 0.15  （I-2: 経営者保守度）
+        + activist_score          × 0.10  （M-3: アクティビスト候補）
+        + governance_score        × 0.10  （M-2: ガバナンス / データなし時は中立）
+        + ceo_score               × 0.10  （I-3: 経営者スコア）
+
+    Args:
+        candidate : screener の candidate 辞書
+        cfg       : config モジュール（重みのカスタマイズ用）
+
+    Returns:
+        {
+          "conviction_score": float,   # 0〜100
+          "conviction_level": int,     # 1〜5
+          "conviction_label": str,
+          "components":       dict,    # 各ファクターのスコアと重み
+          "recommended_pct":  float,   # 推奨ポジション比率（上限値）
+        }
+    """
+    # ── 各ファクターのスコア取得 ──────────────────────────
+    composite    = float(candidate.get("composite_score", 50) or 50)
+
+    # I-1: acc_bonus (-10〜+10) → 0〜100に正規化
+    acc_bonus    = float(candidate.get("acc_bonus", 0) or 0)
+    accel_score  = max(0.0, min(100.0, 50.0 + acc_bonus * 5))
+
+    # P-2: bq_bonus (-20〜+20) → 0〜100に正規化
+    bq_bonus     = float(candidate.get("bq_bonus", 0) or 0)
+    bq_score     = max(0.0, min(100.0, 50.0 + bq_bonus * 2.5))
+
+    # I-2: conservatism_score（0〜100のまま）
+    conservatism = float(candidate.get("conservatism_score", 50) or 50)
+
+    # M-3: activist_score（0〜100のまま）
+    activist     = float(candidate.get("activist_score", 0) or 0)
+
+    # M-2: governance（暫定: activist_score × 0.8 で近似 / M-2実装後に更新）
+    governance   = activist * 0.8
+
+    # I-3: ceo_score（0〜100のまま）
+    ceo          = float(candidate.get("ceo_score", 50) or 50)
+
+    # ── 重み（config からカスタマイズ可能）──────────────
+    if cfg:
+        w_composite   = getattr(cfg, "CONVICTION_W_COMPOSITE",   0.20)
+        w_accel       = getattr(cfg, "CONVICTION_W_ACCEL",        0.20)
+        w_bq          = getattr(cfg, "CONVICTION_W_BQ",           0.15)
+        w_conservatism= getattr(cfg, "CONVICTION_W_CONSERVATISM", 0.15)
+        w_activist    = getattr(cfg, "CONVICTION_W_ACTIVIST",     0.10)
+        w_governance  = getattr(cfg, "CONVICTION_W_GOVERNANCE",   0.10)
+        w_ceo         = getattr(cfg, "CONVICTION_W_CEO",          0.10)
+    else:
+        w_composite, w_accel, w_bq = 0.20, 0.20, 0.15
+        w_conservatism, w_activist = 0.15, 0.10
+        w_governance, w_ceo = 0.10, 0.10
+
+    # 重みの正規化（合計が1.0になるよう）
+    total_w = w_composite + w_accel + w_bq + w_conservatism + w_activist + w_governance + w_ceo
+    if total_w > 0:
+        w_composite    /= total_w
+        w_accel        /= total_w
+        w_bq           /= total_w
+        w_conservatism /= total_w
+        w_activist     /= total_w
+        w_governance   /= total_w
+        w_ceo          /= total_w
+
+    conviction_score = round(
+        composite    * w_composite
+        + accel_score  * w_accel
+        + bq_score     * w_bq
+        + conservatism * w_conservatism
+        + activist     * w_activist
+        + governance   * w_governance
+        + ceo          * w_ceo,
+        1,
+    )
+    conviction_score = max(0.0, min(100.0, conviction_score))
+
+    # ── 確信度レベル判定 ──────────────────────────────────
+    thresholds = getattr(cfg, "CONVICTION_THRESHOLDS", CONVICTION_THRESHOLDS) if cfg else CONVICTION_THRESHOLDS
+    if   conviction_score >= thresholds[0]: level = 5   # 90以上
+    elif conviction_score >= thresholds[1]: level = 4   # 75以上
+    elif conviction_score >= thresholds[2]: level = 3   # 60以上
+    elif conviction_score >= thresholds[3]: level = 2   # 45以上
+    else:                                   level = 1   # 45未満
+
+    label_map = {
+        5: "🌟 Level5（最高確信・集中投資）",
+        4: "📈 Level4（高確信・通常投資）",
+        3: "➡️ Level3（中確信・少額投資）",
+        2: "⚠️  Level2（低確信・最小投資）",
+        1: "🔴 Level1（投資見送り）",
+    }
+
+    # 推奨ポジション比率（上限値を返す）
+    pct_range = CONVICTION_PCT_RANGE.get(level, (0.0, 0.0))
+    recommended_pct = pct_range[1]   # 上限値
+
+    return {
+        "conviction_score": conviction_score,
+        "conviction_level": level,
+        "conviction_label": label_map[level],
+        "recommended_pct":  recommended_pct,
+        "components": {
+            "composite_score":    {"score": round(composite, 1),    "weight": round(w_composite,    3)},
+            "accel_score":        {"score": round(accel_score, 1),  "weight": round(w_accel,        3)},
+            "bq_score":           {"score": round(bq_score, 1),     "weight": round(w_bq,           3)},
+            "conservatism_score": {"score": round(conservatism, 1), "weight": round(w_conservatism, 3)},
+            "activist_score":     {"score": round(activist, 1),     "weight": round(w_activist,     3)},
+            "governance_score":   {"score": round(governance, 1),   "weight": round(w_governance,   3)},
+            "ceo_score":          {"score": round(ceo, 1),          "weight": round(w_ceo,          3)},
+        },
+    }
+
+
+def _get_regime_multiplier(results: dict, cfg=None) -> tuple[float, int]:
+    """
+    regime_detector.py または economic_cycle から regime_state を取得し、
+    サイジング係数を返す。
+
+    Returns:
+        (multiplier: float, regime_state: int)
+    """
+    # regime_detector.py が存在する場合はその state を参照
+    regime_result = results.get("regime", {}) if results else {}
+    if isinstance(regime_result, dict) and "current_state" in regime_result:
+        state = int(regime_result["current_state"])
+    else:
+        # フォールバック: economic_cycle の phase から簡易推定
+        ec = (results or {}).get("economic_cycle", {})
+        phase_to_state = {"B": 0, "A": 1, "D": 2, "C": 3}
+        state = phase_to_state.get(ec.get("phase", "B"), 0)
+
+        # recession_score が高い場合は状態を悪化方向に補正
+        bc = (results or {}).get("bond_commodity", {})
+        rec_score = bc.get("recession_score", 0) if isinstance(bc, dict) else 0
+        if rec_score >= 70 and state < 3:
+            state = min(3, state + 1)
+
+    matrix = getattr(cfg, "REGIME_SIZE_MATRIX", REGIME_SIZE_MATRIX) if cfg else REGIME_SIZE_MATRIX
+    multiplier = matrix.get(state, 1.0)
+    return multiplier, state
 
 # ==============================================================
 # BLOCK 2: ポジションサイズ計算
@@ -154,6 +330,8 @@ def calc_position_size(
     atr_multiplier:  float = ATR_MULTIPLIER,
     lot_size:        int   = LOT_SIZE_JP,
     target_price:    Optional[float] = None,
+    conviction_data: Optional[dict] = None,   # ★ I-4追加
+    regime_multiplier: float = 1.0,           # ★ I-4追加
 ) -> dict:
     """
     ATR データからポジションサイズを計算する。
@@ -183,8 +361,24 @@ def calc_position_size(
     # 推奨株数（連続値）
     raw_shares = risk_amount / loss_per_share
 
+    # ── [I-4] 確信度マルチプライヤーの適用 ──────────────────
+    conviction_level = 4   # デフォルト（データなし時）
+    conviction_score = 75.0
+    if conviction_data:
+        conviction_level = conviction_data.get("conviction_level", 4)
+        conviction_score = conviction_data.get("conviction_score", 75.0)
+    cv_multiplier = CONVICTION_MULTIPLIERS.get(conviction_level, 1.0)
+
+    # レジーム補正 × 確信度補正
+    combined_multiplier = cv_multiplier * regime_multiplier
+    raw_shares = raw_shares * combined_multiplier
+
+    # Level1（見送り）は株数ゼロ
+    if conviction_level == 1:
+        raw_shares = 0
+
     # 日本株は単元（100株）単位に切り捨て
-    suggested_lot    = max(1, int(raw_shares / lot_size))
+    suggested_lot    = max(1, int(raw_shares / lot_size)) if raw_shares > 0 else 0
     suggested_shares = suggested_lot * lot_size
 
     # ポジション価値と比率
@@ -233,6 +427,11 @@ def calc_position_size(
         "risk_reward_ratio":  rrr,
         "capped":             capped,
         "loss_per_share":     round(loss_per_share, 1),
+        # [I-4] 確信度追加フィールド
+        "conviction_level":   conviction_level,
+        "conviction_score":   conviction_score,
+        "conviction_multiplier": combined_multiplier,
+        "regime_multiplier":  regime_multiplier,
     }
 
 
@@ -297,8 +496,8 @@ def format_position_report(result: dict) -> str:
         f"**ATR期間**: {ATR_PERIOD}日  "
         f"**倍率**: {ATR_MULTIPLIER}×",
         "",
-        "| 銘柄 | 現在値 | ATR | 逆指値 | 推奨株数 | 投資額 | リスク額 |",
-        "|------|--------|-----|--------|---------|--------|---------|",
+        "| 銘柄 | 現在値 | 推奨株数 | 投資額 | 確信Lv | 推奨% |",
+        "|------|--------|---------|--------|-------|------|",
     ]
 
     for pos in positions:
@@ -314,14 +513,16 @@ def format_position_report(result: dict) -> str:
         stop_p = pos.get("stop_loss_pct", 0)
         cap    = "⚠️" if pos.get("capped") else ""
 
+        cv_level = pos.get("conviction_level", "-")
+        cv_pct   = pos.get("recommended_pct", 0) or 0
+        cv_label_short = {5: "L5🌟", 4: "L4📈", 3: "L3➡️", 2: "L2⚠️", 1: "L1🔴"}.get(cv_level, "?")
         lines.append(
             f"| {pos['name'][:14]}({pos['ticker']}) "
             f"| {price:,.0f}円 "
-            f"| {atr:.0f}円({atr_p:.1f}%) "
-            f"| {stop:,.0f}円(-{stop_p:.1f}%) "
             f"| {shares:,}株{cap} "
             f"| {_fmt_yen(val)} "
-            f"| {_fmt_yen(risk_a)} |"
+            f"| {cv_label_short} "
+            f"| {cv_pct*100:.0f}% |"
         )
 
     lines.append("")
@@ -344,6 +545,8 @@ def run_position_sizer(
     atr_multiplier:    float = ATR_MULTIPLIER,
     sector_results:    Optional[dict] = None,
     tickers_override:  Optional[list] = None,
+    screener_result:   Optional[dict] = None,   # ★ I-4追加
+    results:           Optional[dict] = None,   # ★ I-4追加（regime取得用）
 ) -> dict:
     """
     ポートフォリオ全銘柄のポジションサイズを計算する。
@@ -361,6 +564,21 @@ def run_position_sizer(
     """
     # config からの総資産上書き
     total_assets = getattr(cfg, "TOTAL_ASSETS_JPY", total_assets_jpy)
+
+    # ── [I-4] レジーム係数を取得 ─────────────────────────────
+    regime_multiplier, regime_state = _get_regime_multiplier(results, cfg)
+    if regime_state == 3:
+        print(f"    ⚠️  [I-4] 危機レジーム検知（state={regime_state}）: 新規投資係数=0.0")
+    elif regime_multiplier < 1.0:
+        print(f"    📊 [I-4] レジーム補正: state={regime_state} → サイズ×{regime_multiplier}")
+
+    # screener 結果から conviction_score を銘柄ごとに取得
+    conviction_map: dict[str, dict] = {}
+    if screener_result:
+        for c in screener_result.get("candidates", []):
+            tk = c.get("ticker", "")
+            if tk:
+                conviction_map[tk] = calc_conviction_score(c, cfg)
 
     print(f"\n  💼 ポジションサイジング開始（総資産: {_fmt_yen(total_assets)}）...")
 
@@ -404,6 +622,8 @@ def run_position_sizer(
             risk_pct       = risk_pct,
             atr_multiplier = atr_multiplier,
             lot_size       = 100 if h.get("market") == "JP" else 1,
+            conviction_data    = _cv_data,       # ★ I-4追加
+            regime_multiplier  = regime_multiplier, # ★ I-4追加
         )
 
         # セクタースコアを付与
@@ -423,6 +643,12 @@ def run_position_sizer(
             "sector_score":   sector_score,
             **atr_data,
             **sizing,
+            # [I-4] 確信度フィールド
+            "conviction_score": conviction_map.get(ticker, {}).get("conviction_score", 75.0),
+            "conviction_level": conviction_map.get(ticker, {}).get("conviction_level", 4),
+            "conviction_label": conviction_map.get(ticker, {}).get("conviction_label", ""),
+            "recommended_pct":  conviction_map.get(ticker, {}).get("recommended_pct", 0.08),
+            "regime_state":     regime_state,
         }
         positions.append(position)
 
@@ -456,6 +682,8 @@ def run_position_sizer(
                 "suggested_shares", "suggested_lot", "position_value",
                 "position_pct", "risk_amount", "risk_pct_actual",
                 "risk_reward_ratio", "sector_score",
+                "conviction_score", "conviction_level",
+                "recommended_pct", "regime_state",
             ]
             writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
             writer.writeheader()

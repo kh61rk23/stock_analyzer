@@ -59,6 +59,21 @@ LOOKBACK_WEEKS     = 12     # 相関計算期間（直近12週）
 MIN_FIRE_COUNT     = 3      # 最低発動回数（これ未満は更新しない）
 CORR_SCALE         = 0.5    # 相関値 → 重み変化のスケール係数
                              # +1.0の相関 → +0.5の重み増加を上限とする
+# [統合エンジン] signal_aggregator の total_signal_score 用重みのデフォルト値
+# これは MACRO_RULES ファクターとは独立して管理する
+DEFAULT_SIGNAL_WEIGHTS: dict = {
+    "macro_phase_weight":      0.20,
+    "sector_composite_weight": 0.20,
+    "momentum_weight":         0.15,
+    "earnings_accel_weight":   0.15,
+    "quality_weight":          0.10,
+    "technical_weight":        0.10,
+    "activist_weight":         0.10,
+}
+# signal_weight の更新レート（MACRO_RULESより保守的にする）
+SIGNAL_WEIGHT_EMA_ALPHA = 0.05   # 月次更新・変化を緩やかに
+SIGNAL_WEIGHT_MIN       = 0.05
+SIGNAL_WEIGHT_MAX       = 0.40
 
 # ファクター発動判定のしきい値（evaluate_macro_signals と整合）
 FACTOR_THRESHOLDS = {
@@ -384,6 +399,77 @@ def update_weights(
     return new_weights
 
 
+def update_signal_weights(cfg, factor_correlations: dict) -> dict:
+    """
+    [統合エンジン] signal_aggregator の total_signal_score 用重みを更新する。
+
+    MACRO_RULES の重み（update_weights）とは独立して管理する。
+    rule_weights.json の "_signal_weights" キーに格納する。
+
+    更新ロジック:
+      各 signal_weight は MACRO_RULES のうち関連ファクターの
+      overall_score の加重平均でEMA更新する。
+      データ不足時はデフォルト値に緩やかに回帰する。
+
+    Args:
+        cfg                 : config モジュール
+        factor_correlations : calc_factor_correlations() の戻り値
+
+    Returns:
+        更新後の signal_weights dict（DEFAULT_SIGNAL_WEIGHTS と同形式）
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    # 現在の signal_weights を rule_weights.json から読み込む
+    all_weights = load_weights(cfg)
+    current_sw  = all_weights.get("_signal_weights", {})
+
+    # デフォルト値のコピーを初期値として使用
+    new_sw = dict(DEFAULT_SIGNAL_WEIGHTS)
+
+    # MACRO_RULES の相関スコアと signal_weight の対応マッピング
+    # 「どのファクター群が高い相関を示したか」で signal_weight を調整
+    SIGNAL_FACTOR_MAP = {
+        "macro_phase_weight":      ["interest_rate_rise", "interest_rate_fall",
+                                    "yen_depreciation", "yen_appreciation"],
+        "sector_composite_weight": ["oil_price_rise", "high_inflation", "geopolitical_risk"],
+        "momentum_weight":         ["ai_semiconductor_boom", "yen_depreciation"],
+        "earnings_accel_weight":   ["ai_semiconductor_boom"],
+        "quality_weight":          ["interest_rate_rise", "yen_appreciation"],
+        "technical_weight":        ["us_recession_risk", "geopolitical_risk"],
+        "activist_weight":         ["interest_rate_rise", "yen_depreciation"],
+    }
+
+    for sw_key, related_factors in SIGNAL_FACTOR_MAP.items():
+        old_w = float(current_sw.get(sw_key, DEFAULT_SIGNAL_WEIGHTS.get(sw_key, 0.10)))
+        default_w = DEFAULT_SIGNAL_WEIGHTS.get(sw_key, 0.10)
+
+        # 関連ファクターの overall_score 平均を計算
+        scores = [
+            factor_correlations[f]["overall_score"]
+            for f in related_factors
+            if f in factor_correlations and factor_correlations[f].get("fire_count", 0) >= MIN_FIRE_COUNT
+        ]
+
+        if scores:
+            avg_score = sum(scores) / len(scores)
+            # EMA 更新（保守的なアルファ）
+            new_w = old_w * (1 - SIGNAL_WEIGHT_EMA_ALPHA) + avg_score * CORR_SCALE * SIGNAL_WEIGHT_EMA_ALPHA + SIGNAL_WEIGHT_EMA_ALPHA * default_w
+        else:
+            # データ不足 → デフォルトに緩やかに回帰
+            new_w = old_w * 0.99 + default_w * 0.01
+
+        new_sw[sw_key] = round(max(SIGNAL_WEIGHT_MIN, min(SIGNAL_WEIGHT_MAX, new_w)), 4)
+
+    # 全重みの合計が1.0になるよう正規化
+    total = sum(new_sw.values())
+    if total > 0:
+        new_sw = {k: round(v / total, 4) for k, v in new_sw.items()}
+
+    new_sw["_updated_at"] = today
+    return new_sw
+
+
 # ==============================================================
 # BLOCK 5: weights.json 保存・読み込み
 # ==============================================================
@@ -530,6 +616,25 @@ def run_rule_optimizer(cfg, force: bool = False) -> dict:
     old_weights = load_weights(cfg)
     new_weights = update_weights(old_weights, factor_correlations)
 
+    # ── [R-3] investment_journal の miss_factor を重みヒントとして適用 ──
+    try:
+        import sys as _sys, importlib as _imp
+        _sys.path.insert(0, str(Path(__file__).parent))
+        _ij = _imp.import_module("investment_journal")
+        hints = _ij.get_miss_factor_weight_hints(cfg)
+        if hints:
+            print(f"    📔 miss_factor重みヒント: {len(hints)}件")
+            for factor_key, adj in hints.items():
+                if factor_key in new_weights:
+                    old_w = new_weights[factor_key].get("weight", 1.0)
+                    new_w = round(max(0.3, min(2.0, old_w + adj)), 4)
+                    new_weights[factor_key]["weight"] = new_w
+                    new_weights[factor_key]["journal_hint"] = adj
+                    print(f"      {factor_key}: {old_w:.3f} → {new_w:.3f} "
+                          f"(journal hint: {adj:+.3f})")
+    except Exception as _e:
+        pass  # journal連携失敗は最適化を止めない
+
     # 変化が大きいファクターを表示
     changed = [(f, d) for f, d in new_weights.items() if abs(d.get("delta", 0)) > 0.01]
     if changed:
@@ -542,6 +647,44 @@ def run_rule_optimizer(cfg, force: bool = False) -> dict:
         print("    重み更新: 有意な変化なし（安定稼働中）")
 
     save_weights(cfg, new_weights)
+
+    # [統合エンジン] signal_weights を rule_weights.json の "_signal_weights" に保存
+    try:
+        new_signal_weights = update_signal_weights(cfg, factor_correlations)
+        # rule_weights.json に "_signal_weights" として追記
+        all_w = load_weights(cfg)
+        all_w["_signal_weights"] = new_signal_weights
+        save_weights(cfg, all_w)
+        print(f"    ✅ signal_weights 更新: "
+              f"{[f'{k}:{v:.3f}' for k,v in new_signal_weights.items() if not k.startswith('_')]}")
+    except Exception as _se:
+        print(f"    ⚠️  signal_weights 更新失敗: {_se}")
+    # ── [A-1] IC トラッカー更新（安定有効シグナルを特定） ──────
+    try:
+        import sys as _sys, importlib as _imp
+        _sys.path.insert(0, str(Path(__file__).parent))
+        _aa = _imp.import_module("alpha_attributer")
+        _attr_data = _aa.load_attribution(cfg)
+        if _attr_data.get("signals"):
+            _ic_result = _aa.update_ic_tracker(cfg, _attr_data)
+            if _ic_result.get("stable_signals"):
+                print(f"    ✅ [A-1] 安定有効シグナル: "
+                      f"{_ic_result['stable_signals'][:3]}")
+            if _ic_result.get("review_signals"):
+                print(f"    ⚠️  [A-1] 見直し推奨: "
+                      f"{_ic_result['review_signals'][:3]}")
+            # 見直し推奨シグナルの重みを自動削減
+            for sig in _ic_result.get("review_signals", []):
+                if sig in new_weights:
+                    old_w = new_weights[sig].get("weight", 1.0)
+                    new_w = round(max(WEIGHT_MIN, old_w * 0.90), 4)
+                    new_weights[sig]["weight"]          = new_w
+                    new_weights[sig]["ic_review_flag"]  = True
+                    new_weights[sig]["ic_auto_reduced"]  = True
+                    print(f"      [A-1] {sig}: {old_w:.3f} → {new_w:.3f} （IC連続負）")
+    except Exception as _ae:
+        pass
+
     report_md = format_weight_report(old_weights, new_weights)
 
     print(f"    ✅ ルール最適化完了: rule_weights.json 更新")

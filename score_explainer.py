@@ -610,3 +610,241 @@ def format_factor_breakdown_block(results: list, top_n: int = 5,
     for bd in sorted_r[:top_n]:
         blocks.append(format_factor_breakdown_text(bd, max_items=max_items))
     return "\n\n".join(blocks)
+
+# ==============================================================
+# BLOCK 7: GAP-1 confidence_prior / ベイズ的更新式
+# ==============================================================
+# 【設計思想】
+#   score_history に蓄積されたデータ量に応じて「初期値への信頼度」を計算し、
+#   今日のスコアをベイズ的に更新する。
+#
+#   new_score = prior_score × (1 - confidence) + today_score × confidence
+#
+#   蓄積日数が多い業種ほど confidence が高く（＝過去の評価を信頼する）、
+#   今日のスコアが多少ブレても急激に変化しない（ノイズ耐性向上）。
+#   逆に急変（乖離幅 >= DRIFT_THRESHOLD）が検出されたらアラートフラグを立てる。
+#
+# 【接続先】
+#   score_explainer.calc_confidence_prior()  → factor_breakdown() の items に追加
+#   score_explainer.apply_bayesian_update()  → main.py のセクターループ内で呼び出し
+#   score_explainer.detect_drift()           → alert_notifier.py の score_jump アラートを補強
+
+import json
+import math
+from pathlib import Path
+
+
+def calc_confidence_prior(
+    score_history: list,
+    max_days: int = 30,
+) -> float:
+    """
+    score_history の蓄積日数から confidence_prior（0.0〜1.0）を計算する。
+
+    Args:
+        score_history : [{date:str, composite_score:float}, ...] 昇順・降順どちらでも可
+        max_days      : 信頼度が 1.0 になる基準日数（デフォルト30日）
+
+    Returns:
+        confidence_prior: 0.0〜1.0
+          0日（データなし）→ 0.0（今日のスコアをそのまま採用）
+          15日             → 0.5
+          30日以上          → 1.0（初期値を強く信頼）
+
+    使い方:
+        confidence = calc_confidence_prior(score_history)
+        new_score  = apply_bayesian_update(prior_score, today_score, confidence)
+    """
+    if not score_history:
+        return 0.0
+
+    valid = [h for h in score_history
+             if h.get("date") and h.get("composite_score") is not None]
+    if not valid:
+        return 0.0
+
+    # 最古〜最新の日数差を蓄積日数として使う
+    try:
+        dates = sorted(h["date"] for h in valid)
+        oldest = datetime.strptime(dates[0], "%Y-%m-%d")
+        newest = datetime.strptime(dates[-1], "%Y-%m-%d")
+        accumulated_days = (newest - oldest).days
+    except Exception:
+        accumulated_days = len(valid)   # フォールバック: エントリ数で代替
+
+    confidence = min(1.0, accumulated_days / max_days)
+    return round(confidence, 3)
+
+
+def apply_bayesian_update(
+    prior_score:    float,
+    today_score:    float,
+    confidence:     float,
+    score_history:  list = None,
+) -> tuple[float, dict]:
+    """
+    ベイズ的更新式でスコアを更新する。
+
+    new_score = prior_score × (1 - confidence) + today_score × confidence
+
+    Args:
+        prior_score   : 前回または過去平均のスコア
+        today_score   : 今日の生スコア（補正前）
+        confidence    : calc_confidence_prior() の出力（0〜1）
+        score_history : 過去スコア（prior_score の算出に使った履歴）
+
+    Returns:
+        (new_score: float, meta: dict)
+        meta = {
+          "prior_score":   float,
+          "today_score":   float,
+          "confidence":    float,
+          "new_score":     float,
+          "drift":         float,   # |today - prior|
+          "drift_alert":   bool,    # drift >= DRIFT_ALERT_THRESHOLD
+        }
+    """
+    DRIFT_ALERT_THRESHOLD = 15.0   # この乖離幅以上でアラートフラグ
+
+    new_score = round(
+        prior_score * (1.0 - confidence) + today_score * confidence,
+        1,
+    )
+    drift = abs(today_score - prior_score)
+
+    meta = {
+        "prior_score":     round(prior_score, 1),
+        "today_score":     round(today_score, 1),
+        "confidence":      confidence,
+        "new_score":       new_score,
+        "drift":           round(drift, 1),
+        "drift_alert":     drift >= DRIFT_ALERT_THRESHOLD,
+    }
+    return new_score, meta
+
+
+def detect_drift(
+    code:          str,
+    today_score:   float,
+    score_history: list,
+    threshold:     float = 15.0,
+) -> Optional[dict]:
+    """
+    前回スコアから大幅に変化した場合に乖離情報を返す。
+    変化がない場合は None を返す。
+
+    Args:
+        code          : 業種コード（ログ用）
+        today_score   : 今日の composite_score（ベイズ更新後）
+        score_history : [{date:str, composite_score:float}, ...]
+        threshold     : 乖離アラートの閾値（デフォルト15pt）
+
+    Returns:
+        None | {
+          "code":       str,
+          "today":      float,
+          "prev":       float,
+          "drift":      float,
+          "direction":  "up" | "down",
+          "severity":   "high" | "medium",
+        }
+    """
+    if not score_history:
+        return None
+
+    valid = sorted(
+        [h for h in score_history
+         if h.get("date") and h.get("composite_score") is not None],
+        key=lambda h: h["date"],
+    )
+    if len(valid) < 2:
+        return None
+
+    prev_score = valid[-1]["composite_score"]
+    drift      = today_score - prev_score
+
+    if abs(drift) < threshold:
+        return None
+
+    return {
+        "code":      code,
+        "today":     round(today_score, 1),
+        "prev":      round(prev_score, 1),
+        "drift":     round(drift, 1),
+        "direction": "up" if drift > 0 else "down",
+        "severity":  "high" if abs(drift) >= threshold * 1.5 else "medium",
+        "date":      datetime.now().strftime("%Y-%m-%d"),
+    }
+
+
+def apply_bayesian_to_sector_results(
+    sector_results: dict,
+    score_history_all: dict,
+    cfg = None,
+) -> tuple[dict, list]:
+    """
+    全セクターの composite_score にベイズ的更新を一括適用する。
+
+    stock_analyzer_main.py の sector ループ後に呼び出す。
+
+    Args:
+        sector_results    : results["sectors"] の dict
+        score_history_all : score_history.json の全内容
+                            形式: {date: {code: {score:float, risk:str}}}
+        cfg               : config モジュール（閾値取得用）
+
+    Returns:
+        (updated_sector_results: dict, drift_events: list)
+        drift_events: [detect_drift() の戻り値, ...]
+    """
+    max_days  = getattr(cfg, "CONFIDENCE_PRIOR_MAX_DAYS", 30) if cfg else 30
+    threshold = getattr(cfg, "DRIFT_ALERT_THRESHOLD",     15.0) if cfg else 15.0
+
+    updated      = {}
+    drift_events = []
+
+    for code, res in sector_results.items():
+        if not isinstance(res, dict):
+            updated[code] = res
+            continue
+
+        today_score = res.get("composite_score", 50.0)
+
+        # code 別の score_history を構築
+        hist = []
+        for date_key in sorted(score_history_all.keys()):
+            entry = score_history_all[date_key]
+            if isinstance(entry, dict) and code in entry:
+                raw = entry[code]
+                sc  = raw.get("score") if isinstance(raw, dict) else float(raw)
+                if sc is not None:
+                    hist.append({"date": date_key, "composite_score": float(sc)})
+
+        confidence  = calc_confidence_prior(hist, max_days=max_days)
+
+        # prior_score: 直近スコアの加重平均（直近2件: 70%/30%）
+        if len(hist) >= 2:
+            prior_score = hist[-1]["composite_score"] * 0.7 + hist[-2]["composite_score"] * 0.3
+        elif len(hist) == 1:
+            prior_score = hist[-1]["composite_score"]
+        else:
+            prior_score = today_score   # 履歴なし → 今日をそのまま採用
+
+        new_score, meta = apply_bayesian_update(
+            prior_score, today_score, confidence, hist
+        )
+
+        # 乖離検出（ベイズ更新後のスコアで比較）
+        drift = detect_drift(code, new_score, hist, threshold=threshold)
+        if drift:
+            drift_events.append(drift)
+
+        # sector_results に反映
+        res = dict(res)   # コピー（元データを変更しない）
+        res["composite_score"]       = new_score
+        res["composite_score_raw"]   = round(today_score, 1)   # 生スコアも保存
+        res["confidence_prior"]      = confidence
+        res["bayesian_meta"]         = meta
+        updated[code] = res
+
+    return updated, drift_events
