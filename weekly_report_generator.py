@@ -227,9 +227,33 @@ def _section_screener(results: dict) -> list:
         lines.append("")
         return lines
 
+    # ── [指示箇所] Top candidates 表示ループの直前に「戦略別セクション」を挿入 ──
+    strategy_summary = results.get("strategy_summary")
+    if strategy_summary:
+        try:
+            # モジュール読み込みの整理
+            import strategy_output_schema as _sos
+            from config import JAPAN_SECTORS
+            
+            sector_names = {k: v.get("name_ja", k) for k, v in JAPAN_SECTORS.items()}
+            
+            # 戦略別セクションのテキストを生成して追加
+            strat_lines = _sos.format_strategy_section(
+                candidates, strategy_summary, sector_names
+            )
+            if strat_lines:
+                lines.extend(strat_lines)
+                lines.append("") # セクション間の余白
+        except Exception:
+            pass
+
+    # ── ここから Top candidates 表示ループ ──
     lines.append("| 銘柄 | 業種 | スコア | PER | PBR | ROE | 配当 | 推奨 |")
     lines.append("|------|------|-------|-----|-----|-----|-----|-----|")
-    for c in sorted(passed, key=lambda x: x.get("composite_score", 0), reverse=True)[:10]:
+    
+    # スコア順に上位10件を表示
+    top_candidates = sorted(passed, key=lambda x: x.get("composite_score", 0), reverse=True)[:10]
+    for c in top_candidates:
         name  = (c.get("name", c.get("ticker", "")))[:12]
         sec   = c.get("sector_name", "")[:8]
         score = c.get("composite_score", 0)
@@ -242,8 +266,121 @@ def _section_screener(results: dict) -> list:
 
     lines.append("")
     return lines
+        
+def _section_strategy_breakdown(results: dict) -> list:
+    """[GAP-4] 戦略別スクリーニング結果セクション"""
+    screener = results.get("screener", {})
+    if not screener or screener.get("skipped"):
+        return []
 
+    lines = ["## 🎯 戦略別スクリーニング結果（GAP-4）", ""]
 
+    def _fmt_candidates(cands: list, cols: list) -> list:
+        if not cands:
+            return ["*該当なし*", ""]
+        header = "| " + " | ".join(c[0] for c in cols) + " |"
+        sep    = "|" + "|".join("------" for _ in cols) + "|"
+        rows   = [header, sep]
+        for c in cands[:8]:
+            row = "| " + " | ".join(
+                str(c.get(col[1], "-") or "-")[:col[2]] if len(col) > 2
+                else str(c.get(col[1], "-") or "-")
+                for col in cols
+            ) + " |"
+            rows.append(row)
+        rows.append("")
+        return rows
+
+    # コア戦略
+    core_top = screener.get("core_top", [])
+    lines.append("### 🔵 コア戦略（低回転ファクター投資）")
+    lines.append("")
+    lines += _fmt_candidates(core_top, [
+        ("銘柄", "name", 14), ("ticker", "ticker", 8),
+        ("sector", "sector_name", 8), ("score", "composite_score", 5),
+        ("確信Lv", "conviction_level", 4),
+    ])
+
+    # サテライト1: イベントドリブン
+    ev_top = screener.get("satellite_event_top", [])
+    lines.append("### 🎯 サテライト1: イベントドリブン（決算サプライズ高確率）")
+    lines.append("")
+    lines += _fmt_candidates(ev_top, [
+        ("銘柄", "name", 14), ("ticker", "ticker", 8),
+        ("保守度", "conservatism_score", 5), ("加速", "acc_bonus", 4),
+        ("score", "composite_score", 5),
+    ])
+
+    # サテライト2: 小型株・特殊状況
+    sc_top = screener.get("satellite_smallcap_top", [])
+    lines.append("### 🔶 サテライト2: 小型株・特殊状況（アクティビスト候補）")
+    lines.append("")
+    lines += _fmt_candidates(sc_top, [
+        ("銘柄", "name", 14), ("ticker", "ticker", 8),
+        ("活動Sc", "activist_score", 5), ("NetCash", "net_cash_ratio", 5),
+        ("時価総額億", "market_cap_b", 6),
+    ])
+
+    # サテライト3: 情報コスト優位
+    info_top = screener.get("satellite_info_top", [])
+    lines.append("### 🔍 サテライト3: 情報コスト優位（未発見銘柄）")
+    lines.append("")
+    lines += _fmt_candidates(info_top, [
+        ("銘柄", "name", 14), ("ticker", "ticker", 8),
+        ("未発見Sc", "discovery_score", 5), ("アナリスト", "analyst_count", 5),
+        ("score", "composite_score", 5),
+    ])
+
+    return lines
+
+def _section_earnings_watchlist(results: dict) -> list:
+    """[I-2] 今週の注目決算銘柄（保守度スコア × 加速スコア上位）"""
+    screener = results.get("screener", {})
+    candidates = screener.get("candidates", [])
+
+    # 保守度高 × 加速スコア高の候補を抽出
+    watchlist = [
+        c for c in candidates
+        if (c.get("conservatism_score", 0) or 0) >= 60
+        and (c.get("acc_bonus", 0) or 0) >= 4.0
+    ]
+    watchlist.sort(
+        key=lambda x: (x.get("conservatism_score", 0) or 0)
+                    + (x.get("acc_bonus", 0) or 0) * 2,
+        reverse=True,
+    )
+
+    if not watchlist:
+        return []
+
+    lines = ["## 🎯 今週の注目決算候補（I-2 保守度×加速スコア）", ""]
+    lines.append("| 銘柄 | 保守度 | 加速 | 複合フラグ | composite |")
+    lines.append("|------|-------|------|----------|---------|")
+    for c in watchlist[:8]:
+        flag = "🎯高確率" if c.get("is_high_prob_surprise") else ""
+        lines.append(
+            f"| {c.get('name','')[:14]}（{c['ticker']}）"
+            f" | {c.get('conservatism_score', 0):.0f}pt"
+            f" | {c.get('acc_bonus', 0):+.0f}pt"
+            f" | {flag}"
+            f" | {c.get('composite_score', 0):.0f} |"
+        )
+    lines.append("")
+    return lines
+
+def _section_midterm_tracker(results: dict) -> list:
+    """[I-5] 中期経営計画達成状況セクション"""
+    mt_result = results.get("midterm_tracker", {})
+    if not mt_result or mt_result.get("total", 0) == 0:
+        return []
+    try:
+        import sys as _sys, importlib as _imp
+        _sys.path.insert(0, __file__.rsplit("/", 1)[0])
+        _mt = _imp.import_module("midterm_plan_tracker")
+        return _mt.format_midterm_section(mt_result.get("results", {}))
+    except Exception:
+        return []
+    
 # ==============================================================
 # BLOCK 6: 事業概要ハイライト（Step E代替）
 # ==============================================================
@@ -319,6 +456,62 @@ def _section_macro(results: dict) -> list:
 
     return lines
 
+def _section_us_macro(results: dict) -> list:
+    """[Phase US-2] 米国マクロ拡張指標セクション"""
+    um = results.get("us_macro", {})
+    if not um or um.get("skipped") or not um.get("indicators"):
+        return []
+
+    indicators = um.get("indicators", {})
+    score      = um.get("composite_us_macro_score", 50)
+
+    lines = ["## 🇺🇸 米国マクロ拡張指標（Phase US-2）", ""]
+    icon  = "🟢" if score >= 65 else ("🔴" if score < 40 else "🟡")
+    lines.append(f"**総合スコア**: {icon} {score:.0f}/100")
+    lines.append("")
+    lines.append("| 指標 | 値 | シグナル | 補足 |")
+    lines.append("|------|-----|---------|------|")
+
+    INDICATOR_LABELS = {
+        "payems":   "非農業部門雇用",
+        "unrate":   "失業率",
+        "cpi":      "CPI前年比",
+        "pce":      "PCE価格指数",
+        "indpro":   "鉱工業生産",
+        "houst":    "住宅着工",
+        "umcsent":  "消費者信頼感",
+        "hy_spread":"HYスプレッド",
+        "icsa":     "失業保険申請",
+        "lei":      "景気先行指数",
+        "m2sl":     "M2マネーサプライ",
+        "dgorder":  "耐久財受注",
+        "rsxfs":    "小売売上（除自動車）",
+    }
+    SIGNAL_ICONS = {"tailwind": "📈", "headwind": "📉", "neutral": "➡️"}
+
+    for key, label in INDICATOR_LABELS.items():
+        ind = indicators.get(key)
+        if not ind:
+            continue
+        val     = ind.get("value")
+        yoy     = ind.get("yoy_pct") or ind.get("yoy")
+        mom     = ind.get("mom_pct") or ind.get("mom_change")
+        signal  = ind.get("signal", "neutral")
+        icon_s  = SIGNAL_ICONS.get(signal, "➡️")
+        unit    = ind.get("unit", "")
+        note    = f"YoY:{yoy:+.1f}%" if yoy is not None else (f"MoM:{mom:+.1f}" if mom is not None else "")
+        lines.append(
+            f"| {label} | {val} {unit[:3]} | {icon_s} {signal} | {note} |"
+            if val else f"| {label} | N/A | - | - |"
+        )
+
+    # 国債残高
+    td = um.get("treasury_debt")
+    if td:
+        lines.append(f"| 米国国債残高 | ${td.get('total_debt_trillion','?')}兆ドル | ➡️ | {td.get('as_of_date','')} |")
+
+    lines.append("")
+    return lines
 
 # ==============================================================
 # BLOCK 8: ニュースハイライト
@@ -337,6 +530,93 @@ def _section_news(results: dict) -> list:
         date_s = a.get("published", "")[:10] if a.get("published") else ""
         lines.append(f"- [{source}] {title} {date_s}")
 
+    lines.append("")
+    return lines
+
+def _section_policy_radar(results: dict) -> list:
+    """政策レーダー：今後30日のイベント + 業種別政策シグナル"""
+    pr = results.get("policy_radar", {})
+    if not pr or pr.get("skipped") or pr.get("total_signals", 0) == 0:
+        return []
+
+    lines = ["## 🏛️ 政策レーダー（政府・官庁先読みシグナル）", ""]
+
+    # イベントカレンダー
+    events = pr.get("events_30d", [])
+    if events:
+        lines.append("### 📅 今後30日の政策イベント")
+        lines.append("")
+        for ev in events[:5]:
+            boost_icon = "⚡" if ev.get("boost_active") else "📌"
+            lines.append(
+                f"- {boost_icon} **{ev['name']}** "
+                f"（{ev['date_estimate']} / 残{ev['days_until']}日）"
+                + (f" → 恩恵業種: {', '.join(ev.get('sectors',[])[:3])}" if ev.get("boost_active") else "")
+            )
+        lines.append("")
+
+    # 高信頼度シグナル上位
+    all_sigs = pr.get("signals", [])
+    top_sigs = sorted(all_sigs, key=lambda x: abs(x.get("pts_adj", 0)), reverse=True)[:6]
+    if top_sigs:
+        lines.append("### 📊 高信頼度政策シグナル")
+        lines.append("")
+        lines.append("| キーワード | ソース | 信頼度 | 加算 | 時間軸 |")
+        lines.append("|----------|-------|-------|------|-------|")
+        for s in top_sigs:
+            pts = s.get("pts_adj", 0)
+            icon = "📈" if pts > 0 else "📉"
+            lines.append(
+                f"| {icon} {s.get('keyword','')} "
+                f"| {s.get('source','')[:8]} "
+                f"| {s.get('credibility',0):.2f} "
+                f"| {pts:+.1f}pt "
+                f"| {s.get('horizon_months','?')}ヶ月 |"
+            )
+        lines.append("")
+
+    return lines
+
+def _section_finbert_sentiment(results: dict) -> list:
+    """[RESEARCH-5] FinBERT業種別感情分析セクション"""
+    sentiment = results.get("sentiment", {})
+    if not sentiment or sentiment.get("skipped") or not sentiment.get("by_sector"):
+        return []
+
+    from datetime import date
+    # 月初のみ詳細版
+    is_monthly = (date.today().day <= 7)
+    if not is_monthly:
+        return []
+
+    by_sector = sentiment.get("by_sector", {})
+    if not by_sector:
+        return []
+
+    cfg_sectors = results.get("_config_sectors", {})  # Japan_sectors の参照
+    lines = ["## 🧠 FinBERT ニュース感情分析（月次）", ""]
+    lines.append(f"**分析対象**: {sentiment.get('articles_scored',0)}件 "
+                 f"/ **モデル**: {sentiment.get('model_used','')[:30]}")
+    lines.append("")
+
+    # スコア降順でソート
+    sorted_sectors = sorted(
+        by_sector.items(),
+        key=lambda x: x[1].get("avg_sentiment", 0.5), reverse=True
+    )
+
+    lines.append("| 業種 | 感情スコア | Pos | Neg | トレンド |")
+    lines.append("|------|-----------|-----|-----|---------|")
+    for code, d in sorted_sectors[:10]:
+        trend_icon = {"improving": "📈", "deteriorating": "📉", "stable": "➡️"}.get(
+            d.get("sentiment_trend", "stable"), "➡️"
+        )
+        lines.append(
+            f"| [{code}] | {d.get('avg_sentiment', 0.5):.2f} "
+            f"| {d.get('positive_count', 0)} "
+            f"| {d.get('negative_count', 0)} "
+            f"| {trend_icon} {d.get('sentiment_trend', 'stable')} |"
+        )
     lines.append("")
     return lines
 
@@ -428,12 +708,91 @@ def _section_jp_us_bridge(results: dict) -> list:
         return []
     return bridge.get("summary_text", "").split("\n")
 
-def _section_rule_optimizer(results: dict) -> list:
+def _section_rule_optimizer(results: dict, cfg=None) -> list:
+    lines = []
+    
+    # 1. Rule Optimizer セクションの処理
     ro = results.get("rule_optimizer", {})
-    if not ro or not ro.get("updated"):
-        return []
-    return ro.get("report_md", "").split("\n")
+    if ro and ro.get("updated"):
+        report_text = ro.get("report_md", "")
+        if report_text:
+            lines.extend(report_text.split("\n"))
 
+    # 2. 監査ログのサマリーを追記（セクションの成否に関わらず判定）
+    audit = results.get("learning_audit")
+    if not audit and cfg:
+        # resultsにない場合は最新ログをロード（_alは定義済みと想定）
+        try:
+            audit = _al.load_latest_audit(cfg)
+        except NameError:
+            pass # _alが未定義の場合の安全策
+
+    if audit:
+        try:
+            # 動的インポートは整理し、フォーマット処理を実行
+            from . import learning_audit_log as _al_mod
+            audit_text = _al_mod.format_audit_for_report(audit)
+            if audit_text:
+                if lines: lines.append("") # 既存行があれば改行を挟む
+                lines.append(audit_text)
+        except (ImportError, Exception):
+            pass
+
+    return lines
+
+def _section_alpha_attribution(results: dict) -> list:
+    """[GAP-8] シグナル別アルファ帰属分析セクション"""
+    aa_res = results.get("alpha_attribution", {})
+    attribution = aa_res.get("attribution", {})
+    if not attribution or not attribution.get("signals"):
+        return []
+
+    try:
+        import sys as _sys, importlib as _imp
+        _sys.path.insert(0, __file__.rsplit("/", 1)[0])
+        _aa = _imp.import_module("alpha_attributer")
+        # cfg が必要なため results から config を取得
+        # フォールバック: 既存のattribution結果を直接フォーマット
+        lines = _aa.format_attribution_section.__doc__ and [] or []
+
+        lines = ["## 📐 シグナル別アルファ帰属分析（GAP-8）", ""]
+        period = attribution.get("period_weeks", 0)
+        lines.append(f"**分析期間**: 直近{period}週")
+        lines.append("")
+
+        top = attribution.get("top_signals", [])
+        if top:
+            lines.append("### ✅ 有効シグナル（IC上位）")
+            lines.append("")
+            lines.append("| シグナル | IC | 発動時α | 勝率 |")
+            lines.append("|---------|-----|--------|------|")
+            for sig_name in top[:5]:
+                d = attribution.get("signals", {}).get(sig_name, {})
+                ic    = d.get("ic")
+                alpha = d.get("avg_alpha_when_fired_pct")
+                wr    = d.get("win_rate_when_fired")
+                if ic is not None:
+                    lines.append(
+                        f"| {sig_name[:22]} | {ic:.3f} "
+                        f"| {alpha:+.2f}% " if alpha else f"| {sig_name[:22]} | {ic:.3f} | N/A "
+                        f"| {wr*100:.0f}% |" if wr else "| N/A |"
+                    )
+            lines.append("")
+
+        weak = attribution.get("weak_signals", [])
+        if weak:
+            lines.append("### ⚠️ 要見直しシグナル（IC < 0）")
+            lines.append("")
+            for sig_name in weak[:3]:
+                d = attribution.get("signals", {}).get(sig_name, {})
+                lines.append(f"- **{sig_name}**: IC={d.get('ic', 'N/A')}")
+            lines.append("")
+
+        return lines
+
+    except Exception:
+        return []
+    
 def _section_backtest(results: dict) -> list:
     bt = results.get("backtest", {})
     if not bt or bt.get("skipped"):
@@ -518,6 +877,28 @@ def _section_scenario(results: dict) -> list:
     text = sa.get("summary_text", "")
     return text.split("\n") if text else []
 
+def _section_longterm_scenario(results: dict) -> list:
+    """[R-5] 10年シナリオ × 業種評価マトリクス（月初のみ詳細版）"""
+    ls = results.get("longterm_scenario", {})
+    if not ls or ls.get("skipped"):
+        return []
+
+    from datetime import date
+    is_monthly = (date.today().day <= 7)
+
+    # summary_text は既に整形済み
+    summary = ls.get("summary_text", "")
+    if not summary:
+        return []
+
+    lines = summary.split("\n")
+
+    # 月初以外は省略版（先頭20行のみ）
+    if not is_monthly:
+        lines = lines[:20] + ["", "*(詳細は月初レポートを参照)*", ""]
+
+    return lines
+
 def _section_action_guide(results: dict) -> list:
     lines = ["## 🎯 来週のアクション候補", ""]
 
@@ -564,6 +945,49 @@ def _section_action_guide(results: dict) -> list:
 
     return lines
 
+def _section_risk_constraints(results: dict) -> list:
+    """[C-1/C-2] VaR制約・相関制約の適用状況セクション"""
+    var_c  = results.get("var_constraint", {})
+    corr_c = results.get("corr_constraint", {})
+
+    if not var_c and not corr_c:
+        return []
+
+    lines = ["## 🛡️ リスク制約フィルター（C-1/C-2）", ""]
+
+    # C-1: VaR制約
+    if var_c:
+        var_pct = var_c.get("var_pct")
+        thr     = var_c.get("threshold_pct", 3.0)
+        constrained = var_c.get("constrained", False)
+        icon = "🔴" if constrained else "🟢"
+        lines.append(f"### {icon} C-1: VaR制約")
+        lines.append("")
+        if var_pct is not None:
+            lines.append(f"- 現在のVaR(95%/1日): **{var_pct:.2f}%** "
+                         f"（閾値: {thr:.1f}%）")
+        if constrained:
+            lines.append(f"- **制約発動**: Buy候補を上位{var_c.get('max_buy_count',2)}銘柄に制限")
+            lines.append(f"- 理由: {var_c.get('reason', '')}")
+        else:
+            lines.append("- 制約なし（VaR正常水準）")
+        lines.append("")
+
+    # C-2: 相関制約
+    if corr_c and corr_c.get("constrained"):
+        clusters = corr_c.get("clusters_applied", [])
+        excluded = corr_c.get("excluded_tickers", [])
+        lines.append("### 🔗 C-2: 相関制約（重複業種除外）")
+        lines.append("")
+        lines.append(f"- 適用クラスタ数: {len(clusters)} / 除外銘柄: {len(excluded)}社")
+        for cl in clusters[:4]:
+            lines.append(
+                f"  - **{cl['name']}**: "
+                f"採用={cl['selected']} / 除外={cl['excluded']}"
+            )
+        lines.append("")
+
+    return lines
 
 # ==============================================================
 # BLOCK 10: メインレポート生成
@@ -602,17 +1026,25 @@ def generate_weekly_report(cfg, results: dict) -> dict:
     sections.append(_section_inference(results))
     sections.append(_section_signal_aggregator(results))
     sections.append(_section_macro(results))
+    sections.append(_section_us_macro(results))     # ★ Phase US-2追加
     sections.append(_section_anomaly_season(results))
     sections.append(_section_market_breadth(results))
     sections.append(_section_jp_sectors(results))
     sections.append(_section_us_sectors(results))
     sections.append(_section_etf(results))
+    sections.append(_section_risk_constraints(results))   # ★ C-1/C-2追加
     sections.append(_section_screener(results))
+    sections.append(_section_strategy_breakdown(results))
+    sections.append(_section_earnings_watchlist(results))   # ★ I-2追加
+    sections.append(_section_midterm_tracker(results))     # ★ I-5追加
     sections.append(_section_scenario(results))
+    sections.append(_section_longterm_scenario(results))   # ★ R-5追加
     sections.append(_section_performance(results))
     sections.append(_section_position_sizer(results))
     sections.append(_section_biz_summaries(results))
     sections.append(_section_news(results))
+    sections.append(_section_policy_radar(results))   # ★ policy_radar追加
+    sections.append(_section_finbert_sentiment(results))   # ★ RESEARCH-5追加
     sections.append(_section_action_guide(results))
     sections.append(_section_stress_test(results))
     sections.append(_section_dividend_calendar(results))
@@ -620,12 +1052,22 @@ def generate_weekly_report(cfg, results: dict) -> dict:
     sections.append(_section_sr_vp(results))
     sections.append(_section_jp_us_bridge(results))
     sections.append(_section_rule_optimizer(results))
+    sections.append(_section_alpha_attribution(results))    # ★ GAP-8追加
     sections.append(_section_backtest(results))
     sections.append(_section_comps(results))
     sections.append(_section_self_evaluator(results))
     sections.append(_section_screener_heatmap(results))
     sections.append(_section_portfolio_optimizer(results))
     sections.append(_section_dcf(results))
+    # ── [R-3] 投資ジャーナルセクション ──────────────────────────
+    try:
+        import sys as _sys, importlib as _imp
+        _sys.path.insert(0, str(Path(__file__).parent))
+        _ij = _imp.import_module("investment_journal")
+        sections.append(_ij.format_journal_section(cfg))    # 記入待ち
+        sections.append(_ij.format_pattern_section(cfg))    # 月次パターン
+    except Exception:
+        pass
 
     # フッター
     sections.append([

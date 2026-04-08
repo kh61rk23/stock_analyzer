@@ -97,6 +97,175 @@ JP_SECTOR_TICKERS = {
     "1033": ["2432.T", "4661.T", "6098.T", "9602.T", "9735.T"],
 }
 
+# ==============================================================
+# BLOCK 0.5: セクター振り分けユーティリティ（④セクター振り分け）
+# ==============================================================
+
+def _build_jp_ticker_to_sector() -> dict:
+    """
+    JP_SECTOR_TICKERS の逆引きマップを生成する。
+    {ticker: sector_code}
+    """
+    mapping = {}
+    for code, tickers in JP_SECTOR_TICKERS.items():
+        for t in tickers:
+            mapping[t] = code
+    return mapping
+
+# 起動時に一度だけ構築
+_JP_TICKER_TO_SECTOR: dict = _build_jp_ticker_to_sector()
+
+
+def get_jp_sector_code(ticker: str, edinet_db: dict = None) -> Optional[str]:
+    """
+    日本株の ticker からセクターコードを返す。
+
+    優先順:
+      1. edinet_rotation_manager の meta.json の sector_code
+      2. JP_SECTOR_TICKERS の逆引きマップ
+      3. None（不明）
+
+    Args:
+        ticker    : "6758.T" 形式
+        edinet_db : edinet_rotation_manager.load_db(cfg) の戻り値（optional）
+    """
+    # ① EDINET DB の meta から取得
+    if edinet_db:
+        meta_entry = edinet_db.get("meta", {}).get(ticker, {})
+        sc = meta_entry.get("sector_code")
+        if sc:
+            return str(sc)
+
+    # ② JP_SECTOR_TICKERS 逆引き
+    return _JP_TICKER_TO_SECTOR.get(ticker)
+
+
+# ── US株セクターマッピング ───────────────────────────────────
+# yfinance の sector 文字列 → US 11セクターコード（GICS準拠）
+US_GICS_SECTOR_MAP: dict[str, str] = {
+    # Energy
+    "Energy":                        "US_10",
+    # Materials
+    "Basic Materials":               "US_15",
+    "Materials":                     "US_15",
+    # Industrials
+    "Industrials":                   "US_20",
+    "Industrial Conglomerates":      "US_20",
+    # Consumer Discretionary
+    "Consumer Cyclical":             "US_25",
+    "Consumer Discretionary":        "US_25",
+    # Consumer Staples
+    "Consumer Defensive":            "US_30",
+    "Consumer Staples":              "US_30",
+    # Health Care
+    "Healthcare":                    "US_35",
+    "Health Care":                   "US_35",
+    # Financials
+    "Financial Services":            "US_40",
+    "Financials":                    "US_40",
+    "Financial":                     "US_40",
+    # Information Technology
+    "Technology":                    "US_45",
+    "Information Technology":        "US_45",
+    # Communication Services
+    "Communication Services":        "US_50",
+    "Communication":                 "US_50",
+    # Utilities
+    "Utilities":                     "US_55",
+    # Real Estate
+    "Real Estate":                   "US_60",
+}
+
+# US_SECTOR_CODE → 日本語ラベル
+US_SECTOR_LABELS: dict[str, str] = {
+    "US_10": "エネルギー",
+    "US_15": "素材",
+    "US_20": "資本財・サービス",
+    "US_25": "一般消費財・サービス",
+    "US_30": "生活必需品",
+    "US_35": "ヘルスケア",
+    "US_40": "金融",
+    "US_45": "情報技術",
+    "US_50": "コミュニケーション・サービス",
+    "US_55": "公益事業",
+    "US_60": "不動産",
+}
+
+
+def get_us_sector_code(ticker: str, yf_info: dict = None) -> tuple[Optional[str], str]:
+    """
+    米国株の ticker からセクターコードと日本語ラベルを返す。
+
+    優先順:
+      1. yf_info["sector"] を US_GICS_SECTOR_MAP で変換
+      2. yf_info["industry"] で部分マッチ
+      3. None（不明）
+
+    Args:
+        ticker  : "AAPL" 形式
+        yf_info : yfinance.Ticker(ticker).info の dict（optional）
+
+    Returns:
+        (sector_code: str|None, sector_label_ja: str)
+    """
+    if yf_info:
+        # ① sector フィールドで直接マッチ
+        yf_sector = yf_info.get("sector", "")
+        if yf_sector:
+            code = US_GICS_SECTOR_MAP.get(yf_sector)
+            if code:
+                return code, US_SECTOR_LABELS.get(code, yf_sector)
+
+        # ② industry フィールドで部分マッチ
+        yf_industry = (yf_info.get("industry") or "").lower()
+        for gics_name, code in US_GICS_SECTOR_MAP.items():
+            if gics_name.lower() in yf_industry:
+                return code, US_SECTOR_LABELS.get(code, gics_name)
+
+    return None, "不明"
+
+
+def enrich_candidates_with_sector(
+    candidates: list,
+    edinet_db:  dict = None,
+) -> list:
+    """
+    candidates リストの各 candidate に sector_code が未設定の場合に付与する。
+
+    JP株（".T" suffix）は get_jp_sector_code()、
+    US株（".T" なし）は get_us_sector_code() を使用。
+
+    screener の run_stock_screener() 完了後に呼び出す。
+
+    Args:
+        candidates : screener の candidate 辞書リスト
+        edinet_db  : edinet_rotation_manager.load_db(cfg)（JP株用）
+    """
+    for c in candidates:
+        if c.get("sector_code"):
+            continue   # 既に付与済みならスキップ
+
+        ticker = c.get("ticker", "")
+        if ticker.endswith(".T") or ticker.endswith(".OS"):
+            # JP株
+            sc = get_jp_sector_code(ticker, edinet_db)
+            if sc:
+                c["sector_code"] = sc
+                # sector_name が未設定なら補完
+                if not c.get("sector_name"):
+                    # cfg は参照できないので JP_SECTOR_TICKERS のコードのみ
+                    c["sector_name"] = f"JP_{sc}"
+        else:
+            # US株（yf_info は持っていない場合は None）
+            yf_info = c.get("_yf_info")   # _fetch_ticker_data が格納している場合
+            sc, label = get_us_sector_code(ticker, yf_info)
+            if sc:
+                c["sector_code"] = sc
+                if not c.get("sector_name"):
+                    c["sector_name"] = label
+
+    return candidates
+
 # [S-3] 未発見銘柄スコアの判定しきい値
 DISCOVERY_MCAP_MAX_B      = 500.0   # 時価総額500億円以下
 DISCOVERY_ANALYST_MAX     = 3       # アナリスト数3人未満
@@ -144,6 +313,11 @@ def _fetch_ticker_data(ticker: str) -> Optional[dict]:
         market_cap = info.get("marketCap") or 0
         name       = info.get("longName") or info.get("shortName") or ticker
         avg_vol    = info.get("averageVolume") or info.get("averageVolume10days") or 0
+        current_price = (
+            info.get("regularMarketPrice") or 
+            info.get("currentPrice") or 
+            info.get("previousClose") or 0
+        )
         # 在庫回転率 = 売上高 / 棚卸資産（製造業・小売業で有効）
         revenue   = info.get("totalRevenue")
         inventory = info.get("inventory")
@@ -181,10 +355,28 @@ def _fetch_ticker_data(ticker: str) -> Optional[dict]:
             "roe":            _clean(roe),
             "market_cap_b":   round(market_cap / 1e8, 1),
             "avg_volume":     int(avg_vol),
+            "current_price":  _clean(current_price),
             # [I-1] EPS成長率（加速度計算用）
             "earnings_growth":  _clean(info.get("earningsGrowth")),        # 直近年率成長率
             "earnings_qgrowth": _clean(info.get("earningsQuarterlyGrowth")), # 直近四半期成長率
             "analyst_count":  analyst_count,   # v3.0追加
+            # [M-3] ネットキャッシュ計算用
+            "total_cash":     _clean(info.get("totalCash")),
+            "total_debt":     _clean(info.get("totalDebt")),
+            "market_cap":     _clean(info.get("marketCap")),
+            "payout_ratio":   _clean(info.get("payoutRatio")),
+            "beta":           _clean(info.get("beta")),
+            # [P-2] 事業モデル質スコア用フィールド
+            "gross_margin":     _clean(info.get("grossMargins")),
+            "op_margin":        _clean(info.get("operatingMargins")),
+            "net_margin":       _clean(info.get("profitMargins")),
+            "operating_cashflow": _clean(info.get("operatingCashflow")),
+            "net_income":       _clean(info.get("netIncomeToCommon")),
+            # [P-3] 長期保有候補フラグ用
+            "equity_ratio":     _clean(info.get("bookValue")),      # book_value_per_share
+            "debt_to_equity":   _clean(info.get("debtToEquity")),   # D/Eレシオ
+            "total_assets":     _clean(info.get("totalAssets")),
+            "stockholders_equity": _clean(info.get("stockholdersEquity")),
             "inventory_turnover": inv_turn,
         }
     except Exception:
@@ -249,6 +441,244 @@ def _load_edinet_accruals(cfg) -> dict:
 
     return accruals
 
+# ==============================================================
+# BLOCK 2.4: [P-2] 事業モデル質スコア計算
+# ==============================================================
+
+def _calc_business_quality_bonus(data: dict) -> tuple[float, dict]:
+    """
+    片山晃モデルの「事業の質」を3軸で定量化する。
+
+    ① 粗利率（gross_margin）
+       ビジネスモデルの本質的な競争優位性を示す。
+       SaaS・ブランド品・医薬品は高く、コモディティは低い。
+
+    ② 営業CF品質（operating_cashflow / net_income）
+       「利益がキャッシュに変換されているか」の確認。
+       アクルーアル補正（S-2）と相互補完する。
+       比率 > 1.0 = 利益の全額以上がキャッシュ化 = 高品質。
+
+    ③ コスト構造の柔軟性（op_margin / gross_margin）
+       粗利に対してどれだけ営業利益が残るか。
+       高いほどSGA・固定費が低く、不況耐性が高い。
+
+    Returns:
+        (bonus: float, detail: dict)  bonus は ±20pt 以内にクランプ
+    """
+    bonus  = 0.0
+    detail = {}
+
+    gross_margin = data.get("gross_margin")
+    op_margin    = data.get("op_margin")
+    op_cf        = data.get("operating_cashflow")
+    net_income   = data.get("net_income")
+
+    # ── ① 粗利率スコア ──────────────────────────────────────
+    if gross_margin is not None and gross_margin > 0:
+        if   gross_margin >= 0.50: gm_bonus = 20.0
+        elif gross_margin >= 0.35: gm_bonus = 12.0
+        elif gross_margin >= 0.20: gm_bonus =  5.0
+        elif gross_margin >= 0.10: gm_bonus =  0.0
+        else:                      gm_bonus = -5.0
+        bonus += gm_bonus
+        detail["gross_margin"] = round(gross_margin * 100, 1)
+        detail["gm_bonus"]     = gm_bonus
+
+    # ── ② 営業CF品質（CF/純利益比率）────────────────────────
+    if op_cf is not None and net_income is not None and abs(net_income) > 1e6:
+        cf_ratio = op_cf / net_income
+        if   cf_ratio >= 1.50: cf_bonus = 20.0   # 利益の1.5倍のCF = 最高品質
+        elif cf_ratio >= 1.10: cf_bonus = 12.0
+        elif cf_ratio >= 0.80: cf_bonus =  5.0
+        elif cf_ratio >= 0.30: cf_bonus =  0.0
+        elif cf_ratio <  0:    cf_bonus = -15.0  # CF がマイナス = 危険
+        else:                  cf_bonus = -10.0  # CF が利益の30%未満
+        bonus += cf_bonus
+        detail["cf_ratio"] = round(cf_ratio, 2)
+        detail["cf_bonus"] = cf_bonus
+    elif op_cf is not None and op_cf < 0:
+        # 純利益がゼロ/マイナスでもCFがマイナスなら明確にペナルティ
+        bonus += -10.0
+        detail["cf_bonus"] = -10.0
+
+    # ── ③ コスト構造の柔軟性（op_margin / gross_margin）──────
+    if (gross_margin is not None and op_margin is not None
+            and gross_margin > 0.05):  # 粗利がほぼゼロの業種は除外
+        cost_ratio = op_margin / gross_margin
+        if   cost_ratio >= 0.60: cost_bonus = 10.0
+        elif cost_ratio >= 0.40: cost_bonus =  5.0
+        elif cost_ratio >= 0.20: cost_bonus =  0.0
+        elif cost_ratio >= 0.05: cost_bonus = -3.0
+        else:                    cost_bonus = -5.0
+        bonus += cost_bonus
+        detail["cost_ratio"] = round(cost_ratio, 2)
+        detail["cost_bonus"] = cost_bonus
+
+    # クランプ: ±20pt 以内
+    bonus = max(-20.0, min(20.0, bonus))
+    detail["total_bonus"] = round(bonus, 1)
+
+    return round(bonus, 1), detail
+
+# ==============================================================
+# BLOCK 2.6: [GAP-4] 戦略別ラベル付与
+# ==============================================================
+
+def _assign_strategy_label(candidate: dict, cfg=None) -> str:
+    """
+    [GAP-4] candidate の属性から戦略ラベルを判定する。
+
+    優先順位（複数該当時は上位を採用）:
+      satellite_event     : イベントドリブン（決算サプライズ高確率 / インサイダー買い）
+      satellite_smallcap  : 小型株・特殊状況（アクティビスト候補 / ネットキャッシュリッチ）
+      satellite_info      : 情報コスト優位（未発見銘柄 / ArXivシグナル）
+      core                : コア戦略（それ以外のTOP_TIER通過銘柄）
+
+    Returns:
+        "core" / "satellite_event" / "satellite_smallcap" / "satellite_info"
+    """
+    # ── サテライト1: イベントドリブン ──────────────────────────
+    is_high_prob = candidate.get("is_high_prob_surprise", False)
+    is_insider   = (candidate.get("credit_flag", "") or "").startswith("insider")
+    consv        = candidate.get("conservatism_score", 0) or 0
+    acc          = candidate.get("acc_bonus", 0) or 0
+    if is_high_prob or (consv >= 70 and acc >= 7):
+        return "satellite_event"
+
+    # ── サテライト2: 小型株・特殊状況 ──────────────────────────
+    is_activist     = candidate.get("is_activist_target", False)
+    is_net_cash     = candidate.get("is_net_cash_rich", False)
+    activist_score  = candidate.get("activist_score", 0) or 0
+    mcap            = candidate.get("market_cap_b", 999) or 999
+    if is_activist or is_net_cash or (activist_score >= 70 and mcap <= 500):
+        return "satellite_smallcap"
+
+    # ── サテライト3: 情報コスト優位 ─────────────────────────────
+    discovery   = candidate.get("discovery_score", 0) or 0
+    analyst_cnt = candidate.get("analyst_count")
+    if discovery >= 60 or (analyst_cnt is not None and analyst_cnt <= 2):
+        return "satellite_info"
+
+    # ── コア ────────────────────────────────────────────────────
+    return "core"
+
+# ==============================================================
+# BLOCK 2.45: [P-3] 長期保有候補フラグ計算
+# ==============================================================
+
+def _calc_longterm_hold_flag(
+    data: dict,
+    edinet_data: dict = None,
+) -> tuple[bool, float, list]:
+    """
+    片山晃モデルの「10年持てる銘柄」基準を数値化する。
+
+    条件（AND 条件）:
+      ① 自己資本比率 >= 60%（財務の堅牢性）
+      ② EPS成長率（直近年率）> 0（増益基調）
+      ③ ROE >= 10%（資本効率が高い）
+      ④ アクルーアルtier != "C"（利益の質が担保されている）
+
+    EDINET の連続増益データがあれば③を3期連続増益で補強する。
+
+    Returns:
+        (is_longterm_hold: bool, confidence: float, flags: list[str])
+        confidence: 0.0〜1.0（条件充足率）
+    """
+    flags      = []
+    conditions = []
+
+    # ── ① 自己資本比率 >= 60% ───────────────────────────────
+    equity_ratio = None
+    se = data.get("stockholders_equity")
+    ta = data.get("total_assets")
+    if se is not None and ta is not None and ta > 0:
+        equity_ratio = se / ta
+    elif data.get("debt_to_equity") is not None:
+        de = data["debt_to_equity"]
+        if de >= 0:
+            equity_ratio = 1.0 / (1.0 + de / 100.0) if de > 0 else 1.0
+
+    if equity_ratio is not None:
+        if equity_ratio >= 0.60:
+            flags.append(f"自己資本比率{equity_ratio*100:.0f}%")
+            conditions.append(True)
+        else:
+            conditions.append(False)
+    else:
+        conditions.append(None)  # データなし = 評価保留
+
+    # ── ② EPS 増益基調（earnings_growth > 0）──────────────
+    eg = data.get("earnings_growth")
+    if eg is not None:
+        if eg > 0:
+            flags.append(f"増益({eg*100:+.1f}%)")
+            conditions.append(True)
+        else:
+            conditions.append(False)
+    else:
+        conditions.append(None)
+
+    # ── ③ ROE >= 10% ────────────────────────────────────────
+    roe = data.get("roe")
+    if roe is not None:
+        roe_pct = roe * 100 if abs(roe) < 1 else roe
+        if roe_pct >= 10.0:
+            flags.append(f"ROE{roe_pct:.1f}%")
+            conditions.append(True)
+        else:
+            conditions.append(False)
+    else:
+        conditions.append(None)
+
+    # ── ④ アクルーアル tier != "C" ──────────────────────────
+    # accrual_tier は _calc_scores() で付与されるが、
+    # _fetch_ticker_data() 時点ではまだ計算されていない。
+    # edinet_data 経由でアクルーアルが取得できる場合のみ評価する。
+    accrual_ok = True   # デフォルトは OK（データなしは不利にしない）
+    if isinstance(edinet_data, dict):
+        analysis = edinet_data.get("analysis", {})
+        acr = analysis.get("accrual_ratio")
+        if acr is not None and float(acr) >= 0.05:
+            accrual_ok = False   # tier C 相当
+            conditions.append(False)
+        else:
+            conditions.append(True)
+    else:
+        conditions.append(None)
+
+    # ── EDINET 連続増益（3期以上）の補強チェック ─────────────
+    if isinstance(edinet_data, dict):
+        fin = edinet_data.get("financials", {})
+        op_income = fin.get("operating_income", [])
+        if len(op_income) >= 3:
+            # 直近3期が全て増益かチェック
+            recent3 = [v for v in op_income[-3:] if v is not None]
+            if len(recent3) >= 3:
+                consecutive = all(
+                    recent3[i] > recent3[i-1]
+                    for i in range(1, len(recent3))
+                )
+                if consecutive:
+                    flags.append("3期連続増益✅")
+
+    # ── 判定 ─────────────────────────────────────────────────
+    valid = [c for c in conditions if c is not None]
+    true_count = sum(1 for c in valid if c)
+    confidence = true_count / len(valid) if valid else 0.0
+
+    # 全条件が True（データなし項目は除外して判定）かつ
+    # 有効条件が3件以上ある場合に長期保有候補フラグを立てる
+    is_longterm = (
+        len(valid) >= 3
+        and all(c for c in valid)
+        and confidence >= 1.0
+    )
+
+    if is_longterm:
+        flags.append("🌱長期保有候補")
+
+    return is_longterm, round(confidence, 2), flags
 
 def _calc_accrual_tier(accrual: Optional[float]) -> tuple[str, float]:
     """
@@ -268,6 +698,27 @@ def _calc_accrual_tier(accrual: Optional[float]) -> tuple[str, float]:
             return label, bonus
     return "C", -15.0
 
+def _apply_capped_adjustment(base_score: float, delta: float,
+                             cap: float, label: str = "") -> tuple[float, float]:
+    """
+    補正量に上限を適用し、クランプ済みのスコアと実際の補正量を返す。
+
+    Args:
+        base_score : 補正前スコア
+        delta      : 補正量（正=追い風 / 負=逆風）
+        cap        : 補正量の絶対値上限（例: 10.0）
+        label      : デバッグ用ラベル
+
+    Returns:
+        (new_score: float, actual_delta: float)
+    """
+    # cap 適用
+    capped_delta = max(-cap, min(cap, delta))
+    if capped_delta != delta and label:
+        print(f"    ⚠️  [{label}] 補正上限適用: "
+              f"{delta:+.1f}pt → {capped_delta:+.1f}pt（上限±{cap}pt）")
+    new_score = round(max(-30.0, min(100.0, base_score + capped_delta)), 1)
+    return new_score, capped_delta
 
 def _calc_sector_accrual_mean(tickers: list, edinet_accruals: dict) -> Optional[float]:
     """
@@ -340,13 +791,14 @@ def _apply_filters(data: dict, cfg) -> tuple:
 
     return (len(fails) == 0), detail
 
-
 def _calc_scores(
-    data:             dict,
-    sector_score:     float,
-    edinet_accrual:   Optional[float] = None,
+    data:                dict,
+    sector_score:        float,
+    edinet_accrual:      Optional[float] = None,
     sector_accrual_mean: Optional[float] = None,
-    surprise_bonus: float = 0.0
+    surprise_bonus:      float = 0.0,
+    bq_bonus:            float = 0.0,   # ★ P-2追加（事業モデル質ボーナス）
+    ceo_bonus:           float = 0.0,   # ★ I-3追加（経営者スコアボーナス）
 ) -> dict:
     """
     バリュースコア / クォリティスコア / 総合スコアを算出する。
@@ -430,7 +882,8 @@ def _calc_scores(
     quality_score = round(
         max(0, min(100,
             quality_base + acr_bonus + relative_bonus
-            + surprise_bonus + inv_bonus + acc_bonus  # ★ I-1追加
+            + surprise_bonus + inv_bonus + acc_bonus
+            + bq_bonus  + ceo_bonus          # ★ P-2追加
         )),
         1,
     )
@@ -456,8 +909,100 @@ def _calc_scores(
         "earnings_acceleration": round(eg_quarter * 4 - eg_annual, 3)
                                  if (eg_annual is not None and eg_quarter is not None)
                                  else None,       # ★ I-1追加（生値保存）
+        "bq_bonus":              round(bq_bonus, 1),   # ★ P-2追加
     }
 
+# ==============================================================
+# BLOCK 2.5: [M-3] アクティビスト候補スコア計算
+# ==============================================================
+
+def _calc_activist_score(data: dict, edinet_data: dict = None) -> tuple[float, list]:
+    """
+    村上世彰モデルの「放置された割安資産」を定量化する。
+
+    スコア構成（合計100点満点）:
+      PBR < 1.0                    → +25pt（解散価値割れ）
+      ROE < 8%（改善余地あり）     → +15pt（資本効率の低さ）
+      ネットキャッシュ/時価総額>20% → +25pt（現金山積み）
+      配当性向 < 30%（還元余地）   → +20pt
+      親会社持株 > 50%             → +15pt（解放余地あり）
+
+    Returns:
+        (activist_score: float, flags: list[str])
+    """
+    score = 0.0
+    flags = []
+
+    pbr        = data.get("pbr")
+    roe        = data.get("roe")        # 小数表記（0.08=8%）
+    total_cash = data.get("total_cash") # 円
+    total_debt = data.get("total_debt") # 円
+    market_cap = data.get("market_cap") # 円（raw）
+    payout     = data.get("payout_ratio")
+
+    # ── ① PBR < 1.0（解散価値割れ）────────────────────────
+    if pbr is not None and pbr > 0:
+        if pbr < 1.0:
+            score += 25.0
+            flags.append(f"PBR割れ({pbr:.2f}x)")
+        elif pbr < 1.5:
+            score += 10.0
+            flags.append(f"PBR低({pbr:.2f}x)")
+
+    # ── ② ROE < 8%（改善余地あり）─────────────────────────
+    if roe is not None:
+        roe_pct = roe * 100 if abs(roe) < 1 else roe  # 0.08 → 8%
+        if roe_pct < 8.0 and roe_pct > -5.0:   # 赤字は除外
+            score += 15.0
+            flags.append(f"低ROE({roe_pct:.1f}%)")
+        elif roe_pct < 12.0:
+            score += 7.0
+            flags.append(f"中ROE({roe_pct:.1f}%)")
+
+    # ── ③ ネットキャッシュ/時価総額 > 20% ─────────────────
+    if total_cash is not None and market_cap is not None and market_cap > 0:
+        net_cash = total_cash - (total_debt or 0.0)
+        net_cash_ratio = net_cash / market_cap
+        if net_cash_ratio > 0.30:
+            score += 25.0
+            flags.append(f"高ネットキャッシュ({net_cash_ratio*100:.0f}%)")
+        elif net_cash_ratio > 0.20:
+            score += 15.0
+            flags.append(f"中ネットキャッシュ({net_cash_ratio*100:.0f}%)")
+        elif net_cash_ratio > 0.10:
+            score += 5.0
+            flags.append(f"ネットキャッシュあり({net_cash_ratio*100:.0f}%)")
+
+    # ── ④ 配当性向 < 30%（還元余地大）────────────────────
+    if payout is not None and payout >= 0:
+        if payout < 0.30:
+            score += 20.0
+            flags.append(f"低配当性向({payout*100:.0f}%→還元余地)")
+        elif payout < 0.50:
+            score += 8.0
+            flags.append(f"配当性向中({payout*100:.0f}%)")
+
+    # ── ⑤ EDINET: 親会社持株 > 50%（解放余地）─────────────
+    # edinet_rotation_manager の大株主情報から取得（将来実装）
+    # 現在は edinet_data 経由で近似値を使用
+    if isinstance(edinet_data, dict):
+        analysis = edinet_data.get("analysis", {})
+        parent_ownership = analysis.get("parent_ownership_pct")
+        if parent_ownership is not None:
+            if parent_ownership > 50.0:
+                score += 15.0
+                flags.append(f"親会社持株{parent_ownership:.0f}%")
+            elif parent_ownership > 30.0:
+                score += 7.0
+                flags.append(f"持株{parent_ownership:.0f}%")
+
+    # ── 触媒待ち割安フラグ ───────────────────────────────────
+    # スコア70以上 = 4〜5条件が複合 = 「触媒があれば動く」銘柄
+    is_activist_target = score >= 70.0
+    if is_activist_target:
+        flags.append("🎯触媒待ち割安")
+
+    return round(score, 1), flags
 
 # ==============================================================
 # BLOCK 2.5: [S-3] 未発見銘柄スコアリング
@@ -546,6 +1091,7 @@ def _calc_discovery_score(
 def _screen_sector(sector_code: str, sector_name: str,
                    sector_score: float, tickers: list,
                    cfg, market: str = "JP",
+                   sector_tier: str = "TOP",   # ★ GAP-6追加 "TOP"/"MID"/"BOT"
                    surprise_cache: dict = None,
                    edinet_accruals: dict = None,
                    all_scores_ref: list = None,
@@ -568,13 +1114,23 @@ def _screen_sector(sector_code: str, sector_name: str,
     # 業種平均アクルーアル（S-2: 相対評価用）
     sector_accrual_mean = _calc_sector_accrual_mean(tickers, accruals)
 
+    # ── [GAP-6] BOT_TIER はスキップ（GAP-2で除外済みだが念のため） ──
+    if sector_tier == "BOT":
+        print(f"    [{sector_code}] {sector_name}: BOT_TIER → スキップ")
+        return []
+
+    # ── [GAP-6] MID_TIER は軽量評価パス ──────────────────────────
+    # MIDは前日のキャッシュスコアを維持し、急変した銘柄のみ再評価する
+    _is_mid_tier = (sector_tier == "MID")
+    if _is_mid_tier:
+        print(f"    [{sector_code}] {sector_name}: MID_TIER → 軽量評価モード")
+
     # 1. 業種内全銘柄の基礎データを収集
     raw_data_list = []
     print(f"    [{sector_code}] {sector_name}: {len(tickers)}銘柄チェック中...")
 
     for ticker in tickers:
         data = _fetch_ticker_data(ticker)
-        "current_price": _clean(info.get("regularMarketPrice")),
         if data is not None:
             raw_data_list.append((ticker, data))
         time.sleep(0.2)
@@ -595,6 +1151,18 @@ def _screen_sector(sector_code: str, sector_name: str,
 
     # 3. メインループ：フィルタリングとスコアリング
     for ticker, data in raw_data_list:
+        # ── [GAP-6] MID_TIER: 急変した銘柄のみ全評価、安定銘柄はスコア維持 ──
+        if _is_mid_tier:
+            price_now = data.get("current_price")
+            # yfinanceから直近の価格変化率を簡易チェック（±3%超で再評価）
+            # ここでは _fetch_ticker_data の返り値から直近価格変化を取得する
+            # 実装: 前日キャッシュとの差分 → screener_historyを参照
+            # フォールバック: MID_TIERは評価フラグを通常通り行うが
+            #   edinet・comps・DCFなどの重いキャッシュ参照をスキップする
+            _mid_light = True   # 軽量フラグ（重いキャッシュをスキップ）
+        else:
+            _mid_light = False
+
         # A. フィルター判定（1回のみ実行）
         passed, detail = _apply_filters(data, cfg)
         
@@ -625,7 +1193,8 @@ def _screen_sector(sector_code: str, sector_name: str,
                 pass
         # [NEW] EDINET品質ボーナス
         eq_bonus = 0.0
-        if edinet_quality_cache and ticker in edinet_quality_cache:
+        # MID_TIER は重いキャッシュ参照をスキップ（APIコール節約）
+        if not _mid_light and edinet_quality_cache and ticker in edinet_quality_cache:
             try:
                 _sfl_mod = _imp.import_module("screener_feedback_loop")
                 eq_bonus = _sfl_mod.get_edinet_bonus(ticker, edinet_quality_cache)
@@ -635,7 +1204,7 @@ def _screen_sector(sector_code: str, sector_name: str,
                               surprise_bonus=es_bonus + cr_bonus + im_bonus
                                              + div_bonus + eq_bonus)
         # [5-2] comps相対バリューボーナス（value_scoreのブレンド）
-        if comps_cache and ticker in comps_cache:
+        if not _mid_light and comps_cache and ticker in comps_cache:
             try:
                 _ca_mod = _imp.import_module("comps_analyzer")
                 cb = _ca_mod.get_comps_bonus(ticker, comps_cache)
@@ -652,7 +1221,7 @@ def _screen_sector(sector_code: str, sector_name: str,
             except Exception:
                 pass
         # [6-3] DCFボーナス（value_scoreに直接加算）
-        if dcf_cache and ticker in dcf_cache:
+        if not _mid_light and dcf_cache and ticker in dcf_cache:
             try:
                 _dcf_mod = _imp.import_module("dcf_valuation")
                 db = _dcf_mod.get_dcf_bonus(ticker, dcf_cache)
@@ -694,8 +1263,32 @@ def _screen_sector(sector_code: str, sector_name: str,
             edinet_accrual      = edinet_acr,
             sector_accrual_mean = sector_accrual_mean,
             surprise_bonus      = total_bonus
+            bq_bonus            = bq_bonus,    # ★ P-2追加
+            ceo_bonus           = ceo_bonus,     # ★ I-3追加
         )
+        # [M-3] アクティビスト候補スコア計算
+        activist_score, activist_flags = _calc_activist_score(data)
 
+        # [P-2] 事業モデル質ボーナス計算
+        bq_bonus, bq_detail = _calc_business_quality_bonus(data)
+
+        # [I-3] CEO スコアをキャッシュから取得（ceo_evaluator は screener 後に実行）
+        # ここでは前回実行時の ceo_scores.json を参照する
+        ceo_score_cached = 0.0
+        ceo_bonus        = 0.0
+        try:
+            import sys as _sys, importlib as _imp
+            _sys.path.insert(0, str(Path(__file__).parent))
+            _ce = _imp.import_module("ceo_evaluator")
+            _ceo_db = _ce.load_ceo_db(cfg)
+            _ceo_latest = _ceo_db.get(ticker, {}).get("latest", {})
+            ceo_score_cached = _ceo_latest.get("ceo_score", 0.0) or 0.0
+            ceo_bonus        = _ceo_latest.get("quality_bonus", 0.0) or 0.0
+        except Exception:
+            pass
+        # [P-3] 長期保有候補フラグ計算
+        is_longterm, lt_confidence, lt_flags = _calc_longterm_hold_flag(data)
+        
         # [4-6] SR ボーナスを technical_score に加算
         if sr_cache and ticker in sr_cache:
             try:
@@ -771,6 +1364,54 @@ def _screen_sector(sector_code: str, sector_name: str,
             "dcf_bonus": scores.get("dcf_bonus", 0.0),
             "acc_bonus": scores.get("acc_bonus", 0.0),   # ★ I-1追加
             "earnings_acceleration": scores.get("earnings_acceleration"),  # ★ I-1追加
+            # [I-2] 保守度スコアと複合フラグ
+            "conservatism_score": (
+                surprise_cache.get(ticker, {}).get("conservatism_score", 50.0)
+                if surprise_cache else 50.0
+            ),
+            "is_high_prob_surprise": (
+                scores.get("acc_bonus", 0) >= 7.0
+                and (surprise_cache.get(ticker, {}).get("conservatism_score", 0) or 0) >= 70.0
+            ) if surprise_cache else False,
+            "is_negative_risk": (
+                scores.get("acc_bonus", 0) <= -7.0
+                and (surprise_cache.get(ticker, {}).get("conservatism_score", 0) or 0) <= 30.0
+            ) if surprise_cache else False,
+            "bq_bonus":             scores.get("bq_bonus", 0.0),   # ★ P-2
+            # [I-3] 経営者スコア
+            "ceo_score":            ceo_score_cached,
+            "ceo_bonus":            ceo_bonus,
+            "ml_correction":        0.0,   # ★ RESEARCH-4追加（main.py で後から書き込む）
+            # [GAP-4] 戦略ラベル（後段で付与・ここでは空文字）
+            "strategy_label":     "",
+            "hold_weeks":       0,
+            "entry_trigger":    "",
+            "exit_trigger":     "",
+            "conviction":       "",
+            "signal_count":     0,
+            "gross_margin":         data.get("gross_margin"),
+            "op_margin":            data.get("op_margin"),
+            "cf_quality_ratio":     bq_detail.get("cf_ratio"),     # CF/純利益比率
+            # [M-3] アクティビスト候補
+            "activist_score":         activist_score,
+            "activist_flags":         activist_flags,
+            "is_activist_target":     activist_score >= 70.0,
+            # [M-1] ネットキャッシュリッチフラグ
+            "is_net_cash_rich":       (
+                (data.get("total_cash", 0) or 0)
+                - (data.get("total_debt") or 0)
+            ) / ((data.get("market_cap") or 1) or 1) >= getattr(
+                cfg, "NET_CASH_RICH_THRESHOLD", 0.30
+            ) if data.get("market_cap") else False,
+            # [P-3] 長期保有候補
+            "is_longterm_hold":       is_longterm,
+            "longterm_confidence":    lt_confidence,
+            "longterm_flags":         lt_flags,
+            "net_cash_ratio":         (
+                round((data.get("total_cash", 0) - (data.get("total_debt") or 0))
+                      / (data.get("market_cap", 1) or 1), 3)
+                if data.get("market_cap") else None
+            ),
         }
         candidates.append(candidate)
 
@@ -845,7 +1486,25 @@ def _save_screener_report(result: dict, cfg) -> None:
                     f"| {c['ticker']} | {c['name'][:20]} | {c['composite_score']:.1f} "
                     f"| {c['discovery_score']:.0f} | {flags} |"
                 )
-
+        # [M-3] 触媒待ち割安候補
+        activist_top_local = sorted(
+            [c for c in result["candidates"] if c.get("is_activist_target")],
+            key=lambda x: x.get("activist_score", 0), reverse=True,
+        )[:10]
+        if activist_top_local:
+            lines += [
+                "",
+                "## 🎯 触媒待ち割安候補（activist_score ≥ 70）",
+                "",
+                "| Ticker | 銘柄名 | Aスコア | 主な根拠 |",
+                "|--------|--------|--------|---------|",
+            ]
+            for c in activist_top_local:
+                flags = " / ".join(c.get("activist_flags", [])[:3])
+                lines.append(
+                    f"| {c['ticker']} | {c['name'][:18]} "
+                    f"| {c.get('activist_score', 0):.0f} | {flags} |"
+                )
         out = screen_dir / f"screener_{today}.md"
         out.write_text("\n".join(lines), encoding="utf-8")
         print(f"  💾 スクリーニングレポート保存: screener_{today}.md")
@@ -858,7 +1517,14 @@ def _save_screener_report(result: dict, cfg) -> None:
 # BLOCK 5: メインエントリポイント（v3.0: S-2/S-3統合）
 # ==============================================================
 
-def run_stock_screener(cfg, sector_results: dict) -> dict:
+def run_stock_screener(cfg, sector_results: dict,
+                       sector_tier_map: dict = None) -> dict:
+    """
+    sector_tier_map : results["sector_tier"] の dict
+                      {sector_code: "TOP"/"MID"/"BOT"}
+                      省略時は全業種を "TOP" として扱う（後方互換）
+    """
+    sector_tier_map = sector_tier_map or {}
     """
     セクター分析結果を受け取り、個別銘柄スクリーニングを実行する。
 
@@ -1010,6 +1676,21 @@ def run_stock_screener(cfg, sector_results: dict) -> dict:
         edinet_accruals = _load_edinet_accruals(cfg)
     except Exception as e:
         print(f"  ⚠️  EDINET accrual ロード失敗（スキップ）: {e}")
+    # ── [問題D] 動的追加銘柄をユニバースに追加 ────────────────
+    dynamic_tickers = getattr(cfg, "DYNAMIC_SCREENER_TICKERS", [])
+    dynamic_meta    = getattr(cfg, "DYNAMIC_SCREENER_META", {})
+
+    if dynamic_tickers:
+        # 静的リストに未含有の銘柄を追加
+        base_set = set(all_tickers)   # all_tickers は既存の全銘柄リスト
+        for t in dynamic_tickers:
+            if t not in base_set:
+                all_tickers.append(t)
+                # discovery_score フラグを立てる（後でcandidateに反映）
+                if t in dynamic_meta:
+                    dynamic_ticker_meta[t] = dynamic_meta[t]
+        print(f"    📋 [問題D] 動的銘柄を追加: "
+              f"{len(dynamic_tickers) - len(base_set & set(dynamic_tickers))}社")
     # セクタースコア上位 N 業種を選択
     sorted_sectors = sorted(
         sector_results.items(),
@@ -1044,6 +1725,7 @@ def run_stock_screener(cfg, sector_results: dict) -> dict:
             tickers         = tickers,
             cfg             = cfg,
             market          = "JP",
+            sector_tier     = sector_tier_map.get(code, "TOP"),  # ★ GAP-6追加
             edinet_accruals = edinet_accruals,
             all_scores_ref  = all_comp_scores,
             surprise_cache = surprise_cache,
@@ -1057,8 +1739,51 @@ def run_stock_screener(cfg, sector_results: dict) -> dict:
             comps_cache    = comps_cache,
             dcf_cache      = dcf_cache,
         )
+    # ── [問題D] 動的追加銘柄は discovery_score を付与 ────────
+        _dyn_meta = getattr(cfg, "DYNAMIC_SCREENER_META", {})
+        if ticker in _dyn_meta:
+            candidate["discovery_score"]  = _dyn_meta[ticker].get("discovery_score", 100)
+            candidate["dynamic_source"]   = _dyn_meta[ticker].get("source", "")
         all_candidates.extend(candidates)
-
+    # ── [問題D] 動的追加銘柄のスクリーニング ─────────────────────
+    _dyn_tickers = getattr(cfg, "DYNAMIC_SCREENER_TICKERS", [])
+    _dyn_meta    = getattr(cfg, "DYNAMIC_SCREENER_META", {})
+    if _dyn_tickers:
+        # 既に静的ループで処理済みの ticker を除外
+        _screened = {c.get("ticker", "") for c in all_candidates}
+        _dyn_new  = [t for t in _dyn_tickers if t not in _screened]
+        if _dyn_new:
+            print(f"    📋 [問題D] 動的追加銘柄: {len(_dyn_new)}社をスクリーニング...")
+            # セクターコード不明のため、「未分類」として処理する
+            # セクタースコアは MID相当（50.0）でフォールバック
+            _dyn_candidates = _screen_sector(
+                sector_code     = "DYNAMIC",
+                sector_name     = "動的追加",
+                sector_score    = 50.0,
+                tickers         = _dyn_new,
+                cfg             = cfg,
+                market          = "JP",
+                edinet_accruals = edinet_accruals,
+                all_scores_ref  = all_comp_scores,
+                surprise_cache  = surprise_cache,
+                credit_cache    = credit_cache,
+                tech_cache      = tech_cache,
+                insider_cache   = insider_cache,
+                dividend_cache  = dividend_cache,
+                sr_cache        = sr_cache,
+                vp_cache        = vp_cache,
+                edinet_quality_cache = edinet_quality_cache,
+                comps_cache     = comps_cache,
+                dcf_cache       = dcf_cache,
+            )
+            # 動的追加銘柄に discovery_score フラグを付与
+            for c in _dyn_candidates:
+                t = c.get("ticker", "")
+                if t in _dyn_meta:
+                    c["discovery_score"] = _dyn_meta[t].get("discovery_score", 100)
+                    c["dynamic_source"]  = _dyn_meta[t].get("source", "")
+            all_candidates.extend(_dyn_candidates)
+            print(f"    ✅ 動的銘柄 {len(_dyn_candidates)}社 追加完了")
     # [S-3] discovery_score を全銘柄に付与
     # composite_score 上位20%の閾値を計算
     if all_comp_scores:
@@ -1094,6 +1819,8 @@ def run_stock_screener(cfg, sector_results: dict) -> dict:
         )
         c["discovery_score"] = disc_score
         c["discovery_flags"] = disc_flags
+        # [GAP-4] 戦略ラベル付与
+        c["strategy_label"]  = _assign_strategy_label(c, cfg)
         if disc_score >= 40:
             discovery_count += 1
 
@@ -1102,6 +1829,27 @@ def run_stock_screener(cfg, sector_results: dict) -> dict:
     discovery_top = sorted(
         [c for c in all_candidates if c.get("discovery_score", 0) >= 40],
         key=lambda x: x.get("discovery_score", 0),
+        reverse=True,
+    )[:10]
+    # [M-3] アクティビスト候補トップ10
+    activist_top = sorted(
+        [c for c in all_candidates
+         if c.get("is_activist_target") and c.get("pass_filters")],
+        key=lambda x: x.get("activist_score", 0),
+        reverse=True,
+    )[:10]
+    # [M-1] ネットキャッシュリッチ候補
+    net_cash_rich_top = sorted(
+        [c for c in all_candidates
+         if c.get("is_net_cash_rich") and c.get("pass_filters")],
+        key=lambda x: x.get("net_cash_ratio", 0) or 0,
+        reverse=True,
+    )[:10]
+    # [P-3] 長期保有候補
+    longterm_top = sorted(
+        [c for c in all_candidates
+         if c.get("is_longterm_hold") and c.get("pass_filters")],
+        key=lambda x: x.get("composite_score", 0),
         reverse=True,
     )[:10]
 
@@ -1118,16 +1866,53 @@ def run_stock_screener(cfg, sector_results: dict) -> dict:
             print(f"      {c['ticker']} {c['name'][:20]} "
                   f"disc={c['discovery_score']:.0f} [{flags}]")
 
+    # [GAP-4] 戦略別リスト
+    _passed = [c for c in all_candidates if c.get("pass_filters")]
+    core_top = sorted(
+        [c for c in _passed if c.get("strategy_label") == "core"],
+        key=lambda x: x.get("composite_score", 0), reverse=True,
+    )[:15]
+    satellite_event_top = sorted(
+        [c for c in _passed if c.get("strategy_label") == "satellite_event"],
+        key=lambda x: x.get("composite_score", 0), reverse=True,
+    )[:10]
+    satellite_smallcap_top = sorted(
+        [c for c in _passed if c.get("strategy_label") == "satellite_smallcap"],
+        key=lambda x: x.get("activist_score", 0) or x.get("composite_score", 0), reverse=True,
+    )[:10]
+    satellite_info_top = sorted(
+        [c for c in _passed if c.get("strategy_label") == "satellite_info"],
+        key=lambda x: x.get("discovery_score", 0), reverse=True,
+    )[:10]
+
     result = {
-        "candidates":     all_candidates,
-        "screened_count": len(all_candidates),
-        "pass_count":     len(passed),
-        "top_sectors":    top_sector_names,
-        "discovery_top":  discovery_top,
-        "timestamp":      datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "candidates":              all_candidates,
+        "screened_count":          len(all_candidates),
+        "pass_count":              len(passed),
+        "top_sectors":             top_sector_names,
+        "discovery_top":           discovery_top,
+        "activist_top":            activist_top,
+        "net_cash_rich_top":       net_cash_rich_top,
+        "longterm_top":            longterm_top,
+        # [GAP-4] 戦略別
+        "core_top":                core_top,
+        "satellite_event_top":     satellite_event_top,
+        "satellite_smallcap_top":  satellite_smallcap_top,
+        "satellite_info_top":      satellite_info_top,
+        "timestamp":               datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
     _save_screener_report(result, cfg)
+
+    # ── [R-3] investment_journal への自動エントリ生成 ──────────
+    try:
+        import sys as _sys, importlib as _imp
+        _sys.path.insert(0, str(Path(__file__).parent))
+        _ij = _imp.import_module("investment_journal")
+        _ij.auto_create_entries(cfg, result)
+    except Exception as _e:
+        pass  # journal失敗はscreenerを止めない
+
     return result
 
 

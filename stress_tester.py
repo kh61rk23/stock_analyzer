@@ -367,6 +367,400 @@ def calc_stress_scenario(
         "worst_3":        worst_3,
     }
 
+# ==============================================================
+# BLOCK 4.5: [A-2] コスト控除後リターン計算
+# ==============================================================
+
+def calc_net_return(
+    gross_return_pct: float,
+    position_value_jpy: float,
+    cfg = None,
+) -> dict:
+    """
+    [A-2] 売買コスト（スプレッド + 手数料）を控除した実質リターンを計算する。
+
+    コスト構成:
+      ① 証券会社手数料:     往復 0.2%（デフォルト。SBI/楽天等の定額制を考慮）
+      ② 売買スプレッド:     流動性によって異なる
+         大型株（流動性高）: 往復 0.05%
+         中型株:             往復 0.10%
+         小型株（流動性低）: 往復 0.20%
+      ③ 税金（譲渡益税）:   20.315%（NISA枠外の場合）
+                             0%（NISA枠内の場合）
+
+    Args:
+        gross_return_pct:   粗リターン（%）
+        position_value_jpy: ポジション評価額（円）
+        cfg:                config（コスト設定の参照）
+
+    Returns:
+        {
+          "gross_return_pct":   float,
+          "commission_pct":     float,  # 往復手数料%
+          "spread_pct":         float,  # 往復スプレッド%
+          "total_cost_pct":     float,  # 合計コスト%
+          "tax_pct":            float,  # 税率（利益時のみ）
+          "net_return_pct":     float,  # コスト・税引後リターン%
+          "net_return_jpy":     float,  # 実質損益（円）
+          "breakeven_return_pct": float,  # コスト回収に必要な最低リターン%
+        }
+    """
+    # コスト設定（config から読み込み / デフォルト値使用）
+    commission_pct = getattr(cfg, "TRADE_COMMISSION_PCT", 0.002)   # 往復0.2%
+    spread_pct     = getattr(cfg, "TRADE_SPREAD_PCT",     0.001)   # 往復0.1%
+    tax_rate       = getattr(cfg, "CAPITAL_GAINS_TAX",    0.20315) # 20.315%
+    is_nisa        = getattr(cfg, "USE_NISA_ACCOUNT",     False)   # NISA口座
+
+    total_cost_pct = commission_pct + spread_pct
+
+    # 税引前リターン（コスト控除後）
+    after_cost_pct = gross_return_pct - total_cost_pct
+
+    # 税引後リターン（利益時のみ課税）
+    if after_cost_pct > 0 and not is_nisa:
+        net_return_pct = after_cost_pct * (1 - tax_rate)
+    else:
+        net_return_pct = after_cost_pct   # 損失・NISA口座は非課税
+
+    net_return_jpy      = position_value_jpy * net_return_pct / 100
+    breakeven_return_pct = total_cost_pct  # コスト回収に必要な最低リターン
+
+    return {
+        "gross_return_pct":     round(gross_return_pct, 4),
+        "commission_pct":       round(commission_pct * 100, 4),
+        "spread_pct":           round(spread_pct * 100, 4),
+        "total_cost_pct":       round(total_cost_pct * 100, 4),
+        "tax_pct":              round(tax_rate * 100, 3) if not is_nisa else 0.0,
+        "net_return_pct":       round(net_return_pct, 4),
+        "net_return_jpy":       round(net_return_jpy, 0),
+        "breakeven_return_pct": round(breakeven_return_pct * 100, 4),
+        "is_nisa":              is_nisa,
+    }
+
+
+def enrich_with_net_returns(result: dict, cfg = None) -> dict:
+    """
+    [A-2] run_stress_test の result にコスト控除後リターンを追記する。
+
+    positions_detail の各ポジションに net_return を付与。
+    performance_tracker の gross リターンと比較できる形式で出力。
+    """
+    portfolio_value = result.get("portfolio_value", 0)
+    positions_detail = result.get("positions_detail", [])
+
+    net_returns = []
+    for pos in positions_detail:
+        gross_pct = pos.get("week_return_pct", 0) or 0
+        pos_val   = pos.get("position_value_jpy", 0) or 0
+        nr = calc_net_return(gross_pct, pos_val, cfg)
+        net_returns.append({**pos, "net_return": nr})
+
+    if net_returns:
+        result["positions_net_returns"] = net_returns
+        # ポートフォリオ全体の加重平均コスト控除後リターン
+        weighted_net = sum(
+            p["net_return"]["net_return_jpy"]
+            for p in net_returns
+            if p.get("net_return")
+        )
+        result["portfolio_net_return_jpy"] = round(weighted_net, 0)
+        result["portfolio_net_return_pct"] = (
+            round(weighted_net / portfolio_value * 100, 3)
+            if portfolio_value > 0 else None
+        )
+
+    return result
+
+# ==============================================================
+# BLOCK 4.6: [C-1] VaR制約付きスクリーニング
+# ==============================================================
+
+def apply_var_constraint_to_screener(
+    candidates:      list,
+    stress_result:   dict,
+    cfg = None,
+) -> dict:
+    """
+    [C-1] ポートフォリオ全体のVaRが閾値を超えた場合、
+    Buy候補を上位1〜2銘柄に制限するフィルターを適用する。
+
+    設計思想:
+      VaRが高い = 既存ポートフォリオのリスクが高い状態。
+      この状況でさらに新規ポジションを追加するのは
+      ダリオの「リスクパリティ」に反する。
+      → Buy候補を絞ることでポートフォリオ全体のリスクを制御。
+
+    Args:
+        candidates:    screener の pass_filters = True な候補リスト
+        stress_result: run_stress_test() の戻り値
+        cfg:           config
+
+    Returns:
+        {
+          "constrained":       bool,   # 制約が発動したか
+          "var_pct":           float,  # 現在のVaR%
+          "threshold_pct":     float,  # 制約発動閾値%
+          "max_buy_count":     int,    # 制約後の最大Buy推奨数
+          "filtered_candidates": list, # 制約後の候補リスト
+          "reason":            str,
+        }
+    """
+    # VaR 閾値（config から取得 / デフォルト 3%）
+    var_threshold_pct = getattr(cfg, "VAR_CONSTRAINT_THRESHOLD_PCT", 3.0)
+    max_buy_normal    = getattr(cfg, "SCREENER_MAX_BUY_NORMAL",      10)
+    max_buy_constrained = getattr(cfg, "SCREENER_MAX_BUY_CONSTRAINED", 2)
+
+    # stress_result から VaR% を取得
+    var_data   = stress_result.get("var_95_1day", {}) if isinstance(stress_result, dict) else {}
+    var_pct    = var_data.get("var_pct") if isinstance(var_data, dict) else None
+
+    # VaR データがない（stress_test 未実行）= 制約なし
+    if var_pct is None or stress_result.get("skipped"):
+        return {
+            "constrained":        False,
+            "var_pct":            None,
+            "threshold_pct":      var_threshold_pct,
+            "max_buy_count":      max_buy_normal,
+            "filtered_candidates": candidates,
+            "reason":             "stress_test未実行 → 制約なし",
+        }
+
+    # VaR が閾値未満 → 制約なし
+    if var_pct < var_threshold_pct:
+        return {
+            "constrained":        False,
+            "var_pct":            var_pct,
+            "threshold_pct":      var_threshold_pct,
+            "max_buy_count":      max_buy_normal,
+            "filtered_candidates": candidates,
+            "reason":             f"VaR {var_pct:.2f}% < 閾値 {var_threshold_pct:.1f}%",
+        }
+
+    # ── VaR が閾値超 → Buy候補を制限 ─────────────────────────
+    # composite_score 降順で上位 max_buy_constrained 件のみ残す
+    passed = [c for c in candidates if c.get("pass_filters")]
+    passed_sorted = sorted(
+        passed,
+        key=lambda x: x.get("composite_score", 0),
+        reverse=True,
+    )
+    filtered = passed_sorted[:max_buy_constrained]
+
+    # 制限された候補にフラグを追加
+    for c in filtered:
+        c["var_constrained"] = True
+
+    reason = (
+        f"⚠️ VaR {var_pct:.2f}% ≥ 閾値 {var_threshold_pct:.1f}% "
+        f"→ Buy候補を上位{max_buy_constrained}銘柄に制限"
+    )
+    print(f"    🛡️ [C-1] {reason}")
+
+    return {
+        "constrained":        True,
+        "var_pct":            var_pct,
+        "threshold_pct":      var_threshold_pct,
+        "max_buy_count":      max_buy_constrained,
+        "filtered_candidates": filtered,
+        "reason":             reason,
+        "original_count":     len(passed),
+    }
+
+# ==============================================================
+# BLOCK 4.7: [C-2] 相関制約（同一クラスタから2銘柄以上を出さない）
+# ==============================================================
+
+# デフォルトの高相関クラスタ（correlation_heatmap の結果で動的に更新される）
+DEFAULT_HIGH_CORR_CLUSTERS = [
+    # 金融クラスタ（銀行・証券・保険は相関0.8以上）
+    {"name": "金融クラスタ", "sectors": ["1028", "1029", "1030", "1031"]},
+    # 素材クラスタ（鉄鋼・非鉄・金属製品）
+    {"name": "素材クラスタ", "sectors": ["1012", "1013", "1014"]},
+    # インフラクラスタ（陸運・海運・空運）
+    {"name": "インフラクラスタ", "sectors": ["1021", "1022", "1023"]},
+    # 内需消費クラスタ（食料品・小売・サービス）
+    {"name": "内需消費クラスタ", "sectors": ["1004", "1027", "1033"]},
+    # エネルギー素材（石油・化学）
+    {"name": "エネルギー素材クラスタ", "sectors": ["1009", "1007"]},
+]
+
+# 相関閾値（これ以上の相関を持つ業種ペアを同一クラスタとみなす）
+CORR_CLUSTER_THRESHOLD = 0.75
+
+
+def _build_clusters_from_heatmap(corr_heatmap_result: dict) -> list:
+    """
+    correlation_heatmap.py の結果から高相関クラスタを動的に構築する。
+
+    Returns:
+        [{name, sectors}, ...]
+    """
+    # correlation_heatmap の出力形式に応じてパース
+    if not isinstance(corr_heatmap_result, dict):
+        return DEFAULT_HIGH_CORR_CLUSTERS
+
+    corr_matrix = corr_heatmap_result.get("correlation_matrix")
+    if not corr_matrix or not isinstance(corr_matrix, dict):
+        return DEFAULT_HIGH_CORR_CLUSTERS
+
+    # Union-Find で高相関業種をクラスタリング
+    parent = {}
+    def find(x):
+        while parent.get(x, x) != x:
+            parent[x] = parent.get(parent.get(x, x), x)
+            x = parent.get(x, x)
+        return x
+    def union(x, y):
+        px, py = find(x), find(y)
+        if px != py:
+            parent[px] = py
+
+    sectors = set(corr_matrix.keys())
+    for sec_a in sectors:
+        for sec_b, corr_val in corr_matrix.get(sec_a, {}).items():
+            if sec_a != sec_b:
+                try:
+                    if abs(float(corr_val)) >= CORR_CLUSTER_THRESHOLD:
+                        union(sec_a, sec_b)
+                except (TypeError, ValueError):
+                    pass
+
+    # 同一クラスタにまとめる
+    cluster_map: dict[str, list] = {}
+    for sec in sectors:
+        root = find(sec)
+        cluster_map.setdefault(root, []).append(sec)
+
+    clusters = [
+        {"name": f"相関クラスタ_{root[:4]}", "sectors": sorted(secs)}
+        for root, secs in cluster_map.items()
+        if len(secs) >= 2   # 1銘柄のみのクラスタは除外
+    ]
+
+    return clusters if clusters else DEFAULT_HIGH_CORR_CLUSTERS
+
+
+def apply_correlation_constraint(
+    candidates:            list,
+    correlation_heatmap:   dict = None,
+    max_per_cluster:       int  = 1,
+    cfg = None,
+) -> dict:
+    """
+    [C-2] 同一相関クラスタから max_per_cluster 銘柄以上の Buy候補を出さない。
+
+    設計思想:
+      銀行と保険は相関0.8以上 → どちらかが暴落したら両方暴落する。
+      同一クラスタから2銘柄以上買うことはリスクの分散になっていない。
+      → 相関の高いクラスタ内では composite_score 最上位のみを残す。
+
+    Args:
+        candidates:          screener の pass_filters = True な候補リスト
+        correlation_heatmap: correlation_heatmap.py の戻り値（動的クラスタ構築用）
+        max_per_cluster:     1クラスタあたりの最大銘柄数（デフォルト1）
+        cfg:                 config
+
+    Returns:
+        {
+          "constrained":          bool,
+          "clusters_applied":     [{name, sectors, selected, excluded}, ...],
+          "filtered_candidates":  list,   # 制約後の候補リスト
+          "excluded_tickers":     list,
+          "reason":               str,
+        }
+    """
+    if not getattr(cfg, "ENABLE_CORR_CONSTRAINT", True):
+        return {
+            "constrained":         False,
+            "clusters_applied":    [],
+            "filtered_candidates": candidates,
+            "excluded_tickers":    [],
+            "reason":              "ENABLE_CORR_CONSTRAINT=False",
+        }
+
+    max_per = getattr(cfg, "MAX_CANDIDATES_PER_CORR_CLUSTER", max_per_cluster)
+
+    # クラスタ定義（動的 or デフォルト）
+    clusters = _build_clusters_from_heatmap(correlation_heatmap or {})
+
+    passed         = [c for c in candidates if c.get("pass_filters")]
+    excluded_tickers = []
+    clusters_applied = []
+
+    # 処理済み ticker を追跡（一度除外した銘柄を重複除外しない）
+    already_selected: set[str] = set()
+    already_excluded: set[str] = set()
+
+    for cluster in clusters:
+        cluster_sectors = set(cluster["sectors"])
+        cluster_name    = cluster["name"]
+
+        # このクラスタに属する候補を composite_score 降順で取得
+        in_cluster = [
+            c for c in passed
+            if c.get("sector_code") in cluster_sectors
+            and c.get("ticker") not in already_excluded
+        ]
+        if not in_cluster:
+            continue
+
+        in_cluster.sort(key=lambda x: x.get("composite_score", 0), reverse=True)
+
+        # 上位 max_per 銘柄を選択、残りを除外
+        selected  = in_cluster[:max_per]
+        to_exclude = in_cluster[max_per:]
+
+        if to_exclude:
+            selected_tickers  = [c["ticker"] for c in selected]
+            excluded_tickers_ = [c["ticker"] for c in to_exclude]
+
+            for c in to_exclude:
+                c["corr_excluded"]       = True
+                c["corr_cluster"]        = cluster_name
+                c["corr_exclude_reason"] = (
+                    f"同一相関クラスタ内で{selected_tickers}より低スコア"
+                )
+                already_excluded.add(c["ticker"])
+                excluded_tickers.append(c["ticker"])
+
+            clusters_applied.append({
+                "name":          cluster_name,
+                "sectors":       list(cluster_sectors),
+                "selected":      selected_tickers,
+                "excluded":      excluded_tickers_,
+                "cluster_size":  len(in_cluster),
+            })
+
+        for c in selected:
+            already_selected.add(c["ticker"])
+
+    constrained = bool(excluded_tickers)
+    if constrained:
+        print(
+            f"    🔗 [C-2] 相関制約適用: "
+            f"{len(excluded_tickers)}銘柄を重複除外 "
+            f"（{len(clusters_applied)}クラスタ）"
+        )
+
+    reason = (
+        f"相関制約: {len(clusters_applied)}クラスタで"
+        f"{len(excluded_tickers)}銘柄を除外"
+        if constrained else "相関制約: 除外なし"
+    )
+
+    # 除外銘柄を除いた最終候補リスト
+    filtered = [
+        c for c in candidates
+        if c.get("ticker") not in already_excluded
+    ]
+
+    return {
+        "constrained":         constrained,
+        "clusters_applied":    clusters_applied,
+        "filtered_candidates": filtered,
+        "excluded_tickers":    excluded_tickers,
+        "reason":              reason,
+    }
 
 # ==============================================================
 # BLOCK 5: テキスト整形

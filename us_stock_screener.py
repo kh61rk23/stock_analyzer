@@ -653,12 +653,26 @@ def _load_daily_cache(cache_path: Path) -> dict:
         return {}
     try:
         data = json.loads(cache_path.read_text(encoding="utf-8"))
-        if data.get("date") == today:
-            return data.get("results", {})
-    except Exception:
-        pass
-    return {}
-
+        # ── [Phase US-1] XBRL財務データで補完 ──────────────────
+        try:
+            import sys as _sys, importlib as _imp
+            _sys.path.insert(0, str(Path(__file__).parent))
+            _ufr = _imp.import_module("us_fundamental_rotator")
+            xbrl_data = _ufr.lookup_us_fundamentals(cfg, ticker)
+            if xbrl_data:
+                # EPS加速度スコア（XBRL版）で上書き（精度が高い）
+                xbrl_acc = xbrl_data.get("eps_accel_score_xbrl")
+                if xbrl_acc is not None:
+                    data["acc_bonus_xbrl"] = xbrl_acc
+                    # yfinance の acc_bonus より XBRL を優先
+                    data["acc_bonus"] = xbrl_acc
+                # FCF を補完（yfinance が None の場合のみ）
+                if data.get("free_cashflow") is None and xbrl_data.get("latest_fcf"):
+                    data["free_cashflow"] = xbrl_data["latest_fcf"]
+                data["xbrl_enriched"] = True
+        except Exception:
+            pass   # XBRL 補完失敗は screener を止めない
+        return data
 
 def _save_daily_cache(cache_path: Path, results_dict: dict):
     """当日の取得済み結果を保存する"""
