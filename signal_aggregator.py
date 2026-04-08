@@ -321,7 +321,10 @@ def detect_market_regime(results: dict) -> str:
     vix_val = om.get("vix_data", {}).get("vix", {}).get("current")
     if vix_val:
         scores.append(max(0, min(100, (35 - float(vix_val)) / 25 * 100)))
-
+    # ── [US-4] VIX term structure スコアを追加 ───────────────
+    ts_score = results.get("options_monitor", {}).get("term_score")
+    if ts_score is not None:
+        scores.append(float(ts_score))   # ★ e_scores → scores に統一
     # 市場幅スコア
     mb_score = results.get("market_breadth", {}).get("breadth_score_jp")
     if mb_score is not None:
@@ -402,6 +405,150 @@ def format_aggregator_report(result: dict, sector_names: dict) -> str:
 
     return "\n".join(lines)
 
+def calc_total_signal_score(results: dict, cfg) -> dict:
+    """
+    [5人統合エンジン最終形] 全シグナルを統合した total_signal_score を算出する。
+
+    入力: run_all_tasks() の results dict
+    出力: {
+      "total_signal_score": float,  # 0〜100
+      "components":         dict,   # 各コンポーネントのスコアと重み
+      "signal_label":       str,    # "強い買いシグナル" 等
+      "recommended_action": str,    # "BUY" / "WATCH" / "HOLD" / "REDUCE"
+    }
+    """
+    # ── コンポーネントスコア取得 ──────────────────────────
+    # D-1: 経済サイクルフェーズスコア（象限BなどをスコアにマップP）
+    ec = results.get("economic_cycle", {})
+    phase_score_map = {"B": 75, "A": 60, "D": 40, "C": 25}
+    macro_phase_score = phase_score_map.get(ec.get("phase", "B"), 50)
+    # 債務サイクル補正（D-2）
+    dc = results.get("debt_cycle", {})
+    dc_adj = {70: -10, 30: +5}.get(  # 簡易マッピング
+        max(k for k in [70, 30, 0] if dc.get("debt_cycle_score", 50) >= k), 0
+    )
+    macro_phase_score = max(0, min(100, macro_phase_score + dc_adj))
+
+    # sector_composite: TOP_TIERセクターの平均スコア
+    sectors = results.get("sectors", {})
+    tier    = results.get("sector_tier", {})
+    top_scores = [
+        v.get("composite_score", 50)
+        for k, v in sectors.items()
+        if tier.get(k) == "TOP" and isinstance(v, dict)
+    ]
+    sector_composite = sum(top_scores) / len(top_scores) if top_scores else 50.0
+
+    # momentum_score: momentum_factor の上位スコア平均
+    mom = results.get("momentum", {})
+    if isinstance(mom, dict):
+        mom_scores = [v.get("momentum_score", 50) for v in mom.values()
+                      if isinstance(v, dict)]
+        momentum_score = sum(mom_scores[:3]) / 3 if mom_scores else 50.0
+    else:
+        momentum_score = 50.0
+
+    # earnings_acceleration: screener通過銘柄のacc_bonus平均
+    screener = results.get("screener", {})
+    cands    = [c for c in screener.get("candidates", []) if c.get("pass_filters")]
+    if cands:
+        acc_scores = [(c.get("acc_bonus", 0) or 0) for c in cands]
+        # acc_bonus は -10〜+10 → 0〜100に正規化
+        earnings_acceleration = 50.0 + (sum(acc_scores) / len(acc_scores)) * 5
+        earnings_acceleration = max(0, min(100, earnings_acceleration))
+    else:
+        earnings_acceleration = 50.0
+
+    # quality_score: screener通過銘柄のquality_score平均 + P-2補正
+    if cands:
+        quality_score = sum(c.get("quality_score", 50) or 50 for c in cands) / len(cands)
+    else:
+        quality_score = 50.0
+
+    # technical_score: screener通過銘柄のtechnical_score平均
+    if cands:
+        tech_vals = [c.get("technical_score", 50) or 50 for c in cands]
+        technical_score = sum(tech_vals) / len(tech_vals)
+    else:
+        technical_score = 50.0
+
+    # activist_potential: activist_top の平均activist_score
+    activist_top = screener.get("activist_top", [])
+    if activist_top:
+        activist_potential = sum(c.get("activist_score", 0) or 0
+                                 for c in activist_top) / len(activist_top)
+    else:
+        activist_potential = 0.0
+
+    # ── 重み（rule_optimizer が自動調整する変数から読む）────
+    # _signal_weights を優先参照（rule_optimizer の update_signal_weights が更新）
+    ro_all     = results.get("_macro_weights") or {}
+    ro_weights = ro_all.get("_signal_weights", ro_all)  # _signal_weights サブキーを優先
+    w_macro    = ro_weights.get("macro_phase_weight",      0.20)
+    w_sector   = ro_weights.get("sector_composite_weight", 0.20)
+    w_mom      = ro_weights.get("momentum_weight",         0.15)
+    w_accel    = ro_weights.get("earnings_accel_weight",   0.15)
+    w_quality  = ro_weights.get("quality_weight",          0.10)
+    w_tech     = ro_weights.get("technical_weight",        0.10)
+    w_activist = ro_weights.get("activist_weight",         0.10)
+
+    # 重みの合計が1.0になるよう正規化
+    total_w = w_macro + w_sector + w_mom + w_accel + w_quality + w_tech + w_activist
+    if total_w > 0:
+        w_macro    /= total_w
+        w_sector   /= total_w
+        w_mom      /= total_w
+        w_accel    /= total_w
+        w_quality  /= total_w
+        w_tech     /= total_w
+        w_activist /= total_w
+
+    # ── 統合スコア算出 ──────────────────────────────────
+    total_signal_score = round(
+        macro_phase_score   * w_macro
+        + sector_composite  * w_sector
+        + momentum_score    * w_mom
+        + earnings_acceleration * w_accel
+        + quality_score     * w_quality
+        + technical_score   * w_tech
+        + activist_potential * w_activist,
+        1,
+    )
+
+    # ── 判断ラベル ─────────────────────────────────────
+    if total_signal_score >= 70:
+        label = "🟢 強い買いシグナル"
+        action = "BUY"
+    elif total_signal_score >= 58:
+        label = "📈 買い検討シグナル"
+        action = "WATCH"
+    elif total_signal_score >= 42:
+        label = "➡️ 中立（様子見）"
+        action = "HOLD"
+    elif total_signal_score >= 30:
+        label = "📉 軽減シグナル"
+        action = "REDUCE"
+    else:
+        label = "🔴 回避シグナル"
+        action = "AVOID"
+
+    return {
+        "total_signal_score": total_signal_score,
+        "components": {
+            "macro_phase_score":      {"score": macro_phase_score,    "weight": round(w_macro,   3)},
+            "sector_composite":       {"score": round(sector_composite,1), "weight": round(w_sector,  3)},
+            "momentum_score":         {"score": round(momentum_score,  1), "weight": round(w_mom,     3)},
+            "earnings_acceleration":  {"score": round(earnings_acceleration, 1), "weight": round(w_accel,   3)},
+            "quality_score":          {"score": round(quality_score,   1), "weight": round(w_quality, 3)},
+            "technical_score":        {"score": round(technical_score, 1), "weight": round(w_tech,    3)},
+            "activist_potential":     {"score": round(activist_potential,1),"weight": round(w_activist,3)},
+        },
+        "signal_label":       label,
+        "recommended_action": action,
+        "d1_phase":           ec.get("phase", "?"),
+        "d2_cycle_score":     dc.get("debt_cycle_score", 50),
+        "timestamp":          datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
 
 # ==============================================================
 # BLOCK 5: メインエントリポイント
