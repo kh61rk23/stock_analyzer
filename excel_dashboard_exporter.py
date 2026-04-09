@@ -14,7 +14,7 @@
 #   GitHub Actions の commit ステップでリポジトリに push されることで
 #   raw.githubusercontent.com から Excel が自動取得できるようになる。
 #
-# 【CSV列定義（全カテゴリ共通スキーマ）】
+# 【CSV列定義（全カテゴリ共通スキーマ）】一部抜粋
 #   date          : 実行日 YYYY-MM-DD
 #   market        : JP / US / ETF
 #   category      : セクターコード / ETF ID
@@ -86,15 +86,14 @@ def _rows_from_jp_sectors(sector_results: dict, date_str: str,
     screener_result が存在する場合は各業種の通過銘柄上位2件を付与する。
     """
     # スクリーナー結果をセクターコードでインデックス化
-    top_by_sector: dict = {}
+    top_cand_by_sector: dict = {}
     if screener_result and isinstance(screener_result, dict):
         for c in screener_result.get("candidates", []):
             if not c.get("pass_filters"):
                 continue
             code = c.get("sector_code", "")
-            top_by_sector.setdefault(code, [])
-            if len(top_by_sector[code]) < 2:
-                top_by_sector[code].append(c.get("ticker", ""))
+            top_cand_by_sector.setdefault(code, [])
+            top_cand_by_sector[code].append(c)
 
     rows = []
     for code, data in sector_results.items():
@@ -120,9 +119,15 @@ def _rows_from_jp_sectors(sector_results: dict, date_str: str,
         else:
             signal = "neutral"
 
-        tops  = top_by_sector.get(code, ["", ""])
-        top1  = tops[0] if len(tops) > 0 else ""
-        top2  = tops[1] if len(tops) > 1 else ""
+        tops_data = top_cand_by_sector.get(code, [])
+        c1 = tops_data[0] if len(tops_data) > 0 else {}
+        c2 = tops_data[1] if len(tops_data) > 1 else {}
+        
+        top1 = c1.get("ticker", "")
+        top2 = c2.get("ticker", "")
+
+        def _get_val(d, k):
+            return round(float(d[k]), 2) if d.get(k) is not None and d.get(k) != "" else ""
 
         rows.append({
             "date":            date_str,
@@ -130,7 +135,7 @@ def _rows_from_jp_sectors(sector_results: dict, date_str: str,
             "category":        code,
             "name_ja":         name_ja,
             "name_en":         name_en,
-            "composite_score": round(float(score), 1),
+            "composite_score": round(float(score), 1) if score else 0.0,
             "risk_level":      risk,
             "risk_score":      RISK_SCORE.get(risk, 0),
             "ret_1m":          "",
@@ -140,11 +145,23 @@ def _rows_from_jp_sectors(sector_results: dict, date_str: str,
             "tailwind_count":  tw,
             "headwind_count":  hw,
             "etfs":            "",
-            "heat_score":      round(float(score), 1),  # JPはcomposite_scoreで代替
+            "heat_score":      round(float(score), 1) if score else 0.0,
             "arxiv_growth":    "",
             "top_company_1":   top1,
             "top_company_2":   top2,
             "notes":           notes,
+            "discovery_score": _get_val(c1, "discovery_score"),
+            "accrual_tier":    c1.get("accrual_tier", ""),
+            "accrual_bonus":   _get_val(c1, "accrual_bonus"),
+            "recession_adj":   _get_val(data, "recession_adjustment"),
+            "comps_bonus":     _get_val(c1, "comps_bonus"),
+            "sr_bonus":        _get_val(c1, "sr_bonus"),
+            "total_signal_score": "",
+            "market_regime": "",
+            "inference_phase": "",
+            "pf_total_value_jpy": "",
+            "pf_sharpe": "",
+            "pf_rebalance_count": "",
         })
 
     return rows
@@ -200,6 +217,18 @@ def _rows_from_us_sectors(us_result: dict, date_str: str) -> list:
             "top_company_1":   "",
             "top_company_2":   "",
             "notes":           " | ".join(sr.get("signals", []))[:80],
+            "discovery_score": "",
+            "accrual_tier":    "",
+            "accrual_bonus":   "",
+            "recession_adj":   "",
+            "comps_bonus":     "",
+            "sr_bonus":        "",
+            "total_signal_score": "",
+            "market_regime": "",
+            "inference_phase": "",
+            "pf_total_value_jpy": "",
+            "pf_sharpe": "",
+            "pf_rebalance_count": "",
         })
     
     return rows
@@ -253,6 +282,18 @@ def _rows_from_etf_tracker(etf_result: dict, date_str: str) -> list:
             "top_company_2":   "",
             "notes":           (f"ArXiv直近4週:{ad.get('recent_4w',0)}件"
                                 if ad.get("recent_4w") else ""),
+            "discovery_score": "",
+            "accrual_tier":    "",
+            "accrual_bonus":   "",
+            "recession_adj":   "",
+            "comps_bonus":     "",
+            "sr_bonus":        "",
+            "total_signal_score": "",
+            "market_regime": "",
+            "inference_phase": "",
+            "pf_total_value_jpy": "",
+            "pf_sharpe": "",
+            "pf_rebalance_count": "",
         })
 
     return rows
@@ -271,12 +312,15 @@ FIELDNAMES = [
     "etfs",            "heat_score",       "arxiv_growth",
     "top_company_1",   "top_company_2",
     "notes",
+    "discovery_score", "accrual_tier", "accrual_bonus", "recession_adj", 
+    "total_signal_score", "market_regime", "comps_bonus", "sr_bonus", 
+    "inference_phase", "pf_total_value_jpy", "pf_sharpe", "pf_rebalance_count"
 ]
 
 def _write_csv(rows: list, path: Path) -> None:
     """BOM付きUTF-8（Excel直接開き対応）でCSVを書き出す。"""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", newline="", encoding="cp932") as f:
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
         writer.writeheader()
         writer.writerows(rows)
@@ -380,6 +424,29 @@ def run_excel_exporter(cfg, results: dict) -> dict:
             "row_count": 0,
             "breakdown": {"JP": 0, "US": 0, "ETF": 0},
         }
+
+    # ── 全体指標の抽出と適用（設計書 No.25〜32） ────────────────────────
+    # ※ 設計書No.25の signal_score は既存12番と重複するため total_signal_score に変更
+    total_sig_score = results.get("total_signal_score", {}).get("total_signal_score", "")
+    if total_sig_score == "":
+        total_sig_score = results.get("signal_aggregator", {}).get("total_score", "")
+    
+    market_regime = results.get("signal_aggregator", {}).get("market_regime", "")
+    inference_phase = results.get("inference", {}).get("phase_label", "")
+    
+    pf_opt = results.get("portfolio_optimizer", {})
+    pf_total_val = pf_opt.get("current", {}).get("total_value_jpy", "")
+    pf_sharpe = pf_opt.get("current", {}).get("sharpe_ratio", "")
+    rebal_list = pf_opt.get("rebalance", [])
+    pf_rebal_count = sum(1 for r in rebal_list if r.get("action") != "HOLD") if rebal_list else ""
+
+    for r in all_rows:
+        r["total_signal_score"] = round(float(total_sig_score), 1) if total_sig_score != "" else ""
+        r["market_regime"]      = market_regime
+        r["inference_phase"]    = inference_phase
+        r["pf_total_value_jpy"] = pf_total_val
+        r["pf_sharpe"]          = round(float(pf_sharpe), 2) if pf_sharpe != "" else ""
+        r["pf_rebalance_count"] = pf_rebal_count
 
     # composite_score 降順でソート（market別に）
     all_rows.sort(key=lambda r: (
