@@ -401,8 +401,6 @@ MACRO_RULES = {
     },
 }
 
-}
-
 # ==============================================================
 # BLOCK R-1: 横断産業シグナルルール（CROSS_SECTOR_RULES）
 # ==============================================================
@@ -1724,3 +1722,15 @@ EDINET_TIER_BOT_PENALTY: int = -20  # BOT業種の優先度スコア減算
 ENABLE_DYNAMIC_SCREENER:     bool = True
 DYNAMIC_SCREENER_MAX_ADD:    int  = 50    # 動的追加の上限社数
 EDINET_CREDIT_THRESHOLD:     int  = 80    # 動的追加のcredit_score閾値
+
+# ==============================================================
+# BLOCK cache_freshness: キャッシュ鮮度管理設定
+# ==============================================================
+ENABLE_CACHE_FRESHNESS: bool = True
+
+# 各キャッシュの半減期（時間）。デフォルト値は cache_freshness_manager.py に定義。
+# カスタマイズしたい場合のみここで指定する（空 dict = デフォルト値を使用）。
+CACHE_HALF_LIFE_HOURS: dict = {
+    # 例: macro_snapshot を 12時間に短縮したい場合:
+    # "macro_snapshot": 12.0,
+}

@@ -1167,6 +1167,27 @@ def run_all_tasks(mode: str = "all") -> dict:
     macro_snapshot_for_sector = {}
     sector_results            = {}
 
+   # ── [④] キャッシュ鮮度管理 ──────────────────────────────────
+    if getattr(cfg, "ENABLE_CACHE_FRESHNESS", True):
+        try:
+            _cfm = _load_local_module(
+                "cache_freshness_manager",
+                "/content/cache_freshness_manager.py",
+                cfg.DRIVE_BASE / "cache_freshness_manager.py",
+            )
+            if _cfm:
+                cfm_result = _cfm.run_cache_freshness_manager(cfg, results)
+                results["freshness"] = cfm_result
+                # 強制再取得が必要なキャッシュをログに記録
+                if cfm_result.get("refresh_caches"):
+                    logger.add(
+                        "cache_freshness", "alert",
+                        f"強制再取得推奨: "
+                        f"{', '.join(cfm_result['refresh_caches'][:5])}",
+                    )
+        except Exception as _cfme:
+            print(f"  ⚠️  キャッシュ鮮度管理エラー（スキップ）: {_cfme}")
+
     if cfg.ENABLE_GOV_PIPELINE and _in_mode("gov"):
         results["gov"] = run_gov_pipeline()
     elif not _in_mode("gov"):
@@ -1652,6 +1673,9 @@ def run_all_tasks(mode: str = "all") -> dict:
                     sector_results[_code]["sector_tier"] = _t
 
             results["sectors"] = sector_results  # tier 付与後で上書き
+        except Exception as _tier_e:
+            print(f"  ⚠️  sector_tier 計算エラー: {_tier_e}")
+
         # ── [③] シグナル重複排除 ─────────────────────────────────
         if getattr(cfg, "ENABLE_SIGNAL_DEDUP", True):
             try:
