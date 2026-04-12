@@ -411,8 +411,8 @@ def extract_alerts(cfg, results: dict) -> list:
     recession_score = bc_result.get("recession_score", 0)
     if recession_score >= 70:
         alerts.append({
-            "type":    "recession_warning",
-            "level":   "HIGH",
+            "trigger": "recession_warning",
+            "severity": "high",
             "title":   f"⚠️ リセッション警戒: スコア {recession_score}/100",
             "body":    (
                 f"イールドカーブ分析によりリセッションリスクが高まっています。\n"
@@ -422,8 +422,8 @@ def extract_alerts(cfg, results: dict) -> list:
         })
     elif recession_score >= 45:
         alerts.append({
-            "type":  "recession_watch",
-            "level": "MEDIUM",
+            "trigger": "recession_watch",
+            "severity": "medium",
             "title": f"📊 リセッション注視: スコア {recession_score}/100",
             "body":  f"イールドカーブが注意水準です。カーブ形状: "
                      f"{bc_result.get('curve_analysis',{}).get('shape_ja','不明')}",
@@ -553,7 +553,7 @@ def extract_alerts(cfg, results: dict) -> list:
                         alerts.append({
                             "trigger":  "score_jump",
                             "title":    f"⚡ 業種スコア急変: {len(jump_lines)}業種（前日比±{jump_threshold:.0f}点超）",
-                            "body":     f"  基準日: {prev_date}\n" + "\n".join(l for _, l in jump_lines[:8]),
+                            "body":     f"  基準日: {prev_date}\n" + "\n".join(l for _, l in jump_lines[:8]),# type: ignore
                             "severity": "high" if any(d >= 20 for d, _ in jump_lines) else "medium",
                         })
         except Exception as _e:
@@ -654,7 +654,7 @@ def extract_alerts(cfg, results: dict) -> list:
                 "trigger":  "market_breadth_divergence",
                 "title":    f"⚠️ 市場幅ダイバージェンス検出（JPスコア:{score:.0f}）",
                 "body":     f"  {div.get('description','')}\n"
-                            f"  上位業種の composite_score に{abs(DIVERGENCE_PENALTY):.0f}pt ペナルティ適用",
+                            f"  上位業種の composite_score にペナルティ適用",
                 "severity": "high",
             })
         elif score <= 30:
@@ -956,8 +956,10 @@ def extract_alerts(cfg, results: dict) -> list:
             lines = []
             for tk in foreign_spike[:5]:
                 sr = sa_results_map.get(tk, {})
+                fp = sr.get('foreign_pct')
+                fp_s = f"{fp:.0f}%" if isinstance(fp, (int, float)) else "?%"
                 lines.append(
-                    f"  🌏 {tk}: 外国人{sr.get('foreign_pct', '?'):.0f}%"
+                    f"  🌏 {tk}: 外国人{fp_s}"
                     f" | スコア{sr.get('shareholder_score', 0):.0f}pt"
                 )
             alerts.append({
@@ -1090,6 +1092,43 @@ def extract_alerts(cfg, results: dict) -> list:
                 "body":     "  " + " / ".join(ceo_chg[:5]),
                 "severity": "medium",
             })
+    # ── [RESEARCH-2] ファクター・クラウディングアラート ──────────────
+    fcm_result = results.get("factor_crowding", {})
+    if fcm_result and not fcm_result.get("skipped"):
+        if fcm_result.get("unwind_alert"):
+            prev_c = fcm_result.get("prev_avg_corr", 0)
+            curr_c = fcm_result.get("avg_correlation", 0)
+            alerts.append({                      # type: ignore
+                "trigger":  "crowding_unwind",
+                "title":    "🚨 クラウディング解消売りアラート（RESEARCH-2）",
+                "body":     (
+                    f"  前週相関: {prev_c:.3f} → 今週: {curr_c:.3f}\n"
+                    f"  ※ 解消売り連鎖の可能性。ポジション縮小を検討。\n"
+                    f"  上位銘柄: {' / '.join(fcm_result.get('top_tickers', [])[:5])}"
+                ),
+                "severity": "high",
+            })
+        elif fcm_result.get("crowding_alert"):
+            score = fcm_result.get("crowding_score", 0)
+            alerts.append({              # type: ignore
+                "trigger":  "crowding_alert",
+                "title":    f"⚠️ ファクタークラウディング検知（score={score}）",
+                "body":     (
+                    f"  avg_corr={fcm_result.get('avg_correlation',0):.3f} "
+                    f"（閾値0.60超）\n"
+                    f"  上位銘柄: {' / '.join(fcm_result.get('top_tickers', [])[:5])}"
+                ),
+                "severity": "medium",
+            })
+        # ファクター別アラート
+        for factor_name, f_data in fcm_result.get("factor_crowding", {}).items():
+            if isinstance(f_data, dict) and f_data.get("alert"):
+                alerts.append({      # type: ignore
+                    "trigger":  f"crowding_{factor_name}",
+                    "title":    f"🔍 [{f_data.get('label',factor_name)}] クラウディング",
+                    "body":     f"  avg_corr={f_data.get('avg_corr',0):.3f}",
+                    "severity": "low",
+                })
     return alerts
 
 
@@ -1308,7 +1347,6 @@ def send_test_notification(cfg) -> dict:
             print(f"    ⚠️  Gmail: {err}")
         else:
             print("    ✅ Gmail テスト通知 送信成功")
-
     return results
 
 
@@ -1397,15 +1435,25 @@ def run_alert_notifier(cfg, results: dict) -> dict:
 if __name__ == "__main__":
     import importlib.util
     from pathlib import Path
+    
+    cfg = None # スコープ外で使うために初期化
     for p in ["/content/config.py", str(Path(__file__).parent / "config.py")]:
         if Path(p).exists():
             spec = importlib.util.spec_from_file_location("config", p)
-            cfg  = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(cfg)
-            break
-    print("=== テスト通知送信 ===")
-    r = send_test_notification(cfg)
-    print(f"LINE: {r['line']} / Gmail: {r['gmail']}")
-    if r["errors"]:
-        for e in r["errors"]:
-            print(f"  エラー: {e}")
+            
+            # --- ここで spec と loader の存在を確定させる ---
+            if spec is not None and spec.loader is not None:
+                cfg = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(cfg)
+                break
+            # ----------------------------------------------
+
+    if cfg:
+        print("=== テスト通知送信 ===")
+        r = send_test_notification(cfg)
+        print(f"LINE: {r['line']} / Gmail: {r['gmail']}")
+        if r["errors"]:
+            for e in r["errors"]:
+                print(f"  エラー: {e}")
+    else:
+        print("ERROR: 設定ファイル(cfg)を読み込めませんでした。")

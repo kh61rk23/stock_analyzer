@@ -169,7 +169,7 @@ def fetch_price_history(tickers: list) -> dict:
     yfinance 一括取得で対象銘柄の価格・出来高履歴を取得する。
     戻り値: {ticker: {"close": [float], "volume": [float], "dates": [str]}}
     """
-    import yfinance as yf
+    import yfinance as yf  # type: ignore
 
     if not tickers:
         return {}

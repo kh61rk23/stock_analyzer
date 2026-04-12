@@ -260,12 +260,20 @@ def _axis1_performance(
 # ==============================================================
 # BLOCK 4: 軸② 公約達成率（中計）
 # ==============================================================
-def _axis2_midterm_plan(ticker: str, edinet_db: dict, cfg=None) -> tuple[float, dict]:
-    """軸②: 中計達成率スコア。midterm_plan_tracker.py を優先参照。"""
+def _axis2_midterm_plan(ticker: str, edinet_db: dict, cfg: dict | None = None) -> tuple[float, dict]:
+    """
+    軸②: 中期経営計画の達成率でスコアを算出する。
+    midterm_plan_tracker.py を優先参照し、なければ EDINET DB から取得。
+    データなし → 中立（12pt）
+
+    Returns:
+        (score: float, detail: dict)  0〜25pt
+    """
     # ── [I-5] midterm_plan_tracker.py の DB を優先参照 ──────────
-    if cfg:
+    if cfg is not None:
         try:
             import sys as _sys, importlib as _imp
+            from pathlib import Path
             _sys.path.insert(0, str(Path(__file__).parent))
             _mt = _imp.import_module("midterm_plan_tracker")
             axis2_score = _mt.get_ceo_axis2_score(cfg, ticker)
@@ -288,55 +296,12 @@ def _axis2_midterm_plan(ticker: str, edinet_db: dict, cfg=None) -> tuple[float, 
         detail["midterm_available"] = False
         return 12.0, detail   # データなし → 中立
 
-    achievement = midterm.get("achievement_rate")
-    if achievement is None:
-        return 12.0, detail
-
-    detail["midterm_available"]     = True
-    detail["achievement_rate_pct"]  = round(achievement * 100, 1)
-
-    if   achievement >= MIDTERM_EXCELLENT: base = 25.0
-    elif achievement >= MIDTERM_GOOD:      base = 15.0
-    elif achievement >= MIDTERM_FAIR:      base =  6.0
-    else:                                  base =  0.0
-
-    explanation_bonus = 0.0
-    if achievement < MIDTERM_GOOD:
-        quality = midterm.get("explanation_quality", "none")
-        if   quality == "good":  explanation_bonus =  3.0
-        elif quality == "vague": explanation_bonus = -3.0
-        else:                    explanation_bonus = -5.0
-        detail["explanation_quality"] = quality
-        detail["explanation_bonus"]   = explanation_bonus
-
-    score = round(max(0.0, min(25.0, base + explanation_bonus)), 1)
-    detail["axis2_score"] = score
-    return score, detail
-
-def _axis2_midterm_plan(ticker: str, edinet_db: dict) -> tuple[float, dict]:
-    """
-    軸②: 中期経営計画の達成率でスコアを算出する。
-
-    データ: edinet_rotation_manager の midterm_plan キー
-    フォールバック: データなし → 中立（12pt）
-
-    Returns:
-        (score: float, detail: dict)  0〜25pt
-    """
-    analysis  = edinet_db.get("analysis", {}).get(ticker, {})
-    midterm   = analysis.get("midterm_plan", {}) if isinstance(analysis, dict) else {}
-    detail    = {}
-
-    if not midterm:
-        detail["midterm_available"] = False
-        return 12.0, detail   # データなし → 中立
-
     # 達成率 (0.0〜1.0)
     achievement = midterm.get("achievement_rate")
     if achievement is None:
         return 12.0, detail
 
-    detail["midterm_available"]   = True
+    detail["midterm_available"]    = True
     detail["achievement_rate_pct"] = round(achievement * 100, 1)
 
     if   achievement >= MIDTERM_EXCELLENT: base = 25.0

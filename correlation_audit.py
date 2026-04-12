@@ -46,8 +46,8 @@ def fetch_price_data(tickers: list, days: int = 180, max_retries: int = 2):
         pd.DataFrame | None  ※ 列=ticker、行=日付
     """
     try:
-        import yfinance as yf
-        import pandas as pd
+        import yfinance as yf  # type: ignore
+        import pandas as pd  # type: ignore
     except ImportError:
         print("  ⚠️  yfinance/pandas 未インストール")
         return None
@@ -69,7 +69,7 @@ def fetch_price_data(tickers: list, days: int = 180, max_retries: int = 2):
             if raw is None or raw.empty:
                 time.sleep(3)
                 continue
-            import pandas as pd
+            import pandas as pd  # type: ignore
             close = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) \
                     else raw[["Close"]].rename(columns={"Close": tickers[0]})
             return close.dropna(how="all").tail(days)
@@ -118,7 +118,7 @@ def calc_rolling_corr(us10y_ret, sector_ret, window: int = 20) -> list:
     Returns:
         [{"date": "YYYY-MM-DD", "corr": float}, ...]
     """
-    import pandas as pd
+    import pandas as pd  # type: ignore
     df = pd.DataFrame({"us10y": us10y_ret, "sector": sector_ret}).dropna()
     rolling = df["us10y"].rolling(window=window).corr(df["sector"])
     result  = rolling.dropna().reset_index()
@@ -173,7 +173,7 @@ def calc_sector_matrix(cfg, prices_df) -> tuple:
     rep        = getattr(cfg, "SECTOR_REPRESENTATIVE_TICKERS", {})
     returns_df = to_daily_returns(prices_df)
 
-    import pandas as pd
+    import pandas as pd  # type: ignore
     sector_series = {}
     labels = []
     codes  = []

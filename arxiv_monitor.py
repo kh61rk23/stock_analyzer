@@ -47,8 +47,8 @@ def _install():
     )
 _install()
 
-import feedparser
-import requests
+import feedparser  # type: ignore
+import requests  # type: ignore
 import json
 import time
 import re
@@ -69,6 +69,9 @@ def _load_config():
         ]:
             if Path(p).exists():
                 spec = importlib.util.spec_from_file_location("config", p)
+                # ★ ここに spec と loader のチェックを追加
+                if spec is None or spec.loader is None:
+                    continue
                 mod  = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(mod)
                 sys.modules["config"] = mod
@@ -555,7 +558,7 @@ def update_idea_index():
 # BLOCK 6: メイン実行エントリーポイント
 # ==============================================================
 
-def run_monitor(investment_threshold: int = None) -> dict:
+def run_monitor(investment_threshold: int | None = None) -> dict:
     """
     ArXiv 監視を 1 回実行する。
     stock_analyzer_main.py から呼ばれる（直接実行も可能）。

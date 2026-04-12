@@ -547,7 +547,7 @@ def format_attribution_section(cfg) -> list:
 # BLOCK 6: メインエントリポイント
 # ==============================================================
 
-def run_alpha_attributer(cfg, results: dict = None) -> dict:
+def run_alpha_attributer(cfg, results: dict | None = None) -> dict:
     """
     シグナル状態を記録し、月末には IC 計算を実行する。
 

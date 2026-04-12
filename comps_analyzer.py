@@ -55,7 +55,7 @@ def _fetch_sector_multiples(tickers: list) -> list:
         ]
     """
     try:
-        import yfinance as yf
+        import yfinance as yf  # type: ignore
     except ImportError:
         return []
 

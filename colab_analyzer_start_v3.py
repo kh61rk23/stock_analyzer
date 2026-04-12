@@ -381,7 +381,7 @@ print("\n" + "=" * 62)
 print(f"  ⏰ [6/7] スケジューラー起動（毎日 {SCHEDULE_HOUR:02d}:{SCHEDULE_MINUTE:02d}）")
 print("=" * 62)
 
-import schedule
+import schedule  # type: ignore
 
 def _scheduled_job():
     import datetime as _dt

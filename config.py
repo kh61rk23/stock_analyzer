@@ -1,7 +1,7 @@
 # ==============================================================
 # config.py
-# 自律型投資AIエージェント基盤 — 設定ファイル v1.4
-# 【v1.4 変更点】3-C: 政策金利トラッカー設定（BLOCK 10）を追加
+# 自律型投資AIエージェント基盤 — 設定ファイル v2.0
+# 【v2.0 変更点】
 # ==============================================================
 # 【役割】
 #   全モジュールがこのファイルだけを参照することで
@@ -43,6 +43,9 @@ ALL_DIRS = [
     DATA_DIR, RESULT_DIR, INSIGHT_DIR,
     ARXIV_DIR, SECTOR_DIR, MACRO_DIR,
     LOG_DIR, AGENTS_DIR,
+    INSIGHT_DIR / "ideas",
+    INSIGHT_DIR / "edinet_rotation",
+    INSIGHT_DIR / "screener",
 ]
 
 # ==============================================================
@@ -768,6 +771,295 @@ LEADING_INDICATOR_RULES = {
             "1007": "化学原料需要が生産量に連動して増加",
             "1012": "鉄鋼の需要は工業生産と高い相関を持つ",
         },
+    }, 
+}
+
+# ==============================================================
+# BLOCK B-2: 政府統計先行指標ルール（GOV_RULES）
+# ==============================================================
+# 【設計思想】
+#   MACRO_RULES が金融マクロ（金利・為替・VIX）→業種の連鎖を定義するのに対し、
+#   GOV_RULES は gov_data_pipeline（e-Stat）が取得する実物経済指標
+#   （CPI/鉱工業生産/機械受注/建設着工/賃金等）→業種の先行連鎖を定義する。
+#   LEADING_INDICATOR_RULES と重複する部分は GOV_RULES に集約して一元管理する。
+#
+# 【評価タイミング】
+#   gov_data_pipeline 実行後に evaluate_gov_rules(results, cfg) を呼び出す。
+#   LEADING_INDICATOR_RULES と同じ形式で出力し、
+#   results["leading_indicator_signals"] に追加する。
+#
+# 【trigger.key の対応】
+#   gov_data_pipeline が results["gov_data"]["stats"][id]["yoy"] 等に格納する値を参照。
+#   source: "gov" = results["gov_data"] 以下
+#
+# 【補正点数の根拠】
+#   MACRO_RULES（±10pt）より小さめの ±3〜5pt を基本とする。
+#   実物指標は発表ラグがあるため、即時性を割り引いた設定。
+# ==============================================================
+
+GOV_RULES = {
+
+    # ── CPI 前年比↑（高インフレ）→ 内需・消費業種に逆風 ─────────
+    "cpi_high_headwind": {
+        "label": "CPI高騰 → 内需消費業種に逆風（購買力低下）",
+        "trigger": {
+            "source": "gov",
+            "key":    "cpi_yoy",
+            "op":     ">=",
+            "val":    3.0,        # 前年比3%以上 = 高インフレ
+        },
+        "lag_weeks":  2,
+        "pts_adj":   -4.0,
+        "signal": {
+            "tailwind": ["1009"],                           # 石油（インフレ受益）
+            "headwind": ["1027", "1033", "1004", "1019"],  # 小売・サービス・食料品・その他製品
+        },
+        "rationale": {
+            "1027": "食品・生活費上昇で消費者の可処分所得が圧縮 → 小売売上が減少",
+            "1033": "外食・娯楽支出が削減されやすい",
+            "1004": "原材料コスト上昇が利益を圧迫",
+            "1009": "資源価格上昇が石油・石炭企業の収益を押し上げる",
+        },
+    },
+
+    # ── CPI 前年比↓（インフレ鎮静）→ 金融緩和期待 ───────────────
+    "cpi_easing_tailwind": {
+        "label": "CPI鎮静 → 金融緩和期待・内需回復",
+        "trigger": {
+            "source": "gov",
+            "key":    "cpi_yoy",
+            "op":     "<=",
+            "val":    1.5,        # 前年比1.5%以下 = 低インフレ
+        },
+        "lag_weeks":  4,
+        "pts_adj":    3.0,
+        "signal": {
+            "tailwind": ["1028", "1032", "1027", "1033"],  # 銀行・不動産・小売・サービス
+            "headwind": [],
+        },
+        "rationale": {
+            "1028": "利下げ期待 → 銀行の貸出需要拡大・債券含み益",
+            "1032": "住宅ローン金利低下期待 → 不動産需要増",
+            "1027": "実質購買力回復 → 消費支出増",
+        },
+    },
+
+    # ── 鉱工業生産↑ → 機械・電気機器（2〜4週先行）─────────────
+    "indpro_up_machinery": {
+        "label": "鉱工業生産↑ → 機械・電気機器需要（2〜4週先行）",
+        "trigger": {
+            "source": "gov",
+            "key":    "industrial_production_yoy",
+            "op":     ">=",
+            "val":    2.0,        # 前年比+2%以上
+        },
+        "lag_weeks":  3,
+        "pts_adj":    4.0,
+        "signal": {
+            "tailwind": ["1015", "1016", "1018", "1012"],  # 機械・電気機器・精密機器・鉄鋼
+            "headwind": [],
+        },
+        "rationale": {
+            "1015": "工場稼働率上昇 → 産業機械・ロボットの受注増",
+            "1016": "半導体・電子部品の生産増加が先行",
+            "1018": "精密機器（FA・検査装置）の需要が製造業拡大に連動",
+            "1012": "鉄鋼需要が工業生産と2〜3ヶ月のラグで連動",
+        },
+    },
+
+    # ── 鉱工業生産↓ → 製造業全般に逆風 ─────────────────────────
+    "indpro_down_headwind": {
+        "label": "鉱工業生産↓ → 製造業全般に逆風",
+        "trigger": {
+            "source": "gov",
+            "key":    "industrial_production_yoy",
+            "op":     "<=",
+            "val":    -2.0,
+        },
+        "lag_weeks":  3,
+        "pts_adj":   -4.0,
+        "signal": {
+            "tailwind": [],
+            "headwind": ["1015", "1016", "1012", "1007"],
+        },
+        "rationale": {
+            "1015": "設備投資削減 → 機械受注の先行減少",
+            "1016": "電子部品需要の急落（在庫調整局面）",
+        },
+    },
+
+    # ── 機械受注↑ → 電気機器・精密機器（3〜6ヶ月先行）─────────
+    "machinery_orders_up": {
+        "label": "機械受注↑ → 電気機器・精密機器（3〜6ヶ月先行）",
+        "trigger": {
+            "source": "gov",
+            "key":    "machinery_orders_yoy",
+            "op":     ">=",
+            "val":    5.0,
+        },
+        "lag_weeks":  12,    # 3ヶ月先行
+        "pts_adj":    4.0,
+        "signal": {
+            "tailwind": ["1016", "1018", "1015"],
+            "headwind": [],
+        },
+        "rationale": {
+            "1016": "設備投資増 → 半導体・電子部品製造装置の受注増（3〜6ヶ月先行）",
+            "1018": "機械受注は精密機器需要の3ヶ月先行指標",
+            "1015": "機械全般の設備投資需要拡大",
+        },
+    },
+
+    # ── 機械受注↓ ──────────────────────────────────────────────
+    "machinery_orders_down": {
+        "label": "機械受注↓ → 電気機器・精密機器（逆風）",
+        "trigger": {
+            "source": "gov",
+            "key":    "machinery_orders_yoy",
+            "op":     "<=",
+            "val":    -10.0,
+        },
+        "lag_weeks":  12,
+        "pts_adj":   -4.0,
+        "signal": {
+            "tailwind": [],
+            "headwind": ["1016", "1018", "1015"],
+        },
+        "rationale": {
+            "1016": "設備投資減速 → 製造装置受注の先行減少",
+            "1018": "精密機器需要の冷え込みを示唆",
+        },
+    },
+
+    # ── 建設着工件数↑ → 建設・不動産・鉄鋼（2〜3ヶ月先行）────
+    "construction_starts_up": {
+        "label": "建設着工↑ → 建設・不動産・鉄鋼（2〜3ヶ月先行）",
+        "trigger": {
+            "source": "gov",
+            "key":    "construction_starts_yoy",
+            "op":     ">=",
+            "val":    3.0,
+        },
+        "lag_weeks":  8,
+        "pts_adj":    3.0,
+        "signal": {
+            "tailwind": ["1003", "1032", "1012", "1013"],
+            "headwind": [],
+        },
+        "rationale": {
+            "1003": "建設着工増 → 建設会社の受注増に直結",
+            "1032": "新規着工増 → 不動産開発会社の売上先行増",
+            "1012": "鉄筋・形鋼の需要増",
+            "1013": "銅管・アルミ建材の需要増",
+        },
+    },
+
+    # ── 建設着工件数↓ ───────────────────────────────────────────
+    "construction_starts_down": {
+        "label": "建設着工↓ → 建設・不動産に逆風",
+        "trigger": {
+            "source": "gov",
+            "key":    "construction_starts_yoy",
+            "op":     "<=",
+            "val":    -5.0,
+        },
+        "lag_weeks":  8,
+        "pts_adj":   -3.0,
+        "signal": {
+            "tailwind": [],
+            "headwind": ["1003", "1032", "1012"],
+        },
+        "rationale": {
+            "1003": "受注パイプラインの縮小",
+            "1032": "分譲・賃貸の供給過剰懸念",
+        },
+    },
+
+    # ── 賃金上昇↑ → 消費関連業種に追い風（1〜3ヶ月先行）────────
+    "wages_up_consumption": {
+        "label": "賃金上昇 → 消費関連業種に追い風（1〜3ヶ月先行）",
+        "trigger": {
+            "source": "gov",
+            "key":    "wages_yoy",
+            "op":     ">=",
+            "val":    2.0,        # 前年比+2%以上
+        },
+        "lag_weeks":  4,
+        "pts_adj":    3.5,
+        "signal": {
+            "tailwind": ["1027", "1033", "1004", "1019"],
+            "headwind": [],
+        },
+        "rationale": {
+            "1027": "可処分所得増 → 小売消費増",
+            "1033": "外食・娯楽・旅行への支出増",
+            "1004": "食品消費の量・質の向上",
+        },
+    },
+
+    # ── 輸出↑ → 輸出製造業に追い風 ─────────────────────────────
+    "exports_up": {
+        "label": "輸出増加 → 輸出製造業に追い風",
+        "trigger": {
+            "source": "gov",
+            "key":    "trade_exports_yoy",
+            "op":     ">=",
+            "val":    5.0,
+        },
+        "lag_weeks":  2,
+        "pts_adj":    3.0,
+        "signal": {
+            "tailwind": ["1017", "1015", "1016", "1007"],
+            "headwind": [],
+        },
+        "rationale": {
+            "1017": "自動車・部品の輸出増",
+            "1015": "産業機械の輸出増",
+            "1016": "電子部品・半導体の輸出増",
+        },
+    },
+
+    # ── 輸出↓ → 輸出製造業に逆風 ─────────────────────────────────
+    "exports_down": {
+        "label": "輸出減少 → 輸出製造業に逆風",
+        "trigger": {
+            "source": "gov",
+            "key":    "trade_exports_yoy",
+            "op":     "<=",
+            "val":    -5.0,
+        },
+        "lag_weeks":  2,
+        "pts_adj":   -3.0,
+        "signal": {
+            "tailwind": [],
+            "headwind": ["1017", "1015", "1016"],
+        },
+        "rationale": {
+            "1017": "海外需要失速 → 自動車輸出台数減",
+            "1016": "電子部品の世界需要減",
+        },
+    },
+
+    # ── 完全失業率↓（雇用改善）→ 内需消費に追い風 ───────────────
+    "unemployment_down": {
+        "label": "失業率低下（雇用改善）→ 消費・サービス業に追い風",
+        "trigger": {
+            "source": "gov",
+            "key":    "unemployment_yoy",
+            "op":     "<=",
+            "val":    -0.2,       # 前年比-0.2%pt以上の改善
+        },
+        "lag_weeks":  4,
+        "pts_adj":    2.5,
+        "signal": {
+            "tailwind": ["1027", "1033", "1003", "1021"],
+            "headwind": [],
+        },
+        "rationale": {
+            "1027": "雇用安定 → 消費マインド改善",
+            "1033": "サービス業の人手不足緩和・需要拡大",
+            "1003": "建設業の人材確保改善",
+        },
     },
 }
 
@@ -1115,6 +1407,7 @@ DAILY_MODULES = [
 # ── ウィークリーサイクル（月曜朝に追加実行）───────────────────
 WEEKLY_MODULES = [
     "arxiv",         # ArXiv 論文取得
+    "semantic_scholar", # ★ 論文追加分析
     "correlation",   # 米国債×業種 相関監査
     "credit_data",   # 信用残高週次取得 [3-5]
     "idea",          # アイデア生成
@@ -1138,6 +1431,7 @@ WEEKLY_MODULES = [
     "longterm_scenario",   # 10年単位のシナリオ R-5追加
     "google_trends",    # ★ RESEARCH-3追加
     "finbert",          # ★ RESEARCH-5追加
+    "factor_crowding",  # ★ RESEARCH-2追加
 ]
 
 # ウィークリー実行の曜日（0=月曜 〜 6=日曜）
@@ -1228,6 +1522,11 @@ ALERT_ON_STRONG_BUY: bool = True
 
 # 財務リスクウォッチ（高負債・FCFマイナス・低流動比率）
 ALERT_ON_FINANCIAL_RISK: bool = True
+
+ALERT_ON_MACRO_DELTA:    bool = True   # マクロ急変アラート [GAP-7]
+ALERT_ON_BUYBACK:        bool = True   # 自己株式取得アラート [M-4]
+ALERT_ON_DIV_UP:         bool = True   # 増配・特別配当アラート [M-4]
+ALERT_ON_FOREIGN_SPIKE:  bool = True   # 外国人持株急増アラート [P-4]
 
 # ── LINE Messaging API ─────────────────────────────────────────
 # LINE Notify は 2025年3月終了。Messaging API を使用する。
@@ -1734,3 +2033,45 @@ CACHE_HALF_LIFE_HOURS: dict = {
     # 例: macro_snapshot を 12時間に短縮したい場合:
     # "macro_snapshot": 12.0,
 }
+
+# ==============================================================
+# BLOCK B-1: TDnet × EDINET 連携設定
+# ==============================================================
+ENABLE_B1_TDNET_EDINET: bool = True
+# TDnetの決算短信カテゴリID（tdnet_monitor.pyの"category"フィールドに対応）
+B1_KESSAN_CATEGORIES: list = [
+    "kessan", "financial_results", "決算短信", "earnings", "1", "q_report"
+]
+
+# ==============================================================
+# BLOCK B-2: 政府統計先行指標ルール設定
+# ==============================================================
+ENABLE_GOV_RULES: bool = True
+
+# ==============================================================
+# BLOCK D-1: 投資判断カード設定
+# ==============================================================
+ENABLE_INVESTMENT_CARD: bool = True
+
+# ==============================================================
+# BLOCK RESEARCH-2: ファクター・クラウディング検知設定
+# ==============================================================
+ENABLE_FACTOR_CROWDING:        bool  = True
+ENABLE_FACTOR_CROWDING_DETAIL: bool  = True   # ファクター別詳細分析
+ENABLE_RESIDUAL_CORR:          bool  = False  # Stage2 残差相関（重い・デフォルトOFF）
+
+CROWDING_THRESHOLD:   float = 0.60   # avg_corr >= これ → クラウディングアラート
+UNWIND_THRESHOLD:     float = 0.40   # 前週高 → 今週これ未満 → 解消売りアラート
+CROWDING_TOP_N:       int   = 20     # 上位N銘柄（クラウディング計算対象）
+CROWDING_LOOKBACK_DAYS: int = 30     # リターン計算期間（日）
+
+# rule_optimizer が自動削減する閾値（クラウディングスコアがこれ以上で削減）
+CROWDING_REDUCTION_TRIGGER:  int   = 80     # スコア80以上で自動削減
+CROWDING_REDUCTION_RATE:     float = 0.85   # 重みをこの比率で削減
+
+# ==============================================================
+# BLOCK ⑤: 論文スコアリング強化（Semantic Scholar API）設定
+# ==============================================================
+ENABLE_SEMANTIC_SCHOLAR: bool = True  # True で重み付き論文スコア有効化
+# 注: SS APIは無料・APIキー不要だが、1論文あたり約0.1秒の追加処理が発生
+# 上位候補のみに限定するため WEEKLY_MODULES での実行を推奨

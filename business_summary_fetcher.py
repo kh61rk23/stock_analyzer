@@ -182,7 +182,7 @@ def fetch_business_summary(ticker: str, cfg,
 
     # yfinance で事業概要取得
     try:
-        import yfinance as yf
+        import yfinance as yf  # type: ignore
         info = yf.Ticker(ticker).info or {}
         name        = info.get("shortName") or info.get("longName") or ticker
         summary_en  = info.get("longBusinessSummary", "")
@@ -346,12 +346,28 @@ def run_business_summary_fetcher(cfg, results: dict) -> dict:
 
 if __name__ == "__main__":
     import importlib.util, sys
+    
+    # 1. 未定義エラーを防ぐための初期値
+    cfg = None 
+
     for p in ["/content/config.py", str(Path(__file__).parent / "config.py")]:
         if Path(p).exists():
             spec = importlib.util.spec_from_file_location("config", p)
-            cfg  = importlib.util.module_from_spec(spec)
+            # ★ spec と loader の存在を確定させる
+            if spec is None or spec.loader is None:
+                continue
+                
+            cfg = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(cfg)
             break
+
+    # 2. cfg が見つからなかった場合のフォールバック
+    if cfg is None:
+        print("  ⚠️ config.py が見つからないため、デフォルト値を使用します。")
+        class DefaultCfg:
+            DEEPL_API_KEY = ""
+            DATA_DIR = "/tmp"
+        cfg = DefaultCfg()
 
     print("=== business_summary_fetcher v1.0 単体テスト ===")
     deepl = getattr(cfg, "DEEPL_API_KEY", "")
