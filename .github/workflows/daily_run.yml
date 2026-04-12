@@ -25,12 +25,13 @@
 name: 📊 Stock Analyzer 自律実行
 
 on:
-  # ── デイリー: 毎日 08:00 JST ──────────────────────────────
+  # ── デイリー: 毎日 07:00 JST ──────────────────────────────
   schedule:
-    - cron: "0 23 * * *"      # UTC 23:00 = JST 08:00（デイリー）
+    - cron: "0 22 * * *"      # UTC 22:00 = JST 07:00（デイリー）
     - cron: "0 23 * * 0"      # UTC 日曜 23:00 = JST 月曜 08:00（ウィークリー）
 
   # ── 手動実行 ──────────────────────────────────────────────
+  # 実行モードは四種類ある。
   workflow_dispatch:
     inputs:
       mode:
@@ -99,6 +100,8 @@ jobs:
           echo "▶ 実行モード: $(cat $GITHUB_OUTPUT | grep mode | cut -d= -f2)"
 
       # ── 5. アナライザー実行 ───────────────────────────────
+      # github actionsのAPIキーやファイルパスをそれぞれ定義している。
+      # シングルモードの時は指定モジュールを実行。そうでないときはrun_headless.pyから参照する。
       - name: 🚀 Run analyzer
         env:
           STOCK_ANALYZER_MODE:  ${{ steps.set-mode.outputs.mode }}
@@ -129,7 +132,6 @@ jobs:
           else
             python -u run_headless.py --mode ${{ steps.set-mode.outputs.mode }} 2>&1
           fi
-
       # ── 5-B. ダッシュボードCSVと.iqyをリポジトリにコミット ───────
       - name: 📊 Commit dashboard files
         if: always()
@@ -212,6 +214,7 @@ jobs:
             git add stock_data/data/us_8k_cache.json || true
             git add stock_data/data/cross_sector_signal_history.json || true
             git add stock_data/data/us_sector_mapping.json || true
+            git add stock_data/data/crowding_history.json || true
             git diff --cached --quiet || git commit -m "auto: daily update $(date '+%Y-%m-%d')"
             git push || true
             echo "✅ dashboard_latest.csv + dashboard.iqy をコミットしました"
