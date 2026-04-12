@@ -224,7 +224,7 @@ def _save_analysis(cfg, edinet_code: str, data: dict):
 # BLOCK 3: 取得キュー構築
 # ==============================================================
 
-def _build_fetch_queue(cfg, meta: dict, results: dict = None) -> list:
+def _build_fetch_queue(cfg, meta: dict, results: dict | None = None) -> list:
     """
     優先順位に従って本日取得すべき銘柄リストを返す。
 
@@ -298,6 +298,15 @@ def _build_fetch_queue(cfg, meta: dict, results: dict = None) -> list:
         return -(days_old + boost)
 
     rotation_targets.sort(key=_tier_sort_key)
+    # ── [④] freshness.force_refresh 銘柄を優先度1に昇格 ──────────
+    edinet_db_fresh = (results or {}).get("edinet_db_fresh", {})
+    force_refresh_tickers = [
+        t for t, d in edinet_db_fresh.items()
+        if isinstance(d, dict) and d.get("force_refresh")
+        and t not in seen
+    ]
+    for t in force_refresh_tickers[:5]:   # 最大5社を追加
+        _add(t, 1, "freshness_force_refresh")
     for days_old, ticker, sector_code in rotation_targets:
         if len(queue) >= per_day:
             break
@@ -333,21 +342,27 @@ def _days_since(date_str: Optional[str]) -> int:
 def _load_edinet_client(cfg):
     """edinet_client.py を動的 import する"""
     import importlib.util
+    from pathlib import Path  # Pathが未定義なら追加してください
+
+    # 候補となるパスのリスト（優先順位順）
     candidates = [
         Path(getattr(cfg, "DRIVE_BASE", "")) / "edinet_client.py",
         Path(__file__).parent / "edinet_client.py",
         Path("/content/edinet_client.py"),
     ]
+    
     for path in candidates:
         if path.exists():
-            spec   = importlib.util.spec_from_file_location(
-                "edinet_client", path)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            return module
+            spec = importlib.util.spec_from_file_location("edinet_client", path)
+            
+            # 論理的チェック：spec と loader が確実に存在する場合のみ処理
+            if spec is not None and spec.loader is not None:
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                return module
+                
     print("    ⚠️  edinet_client.py が見つかりません")
     return None
-
 
 # ==============================================================
 # BLOCK 5: 1銘柄取得処理
@@ -533,8 +548,7 @@ def _build_summary_report(fetch_results: list, meta: dict,
         "",
         f"- 管理銘柄数: {total_tracked}社",
         f"- 取得済み: {fetched_ever}社",
-        f"- カバレッジ: "
-        f"{fetched_ever/total_tracked*100:.1f}%" if total_tracked else "0%",
+        f"- カバレッジ: {fetched_ever/total_tracked*100:.1f}%" if total_tracked else "- カバレッジ: 0%",
     ]
 
     lines += ["", "---",
@@ -546,7 +560,8 @@ def _build_summary_report(fetch_results: list, meta: dict,
 # BLOCK 9: メインエントリポイント
 # ==============================================================
 
-def run_edinet_rotation(cfg, results: dict = None) -> dict:
+# 「辞書、または（|） None」を許可する最新の書き方
+def run_edinet_rotation(cfg, results: dict | None = None) -> dict:
     """
     stock_analyzer_main.py の run_all_tasks() から呼ばれる。
 
@@ -809,19 +824,26 @@ def get_db_stats(cfg) -> dict:
 
 if __name__ == "__main__":
     import importlib.util, sys
+    from pathlib import Path
 
-    for p in ["/content/config.py",
-              str(Path(__file__).parent / "config.py")]:
-        if Path(p).exists():
+    cfg = None
+    for p in ["/content/config.py", str(Path(__file__).parent / "config.py")]:
+        path_obj = Path(p)
+        if path_obj.exists():
             spec = importlib.util.spec_from_file_location("config", p)
-            cfg  = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(cfg)
-            break
-    else:
+            # spec と loader の存在を明示的にチェック（型エラーの解消）
+            if spec is not None and spec.loader is not None:
+                cfg = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(cfg)
+                break
+    
+    # cfg が None のままなら終了（ガードを明確化）
+    if cfg is None:
         print("config.py が見つかりません")
         sys.exit(1)
 
     print("=== edinet_rotation_manager.py v1.0 単体テスト ===")
+    # getattr を使っているのは、設定がない場合の安全策として非常に良い判断です
     print(f"ENABLE_EDINET_ROTATION: "
           f"{getattr(cfg, 'ENABLE_EDINET_ROTATION', False)}")
     print(f"EDINET_ROTATION_PER_DAY: "
@@ -831,12 +853,12 @@ if __name__ == "__main__":
 
     # DB統計確認
     stats = get_db_stats(cfg)
-    print(f"\n  DBカバレッジ: {stats['coverage_pct']:.1f}% "
-          f"({stats['fetched']}/{stats['total']}社)")
+    print(f"\n  DBカバレッジ: {stats.get('coverage_pct', 0):.1f}% "
+          f"({stats.get('fetched', 0)}/{stats.get('total', 0)}社)")
 
     # ローテーション実行
     result = run_edinet_rotation(cfg, {})
-    print(f"\n  取得成功: {result['ok_count']}社")
-    print(f"  取得失敗: {result['error_count']}社")
+    print(f"\n  取得成功: {result.get('ok_count', 0)}社")
+    print(f"  取得失敗: {result.get('error_count', 0)}社")
     print(f"  APIコール: {result.get('budget_used', 0)}")
     print(f"  DBカバレッジ: {result.get('db_coverage', 0):.1f}%")
