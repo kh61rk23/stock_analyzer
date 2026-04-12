@@ -246,6 +246,25 @@ def _section_screener(results: dict) -> list:
                 lines.append("") # セクション間の余白
         except Exception:
             pass
+    # ── [D-1] 投資判断カード ───────────────────────────────────────
+    candidates = results.get("screener", {}).get("candidates", [])
+    buy_cards  = [
+        c for c in candidates
+        if c.get("investment_card", {}).get("verdict") == "BUY"
+           and c.get("pass_filters")
+    ]
+    if buy_cards:
+        lines += ["### 🃏 投資判断カード（D-1）", ""]
+        for c in buy_cards[:6]:
+            card   = c.get("investment_card", {})
+            ticker = c.get("ticker", "")
+            score  = c.get("composite_score", 0)
+            lines.append(f"#### {ticker}（score={score:.0f}）")
+            lines.append("")
+            for summary_line in card.get("summary", "").split("\n"):
+                if summary_line.strip():
+                    lines.append(f"> {summary_line}")
+            lines.append("")
 
     # ── ここから Top candidates 表示ループ ──
     lines.append("| 銘柄 | 業種 | スコア | PER | PBR | ROE | 配当 | 推奨 |")
@@ -1408,12 +1427,19 @@ def run_weekly_report(cfg, results: dict) -> dict:
 
 if __name__ == "__main__":
     import importlib.util, sys
+    from pathlib import Path
+
+    cfg = None
+    # 設定ファイルの読み込み
     for p in ["/content/config.py", str(Path(__file__).parent / "config.py")]:
-        if Path(p).exists():
+        path_obj = Path(p)
+        if path_obj.exists():
             spec = importlib.util.spec_from_file_location("config", p)
-            cfg  = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(cfg)
-            break
+            # spec と loader が存在することを確定させる
+            if spec is not None and spec.loader is not None:
+                cfg = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(cfg)
+                break
 
     # 簡易テスト用ダミーresults
     dummy_results = {
@@ -1441,6 +1467,12 @@ if __name__ == "__main__":
         },
     }
 
-    result = run_weekly_report(cfg, dummy_results)
-    print("\n--- レポート先頭 300字 ---")
-    print(result["report_md"][:300])
+    # cfg が正しく読み込めている場合のみ実行する（論理的な安全装置）
+    if cfg is not None:
+        result = run_weekly_report(cfg, dummy_results)
+        print("\n--- レポート先頭 300字 ---")
+        # report_md が存在するか、文字列かどうかのチェック
+        report_text = result.get("report_md", "")
+        print(report_text[:300])
+    else:
+        print("ERROR: config.py が読み込めなかったため、レポート生成をスキップします。")

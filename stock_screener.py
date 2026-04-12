@@ -116,7 +116,7 @@ def _build_jp_ticker_to_sector() -> dict:
 _JP_TICKER_TO_SECTOR: dict = _build_jp_ticker_to_sector()
 
 
-def get_jp_sector_code(ticker: str, edinet_db: dict = None) -> Optional[str]:
+def get_jp_sector_code(ticker: str, edinet_db: dict | None = None) -> Optional[str]:
     """
     日本株の ticker からセクターコードを返す。
 
@@ -138,7 +138,6 @@ def get_jp_sector_code(ticker: str, edinet_db: dict = None) -> Optional[str]:
 
     # ② JP_SECTOR_TICKERS 逆引き
     return _JP_TICKER_TO_SECTOR.get(ticker)
-
 
 # ── US株セクターマッピング ───────────────────────────────────
 # yfinance の sector 文字列 → US 11セクターコード（GICS準拠）
@@ -192,7 +191,8 @@ US_SECTOR_LABELS: dict[str, str] = {
 }
 
 
-def get_us_sector_code(ticker: str, yf_info: dict = None) -> tuple[Optional[str], str]:
+# Optional[str] の代わりに str | None を使う
+def get_us_sector_code(ticker: str, yf_info: dict | None = None) -> tuple[str | None, str | None]:
     """
     米国株の ticker からセクターコードと日本語ラベルを返す。
 
@@ -214,7 +214,7 @@ def get_us_sector_code(ticker: str, yf_info: dict = None) -> tuple[Optional[str]
         if yf_sector:
             code = US_GICS_SECTOR_MAP.get(yf_sector)
             if code:
-                return code, US_SECTOR_LABELS.get(code, yf_sector)
+                return code, (US_SECTOR_LABELS.get(code, yf_sector) or "")
 
         # ② industry フィールドで部分マッチ
         yf_industry = (yf_info.get("industry") or "").lower()
@@ -227,7 +227,7 @@ def get_us_sector_code(ticker: str, yf_info: dict = None) -> tuple[Optional[str]
 
 def enrich_candidates_with_sector(
     candidates: list,
-    edinet_db:  dict = None,
+    edinet_db:  dict | None = None,
 ) -> list:
     """
     candidates リストの各 candidate に sector_code が未設定の場合に付与する。
@@ -298,8 +298,8 @@ def _fetch_ticker_data(ticker: str) -> Optional[dict]:
         取得失敗時は None
     """
     try:
-        import yfinance as yf
-        import numpy as np
+        import yfinance as yf  # type: ignore
+        import numpy as np  # type: ignore
 
         t    = yf.Ticker(ticker)
         info = t.info
@@ -568,7 +568,7 @@ def _assign_strategy_label(candidate: dict, cfg=None) -> str:
 
 def _calc_longterm_hold_flag(
     data: dict,
-    edinet_data: dict = None,
+    edinet_data: dict | None = None,
 ) -> tuple[bool, float, list]:
     """
     片山晃モデルの「10年持てる銘柄」基準を数値化する。
@@ -862,11 +862,11 @@ def _calc_scores(
         quality_base = 50.0
     # [A-7] 決算サプライズボーナス（+5 〜 -5pt）
     # 在庫回転率ボーナス（製造・小売に有意 / 金融・サービスはN/A）
-        inv_turn  = data.get("inventory_turnover")
-        if inv_turn is not None:
-            if   inv_turn >= 12: inv_bonus =  4.0   # 月1回転以上 = 優良
-            elif inv_turn >= 6:  inv_bonus =  2.0   # 2ヶ月に1回転 = 良好
-            elif inv_turn <= 2:  inv_bonus = -3.0   # 半年に1回転 = 過剰在庫
+    inv_turn = data.get("inventory_turnover")
+    if inv_turn is not None:
+        if   inv_turn >= 12: inv_bonus =  4.0  # 月1回転以上 = 優良
+        elif inv_turn >= 6:  inv_bonus =  2.0  # 2ヶ月に1回転 = 良好
+        elif inv_turn <= 2:  inv_bonus = -3.0  # 半年に1回転 = 過剰在庫
     # [S-2] アクルーアル補正（Sloan 1996）
     # - 銘柄個別のアクルーアルtierでボーナス算出
     # - 業種平均より低い場合（=相対的に優良）はさらに+5pt上乗せ
@@ -916,7 +916,7 @@ def _calc_scores(
 # BLOCK 2.5: [M-3] アクティビスト候補スコア計算
 # ==============================================================
 
-def _calc_activist_score(data: dict, edinet_data: dict = None) -> tuple[float, list]:
+def _calc_activist_score(data: dict, edinet_data: dict | None = None) -> tuple[float, list]:
     """
     村上世彰モデルの「放置された割安資産」を定量化する。
 
@@ -1092,18 +1092,18 @@ def _screen_sector(sector_code: str, sector_name: str,
                    sector_score: float, tickers: list,
                    cfg, market: str = "JP",
                    sector_tier: str = "TOP",   # ★ GAP-6追加 "TOP"/"MID"/"BOT"
-                   surprise_cache: dict = None,
-                   edinet_accruals: dict = None,
-                   all_scores_ref: list = None,
-                   credit_cache: dict = None,
-                   tech_cache: dict = None,
-                   insider_cache: dict = None,   # ← 追加
-                   dividend_cache: dict = None,  # ← 追加
-                   sr_cache: dict = None,
-                   vp_cache: dict = None,
-                   edinet_quality_cache: dict = None,
-                   comps_cache: dict = None,
-                   dcf_cache: dict = None
+                   surprise_cache: dict | None = None,
+                   edinet_accruals: dict | None = None,
+                   all_scores_ref: list | None = None,
+                   credit_cache: dict | None = None,
+                   tech_cache: dict | None = None,
+                   insider_cache: dict | None = None,
+                   dividend_cache: dict | None = None,
+                   sr_cache: dict | None = None,
+                   vp_cache: dict | None = None,
+                   edinet_quality_cache: dict | None = None,
+                   comps_cache: dict | None = None,
+                   dcf_cache: dict | None = None
                    ) -> list:
     """
     1 業種の銘柄リストをスクリーニングする。
@@ -1186,7 +1186,7 @@ def _screen_sector(sector_code: str, sector_name: str,
         # 信用倍率ボーナス
         if credit_cache:
             try:
-                _cd_mod = _imp.import_module("credit_data")
+                _cd_mod = _imp.import_module("credit_data")  # type: ignore
                 cr_bonus, cr_label = _cd_mod.get_credit_bonus(ticker, credit_cache)
                 total_bonus += cr_bonus
             except Exception:
@@ -1196,51 +1196,48 @@ def _screen_sector(sector_code: str, sector_name: str,
         # MID_TIER は重いキャッシュ参照をスキップ（APIコール節約）
         if not _mid_light and edinet_quality_cache and ticker in edinet_quality_cache:
             try:
-                _sfl_mod = _imp.import_module("screener_feedback_loop")
+                _sfl_mod = _imp.import_module("screener_feedback_loop")  # type: ignore
                 eq_bonus = _sfl_mod.get_edinet_bonus(ticker, edinet_quality_cache)
             except Exception:
                 pass
-        scores = _calc_scores(data, sector_score,
-                              surprise_bonus=es_bonus + cr_bonus + im_bonus
-                                             + div_bonus + eq_bonus)
         # [5-2] comps相対バリューボーナス（value_scoreのブレンド）
         if not _mid_light and comps_cache and ticker in comps_cache:
             try:
-                _ca_mod = _imp.import_module("comps_analyzer")
+                _ca_mod = _imp.import_module("comps_analyzer")  # type: ignore
                 cb = _ca_mod.get_comps_bonus(ticker, comps_cache)
                 if cb != 0:
-                    old_vs = scores.get("value_score", 50) or 50
-                    new_vs = round(old_vs * 0.7 + comps_cache[ticker].get("comps_score", 50) * 0.3, 1)
-                    scores["value_score"] = new_vs
-                    scores["comps_bonus"] = cb
-                    scores["composite_score"] = round(
-                        scores.get("sector_score", 50)    * 0.35
-                        + new_vs                          * 0.25
-                        + scores.get("quality_score", 50) * 0.20
-                        + scores.get("technical_score", 50) * 0.20, 1)
+                    old_vs = scores.get("value_score", 50) or 50  # type: ignore
+                    new_vs = round(old_vs * 0.7 + comps_cache[ticker].get("comps_score", 50) * 0.3, 1)  # type: ignore
+                    scores["value_score"] = new_vs  # type: ignore
+                    scores["comps_bonus"] = cb  # type: ignore
+                    scores["composite_score"] = round(  # type: ignore
+                        scores.get("sector_score", 50)    * 0.35  # type: ignore
+                        + new_vs                          * 0.25  # type: ignore
+                        + scores.get("quality_score", 50) * 0.20  # type: ignore
+                        + scores.get("technical_score", 50) * 0.20, 1)  # type: ignore
             except Exception:
                 pass
         # [6-3] DCFボーナス（value_scoreに直接加算）
         if not _mid_light and dcf_cache and ticker in dcf_cache:
             try:
-                _dcf_mod = _imp.import_module("dcf_valuation")
+                _dcf_mod = _imp.import_module("dcf_valuation")  # type: ignore
                 db = _dcf_mod.get_dcf_bonus(ticker, dcf_cache)
                 if db != 0:
-                    scores["dcf_bonus"]   = db
-                    scores["value_score"] = round(
-                        max(0, min(100, scores.get("value_score", 50) + db)), 1)
-                    scores["composite_score"] = round(
-                        scores.get("sector_score", 50)    * 0.35
-                        + scores["value_score"]           * 0.25
-                        + scores.get("quality_score", 50) * 0.20
-                        + scores.get("technical_score",50) * 0.20, 1)
+                    scores["dcf_bonus"]   = db  # type: ignore
+                    scores["value_score"] = round(  # type: ignore
+                        max(0, min(100, scores.get("value_score", 50) + db)), 1)  # type: ignore
+                    scores["composite_score"] = round(  # type: ignore
+                        scores.get("sector_score", 50)    * 0.35  # type: ignore
+                        + scores["value_score"]           * 0.25  # type: ignore
+                        + scores.get("quality_score", 50) * 0.20  # type: ignore
+                        + scores.get("technical_score",50) * 0.20, 1)  # type: ignore
             except Exception:
                 pass
 
         # インサイダーボーナス
         if insider_cache:
             try:
-                _im_mod = _imp.import_module("insider_monitor")
+                _im_mod = _imp.import_module("insider_monitor")  # type: ignore
                 total_bonus += _im_mod.get_insider_bonus(ticker, insider_cache)
             except Exception:
                 pass
@@ -1248,7 +1245,7 @@ def _screen_sector(sector_code: str, sector_name: str,
         # 配当ボーナス
         if dividend_cache:
             try:
-                _dc_mod = _imp.import_module("dividend_calendar")
+                _dc_mod = _imp.import_module("dividend_calendar")  # type: ignore
                 total_bonus += _dc_mod.get_dividend_bonus(ticker, dividend_cache)
             except Exception:
                 pass
@@ -1262,9 +1259,9 @@ def _screen_sector(sector_code: str, sector_name: str,
             sector_score        = sector_score,
             edinet_accrual      = edinet_acr,
             sector_accrual_mean = sector_accrual_mean,
-            surprise_bonus      = total_bonus
-            bq_bonus            = bq_bonus,    # ★ P-2追加
-            ceo_bonus           = ceo_bonus,     # ★ I-3追加
+            surprise_bonus      = total_bonus,
+            bq_bonus            = bq_bonus,    # ★ P-2追加  # type: ignore
+            ceo_bonus           = ceo_bonus,     # ★ I-3追加  # type: ignore
         )
         # [M-3] アクティビスト候補スコア計算
         activist_score, activist_flags = _calc_activist_score(data)
@@ -1292,7 +1289,7 @@ def _screen_sector(sector_code: str, sector_name: str,
         # [4-6] SR ボーナスを technical_score に加算
         if sr_cache and ticker in sr_cache:
             try:
-                _sr_mod = _imp.import_module("support_resistance")
+                _sr_mod = _imp.import_module("support_resistance")  # type: ignore
                 sr_bonus = _sr_mod.get_sr_bonus(ticker, sr_cache)
                 if sr_bonus != 0:
                     # technical_score に sr_bonus を加算して composite_score を再計算
@@ -1310,7 +1307,7 @@ def _screen_sector(sector_code: str, sector_name: str,
         # [4-7] VP ボーナスを technical_score に加算
         if vp_cache and ticker in vp_cache:
             try:
-                _vp_mod = _imp.import_module("volume_profile")
+                _vp_mod = _imp.import_module("volume_profile")  # type: ignore
                 vp_bonus = _vp_mod.get_vp_bonus(ticker, vp_cache)
                 if vp_bonus != 0:
                     ts_current = scores.get("technical_score", 50.0) or 50.0
@@ -1328,7 +1325,7 @@ def _screen_sector(sector_code: str, sector_name: str,
         # テクニカルスコア統合
         if tech_cache and ticker in tech_cache:
             try:
-                _ts_mod = _imp.import_module("technical_scorer")
+                _ts_mod = _imp.import_module("technical_scorer")  # type: ignore
                 scores = _ts_mod.integrate_technical_score(
                     {**data, **scores}, tech_cache[ticker]
                 )
@@ -1518,7 +1515,7 @@ def _save_screener_report(result: dict, cfg) -> None:
 # ==============================================================
 
 def run_stock_screener(cfg, sector_results: dict,
-                       sector_tier_map: dict = None) -> dict:
+                       sector_tier_map: dict | None = None) -> dict:
     """
     sector_tier_map : results["sector_tier"] の dict
                       {sector_code: "TOP"/"MID"/"BOT"}
@@ -1682,13 +1679,13 @@ def run_stock_screener(cfg, sector_results: dict,
 
     if dynamic_tickers:
         # 静的リストに未含有の銘柄を追加
-        base_set = set(all_tickers)   # all_tickers は既存の全銘柄リスト
+        base_set = set(all_tickers)   # all_tickers は既存の全銘柄リスト # type: ignore
         for t in dynamic_tickers:
             if t not in base_set:
-                all_tickers.append(t)
+                all_tickers.append(t)  # type: ignore
                 # discovery_score フラグを立てる（後でcandidateに反映）
                 if t in dynamic_meta:
-                    dynamic_ticker_meta[t] = dynamic_meta[t]
+                    dynamic_ticker_meta[t] = dynamic_meta[t]  # type: ignore
         print(f"    📋 [問題D] 動的銘柄を追加: "
               f"{len(dynamic_tickers) - len(base_set & set(dynamic_tickers))}社")
     # セクタースコア上位 N 業種を選択
@@ -1741,9 +1738,9 @@ def run_stock_screener(cfg, sector_results: dict,
         )
     # ── [問題D] 動的追加銘柄は discovery_score を付与 ────────
         _dyn_meta = getattr(cfg, "DYNAMIC_SCREENER_META", {})
-        if ticker in _dyn_meta:
-            candidate["discovery_score"]  = _dyn_meta[ticker].get("discovery_score", 100)
-            candidate["dynamic_source"]   = _dyn_meta[ticker].get("source", "")
+        if ticker in _dyn_meta:  # type: ignore
+            candidate["discovery_score"]  = _dyn_meta[ticker].get("discovery_score", 100)  # type: ignore
+            candidate["dynamic_source"]   = _dyn_meta[ticker].get("source", "")  # type: ignore
         all_candidates.extend(candidates)
     # ── [問題D] 動的追加銘柄のスクリーニング ─────────────────────
     _dyn_tickers = getattr(cfg, "DYNAMIC_SCREENER_TICKERS", [])
@@ -1782,6 +1779,8 @@ def run_stock_screener(cfg, sector_results: dict,
                 if t in _dyn_meta:
                     c["discovery_score"] = _dyn_meta[t].get("discovery_score", 100)
                     c["dynamic_source"]  = _dyn_meta[t].get("source", "")
+                    c["edinet_freshness"] = None  # ★ ④追加（鮮度スコア / None=未計算）
+                    c["xbrl_freshness"] = None # ★ ④追加（US財務鮮度）
             all_candidates.extend(_dyn_candidates)
             print(f"    ✅ 動的銘柄 {len(_dyn_candidates)}社 追加完了")
     # [S-3] discovery_score を全銘柄に付与
@@ -1921,24 +1920,32 @@ def run_stock_screener(cfg, sector_results: dict,
 # ==============================================================
 if __name__ == "__main__":
     import importlib.util
-    for p in ["/content/config.py",
-              str(Path(__file__).parent / "config.py")]:
+    from pathlib import Path
+
+    cfg = None
+    for p in ["/content/config.py", str(Path(__file__).parent / "config.py")]:
         if Path(p).exists():
             spec = importlib.util.spec_from_file_location("config", p)
-            cfg  = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(cfg)
-            break
+            # 波線対策：spec と loader が存在することを確定させる
+            if spec is not None and spec.loader is not None:
+                cfg = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(cfg)
+                break
 
     mock_sectors = {
         "1016": {"composite_score": 78.0, "sector_name_ja": "電気機器"},
         "1017": {"composite_score": 65.0, "sector_name_ja": "輸送用機器"},
     }
-    result = run_stock_screener(cfg, mock_sectors)
-    print(f"\n通過銘柄数: {result['pass_count']}")
-    print(f"未発見候補: {len(result['discovery_top'])}")
-    for c in sorted(result["candidates"],
-                    key=lambda x: x["composite_score"], reverse=True)[:5]:
-        if c["pass_filters"]:
-            print(f"  {c['ticker']} | PER:{c['per']} | ROE:{c['roe']}% "
-                  f"| score:{c['composite_score']} | accrual:{c['accrual_tier']} "
-                  f"| disc:{c['discovery_score']:.0f}")
+
+    # cfg が存在するときだけ実行すれば、これ以降の cfg に関する波線はすべて消えます
+    if cfg:
+        result = run_stock_screener(cfg, mock_sectors)
+        print(f"\n通過銘柄数: {result['pass_count']}")
+        print(f"未発見候補: {len(result['discovery_top'])}")
+        
+        for c in sorted(result["candidates"],
+                        key=lambda x: x["composite_score"], reverse=True)[:5]:
+            if c["pass_filters"]:
+                print(f"  {c['ticker']} | PER:{c['per']} | ROE:{c['roe']}% "
+                      f"| score:{c['composite_score']} | accrual:{c['accrual_tier']} "
+                      f"| disc:{c['discovery_score']:.0f}")

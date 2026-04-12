@@ -49,8 +49,8 @@ def _install():
     )
 _install()
 
-import schedule
-import pandas as pd
+import schedule # type: ignore
+import pandas as pd # type: ignore
 
 # add by gemini20260311
 import logging
@@ -185,7 +185,10 @@ def fetch_macro_snapshot() -> dict:
             info  = yf.Ticker(ticker).info or {}
             price = info.get("regularMarketPrice") or info.get("currentPrice")
             snapshot[key] = float(price) if price else None
-            status = f"{price:.3g}" if price else "N/A"
+            try:
+                status = f"{float(price):.3g}" if price else "N/A"
+            except (TypeError, ValueError):
+                status = str(price)[:15] if price else "N/A"
             print(f"    {key:10s}: {status}")
         except Exception as e:
             snapshot[key] = None
@@ -643,7 +646,7 @@ def evaluate_macro_signals(snapshot: dict, weights: dict = None) -> list:
                 "trigger_value":  f"WTI: ${oil:.1f}",
                 "sector_signals": _build_sector_signals(rule),
                 "rationale":      rule.get("rationale", {}),
-                "weight":         weights.get(factor, 1.0),
+                "weight":         weights.get("oil_price_rise", 1.0),
             })
 
     # ── VIX 判定 ─────────────────────────────────────────────
@@ -656,7 +659,7 @@ def evaluate_macro_signals(snapshot: dict, weights: dict = None) -> list:
                 "trigger_value":  f"VIX: {vix:.1f}",
                 "sector_signals": _build_sector_signals(rule),
                 "rationale":      rule.get("rationale", {}),
-                "weight":         weights.get(factor, 1.0),
+                "weight":         weights.get("us_recession_risk", 1.0),
             })
     # ── [GAP-7] 各シグナルに delta 情報を付与 ──────────────────
     delta_alerts = snapshot.get("_delta_alerts", [])
@@ -874,6 +877,7 @@ def _load_local_module(name: str, local_path: str, drive_path: Path):
 
     try:
         spec = importlib.util.spec_from_file_location(name, str(found))
+        if spec is None or spec.loader is None: return None
         mod  = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         return mod
@@ -881,6 +885,198 @@ def _load_local_module(name: str, local_path: str, drive_path: Path):
         print(f"  ❌ {name} ロード失敗: {e}")
         return None
 
+# ==============================================================
+# [D-1] 投資判断カード生成（Claude API不使用・ルールベース）
+# ==============================================================
+
+def _generate_investment_cards(
+    candidates: list,
+    results:    dict,
+    cfg,
+) -> None:
+    """
+    [D-1] 各 screener 通過銘柄に「なぜBuyか／なぜAvoidか」の
+    自然言語サマリーを5行以内で生成し、candidate["investment_card"] に格納する。
+
+    Claude API は使用しない。
+    score_explainer / inference_engine / comps の出力を
+    ルールベースで統合して生成する。
+    """
+    import sys as _sys, importlib as _imp
+    _sys.path.insert(0, str(Path(__file__).parent))
+
+    # score_explainer をロード
+    try:
+        _se = _imp.import_module("score_explainer")
+    except Exception:
+        _se = None
+
+    # comps キャッシュ読み込み
+    comps_cache = {}
+    try:
+        _ca = _imp.import_module("comps_analyzer")
+        comps_cache = _ca._load_cache(cfg) or {}
+    except Exception:
+        pass
+
+    # inference_engine の結果（既に results に格納済みの場合）
+    ie_result = results.get("inference", {}) or {}
+
+    # economic_cycle フェーズ
+    ec_phase = results.get("economic_cycle", {}).get("phase", "B")
+    phase_labels = {
+        "A": "インフレ拡大局面",
+        "B": "成長安定局面",
+        "C": "スタグフレーション局面",
+        "D": "デフレ・縮小局面",
+    }
+    phase_label = phase_labels.get(ec_phase, "不明局面")
+
+    japan_sectors = getattr(cfg, "JAPAN_SECTORS", {})
+
+    for c in candidates:
+        ticker         = c.get("ticker", "")
+        comp_score     = c.get("composite_score") or 50.0
+        strategy_label = c.get("strategy_label", "")
+        sector_code    = c.get("sector_code", "")
+        sector_name    = japan_sectors.get(sector_code, {}).get("name_ja", sector_code)
+        pass_filters   = c.get("pass_filters", False)
+        acc_bonus      = c.get("acc_bonus") or 0.0
+        ceo_score      = c.get("ceo_score") or 0.0
+        lt_score       = c.get("longterm_scenario_score") or 0.0
+        conviction     = c.get("conviction", "low")
+        tier           = c.get("tier", "MID")
+
+        reasons_buy   = []
+        reasons_avoid = []
+
+        # ① スコア評価
+        if comp_score >= 70:
+            reasons_buy.append(
+                f"総合スコア{comp_score:.0f}pt（上位水準）— "
+                f"{sector_name}の{phase_label}における優位性が高い"
+            )
+        elif comp_score < 50:
+            reasons_avoid.append(
+                f"総合スコア{comp_score:.0f}pt（低水準）— "
+                f"現在の{phase_label}では相対的に不利"
+            )
+
+        # ② EPS加速度
+        if acc_bonus >= 5:
+            reasons_buy.append(
+                f"EPS加速スコア+{acc_bonus:.0f}pt — "
+                f"直近4四半期で増益加速傾向（I-1検知）"
+            )
+        elif acc_bonus <= -3:
+            reasons_avoid.append(
+                f"EPS減速（加速スコア{acc_bonus:.0f}pt）— "
+                f"増益率が鈍化傾向"
+            )
+
+        # ③ 経営者評価
+        if ceo_score >= 70:
+            reasons_buy.append(
+                f"経営者スコア{ceo_score:.0f}pt — "
+                f"中計達成率・資本配分が高評価（I-3）"
+            )
+        elif ceo_score > 0 and ceo_score < 40:
+            reasons_avoid.append(
+                f"経営者スコア低（{ceo_score:.0f}pt）— "
+                f"過去の公約達成率・ROE改善が不十分"
+            )
+
+        # ④ 長期シナリオ
+        if lt_score >= 65:
+            reasons_buy.append(
+                f"長期シナリオスコア{lt_score:.0f}pt — "
+                f"10年後の産業地図で{sector_name}は有望（R-5）"
+            )
+        elif lt_score > 0 and lt_score < 40:
+            reasons_avoid.append(
+                f"長期シナリオ低（{lt_score:.0f}pt）— "
+                f"構造的な逆風（技術変化・地政学）リスク"
+            )
+
+        # ⑤ comps（同業種内バリュエーション）
+        comps_entry = comps_cache.get(ticker, {})
+        if isinstance(comps_entry, dict):
+            per_vs_med = comps_entry.get("per_vs_median")
+            pbr_vs_med = comps_entry.get("pbr_vs_median")
+            if per_vs_med is not None:
+                if per_vs_med < 0.8:
+                    reasons_buy.append(
+                        f"同業種比PER割安（中央値比{per_vs_med:.1%}）— "
+                        f"バリュエーション面で割安感あり（5-2）"
+                    )
+                elif per_vs_med > 1.3:
+                    reasons_avoid.append(
+                        f"同業種比PER割高（中央値比{per_vs_med:.1%}）— "
+                        f"株価に割高感（5-2）"
+                    )
+
+        # ⑥ フィルター通過状況
+        if not pass_filters:
+            reasons_avoid.append(
+                "基本フィルター未通過（PER/PBR/時価総額基準外）"
+            )
+
+        # ⑦ VaR・相関制約
+        if c.get("var_constrained"):
+            reasons_avoid.append(
+                "VaR制約適用中（ポートフォリオリスク高 / C-1）— "
+                "追加購入は慎重に"
+            )
+        if c.get("corr_excluded"):
+            reasons_avoid.append(
+                f"相関制約除外（{c.get('corr_cluster','')}内で優先度低 / C-2）"
+            )
+
+        # ⑧ 確信度サマリー
+        conviction_jp = {"high": "高確信度", "medium": "中確信度", "low": "低確信度"}.get(
+            conviction, "確信度不明"
+        )
+
+        # ── カード生成 ───────────────────────────────────────
+        if strategy_label in ("core", "satellite_event", "satellite_smallcap"):
+            # Buy系カード
+            summary_lines = [f"✅ {conviction_jp} / {strategy_label}"] + reasons_buy[:4]
+            verdict = "BUY"
+        else:
+            # Avoid系カード
+            summary_lines = ["⚠️ 現時点では見送り"] + reasons_avoid[:4]
+            verdict = "AVOID" if not pass_filters else "WATCH"
+
+        # score_explainer による1行説明を付加
+        if _se:
+            try:
+                macro_snap  = results.get("macro_snapshot", {})
+                sec_result  = results.get("sectors", {}).get(sector_code, {})
+                explanation = _se.explain_score(
+                    sector_code    = sector_code,
+                    composite_score= comp_score,
+                    sector_result  = sec_result,
+                    macro_snapshot = macro_snap,
+                )
+                if explanation:
+                    summary_lines.append(f"📊 スコア根拠: {explanation}")
+            except Exception:
+                pass
+
+        c["investment_card"] = {
+            "verdict":      verdict,
+            "summary":      "\n".join(summary_lines[:5]),
+            "reasons_buy":  reasons_buy[:4],
+            "reasons_avoid": reasons_avoid[:4],
+            "conviction":   conviction,
+            "phase":        phase_label,
+            "generated_at": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M"),
+        }
+
+    bought_count = sum(1 for c in candidates if c.get("investment_card", {}).get("verdict") == "BUY")
+    print(f"    🃏 [D-1] 投資判断カード生成: {len(candidates)}銘柄 "
+          f"（BUY:{bought_count} / AVOID/WATCH:{len(candidates)-bought_count}）")
+    
 # ==============================================================
 # [問題B] composite_score 補正量の一元管理関数
 # ==============================================================
@@ -1028,8 +1224,16 @@ def _save_macro_report(snapshot: dict, signals: list):
         "nikkei":  "日経平均",
     }
     for k, v in snapshot.items():
+        # delta系キー（_delta, _alert等）と非数値はスキップ
+        if k.startswith("_") or k.endswith("_delta") or k.endswith("_alert"):
+            continue
         label = labels.get(k, k)
-        val   = f"{v:.3g}" if v is not None else "N/A"
+        if label == k and k not in labels:
+            continue   # labelsに定義されていないキーはスキップ
+        try:
+            val = f"{float(v):.3g}" if v is not None else "N/A"
+        except (TypeError, ValueError):
+            val = str(v)[:20] if v is not None else "N/A"
         md += f"| {label} | {val} |\n"
 
     md += "\n## アクティブなマクロシグナル\n\n"
@@ -1190,6 +1394,75 @@ def run_all_tasks(mode: str = "all") -> dict:
 
     if cfg.ENABLE_GOV_PIPELINE and _in_mode("gov"):
         results["gov"] = run_gov_pipeline()
+
+        # ── [B-2] GOV_RULES による先行指標シグナル生成 ──────────────
+        if getattr(cfg, "ENABLE_GOV_RULES", True):
+            try:
+                _gov_rules   = getattr(cfg, "GOV_RULES", {})
+                _gov_signals = []
+                _gov_result  = results.get("gov", {})
+                # gov_data_pipeline は stats/{id} の形式で値を返す
+                _gov_stats   = _gov_result.get("stats", {})
+
+                for rule_id, rule in _gov_rules.items():
+                    trigger    = rule.get("trigger", {})
+                    key        = trigger.get("key", "")
+                    op         = trigger.get("op", ">=")
+                    val        = trigger.get("val", 0.0)
+                    pts        = rule.get("pts_adj", 3.0)
+
+                    stat_entry = _gov_stats.get(key) or {}
+                    metric_val = None
+                    if isinstance(stat_entry, dict):
+                        metric_val = (
+                            stat_entry.get("yoy") or
+                            stat_entry.get("change_pct") or
+                            stat_entry.get("latest_value")
+                        )
+                    elif isinstance(stat_entry, (int, float)):
+                        metric_val = float(stat_entry)
+
+                    if metric_val is None:
+                        continue
+
+                    triggered = (
+                        (op == ">=" and metric_val >= val) or
+                        (op == ">"  and metric_val >  val) or
+                        (op == "<=" and metric_val <= val) or
+                        (op == "<"  and metric_val <  val)
+                    )
+                    if not triggered:
+                        continue
+
+                    sig = rule.get("signal", {})
+                    for code in sig.get("tailwind", []):
+                        _gov_signals.append({
+                            "rule_id":     f"GOV_{rule_id}",
+                            "label":       rule.get("label", rule_id),
+                            "sector_code": code,
+                            "signal":      "tailwind",
+                            "pts_adj":     abs(pts),
+                            "source":      "gov_rules",
+                            "metric_val":  round(float(metric_val), 3),
+                        })
+                    for code in sig.get("headwind", []):
+                        _gov_signals.append({
+                            "rule_id":     f"GOV_{rule_id}",
+                            "label":       rule.get("label", rule_id),
+                            "sector_code": code,
+                            "signal":      "headwind",
+                            "pts_adj":     -abs(pts),
+                            "source":      "gov_rules",
+                            "metric_val":  round(float(metric_val), 3),
+                        })
+
+                if _gov_signals:
+                    _existing = results.get("leading_indicator_signals", [])
+                    results["leading_indicator_signals"] = _existing + _gov_signals
+                    print(f"    📊 [B-2] GOV_RULES: {len(_gov_signals)}件発動")
+
+            except Exception as _b2e:
+                print(f"  ⚠️  [B-2] GOV_RULES評価エラー: {_b2e}")
     elif not _in_mode("gov"):
         print("  ⏩ 政府データ: スキップ（週次モジュール）")
     else:
@@ -2573,6 +2846,15 @@ def run_all_tasks(mode: str = "all") -> dict:
                     )
                     if _sdr and getattr(cfg, "ENABLE_STOCK_DETAIL_REPORT", True):
                         sdr_result = _sdr.run_stock_detail_report(cfg, screen_result, results)
+                        # ── [D-1] 投資判断カード（自然言語サマリー）────────
+                        if getattr(cfg, "ENABLE_INVESTMENT_CARD", True):
+                            try:
+                                _generate_investment_cards(
+                                    screen_result.get("candidates", []),
+                                    results, cfg,
+                                )
+                            except Exception as _d1e:
+                                print(f"  ⚠️  [D-1] 投資判断カードエラー: {_d1e}")
                         results["stock_detail_report"] = sdr_result
                         logger.add("stock_detail_report", "success",
                                    f"{sdr_result.get('generated',0)}銘柄レポート生成")
@@ -2612,7 +2894,38 @@ def run_all_tasks(mode: str = "all") -> dict:
                 print("  ⚠️  tdnet_monitor.py が見つかりません")
         except Exception as e:
             logger.add("tdnet_monitor", "error", str(e)[:100])
-            print(f"  ⚠️  TDnetモニターエラー: {str(e)[:80]}")
+            # ── [B-1] 決算短信開示銘柄をEDINETの最優先に追加 ────
+        if getattr(cfg, "ENABLE_B1_TDNET_EDINET", True):
+            _kessan_tickers = []
+            # TDnet の決算短信（kessan）銘柄を収集
+            for _item in tdnet_result.get("disclosures", []):
+                if isinstance(_item, dict):
+                    _cat = _item.get("category", "")
+                    _t   = _item.get("ticker", "") or _item.get("code", "")
+                    # 決算短信カテゴリのみ対象
+                    if _cat in ("kessan", "financial_results",
+                                "決算短信", "earnings") and _t:
+                        _ticker_jp = (
+                            f"{_t}.T" if not str(_t).endswith(".T")
+                            and len(str(_t)) == 4 else str(_t)
+                        )
+                        _kessan_tickers.append(_ticker_jp)
+
+            if _kessan_tickers:
+                # cfg.EDINET_WATCHLIST_TICKERS の先頭に挿入
+                _existing_wl = list(getattr(cfg, "EDINET_WATCHLIST_TICKERS", []))
+                cfg.__dict__["EDINET_WATCHLIST_TICKERS"] = (
+                    list(dict.fromkeys(_kessan_tickers + _existing_wl))[:20]
+                )
+                print(
+                    f"    📌 [B-1] 決算短信銘柄→EDINET優先: "
+                    f"{_kessan_tickers[:5]}"
+                )
+                logger.add(
+                    "b1_tdnet_edinet", "success",
+                    f"決算短信{len(_kessan_tickers)}社をEDINET最優先に設定",
+                )
+        print(f"  ⚠️  TDnetモニターエラー: {str(e)[:80]}")
     else:
         print("  ⏩ TDnetモニター: スキップ（ENABLE_TDNET_MONITOR=False）")
     
@@ -3291,6 +3604,35 @@ def run_all_tasks(mode: str = "all") -> dict:
                 print(f"  ⚠️  ML補正エラー（スキップ）: {str(e)[:60]}")
     else:
         print("  ⏩ ルールオプティマイザー/ML補正: スキップ")
+    # ── [RESEARCH-2] ファクター・クラウディング検知 ─────────────────
+    if getattr(cfg, "ENABLE_FACTOR_CROWDING", True) and _in_mode("factor_crowding"):
+        try:
+            _fcm = _load_local_module(
+                "factor_crowding_monitor",
+                "/content/factor_crowding_monitor.py",
+                cfg.DRIVE_BASE / "factor_crowding_monitor.py",
+            )
+            if _fcm:
+                fcm_result = _fcm.run_factor_crowding_monitor(cfg, results)
+                results["factor_crowding"] = fcm_result
+
+                if not fcm_result.get("skipped"):
+                    score = fcm_result.get("crowding_score", 0)
+                    alert = fcm_result.get("crowding_alert", False)
+                    unwind = fcm_result.get("unwind_alert", False)
+
+                    logger.add(
+                        "factor_crowding", "success" if not alert else "alert",
+                        f"avg_corr={fcm_result.get('avg_correlation', 0):.3f} "
+                        f"/ score={score} "
+                        f"/ crowding={'🚨' if alert else '✅'} "
+                        f"/ unwind={'🚨' if unwind else '-'}",
+                    )
+        except Exception as e:
+            logger.add("factor_crowding", "error", str(e)[:100])
+            print(f"  ⚠️  クラウディング検知エラー（スキップ）: {str(e)[:60]}")
+    else:
+        print("  ⏩ クラウディング検知: スキップ")
     # ── [5-3] バックテスト（C-2 / 週次） ────────────────────────
     if getattr(cfg, "ENABLE_BACKTESTER", True) and _in_mode("backtester"):
         try:
@@ -3722,7 +4064,7 @@ def _render_fin_chart(companies: list, sector_name: str) -> None:
 def run_streamlit_ui():
     """Streamlit UI を起動する（colab_analyzer_start_v3.py から呼ばれる）"""
     try:
-        import streamlit as st
+        import streamlit as st # type: ignore
     except ImportError:
         print("  ❌ streamlit が未インストールです")
         return
@@ -3820,7 +4162,11 @@ def run_streamlit_ui():
             for i, (k, label) in enumerate(labels.items()):
                 v = snapshot.get(k)
                 with cols[i % 3]:
-                    st.metric(label, f"{v:.3g}" if v else "N/A")
+                    try:
+                        metric_val = f"{float(v):.3g}" if v is not None else "N/A"
+                    except (TypeError, ValueError):
+                        metric_val = str(v)[:15] if v is not None else "N/A"
+                    st.metric(label, metric_val)
 
         st.markdown("---")
 

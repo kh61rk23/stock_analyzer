@@ -533,6 +533,14 @@ def fetch_one_ticker(
             "latest_fcf":         latest_fcf,
             "data_source":        "sec_xbrl",
         }
+        # ── [④] 鮮度情報を付与 ─────────────────────────────────
+        try:
+            import sys as _sys, importlib as _imp
+            _sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent))
+            _cfm = _imp.import_module("cache_freshness_manager")
+            result_data = _cfm.enrich_us_fundamental_with_freshness(result_data, cfg)
+        except Exception:
+            pass   # 鮮度付与失敗は致命的でない
 
         save_ticker_db(cfg, ticker, result_data)
 
@@ -668,8 +676,8 @@ def _update_meta(meta: dict, result: dict) -> None:
 # ==============================================================
 # BLOCK 9: メインエントリポイント
 # ==============================================================
-
-def run_us_fundamental_rotator(cfg, results: dict = None) -> dict:
+# 「dict または None」という意味
+def run_us_fundamental_rotator(cfg, results: dict | None = None) -> dict:
     """
     US 財務 DB ローテーターを実行する。
 

@@ -163,8 +163,8 @@ def _fetch_etf_momentum(ticker: str) -> Optional[dict]:
         取得失敗時は None
     """
     try:
-        import yfinance as yf
-        import numpy as np
+        import yfinance as yf # type: ignore # yfinance は外部依存のため、実行環境にない場合はこのモジュール全体をスキップする設計
+        import numpy as np # type: ignore # numpy も yfinance と同様に外部依存として扱う
 
         t    = yf.Ticker(ticker)
         hist = t.history(period="6mo", interval="1d")
@@ -234,28 +234,171 @@ def _calc_etf_momentum_score(etf_details: list) -> float:
 
     return round(sum(scores) / len(scores), 1)
 
-
 # ==============================================================
-# BLOCK 2: ArXivトレンドスコア算出
+# BLOCK 2: ArXivトレンドスコア算出 Semantic Scholar API 統合（⑤ 論文スコアリング強化）
 # ==============================================================
 
-def _calc_arxiv_trend_score(theme: dict, arxiv_result: Optional[dict]) -> tuple:
+_SS_CACHE: dict = {}   # セッション内キャッシュ（重複APIコール防止）
+
+def _fetch_semantic_scholar(paper_id: str) -> dict:
+    """
+    Semantic Scholar API から論文の引用数・著者情報を取得する。
+    APIキー不要・無料。失敗時は空 dict を返す（スキップ設計）。
+
+    Args:
+        paper_id: ArXiv ID（例: "2301.07041"）または SS の paperId
+
+    Returns:
+        {
+          "citation_count":   int,
+          "influential_count": int,   # 影響力のある引用数
+          "authors":          [{name, hIndex, affiliations}],
+          "year":             int,
+          "is_open_access":   bool,
+        }
+    """
+    if paper_id in _SS_CACHE:
+        return _SS_CACHE[paper_id]
+
+    try:
+        import requests
+        # ArXiv ID から SS paperId を構築
+        ss_id = f"ARXIV:{paper_id}" if not paper_id.startswith("ARXIV:") else paper_id
+        url   = f"https://api.semanticscholar.org/graph/v1/paper/{ss_id}"
+        params = {
+            "fields": "citationCount,influentialCitationCount,authors.hIndex,authors.name,authors.affiliations,year,isOpenAccess"
+        }
+        resp = requests.get(url, params=params, timeout=5,
+                            headers={"User-Agent": "stock_analyzer/1.0"})
+        if resp.status_code == 200:
+            data = resp.json()
+            result = {
+                "citation_count":    data.get("citationCount", 0) or 0,
+                "influential_count": data.get("influentialCitationCount", 0) or 0,
+                "authors":           data.get("authors", []),
+                "year":              data.get("year"),
+                "is_open_access":    data.get("isOpenAccess", False),
+            }
+            _SS_CACHE[paper_id] = result
+            return result
+    except Exception:
+        pass
+    _SS_CACHE[paper_id] = {}
+    return {}
+
+
+def _calc_paper_weight(paper: dict, ss_data: dict) -> float:
+    """
+    1論文の重みスコアを計算する。
+
+    重み = キーワードマッチ点数（呼び出し元で適用）
+         × 引用数スコア
+         × 著者スコア（機関・H-index）
+         × カテゴリスコア
+         × 再現性スコア（コード公開）
+         × ホット度スコア（発表後72h以内の被引用スコア）
+
+    Returns:
+        weight_multiplier: float（1.0 = 標準）
+    """
+    weight = 1.0
+
+    # ── 引用数スコア ──────────────────────────────────────────────
+    citations = ss_data.get("citation_count", 0) or 0
+    if citations >= 100:
+        weight *= 3.0
+    elif citations >= 50:
+        weight *= 2.0
+    elif citations >= 20:
+        weight *= 1.5
+    elif citations >= 5:
+        weight *= 1.2
+    # 0件はそのまま（新着論文は引用なしが正常）
+
+    # ── 著者スコア（H-index × 機関名マッチ） ──────────────────────
+    top_institutions = [
+        "google", "deepmind", "openai", "mit", "stanford", "cmu",
+        "microsoft research", "meta", "amazon", "berkeley", "oxford",
+        "cambridge", "harvard", "eth", "tokyo", "kyoto", "nvidia",
+        "anthropic", "hugging face", "brain", "fair",
+    ]
+    authors = ss_data.get("authors", [])
+    max_h_index = 0
+    has_top_affil = False
+
+    for author in authors[:5]:   # 先頭5著者のみ確認
+        h_idx = author.get("hIndex") or 0
+        if h_idx > max_h_index:
+            max_h_index = h_idx
+
+        affiliations = author.get("affiliations", []) or []
+        for aff in affiliations:
+            aff_lower = str(aff).lower()
+            if any(inst in aff_lower for inst in top_institutions):
+                has_top_affil = True
+                break
+
+    if max_h_index >= 50:
+        weight *= 2.0
+    elif max_h_index >= 20:
+        weight *= 1.5
+    elif max_h_index >= 10:
+        weight *= 1.2
+
+    if has_top_affil:
+        weight *= 1.5
+
+    # ── カテゴリスコア ─────────────────────────────────────────────
+    arxiv_id = paper.get("id", "") or paper.get("url", "")
+    # ArXiv カテゴリを URL から推定
+    categories = paper.get("categories", []) or []
+    cat_str = " ".join(str(c) for c in categories).lower() + arxiv_id.lower()
+
+    if "cs.lg" in cat_str or "machine learning" in cat_str:
+        weight *= 1.3
+    elif "cs.cl" in cat_str or "natural language" in cat_str:
+        weight *= 1.2
+    elif "econ.gn" in cat_str or "q-fin" in cat_str:
+        weight *= 1.4   # 金融系は特に重要
+    elif "cs.cv" in cat_str or "computer vision" in cat_str:
+        weight *= 1.1
+
+    # ── 再現性スコア（コード公開） ─────────────────────────────────
+    title   = (paper.get("title",   "") or "").lower()
+    summary = (paper.get("summary", "") or "").lower()
+    text    = title + " " + summary
+    if any(kw in text for kw in ["code available", "open source", "github.com",
+                                   "open-source", "code release"]):
+        weight *= 1.3
+
+    # ── ホット度スコア（投稿後72時間以内 + 被引用あり） ──────────────
+    pub_str = paper.get("published") or paper.get("pub_date") or ""
+    try:
+        from datetime import datetime as _dt
+        pub_dt = _dt.strptime(pub_str[:10], "%Y-%m-%d")
+        hours_since = (datetime.now() - pub_dt).total_seconds() / 3600
+        if hours_since <= 72 and citations >= 1:
+            weight *= 1.5   # 直後に被引用 = バズ論文
+    except Exception:
+        pass
+
+    return round(weight, 3)
+
+
+def _calc_arxiv_trend_score(theme: dict, arxiv_result: Optional[dict],
+                             enable_semantic_scholar: bool = False) -> tuple:
     """
     ArXivの論文数増加率からトレンドスコア(0-100)を算出する。
-
-    arxiv_result が None（週次未実施）の場合は 50（中立）を返す。
+    [⑤] Semantic Scholar APIによる重み付けをオプションで追加。
 
     Returns:
         (score: float, detail: dict)
-        detail = {recent_4w, prev_4w, growth_rate}
     """
     empty_detail = {"recent_4w": 0, "prev_4w": 0, "growth_rate": None}
 
     if not arxiv_result or not isinstance(arxiv_result, dict):
         return 50.0, empty_detail
 
-    # arxiv_result["papers"] があれば論文リストを取得
-    # arxiv_monitor.py の出力形式に合わせて探索
     papers = []
     for key in ("papers", "new_papers_list", "all_papers"):
         v = arxiv_result.get(key)
@@ -263,16 +406,16 @@ def _calc_arxiv_trend_score(theme: dict, arxiv_result: Optional[dict]) -> tuple:
             papers = v
             break
 
-    # 論文数スカラーのみの場合（リストがない）は中立返却
     if not papers:
         return 50.0, empty_detail
 
-    # テーマキーワードで論文をフィルタリング
     keywords = [kw.lower() for kw in theme.get("arxiv_keywords", [])]
-    now      = datetime.now()
-    cutoff_4w  = now - timedelta(weeks=4)
-    cutoff_8w  = now - timedelta(weeks=8)
+    now       = datetime.now()
+    cutoff_4w = now - timedelta(weeks=4)
+    cutoff_8w = now - timedelta(weeks=8)
 
+    recent_score = 0.0   # 重み付き合計（単純カウントから変更）
+    prev_score   = 0.0
     recent_count = 0
     prev_count   = 0
 
@@ -281,38 +424,52 @@ def _calc_arxiv_trend_score(theme: dict, arxiv_result: Optional[dict]) -> tuple:
         summary = (p.get("summary", "") or "").lower()
         text    = title + " " + summary
 
-        # キーワードマッチ
         if not any(kw in text for kw in keywords):
             continue
 
-        # 公開日のパース
         pub_str = p.get("published") or p.get("pub_date") or ""
         try:
             pub_dt = datetime.strptime(pub_str[:10], "%Y-%m-%d")
         except (ValueError, TypeError):
             continue
 
+        # 重みの計算
+        paper_weight = 1.0
+        if enable_semantic_scholar:
+            # ArXiv ID を抽出（URL形式: https://arxiv.org/abs/2301.07041）
+            arxiv_url = p.get("url", "") or p.get("id", "")
+            arxiv_id  = ""
+            if "arxiv.org/abs/" in arxiv_url:
+                arxiv_id = arxiv_url.split("arxiv.org/abs/")[-1].split("v")[0]
+            if arxiv_id:
+                ss_data = _fetch_semantic_scholar(arxiv_id)
+                paper_weight = _calc_paper_weight(p, ss_data)
+                time.sleep(0.1)   # SS API レート制限（100req/5min = 1.2req/s）
+
         if pub_dt >= cutoff_4w:
+            recent_score += paper_weight
             recent_count += 1
         elif pub_dt >= cutoff_8w:
-            prev_count += 1
+            prev_score   += paper_weight
+            prev_count   += 1
 
-    # 増加率計算
-    if prev_count == 0 and recent_count == 0:
-        return 50.0, {"recent_4w": 0, "prev_4w": 0, "growth_rate": None}
+    if recent_score == 0 and prev_score == 0:
+        return 50.0, {"recent_4w": recent_count, "prev_4w": prev_count, "growth_rate": None}
 
-    if prev_count == 0:
-        growth_rate = 100.0   # 前期0 → 今期あり = 100%増扱い
+    if prev_score < 0.1:
+        growth_rate = 100.0
     else:
-        growth_rate = (recent_count - prev_count) / prev_count * 100
+        growth_rate = (recent_score - prev_score) / prev_score * 100
 
-    # [-50%, +100%] → [0, 100] に正規化
     score = max(0.0, min(100.0, (growth_rate + 50) / 150 * 100))
 
     return round(score, 1), {
-        "recent_4w":  recent_count,
-        "prev_4w":    prev_count,
-        "growth_rate": round(growth_rate, 1),
+        "recent_4w":         recent_count,
+        "prev_4w":           prev_count,
+        "growth_rate":       round(growth_rate, 1),
+        "recent_weighted":   round(recent_score, 2),
+        "prev_weighted":     round(prev_score, 2),
+        "ss_enabled":        enable_semantic_scholar,
     }
 
 
@@ -320,7 +477,7 @@ def _calc_arxiv_trend_score(theme: dict, arxiv_result: Optional[dict]) -> tuple:
 # BLOCK 3: テーマ単体スコアリング
 # ==============================================================
 
-def _score_theme(theme: dict, arxiv_result: Optional[dict]) -> dict:
+def _score_theme(theme: dict, arxiv_result: Optional[dict], cfg=None) -> dict:
     """
     1テーマのETFモメンタム + ArXivトレンドを統合してスコアを返す。
     """
@@ -332,7 +489,9 @@ def _score_theme(theme: dict, arxiv_result: Optional[dict]) -> dict:
         time.sleep(0.3)
 
     etf_score    = _calc_etf_momentum_score(etf_details)
-    arxiv_score, arxiv_detail = _calc_arxiv_trend_score(theme, arxiv_result)
+    _use_ss = getattr(cfg, "ENABLE_SEMANTIC_SCHOLAR", False) if cfg else False
+    arxiv_score, arxiv_detail = _calc_arxiv_trend_score(theme, arxiv_result,
+                                                          enable_semantic_scholar=_use_ss)
 
     # 熱量スコア: ETF 60% + ArXiv 40%
     heat_score = round(etf_score * 0.60 + arxiv_score * 0.40, 1)
@@ -462,7 +621,7 @@ def run_thematic_etf_tracker(cfg, arxiv_result: Optional[dict] = None) -> dict:
     results_list = []
     for theme in target_themes:
         print(f"  📌 {theme['name']} ({'/'.join(theme['etfs'])}) ...")
-        result = _score_theme(theme, arxiv_result)
+        result = _score_theme(theme, arxiv_result, cfg=cfg)
         results_list.append(result)
         print(
             f"    → 熱量:{result['heat_score']:.0f}  "
@@ -499,16 +658,34 @@ def run_thematic_etf_tracker(cfg, arxiv_result: Optional[dict] = None) -> dict:
 # ==============================================================
 if __name__ == "__main__":
     import importlib.util
-    for p in ["/content/config.py",
-              str(Path(__file__).parent / "config.py")]:
-        if Path(p).exists():
-            spec = importlib.util.spec_from_file_location("config", p)
-            cfg  = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(cfg)
-            break
+    from pathlib import Path
 
-    result = run_thematic_etf_tracker(cfg, arxiv_result=None)
-    print("\n--- 熱量ランキング ---")
-    for t in result["themes"]:
-        icon = {"hot": "🔥", "warming": "📈", "neutral": "➡️", "cooling": "❄️"}.get(t["signal"])
-        print(f"  {icon} {t['theme_name']}: {t['heat_score']:.0f}点")
+    cfg = None
+    # 設定ファイルの読み込み
+    for p in ["/content/config.py", str(Path(__file__).parent / "config.py")]:
+        path_obj = Path(p)
+        if path_obj.exists():
+            spec = importlib.util.spec_from_file_location("config", p)
+            # spec と loader の存在を確定させ、Noneのリスクを排除
+            if spec is not None and spec.loader is not None:
+                cfg = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(cfg)
+                break
+
+    # cfg が正しく読み込めている場合のみ、解析処理を実行する
+    if cfg is not None:
+        result = run_thematic_etf_tracker(cfg, arxiv_result=None)
+        
+        print("\n--- 熱量ランキング ---")
+        # 結果のリストを取得（万が一結果が空だった場合も考慮）
+        themes = result.get("themes", [])
+        for t in themes:
+            # 信号に応じたアイコンの取得
+            signal_map = {"hot": "🔥", "warming": "📈", "neutral": "➡️", "cooling": "❄️"}
+            icon = signal_map.get(t.get("signal", "neutral"), "➡️")
+            
+            # スコアの表示
+            heat_score = t.get("heat_score", 0)
+            print(f"  {icon} {t.get('theme_name', '不明')}: {heat_score:.0f}点")
+    else:
+        print("ERROR: config.py が読み込めなかったため、ETFトラッカーを実行できません。")

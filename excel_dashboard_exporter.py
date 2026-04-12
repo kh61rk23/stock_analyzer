@@ -14,24 +14,43 @@
 #   GitHub Actions の commit ステップでリポジトリに push されることで
 #   raw.githubusercontent.com から Excel が自動取得できるようになる。
 #
-# 【CSV列定義（全カテゴリ共通スキーマ）】一部抜粋
-#   date          : 実行日 YYYY-MM-DD
-#   market        : JP / US / ETF
-#   category      : セクターコード / ETF ID
-#   name_ja       : 日本語名
-#   name_en       : 英語名
-#   composite_score : 総合スコア（0-100）
-#   risk_level    : high / medium / low
-#   ret_1m        : 1ヶ月リターン（%、US/ETFのみ）
-#   ret_3m        : 3ヶ月リターン（%、US/ETFのみ）
-#   signal        : tailwind / headwind / neutral / hot / warming / cooling
-#   etfs          : 対象ETFティッカー（カンマ区切り）
-#   heat_score    : 熱量スコア（ETFテーマのみ）
-#   arxiv_growth  : ArXiv論文増加率（%、ETFテーマのみ）
-#   top_company_1 : 代表銘柄1（JPのみ、スクリーニング通過上位）
-#   top_company_2 : 代表銘柄2
-#   notes         : 補足（マクロシグナル要約など）
+# 【CSV列定義（全カテゴリ共通スキーマ）】
 #
+#列番号  カラム名          型      説明
+#──────────────────────────────────────────────────────────────
+#  1     date             str     実行日（YYYY-MM-DD）
+#  2     market           str     "JP" または "US"または"ETF"
+#  3     category         str     業種コード（JP: "1001"〜"1033" / US: セクター名）
+#  4     name_ja          str     業種・セクター日本語名
+#  5     name_en          str     業種・セクター英語名
+#  6     composite_score  float   総合スコア（0〜100）★現在 0.0 の問題あり
+#  7     risk_level       str     "HIGH" / "MEDIUM" / "LOW" / "N/A"
+#  8     risk_score       int     リスクスコア（数値化）
+#  9     ret_1m           float   1ヶ月リターン（%）
+# 10     ret_3m           float   3ヶ月リターン（%）
+# 11     signal           str     tailwind / headwind / neutral / hot / warming / cooling
+# 12     signal_score     int     シグナルスコア（正=追い風 / 負=逆風）
+# 13     tailwind_count   int     追い風シグナル数
+# 14     headwind_count   int     逆風シグナル数
+# 15     etfs             str     関連ETFティッカー（カンマ区切り）
+# 16     heat_score       float   テーマ熱量スコア（ETFテーマのみ）
+# 17     arxiv_growth     str     ArXiv論文成長率（%、ETFテーマのみ）
+# 18     top_company_1    str     代表銘柄1（例: "1332.T"）
+# 19     top_company_2    str     代表銘柄2
+# 20     notes            str     備考・メモ・補足（マクロシグナル要約など）
+# 21     discovery_score  float   未発見銘柄スコア（0-100）[S-3追加]
+# 22     accrual_tier     str     EDINETアクルーアルtier（AAA/AA/A/B/C/N/A）[S-2追加]
+# 23     accrual_bonus    float   quality_scoreへの加算点
+# 24     recession_adj    float   イールドカーブ補正量（recession_adjustment）[F-1追加]
+# 25  signal_score      float  signal_aggregator 統合スコア（0-100）
+# 26  market_regime     str    "リスクオン" / "中立" / "リスクオフ"
+# 27  comps_bonus       float  同業種内比較ボーナス点
+# 28  sr_bonus          float  サポレジ位置ボーナス点
+# 29  inference_phase   str    推論エンジン市場フェーズ
+# 30  pf_total_value_jpy  float  ポートフォリオ総時価（円）
+# 31  pf_sharpe           float  現在PFシャープレシオ
+# 32  pf_rebalance_count  int    リバランシング推奨銘柄数
+#文字コード: UTF-8（BOMあり / Mac Excel対応）
 # 【依存】config.py のみ（pandas / pathlib / csv）
 # 【呼出】from excel_dashboard_exporter import run_excel_exporter
 # ==============================================================
