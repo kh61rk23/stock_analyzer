@@ -417,8 +417,6 @@ def fetch_commodity_prices() -> dict:
         print(f"    WARNING: 一括取得失敗: {e} → 個別取得にフォールバック")
         data = None
 
-    today = datetime.now()
-
     for item_key, meta in all_items.items():
         ticker = meta["ticker"]
         try:
@@ -759,6 +757,80 @@ def calc_sector_deltas(commodity_data: dict) -> dict:
 
     return {"jp": jp_deltas, "us": us_deltas}
 
+# ==============================================================
+# BLOCK 6.5: FRED金利シグナル → GICSセクタースコア接続（Wave 1 - U-2）
+# ==============================================================
+
+def calc_rate_sensitivity_deltas(yields_data: dict, cfg) -> dict:
+    """
+    FRED から取得した US10Y 利回り変化量を US_RATE_SENSITIVITY_RULES に接続し、
+    GICSセクターETFごとのスコア補正量を算出する（U-2）。
+
+    算出式:
+      $delta = magnitude \times change\\_1m\\_bps$
+      ただし $|change\\_1m\\_bps| < rate\\_threshold\\_bp$ なら発動しない。
+      発動した場合は $[-max\\_delta, +max\\_delta]$ にクリップする。
+
+    Args:
+        yields_data: fetch_yields() の返り値
+                     {"us10y": {"latest": float, "change_1m": float, ...}, ...}
+        cfg:         config モジュール（US_RATE_SENSITIVITY_RULES を参照）
+
+    Returns:
+        {"XLF": delta_pt, "XLRE": delta_pt, ...}
+        補正が発動しなかった ETF は含まない
+    """
+    rate_deltas: dict = {}
+    try:
+        rules = getattr(cfg, "US_RATE_SENSITIVITY_RULES", {})
+        if not rules:
+            return rate_deltas
+
+        # US10Y 1M変化量を bps に変換（%pt × 100）
+        us10y_data       = yields_data.get("us10y", {})
+        change_1m_pct    = float(us10y_data.get("change_1m", 0) or 0)
+        change_1m_bps    = round(change_1m_pct * 100, 1)   # %pt → bps
+
+        if change_1m_bps == 0:
+            return rate_deltas
+
+        applied = []
+        for etf_sym, rule in rules.items():
+            try:
+                threshold = float(rule.get("rate_threshold_bp", 25))
+                magnitude = float(rule.get("magnitude", 0))
+                max_delta = float(rule.get("max_delta", 5))
+
+                # 閾値未満は発動しない（ノイズ除去）
+                if abs(change_1m_bps) < threshold:
+                    continue
+
+                # $delta = magnitude \times change\_1m\_bps$
+                raw_delta = magnitude * change_1m_bps
+                # max_delta でクリップ（方向を維持）
+                clipped = max(-max_delta, min(max_delta, raw_delta))
+                clipped = round(clipped, 2)
+
+                if clipped != 0.0:
+                    rate_deltas[etf_sym] = clipped
+                    sign = "+" if clipped >= 0 else ""
+                    applied.append(f"{etf_sym}:{sign}{clipped:.1f}")
+
+            except Exception:
+                continue
+
+        if applied:
+            direction = "上昇" if change_1m_bps > 0 else "低下"
+            print(
+                f"    📈 [U-2] 金利感応補正 (US10Y {change_1m_bps:+.0f}bps {direction}): "
+                f"{', '.join(applied[:6])}"
+                f"{'...' if len(applied) > 6 else ''}"
+            )
+
+    except Exception as e:
+        print(f"    ⚠️  [U-2] 金利感応補正エラー（スキップ）: {str(e)[:60]}")
+
+    return rate_deltas
 
 # ==============================================================
 # BLOCK 7: MDレポート生成
@@ -1065,6 +1137,25 @@ def run_bond_commodity_pipeline(cfg, logger=None) -> dict:
         f"JP補正対象: {jp_affected}業種 | US補正対象: {us_affected}セクター"
     )
 
+# ── [U-2] FRED金利シグナル → GICSセクタースコア接続 ───────────
+    try:
+        rate_deltas = calc_rate_sensitivity_deltas(yields, cfg)
+        if rate_deltas:
+            # commodity ベースの US deltas と合算してクリップ
+            for etf_sym, delta in rate_deltas.items():
+                existing = sector_deltas["us"].get(etf_sym, 0.0)
+                merged   = round(existing + delta, 2)
+                # 最終クリップ: ±20pt（金利＋コモディティの複合効果上限）
+                sector_deltas["us"][etf_sym] = max(-20.0, min(20.0, merged))
+            us_affected = len([v for v in sector_deltas["us"].values() if abs(v) > 0])
+            logger.add(
+                "bond_commodity", "success",
+                f"[U-2] 金利感応補正後 US補正対象: {us_affected}セクター",
+            )
+    except Exception as _u2e:
+        logger.add("bond_commodity", "error", f"[U-2] 金利感応補正失敗: {str(_u2e)[:80]}")
+        print(f"    ⚠️  [U-2] 金利感応補正エラー（スキップ）: {str(_u2e)[:80]}")
+
     # ── Step 5: レポート生成・保存 ────────────────────────────
     print("  [5/5] MDレポート・JSON生成...")
     md_report = generate_md_report(
@@ -1095,7 +1186,7 @@ def run_bond_commodity_pipeline(cfg, logger=None) -> dict:
     # 実際の apply_recession_score_to_sectors() 呼び出しは
     # stock_analyzer_main.py の bond_commodity 実行ブロック直後で行う。
     # （sector_results が確定した後に呼ぶ必要があるため）
-    print(f"  ✅ 債券・コモディティパイプライン完了")
+    print("  ✅ 債券・コモディティパイプライン完了")
 
     return {
         "curve_analysis":  curve_analysis,
@@ -1105,6 +1196,7 @@ def run_bond_commodity_pipeline(cfg, logger=None) -> dict:
         "ok_count":        ok_count,
         "md_path":         md_path,
         "json_path":       json_path,
+        "rate_deltas":     rate_deltas if "rate_deltas" in dir() else {},
     }
 
 
@@ -1112,7 +1204,6 @@ def run_bond_commodity_pipeline(cfg, logger=None) -> dict:
 # スタンドアロン実行（テスト用）
 # ==============================================================
 if __name__ == "__main__":
-    import types
 
     class _MockCfg:
         POLICY_FRED_API_KEY = ""

@@ -1,0 +1,345 @@
+{
+  "version": "1.0",
+  "description": "日本株33業種 × サブテーマ定義（Wave 2 - R-1）",
+  "generated": "2026-05-24",
+  "attributes": {
+    "supply_chain_position": "upstream | midstream | downstream | service | financial",
+    "business_cycle_sensitivity": "cyclical | defensive | growth | financial",
+    "export_dependency": "high | medium | low",
+    "digital_transformation_stage": "leader | follower | laggard",
+    "esg_priority": "environmental | social | governance | balanced",
+    "bm_type": "BM-01（商社）| BM-02（銀行）| BM-03（保険）| null"
+  },
+  "sectors": {
+    "1001": {
+      "name_ja": "水産・農林業",
+      "supply_chain_position": "upstream",
+      "business_cycle_sensitivity": "defensive",
+      "export_dependency": "low",
+      "digital_transformation_stage": "laggard",
+      "esg_priority": "environmental",
+      "bm_type": null,
+      "subthemes": ["食料安全保障", "代替タンパク", "スマート農業", "洋上養殖", "フードテック"]
+    },
+    "1002": {
+      "name_ja": "鉱業",
+      "supply_chain_position": "upstream",
+      "business_cycle_sensitivity": "cyclical",
+      "export_dependency": "medium",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "environmental",
+      "bm_type": null,
+      "subthemes": ["資源ナショナリズム", "脱炭素転換リスク", "重要鉱物", "カーボンフットプリント"]
+    },
+    "1003": {
+      "name_ja": "建設業",
+      "supply_chain_position": "downstream",
+      "business_cycle_sensitivity": "cyclical",
+      "export_dependency": "low",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "environmental",
+      "bm_type": null,
+      "subthemes": ["インフラ老朽化更新", "防災・国土強靭化", "BIM/CIM", "人手不足対応", "再開発"]
+    },
+    "1004": {
+      "name_ja": "食料品",
+      "supply_chain_position": "downstream",
+      "business_cycle_sensitivity": "defensive",
+      "export_dependency": "low",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "social",
+      "bm_type": null,
+      "subthemes": ["値上げ転嫁力", "海外展開", "植物性食品", "フードロス削減", "機能性食品"]
+    },
+    "1005": {
+      "name_ja": "繊維製品",
+      "supply_chain_position": "midstream",
+      "business_cycle_sensitivity": "cyclical",
+      "export_dependency": "medium",
+      "digital_transformation_stage": "laggard",
+      "esg_priority": "environmental",
+      "bm_type": null,
+      "subthemes": ["サプライチェーン透明化", "機能素材", "リサイクル繊維", "ESGファッション"]
+    },
+    "1006": {
+      "name_ja": "パルプ・紙",
+      "supply_chain_position": "midstream",
+      "business_cycle_sensitivity": "defensive",
+      "export_dependency": "low",
+      "digital_transformation_stage": "laggard",
+      "esg_priority": "environmental",
+      "bm_type": null,
+      "subthemes": ["脱プラ代替素材", "バイオマス", "森林認証", "デジタル化による需要縮小リスク"]
+    },
+    "1007": {
+      "name_ja": "化学",
+      "supply_chain_position": "midstream",
+      "business_cycle_sensitivity": "cyclical",
+      "export_dependency": "high",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "environmental",
+      "bm_type": null,
+      "subthemes": ["半導体材料", "電池材料", "バイオプラスチック", "スペシャリティケミカル", "PFAS規制"]
+    },
+    "1008": {
+      "name_ja": "医薬品",
+      "supply_chain_position": "downstream",
+      "business_cycle_sensitivity": "defensive",
+      "export_dependency": "medium",
+      "digital_transformation_stage": "leader",
+      "esg_priority": "social",
+      "bm_type": null,
+      "subthemes": ["がん免疫療法", "核酸医薬", "AI創薬", "後発薬", "グローバル展開", "薬価改定リスク"]
+    },
+    "1009": {
+      "name_ja": "石油・石炭製品",
+      "supply_chain_position": "midstream",
+      "business_cycle_sensitivity": "cyclical",
+      "export_dependency": "medium",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "environmental",
+      "bm_type": null,
+      "subthemes": ["脱炭素転換", "SAF（持続可能航空燃料）", "水素サプライヤー転換", "エネルギー安全保障"]
+    },
+    "1010": {
+      "name_ja": "ゴム製品",
+      "supply_chain_position": "midstream",
+      "business_cycle_sensitivity": "cyclical",
+      "export_dependency": "high",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "environmental",
+      "bm_type": null,
+      "subthemes": ["EV用タイヤ需要変化", "CASE対応", "天然ゴム調達安定性"]
+    },
+    "1011": {
+      "name_ja": "ガラス・土石製品",
+      "supply_chain_position": "midstream",
+      "business_cycle_sensitivity": "cyclical",
+      "export_dependency": "medium",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "environmental",
+      "bm_type": null,
+      "subthemes": ["半導体用ガラス基板", "建材省エネ化", "光ファイバー需要", "カーボンニュートラル窯"]
+    },
+    "1012": {
+      "name_ja": "鉄鋼",
+      "supply_chain_position": "midstream",
+      "business_cycle_sensitivity": "cyclical",
+      "export_dependency": "high",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "environmental",
+      "bm_type": null,
+      "subthemes": ["グリーンスチール", "高炉→電炉転換", "自動車向け高張力鋼", "中国供給過剰リスク"]
+    },
+    "1013": {
+      "name_ja": "非鉄金属",
+      "supply_chain_position": "midstream",
+      "business_cycle_sensitivity": "cyclical",
+      "export_dependency": "high",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "environmental",
+      "bm_type": null,
+      "subthemes": ["銅需要（EV・再エネ）", "希少金属リサイクル", "鉱山権益", "中国需要依存度"]
+    },
+    "1014": {
+      "name_ja": "金属製品",
+      "supply_chain_position": "midstream",
+      "business_cycle_sensitivity": "cyclical",
+      "export_dependency": "medium",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "environmental",
+      "bm_type": null,
+      "subthemes": ["半導体製造装置部品", "精密加工", "建設向け需要"]
+    },
+    "1015": {
+      "name_ja": "機械",
+      "supply_chain_position": "downstream",
+      "business_cycle_sensitivity": "cyclical",
+      "export_dependency": "high",
+      "digital_transformation_stage": "leader",
+      "esg_priority": "balanced",
+      "bm_type": null,
+      "subthemes": ["工場自動化（FA）", "半導体製造装置", "建設機械", "農業機械", "脱炭素設備投資"]
+    },
+    "1016": {
+      "name_ja": "電気機器",
+      "supply_chain_position": "downstream",
+      "business_cycle_sensitivity": "growth",
+      "export_dependency": "high",
+      "digital_transformation_stage": "leader",
+      "esg_priority": "balanced",
+      "bm_type": null,
+      "subthemes": ["AI半導体", "パワー半導体（EV）", "産業用インバータ", "スマートグリッド", "5G通信機器"]
+    },
+    "1017": {
+      "name_ja": "輸送用機器",
+      "supply_chain_position": "downstream",
+      "business_cycle_sensitivity": "cyclical",
+      "export_dependency": "high",
+      "digital_transformation_stage": "leader",
+      "esg_priority": "environmental",
+      "bm_type": null,
+      "subthemes": ["EV化対応", "CASE戦略", "自動運転", "HV継続優位", "中国市場シェア"]
+    },
+    "1018": {
+      "name_ja": "精密機器",
+      "supply_chain_position": "downstream",
+      "business_cycle_sensitivity": "growth",
+      "export_dependency": "high",
+      "digital_transformation_stage": "leader",
+      "esg_priority": "balanced",
+      "bm_type": null,
+      "subthemes": ["半導体露光装置", "医療機器", "産業用レンズ", "計測・検査機器"]
+    },
+    "1019": {
+      "name_ja": "その他製品",
+      "supply_chain_position": "downstream",
+      "business_cycle_sensitivity": "defensive",
+      "export_dependency": "medium",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "social",
+      "bm_type": null,
+      "subthemes": ["ゲーム・エンタメIP", "玩具", "楽器", "家具"]
+    },
+    "1020": {
+      "name_ja": "電力・ガス",
+      "supply_chain_position": "service",
+      "business_cycle_sensitivity": "defensive",
+      "export_dependency": "low",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "environmental",
+      "bm_type": null,
+      "subthemes": ["再生可能エネルギー転換", "蓄電池投資", "電力自由化", "水素・アンモニア混焼", "原子力再稼働"]
+    },
+    "1021": {
+      "name_ja": "陸運業",
+      "supply_chain_position": "service",
+      "business_cycle_sensitivity": "defensive",
+      "export_dependency": "low",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "social",
+      "bm_type": null,
+      "subthemes": ["物流自動化", "2024年問題（労働時間規制）", "EC物流需要", "インバウンド需要"]
+    },
+    "1022": {
+      "name_ja": "海運業",
+      "supply_chain_position": "service",
+      "business_cycle_sensitivity": "cyclical",
+      "export_dependency": "high",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "environmental",
+      "bm_type": null,
+      "subthemes": ["コンテナ運賃サイクル", "LNG輸送需要", "脱炭素燃料（アンモニア）", "地政学リスク（スエズ）"]
+    },
+    "1023": {
+      "name_ja": "空運業",
+      "supply_chain_position": "service",
+      "business_cycle_sensitivity": "cyclical",
+      "export_dependency": "high",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "environmental",
+      "bm_type": null,
+      "subthemes": ["インバウンド回復", "SAF義務化コスト", "燃油サーチャージ", "路線拡大"]
+    },
+    "1024": {
+      "name_ja": "倉庫・運輸関連業",
+      "supply_chain_position": "service",
+      "business_cycle_sensitivity": "defensive",
+      "export_dependency": "low",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "social",
+      "bm_type": null,
+      "subthemes": ["3PL需要拡大", "冷凍冷蔵物流", "港湾インフラ", "EC対応倉庫"]
+    },
+    "1025": {
+      "name_ja": "情報・通信業",
+      "supply_chain_position": "service",
+      "business_cycle_sensitivity": "growth",
+      "export_dependency": "low",
+      "digital_transformation_stage": "leader",
+      "esg_priority": "governance",
+      "bm_type": null,
+      "subthemes": ["生成AI活用", "DX支援", "5G/6G", "データセンター投資", "サイバーセキュリティ", "SaaS転換"]
+    },
+    "1026": {
+      "name_ja": "卸売業",
+      "supply_chain_position": "service",
+      "business_cycle_sensitivity": "cyclical",
+      "export_dependency": "high",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "balanced",
+      "bm_type": "BM-01",
+      "subthemes": ["総合商社の資源ポートフォリオ", "事業投資利益", "トレーディング収益", "脱炭素事業転換", "専門商社の高マージン"]
+    },
+    "1027": {
+      "name_ja": "小売業",
+      "supply_chain_position": "downstream",
+      "business_cycle_sensitivity": "defensive",
+      "export_dependency": "low",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "social",
+      "bm_type": null,
+      "subthemes": ["EC化率向上", "コンビニ海外展開", "PB商品強化", "インバウンド消費", "値上げ転嫁力"]
+    },
+    "1028": {
+      "name_ja": "銀行業",
+      "supply_chain_position": "financial",
+      "business_cycle_sensitivity": "financial",
+      "export_dependency": "medium",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "governance",
+      "bm_type": "BM-02",
+      "subthemes": ["金利上昇メリット", "NIM拡大", "不良債権リスク", "デジタルバンキング", "地銀再編", "海外M&A"]
+    },
+    "1029": {
+      "name_ja": "証券・商品先物取引業",
+      "supply_chain_position": "financial",
+      "business_cycle_sensitivity": "cyclical",
+      "export_dependency": "medium",
+      "digital_transformation_stage": "leader",
+      "esg_priority": "governance",
+      "bm_type": null,
+      "subthemes": ["株式相場連動収益", "NISA拡大", "アルゴトレーディング", "資産運用業改革"]
+    },
+    "1030": {
+      "name_ja": "保険業",
+      "supply_chain_position": "financial",
+      "business_cycle_sensitivity": "defensive",
+      "export_dependency": "medium",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "social",
+      "bm_type": "BM-03",
+      "subthemes": ["保険料改定", "自然災害リスク", "金利感応度（運用収益）", "インシュアテック", "政策株解消"]
+    },
+    "1031": {
+      "name_ja": "その他金融業",
+      "supply_chain_position": "financial",
+      "business_cycle_sensitivity": "cyclical",
+      "export_dependency": "low",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "governance",
+      "bm_type": null,
+      "subthemes": ["消費者金融規制", "クレジットカード", "リース", "ノンバンク金利感応度"]
+    },
+    "1032": {
+      "name_ja": "不動産業",
+      "supply_chain_position": "service",
+      "business_cycle_sensitivity": "cyclical",
+      "export_dependency": "low",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "environmental",
+      "bm_type": null,
+      "subthemes": ["都市再開発", "物流倉庫REIT", "インバウンドホテル需要", "金利上昇影響", "ZEBビル需要"]
+    },
+    "1033": {
+      "name_ja": "サービス業",
+      "supply_chain_position": "service",
+      "business_cycle_sensitivity": "growth",
+      "export_dependency": "low",
+      "digital_transformation_stage": "leader",
+      "esg_priority": "social",
+      "bm_type": null,
+      "subthemes": ["人材不足対応", "インバウンド観光", "HR Tech", "プラットフォームビジネス", "人的資本開示"]
+    }
+  }
+}

@@ -164,7 +164,6 @@ def _fetch_etf_momentum(ticker: str) -> Optional[dict]:
     """
     try:
         import yfinance as yf # type: ignore # yfinance は外部依存のため、実行環境にない場合はこのモジュール全体をスキップする設計
-        import numpy as np # type: ignore # numpy も yfinance と同様に外部依存として扱う
 
         t    = yf.Ticker(ticker)
         hist = t.history(period="6mo", interval="1d")

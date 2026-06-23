@@ -1,0 +1,1417 @@
+{
+  "generated_at": "2026-06-13 08:49:30",
+  "source": "stock_analyzer_main.run_all_tasks（AST自動生成・手動編集禁止）",
+  "stage_count": 92,
+  "stages": [
+    {
+      "order": 1359,
+      "modules": [
+        "cache_freshness_manager"
+      ],
+      "enable_flags": [
+        "ENABLE_CACHE_FRESHNESS"
+      ],
+      "mode_keys": [],
+      "produces": [
+        "freshness"
+      ]
+    },
+    {
+      "order": 1379,
+      "modules": [],
+      "enable_flags": [
+        "ENABLE_GOV_PIPELINE"
+      ],
+      "mode_keys": [
+        "gov"
+      ],
+      "produces": [
+        "gov",
+        "leading_indicator_signals"
+      ]
+    },
+    {
+      "order": 1455,
+      "modules": [],
+      "enable_flags": [
+        "ENABLE_ARXIV"
+      ],
+      "mode_keys": [
+        "arxiv"
+      ],
+      "produces": [
+        "arxiv"
+      ]
+    },
+    {
+      "order": 1468,
+      "modules": [
+        "country_risk_updater"
+      ],
+      "enable_flags": [
+        "ENABLE_COUNTRY_RISK_UPDATE"
+      ],
+      "mode_keys": [
+        "macro"
+      ],
+      "produces": [
+        "geo_risk"
+      ]
+    },
+    {
+      "order": 1513,
+      "modules": [
+        "alpha_attributer"
+      ],
+      "enable_flags": [
+        "ENABLE_MACRO"
+      ],
+      "mode_keys": [
+        "macro"
+      ],
+      "produces": [
+        "cross_sector_signals",
+        "leading_indicator_signals",
+        "macro",
+        "macro_delta_alerts",
+        "macro_signals",
+        "macro_snapshot"
+      ]
+    },
+    {
+      "order": 1654,
+      "modules": [
+        "economic_cycle_detector",
+        "regime_detector"
+      ],
+      "enable_flags": [
+        "ENABLE_ECONOMIC_CYCLE"
+      ],
+      "mode_keys": [
+        "economic_cycle"
+      ],
+      "produces": [
+        "economic_cycle",
+        "regime"
+      ]
+    },
+    {
+      "order": 1740,
+      "modules": [
+        "longterm_scenario"
+      ],
+      "enable_flags": [
+        "ENABLE_LONGTERM_SCENARIO"
+      ],
+      "mode_keys": [
+        "longterm_scenario"
+      ],
+      "produces": [
+        "longterm_scenario"
+      ]
+    },
+    {
+      "order": 1769,
+      "modules": [],
+      "enable_flags": [
+        "ENABLE_DEBT_CYCLE"
+      ],
+      "mode_keys": [
+        "economic_cycle"
+      ],
+      "produces": [
+        "debt_cycle"
+      ]
+    },
+    {
+      "order": 1896,
+      "modules": [
+        "drift_detector",
+        "momentum_factor",
+        "performance_tracker",
+        "score_explainer",
+        "score_prior_manager",
+        "signal_dedup"
+      ],
+      "enable_flags": [
+        "ENABLE_SECTOR"
+      ],
+      "mode_keys": [],
+      "produces": [
+        "confidence_prior",
+        "drift_events",
+        "drift_report",
+        "momentum",
+        "sector_alloc",
+        "sector_tier",
+        "sectors",
+        "signal_dedup"
+      ]
+    },
+    {
+      "order": 2236,
+      "modules": [
+        "size_tier_classifier"
+      ],
+      "enable_flags": [],
+      "mode_keys": [
+        "size_tier_classifier"
+      ],
+      "produces": [
+        "size_tier_master"
+      ]
+    },
+    {
+      "order": 2269,
+      "modules": [
+        "size_decay_manager"
+      ],
+      "enable_flags": [
+        "ENABLE_SIZE_DECAY_MANAGER"
+      ],
+      "mode_keys": [
+        "size_tier"
+      ],
+      "produces": [
+        "size_decay"
+      ]
+    },
+    {
+      "order": 2290,
+      "modules": [
+        "cross_size_signal"
+      ],
+      "enable_flags": [
+        "ENABLE_CROSS_SIZE_SIGNAL"
+      ],
+      "mode_keys": [
+        "size_tier"
+      ],
+      "produces": [
+        "cross_size_signal"
+      ]
+    },
+    {
+      "order": 2311,
+      "modules": [
+        "independence_score_calculator"
+      ],
+      "enable_flags": [
+        "ENABLE_INDEPENDENCE_SCORE"
+      ],
+      "mode_keys": [
+        "screener"
+      ],
+      "produces": [
+        "independence_scores"
+      ]
+    },
+    {
+      "order": 2335,
+      "modules": [
+        "latent_pearl_manager"
+      ],
+      "enable_flags": [
+        "ENABLE_LATENT_PEARL_MANAGER"
+      ],
+      "mode_keys": [
+        "screener"
+      ],
+      "produces": [
+        "latent_pearl",
+        "wave7_trackers"
+      ]
+    },
+    {
+      "order": 2357,
+      "modules": [
+        "jp_us_sector_bridge"
+      ],
+      "enable_flags": [
+        "ENABLE_JP_US_BRIDGE"
+      ],
+      "mode_keys": [
+        "jp_us_bridge"
+      ],
+      "produces": [
+        "jp_us_bridge",
+        "sectors",
+        "wave7_trackers"
+      ]
+    },
+    {
+      "order": 2401,
+      "modules": [
+        "us_sector_bridge_enhanced"
+      ],
+      "enable_flags": [
+        "ENABLE_US_SECTOR_BRIDGE"
+      ],
+      "mode_keys": [
+        "us_sector_bridge"
+      ],
+      "produces": [
+        "cross_sector_signals",
+        "us_sector_bridge"
+      ]
+    },
+    {
+      "order": 2431,
+      "modules": [
+        "market_breadth"
+      ],
+      "enable_flags": [
+        "ENABLE_MARKET_BREADTH"
+      ],
+      "mode_keys": [
+        "market_breadth"
+      ],
+      "produces": [
+        "market_breadth",
+        "sectors"
+      ]
+    },
+    {
+      "order": 2473,
+      "modules": [
+        "anomaly_season"
+      ],
+      "enable_flags": [
+        "ENABLE_ANOMALY_SEASON"
+      ],
+      "mode_keys": [
+        "anomaly_season"
+      ],
+      "produces": [
+        "anomaly_season",
+        "sectors"
+      ]
+    },
+    {
+      "order": 2506,
+      "modules": [
+        "options_monitor"
+      ],
+      "enable_flags": [
+        "ENABLE_OPTIONS_MONITOR"
+      ],
+      "mode_keys": [
+        "options_monitor"
+      ],
+      "produces": [
+        "options_monitor",
+        "sectors"
+      ]
+    },
+    {
+      "order": 2543,
+      "modules": [
+        "timeline_manager"
+      ],
+      "enable_flags": [
+        "ENABLE_TIMELINE"
+      ],
+      "mode_keys": [
+        "timeline"
+      ],
+      "produces": [
+        "timeline"
+      ]
+    },
+    {
+      "order": 2570,
+      "modules": [
+        "policy_tracker"
+      ],
+      "enable_flags": [
+        "ENABLE_POLICY_TRACKER"
+      ],
+      "mode_keys": [
+        "policy"
+      ],
+      "produces": [
+        "policy"
+      ]
+    },
+    {
+      "order": 2599,
+      "modules": [
+        "multi_currency_monitor"
+      ],
+      "enable_flags": [
+        "ENABLE_MULTI_CURRENCY"
+      ],
+      "mode_keys": [
+        "multi_currency"
+      ],
+      "produces": [
+        "multi_currency",
+        "sectors"
+      ]
+    },
+    {
+      "order": 2634,
+      "modules": [
+        "fed_calendar_fetcher"
+      ],
+      "enable_flags": [
+        "ENABLE_FED_CALENDAR"
+      ],
+      "mode_keys": [
+        "policy"
+      ],
+      "produces": [
+        "fed_calendar"
+      ]
+    },
+    {
+      "order": 2664,
+      "modules": [
+        "us_sector_pipeline"
+      ],
+      "enable_flags": [
+        "ENABLE_US_SECTOR"
+      ],
+      "mode_keys": [
+        "us_sector"
+      ],
+      "produces": [
+        "us_sectors"
+      ]
+    },
+    {
+      "order": 2688,
+      "modules": [
+        "bond_commodity_pipeline"
+      ],
+      "enable_flags": [
+        "ENABLE_BOND_COMMODITY"
+      ],
+      "mode_keys": [
+        "bond_commodity"
+      ],
+      "produces": [
+        "bond_commodity"
+      ]
+    },
+    {
+      "order": 2714,
+      "modules": [
+        "google_trends_pipeline"
+      ],
+      "enable_flags": [
+        "ENABLE_GOOGLE_TRENDS"
+      ],
+      "mode_keys": [
+        "google_trends"
+      ],
+      "produces": [
+        "google_trends",
+        "leading_indicator_signals"
+      ]
+    },
+    {
+      "order": 2743,
+      "modules": [
+        "policy_radar"
+      ],
+      "enable_flags": [
+        "ENABLE_POLICY_RADAR"
+      ],
+      "mode_keys": [
+        "policy_radar"
+      ],
+      "produces": [
+        "leading_indicator_signals",
+        "policy_events_30d",
+        "policy_radar"
+      ]
+    },
+    {
+      "order": 2777,
+      "modules": [
+        "catalyst_calendar"
+      ],
+      "enable_flags": [],
+      "mode_keys": [
+        "catalyst_calendar"
+      ],
+      "produces": [
+        "catalyst"
+      ]
+    },
+    {
+      "order": 2802,
+      "modules": [
+        "portfolio_diversity_filter"
+      ],
+      "enable_flags": [],
+      "mode_keys": [
+        "portfolio_diversity_filter"
+      ],
+      "produces": [
+        "diversity"
+      ]
+    },
+    {
+      "order": 2828,
+      "modules": [
+        "news_pipeline"
+      ],
+      "enable_flags": [
+        "ENABLE_NEWS"
+      ],
+      "mode_keys": [
+        "news"
+      ],
+      "produces": [
+        "news"
+      ]
+    },
+    {
+      "order": 2851,
+      "modules": [
+        "finbert_analyzer"
+      ],
+      "enable_flags": [
+        "ENABLE_FINBERT"
+      ],
+      "mode_keys": [
+        "finbert"
+      ],
+      "produces": [
+        "leading_indicator_signals",
+        "sentiment"
+      ]
+    },
+    {
+      "order": 2885,
+      "modules": [
+        "us_macro_pipeline"
+      ],
+      "enable_flags": [
+        "ENABLE_US_MACRO"
+      ],
+      "mode_keys": [
+        "us_macro"
+      ],
+      "produces": [
+        "leading_indicator_signals",
+        "us_macro"
+      ]
+    },
+    {
+      "order": 2928,
+      "modules": [
+        "bond_commodity_pipeline"
+      ],
+      "enable_flags": [],
+      "mode_keys": [],
+      "produces": [
+        "sectors"
+      ]
+    },
+    {
+      "order": 2948,
+      "modules": [
+        "screener_candidate_builder"
+      ],
+      "enable_flags": [
+        "ENABLE_DYNAMIC_SCREENER"
+      ],
+      "mode_keys": [],
+      "produces": [
+        "screener_candidates"
+      ]
+    },
+    {
+      "order": 2969,
+      "modules": [
+        "comps_analyzer",
+        "dcf_valuation",
+        "earnings_surprise",
+        "edinet_rotation_manager",
+        "pead_monitor",
+        "screener_feedback_loop",
+        "stock_detail_report",
+        "stock_screener",
+        "strategy_output_schema",
+        "stress_tester",
+        "support_resistance",
+        "technical_scorer",
+        "volume_profile"
+      ],
+      "enable_flags": [
+        "ENABLE_SCREENER"
+      ],
+      "mode_keys": [
+        "screener"
+      ],
+      "produces": [
+        "comps_analyzer",
+        "corr_constraint",
+        "dcf_valuation",
+        "earnings_surprise",
+        "pead",
+        "screener",
+        "screener_feedback",
+        "stock_detail_report",
+        "strategy_summary",
+        "support_resistance",
+        "technical_scorer",
+        "var_constraint",
+        "volume_profile"
+      ]
+    },
+    {
+      "order": 3308,
+      "modules": [
+        "jp_us_sector_bridge",
+        "politician_monitor"
+      ],
+      "enable_flags": [
+        "ENABLE_POLITICIAN_MONITOR"
+      ],
+      "mode_keys": [],
+      "produces": [
+        "jp_us_bridge",
+        "politician_monitor"
+      ]
+    },
+    {
+      "order": 3352,
+      "modules": [
+        "institutional_13f_monitor",
+        "institutional_signal_scorer"
+      ],
+      "enable_flags": [
+        "ENABLE_INSTITUTIONAL_13F"
+      ],
+      "mode_keys": [
+        "all"
+      ],
+      "produces": [
+        "institutional_13f",
+        "institutional_scorer"
+      ]
+    },
+    {
+      "order": 3414,
+      "modules": [
+        "congress_monitor"
+      ],
+      "enable_flags": [
+        "ENABLE_CONGRESS_MONITOR"
+      ],
+      "mode_keys": [
+        "congress_monitor"
+      ],
+      "produces": [
+        "congress_monitor"
+      ]
+    },
+    {
+      "order": 3438,
+      "modules": [
+        "policy_signal_applier",
+        "politician_signal_scorer"
+      ],
+      "enable_flags": [],
+      "mode_keys": [
+        "policy_signal_applier"
+      ],
+      "produces": [
+        "policy_signals",
+        "politician_scorer"
+      ]
+    },
+    {
+      "order": 3500,
+      "modules": [
+        "deep_dive_trigger"
+      ],
+      "enable_flags": [
+        "ENABLE_DEEP_DIVE_TRIGGER"
+      ],
+      "mode_keys": [
+        "all"
+      ],
+      "produces": [
+        "deep_dive"
+      ]
+    },
+    {
+      "order": 3527,
+      "modules": [
+        "tdnet_monitor"
+      ],
+      "enable_flags": [
+        "ENABLE_TDNET_MONITOR"
+      ],
+      "mode_keys": [
+        "tdnet"
+      ],
+      "produces": [
+        "tdnet"
+      ]
+    },
+    {
+      "order": 3586,
+      "modules": [
+        "edinet_rotation_manager",
+        "shareholder_analyzer"
+      ],
+      "enable_flags": [
+        "ENABLE_SHAREHOLDER_ANALYZER"
+      ],
+      "mode_keys": [
+        "screener"
+      ],
+      "produces": [
+        "shareholder"
+      ]
+    },
+    {
+      "order": 3642,
+      "modules": [
+        "ceo_evaluator",
+        "edinet_rotation_manager"
+      ],
+      "enable_flags": [
+        "ENABLE_CEO_EVALUATOR"
+      ],
+      "mode_keys": [
+        "screener"
+      ],
+      "produces": [
+        "ceo_scores"
+      ]
+    },
+    {
+      "order": 3679,
+      "modules": [
+        "midterm_plan_tracker"
+      ],
+      "enable_flags": [
+        "ENABLE_MIDTERM_PLAN_TRACKER"
+      ],
+      "mode_keys": [
+        "screener"
+      ],
+      "produces": [
+        "midterm_tracker",
+        "wave7_trackers"
+      ]
+    },
+    {
+      "order": 3708,
+      "modules": [
+        "thematic_etf_tracker"
+      ],
+      "enable_flags": [
+        "ENABLE_ETF_TRACKER"
+      ],
+      "mode_keys": [
+        "etf_tracker"
+      ],
+      "produces": [
+        "etf_tracker"
+      ]
+    },
+    {
+      "order": 3735,
+      "modules": [
+        "idea_generator"
+      ],
+      "enable_flags": [
+        "ENABLE_IDEA_GENERATOR"
+      ],
+      "mode_keys": [
+        "idea"
+      ],
+      "produces": [
+        "ideas"
+      ]
+    },
+    {
+      "order": 3768,
+      "modules": [
+        "idea_evaluator"
+      ],
+      "enable_flags": [
+        "ENABLE_IDEA_EVALUATOR"
+      ],
+      "mode_keys": [
+        "evaluation"
+      ],
+      "produces": [
+        "evaluations"
+      ]
+    },
+    {
+      "order": 3793,
+      "modules": [
+        "anomaly_detector"
+      ],
+      "enable_flags": [
+        "ENABLE_ANOMALY_DETECTOR"
+      ],
+      "mode_keys": [
+        "anomaly"
+      ],
+      "produces": [
+        "anomaly"
+      ]
+    },
+    {
+      "order": 3820,
+      "modules": [
+        "alert_notifier"
+      ],
+      "enable_flags": [
+        "ENABLE_ALERT"
+      ],
+      "mode_keys": [],
+      "produces": [
+        "alerts"
+      ]
+    },
+    {
+      "order": 3848,
+      "modules": [
+        "imf_pipeline"
+      ],
+      "enable_flags": [
+        "ENABLE_IMF"
+      ],
+      "mode_keys": [
+        "imf"
+      ],
+      "produces": [
+        "imf"
+      ]
+    },
+    {
+      "order": 3870,
+      "modules": [
+        "sec_summarizer"
+      ],
+      "enable_flags": [
+        "ENABLE_SEC_SUMMARIZER"
+      ],
+      "mode_keys": [
+        "sec_summary"
+      ],
+      "produces": [
+        "sec_summary"
+      ]
+    },
+    {
+      "order": 3892,
+      "modules": [
+        "us_stock_screener"
+      ],
+      "enable_flags": [
+        "ENABLE_US_SCREENER"
+      ],
+      "mode_keys": [
+        "us_screener"
+      ],
+      "produces": [
+        "us_screener"
+      ]
+    },
+    {
+      "order": 3917,
+      "modules": [
+        "edinet_rotation_manager"
+      ],
+      "enable_flags": [
+        "ENABLE_EDINET_ROTATION"
+      ],
+      "mode_keys": [
+        "edinet_rotation"
+      ],
+      "produces": [
+        "edinet_rotation",
+        "sector_tier"
+      ]
+    },
+    {
+      "order": 3948,
+      "modules": [
+        "us_fundamental_rotator"
+      ],
+      "enable_flags": [
+        "ENABLE_US_FUNDAMENTALS"
+      ],
+      "mode_keys": [
+        "us_fundamentals"
+      ],
+      "produces": [
+        "us_fundamentals"
+      ]
+    },
+    {
+      "order": 3971,
+      "modules": [
+        "us_8k_monitor"
+      ],
+      "enable_flags": [
+        "ENABLE_US_8K_MONITOR"
+      ],
+      "mode_keys": [
+        "us_8k"
+      ],
+      "produces": [
+        "us_8k"
+      ]
+    },
+    {
+      "order": 3992,
+      "modules": [
+        "business_summary_fetcher"
+      ],
+      "enable_flags": [
+        "ENABLE_BIZ_SUMMARY"
+      ],
+      "mode_keys": [
+        "biz_summary"
+      ],
+      "produces": [
+        "biz_summaries"
+      ]
+    },
+    {
+      "order": 4015,
+      "modules": [
+        "scenario_analyzer"
+      ],
+      "enable_flags": [
+        "ENABLE_SCENARIO_ANALYSIS"
+      ],
+      "mode_keys": [
+        "weekly_report"
+      ],
+      "produces": [
+        "scenario_analysis"
+      ]
+    },
+    {
+      "order": 4045,
+      "modules": [
+        "credit_data"
+      ],
+      "enable_flags": [
+        "ENABLE_CREDIT_DATA"
+      ],
+      "mode_keys": [
+        "credit_data"
+      ],
+      "produces": [
+        "credit_data"
+      ]
+    },
+    {
+      "order": 4068,
+      "modules": [
+        "stress_tester"
+      ],
+      "enable_flags": [
+        "ENABLE_STRESS_TEST"
+      ],
+      "mode_keys": [
+        "weekly_report"
+      ],
+      "produces": [
+        "stress_test"
+      ]
+    },
+    {
+      "order": 4107,
+      "modules": [
+        "insider_monitor"
+      ],
+      "enable_flags": [
+        "ENABLE_INSIDER_MONITOR"
+      ],
+      "mode_keys": [
+        "insider_monitor"
+      ],
+      "produces": [
+        "insider_monitor"
+      ]
+    },
+    {
+      "order": 4133,
+      "modules": [
+        "dividend_calendar"
+      ],
+      "enable_flags": [
+        "ENABLE_DIVIDEND_CALENDAR"
+      ],
+      "mode_keys": [
+        "dividend_calendar"
+      ],
+      "produces": [
+        "dividend_calendar"
+      ]
+    },
+    {
+      "order": 4154,
+      "modules": [
+        "alpha_attributer",
+        "learning_audit_log",
+        "ml_score_corrector",
+        "rule_optimizer"
+      ],
+      "enable_flags": [],
+      "mode_keys": [
+        "rule_optimizer"
+      ],
+      "produces": [
+        "_macro_weights",
+        "alpha_attribution",
+        "learning_audit",
+        "ml_correction",
+        "rule_optimizer"
+      ]
+    },
+    {
+      "order": 4255,
+      "modules": [
+        "factor_crowding_monitor"
+      ],
+      "enable_flags": [
+        "ENABLE_FACTOR_CROWDING"
+      ],
+      "mode_keys": [
+        "factor_crowding"
+      ],
+      "produces": [
+        "factor_crowding"
+      ]
+    },
+    {
+      "order": 4284,
+      "modules": [
+        "backtester"
+      ],
+      "enable_flags": [
+        "ENABLE_BACKTESTER"
+      ],
+      "mode_keys": [
+        "backtester"
+      ],
+      "produces": [
+        "backtest"
+      ]
+    },
+    {
+      "order": 4309,
+      "modules": [
+        "self_evaluator"
+      ],
+      "enable_flags": [
+        "ENABLE_SELF_EVALUATOR"
+      ],
+      "mode_keys": [
+        "self_evaluator"
+      ],
+      "produces": [
+        "self_evaluator"
+      ]
+    },
+    {
+      "order": 4335,
+      "modules": [
+        "screener_sector_heatmap"
+      ],
+      "enable_flags": [
+        "ENABLE_SCREENER_HEATMAP"
+      ],
+      "mode_keys": [
+        "screener_heatmap"
+      ],
+      "produces": [
+        "screener_heatmap"
+      ]
+    },
+    {
+      "order": 4356,
+      "modules": [
+        "portfolio_optimizer"
+      ],
+      "enable_flags": [
+        "ENABLE_PORTFOLIO_OPTIMIZER"
+      ],
+      "mode_keys": [
+        "portfolio_optimizer"
+      ],
+      "produces": [
+        "portfolio_optimizer"
+      ]
+    },
+    {
+      "order": 4382,
+      "modules": [
+        "weekly_report_generator"
+      ],
+      "enable_flags": [
+        "ENABLE_WEEKLY_REPORT"
+      ],
+      "mode_keys": [
+        "weekly_report"
+      ],
+      "produces": [
+        "weekly_report"
+      ]
+    },
+    {
+      "order": 4406,
+      "modules": [
+        "correlation_heatmap"
+      ],
+      "enable_flags": [
+        "ENABLE_CORRELATION_HEATMAP"
+      ],
+      "mode_keys": [
+        "excel_export"
+      ],
+      "produces": [
+        "correlation_heatmap"
+      ]
+    },
+    {
+      "order": 4427,
+      "modules": [
+        "position_sizer"
+      ],
+      "enable_flags": [
+        "ENABLE_POSITION_SIZER"
+      ],
+      "mode_keys": [
+        "weekly_report"
+      ],
+      "produces": [
+        "position_sizer"
+      ]
+    },
+    {
+      "order": 4456,
+      "modules": [
+        "excel_dashboard_exporter"
+      ],
+      "enable_flags": [
+        "ENABLE_EXCEL_EXPORT"
+      ],
+      "mode_keys": [
+        "excel_export"
+      ],
+      "produces": [
+        "excel_export"
+      ]
+    },
+    {
+      "order": 4497,
+      "modules": [
+        "sector_rotation_detector"
+      ],
+      "enable_flags": [],
+      "mode_keys": [
+        "sector_rotation_detector"
+      ],
+      "produces": [
+        "sector_rotation"
+      ]
+    },
+    {
+      "order": 4525,
+      "modules": [
+        "ignition_detector"
+      ],
+      "enable_flags": [],
+      "mode_keys": [
+        "ignition_detector"
+      ],
+      "produces": [
+        "ignition"
+      ]
+    },
+    {
+      "order": 4551,
+      "modules": [
+        "technology_mapper"
+      ],
+      "enable_flags": [
+        "ENABLE_TECHNOLOGY_MAPPER"
+      ],
+      "mode_keys": [
+        "technology_mapper"
+      ],
+      "produces": [
+        "technology_mapper"
+      ]
+    },
+    {
+      "order": 4577,
+      "modules": [
+        "technology_cluster_engine"
+      ],
+      "enable_flags": [
+        "ENABLE_CLUSTER_ENGINE"
+      ],
+      "mode_keys": [
+        "cluster_engine"
+      ],
+      "produces": [
+        "cluster_phase"
+      ]
+    },
+    {
+      "order": 4603,
+      "modules": [
+        "emerging_technology_detector"
+      ],
+      "enable_flags": [
+        "ENABLE_EMERGING_DETECTOR"
+      ],
+      "mode_keys": [
+        "emerging_detector"
+      ],
+      "produces": []
+    },
+    {
+      "order": 4628,
+      "modules": [
+        "cluster_graph_exporter"
+      ],
+      "enable_flags": [
+        "ENABLE_CLUSTER_GRAPH_EXPORT"
+      ],
+      "mode_keys": [
+        "cluster_graph_exporter"
+      ],
+      "produces": []
+    },
+    {
+      "order": 4658,
+      "modules": [
+        "jp_us_sector_correlation"
+      ],
+      "enable_flags": [],
+      "mode_keys": [
+        "jp_us_sector_correlation"
+      ],
+      "produces": [
+        "jp_us_sector_correlation"
+      ]
+    },
+    {
+      "order": 4685,
+      "modules": [
+        "rule_optimizer"
+      ],
+      "enable_flags": [
+        "ENABLE_SIGNAL_AGGREGATOR"
+      ],
+      "mode_keys": [
+        "signal_aggregator"
+      ],
+      "produces": [
+        "rule_optimizer"
+      ]
+    },
+    {
+      "order": 4754,
+      "modules": [
+        "academic_conf_tracker"
+      ],
+      "enable_flags": [
+        "ENABLE_ACADEMIC_CONF_TRACKER"
+      ],
+      "mode_keys": [
+        "signal_aggregator"
+      ],
+      "produces": [
+        "wave7_trackers"
+      ]
+    },
+    {
+      "order": 4775,
+      "modules": [
+        "industry_standard_tracker"
+      ],
+      "enable_flags": [
+        "ENABLE_STANDARDIZATION_TRACKER"
+      ],
+      "mode_keys": [
+        "signal_aggregator"
+      ],
+      "produces": [
+        "wave7_trackers"
+      ]
+    },
+    {
+      "order": 4802,
+      "modules": [
+        "signal_aggregator"
+      ],
+      "enable_flags": [
+        "ENABLE_SIGNAL_AGGREGATOR"
+      ],
+      "mode_keys": [
+        "signal_aggregator"
+      ],
+      "produces": [
+        "signal_aggregator"
+      ]
+    },
+    {
+      "order": 4828,
+      "modules": [
+        "signal_aggregator"
+      ],
+      "enable_flags": [],
+      "mode_keys": [
+        "signal_aggregator"
+      ],
+      "produces": [
+        "total_signal_score"
+      ]
+    },
+    {
+      "order": 4841,
+      "modules": [
+        "inference_engine"
+      ],
+      "enable_flags": [
+        "ENABLE_INFERENCE_ENGINE"
+      ],
+      "mode_keys": [
+        "inference"
+      ],
+      "produces": [
+        "inference"
+      ]
+    },
+    {
+      "order": 4863,
+      "modules": [
+        "notion_obsidian_writer"
+      ],
+      "enable_flags": [
+        "ENABLE_NOTION_OBSIDIAN"
+      ],
+      "mode_keys": [
+        "notion_obsidian"
+      ],
+      "produces": [
+        "notion_obsidian"
+      ]
+    },
+    {
+      "order": 4887,
+      "modules": [
+        "job_posting_monitor"
+      ],
+      "enable_flags": [
+        "ENABLE_JOB_POSTING_MONITOR"
+      ],
+      "mode_keys": [
+        "weekly"
+      ],
+      "produces": [
+        "job_posting"
+      ]
+    },
+    {
+      "order": 4921,
+      "modules": [
+        "executive_transition_tracker"
+      ],
+      "enable_flags": [
+        "ENABLE_EXECUTIVE_TRANSITION"
+      ],
+      "mode_keys": [
+        "weekly"
+      ],
+      "produces": [
+        "executive_transition"
+      ]
+    },
+    {
+      "order": 4957,
+      "modules": [
+        "facility_expansion_monitor"
+      ],
+      "enable_flags": [
+        "ENABLE_FACILITY_EXPANSION"
+      ],
+      "mode_keys": [
+        "weekly"
+      ],
+      "produces": [
+        "facility_expansion"
+      ]
+    },
+    {
+      "order": 4991,
+      "modules": [
+        "event_horizon_scanner"
+      ],
+      "enable_flags": [
+        "ENABLE_EVENT_HORIZON"
+      ],
+      "mode_keys": [
+        "event_horizon"
+      ],
+      "produces": [
+        "event_horizon"
+      ]
+    },
+    {
+      "order": 5016,
+      "modules": [
+        "options_strategy_advisor"
+      ],
+      "enable_flags": [
+        "ENABLE_OPTIONS_ADVISOR"
+      ],
+      "mode_keys": [
+        "options_advisor"
+      ],
+      "produces": [
+        "options_advisor"
+      ]
+    },
+    {
+      "order": 5041,
+      "modules": [
+        "ontology_exporter"
+      ],
+      "enable_flags": [
+        "ENABLE_ONTOLOGY_EXPORT"
+      ],
+      "mode_keys": [
+        "ontology_export"
+      ],
+      "produces": [
+        "ontology_export"
+      ]
+    },
+    {
+      "order": 5082,
+      "modules": [
+        "module_ledger"
+      ],
+      "enable_flags": [
+        "ENABLE_MODULE_LEDGER"
+      ],
+      "mode_keys": [],
+      "produces": [
+        "module_ledger"
+      ]
+    }
+  ]
+}

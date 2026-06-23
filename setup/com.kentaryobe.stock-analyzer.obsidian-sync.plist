@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- stock_analyzer → Obsidian vault 日次同期（DEPT-2）
+       インストール: setup/install_launchd.sh を実行（このファイルは直接編集不要） -->
+  <key>Label</key>
+  <string>com.kentaryobe.stock-analyzer.obsidian-sync</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/env</string>
+    <string>python3</string>
+    <string>__REPO_DIR__/obsidian_sync.py</string>
+    <string>all</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>STOCK_ANALYZER_REPO_URL</key>
+    <string>__REPO_URL__</string>
+  </dict>
+
+  <!-- 毎朝 7:30（GitHub Actions の JST 6:00 実行が終わった後。
+       日次modeは通常90分未満で完了するため余裕あり。月曜のweekly modeのみ
+       長引く可能性があり、その朝は前回commit分をpullするが翌日自動で追いつく） -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>7</integer>
+    <key>Minute</key><integer>30</integer>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/stock-analyzer-obsidian-sync.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/stock-analyzer-obsidian-sync.err</string>
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>

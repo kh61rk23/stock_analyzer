@@ -318,7 +318,7 @@ def calc_position_score(metrics: dict, resistance_levels: list,
 def _fetch_ohlcv(ticker: str) -> Optional[dict]:
     """yfinance から 52週分の OHLCV を取得する。"""
     try:
-        import yfinance as yf
+        import yfinance as yf # type: ignore
         hist = yf.Ticker(ticker).history(period="2y", auto_adjust=True)
         if hist is None or len(hist) < 60:
             return None

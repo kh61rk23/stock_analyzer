@@ -54,6 +54,7 @@ import time
 import re
 from pathlib import Path
 from datetime import datetime
+from datetime import timedelta
 from typing import Optional
 
 # ── config.py をロード（/content/ または 同ディレクトリから解決） ──
@@ -406,43 +407,341 @@ def save_seen_papers(seen: set):
         encoding="utf-8",
     )
 
+# ==============================================================
+# BLOCK 3.5: Semantic Scholar API + 引用数キャッシュ（Wave 0 - Idea1）
+# ==============================================================
+# citation_cache.json 形式:
+#   {"arxiv_id": {"count": int, "cached_at": "YYYY-MM-DD"}, ...}
+# TTL: SEMANTIC_SCHOLAR_CACHE_TTL_DAYS（デフォルト30日）
+
+import time as _time
+
+_SS_REQUEST_INTERVAL = 3.0   # Semantic Scholar 公開API レート制限（3秒/req）
+_SS_TIMEOUT          = 15    # タイムアウト（秒）
+
+
+def _citation_cache_path() -> "Path":
+    d = Path(getattr(cfg, "CACHE_DIR", "stock_data/cache"))
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return d / "citation_cache.json"
+
+
+def _load_citation_cache() -> dict:
+    """citation_cache.json を読み込む。失敗時は空 dict を返す。"""
+    try:
+        p = _citation_cache_path()
+        if p.exists():
+            return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def _save_citation_cache(cache: dict) -> None:
+    """citation_cache.json を保存する。失敗時はサイレントに無視する。"""
+    try:
+        _citation_cache_path().write_text(
+            json.dumps(cache, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _extract_arxiv_id(raw_id: str) -> str:
+    """
+    ArXiv ID を正規化する。
+    例: "http://arxiv.org/abs/2401.12345v1" → "2401.12345"
+    """
+    try:
+        if "abs/" in raw_id:
+            raw_id = raw_id.split("abs/")[-1]
+        return raw_id.split("v")[0].strip()
+    except Exception:
+        return raw_id
+
+
+def _fetch_citation_count_api(arxiv_id: str) -> int:
+    """
+    Semantic Scholar Graph API から引用数を直接取得する。
+    失敗時は 0 を返す（例外を外に投げない）。
+    """
+    try:
+        import requests as _req
+        url_tmpl = getattr(
+            cfg,
+            "SEMANTIC_SCHOLAR_API_URL",
+            "https://api.semanticscholar.org/graph/v1/paper/"
+            "arXiv:{arxiv_id}?fields=citationCount",
+        )
+        url  = url_tmpl.replace("{arxiv_id}", arxiv_id)
+        resp = _req.get(url, timeout=_SS_TIMEOUT)
+        if resp.status_code == 200:
+            return int(resp.json().get("citationCount", 0))
+        # 404: 未収録（正常）/ 429: レート制限 → 0
+        return 0
+    except Exception:
+        return 0
+
+
+def get_citation_count(arxiv_id: str) -> int:
+    """
+    キャッシュ付きで引用数を返す。
+    ・キャッシュ有効（TTL内） → キャッシュ値を即返却（API呼び出しなし）
+    ・キャッシュ失効 or 未収録 → Semantic Scholar API を呼び出してキャッシュ更新
+
+    Args:
+        arxiv_id: 生の ArXiv ID（URL形式でも可）
+
+    Returns:
+        int: citationCount（取得失敗時は 0）
+    """
+    try:
+        clean_id = _extract_arxiv_id(arxiv_id)
+        ttl_days = int(getattr(cfg, "SEMANTIC_SCHOLAR_CACHE_TTL_DAYS", 30))
+        today    = datetime.now().strftime("%Y-%m-%d")
+        cutoff   = (datetime.now() - timedelta(days=ttl_days)).strftime("%Y-%m-%d")
+
+        cache = _load_citation_cache()
+
+        # ── キャッシュヒット ──────────────────────────────────────
+        if clean_id in cache:
+            entry = cache[clean_id]
+            if entry.get("cached_at", "0000") >= cutoff:
+                return int(entry.get("count", 0))
+
+        # ── API 取得（レート制限を守る）──────────────────────────
+        _time.sleep(_SS_REQUEST_INTERVAL)
+        count = _fetch_citation_count_api(clean_id)
+
+        # ── キャッシュ更新 + TTL 切れエントリ除去 ────────────────
+        cache[clean_id] = {"count": count, "cached_at": today}
+        cache = {k: v for k, v in cache.items()
+                 if v.get("cached_at", "0000") >= cutoff}
+        if len(cache) > 10_000:
+            # 古いエントリを削除して10000件以内に収める
+            sorted_items = sorted(
+                cache.items(), key=lambda x: x[1].get("cached_at", "")
+            )
+            cache = dict(sorted_items[-10_000:])
+        _save_citation_cache(cache)
+
+        return count
+
+    except Exception:
+        return 0
 
 # ==============================================================
-# BLOCK 4: スコアリング
+# BLOCK 4: スコアリング（Wave 0 - Idea1: 5乗数重み付け式）
 # ==============================================================
 # 【v1.0 との差分】
 #   v1.0: INVESTMENT_KEYWORDS は文字列リスト。タイトル含む→2点、その他→1点 固定
 #   v2.0: cfg.ARXIV_KEYWORDS は (keyword, title_pts, summary_pts) のタプルリスト
 #         keyword ごとに点数を個別設定できる
+# 【v2.1 との差分（v2.0 → v2.1）】
+#   v2.0: キーワード一致のみ（title_pts / summary_pts の単純加算）
+#   v2.1: 以下の5乗数を基礎スコアに乗算して最終スコアを算出する
+#
+#   $final = base\_kw\_score \times W_{inst} \times W_{cite}
+#            \times W_{cat} \times W_{repro} \times W_{hot}$
+#
+#   W_inst: 著者機関スコア    （1.0〜1.8）トップ機関ほど高い
+#   W_cite: 引用数スコア      （1.0〜2.0）Semantic Scholar API（30日キャッシュ）
+#   W_cat:  カテゴリ整合スコア（0.7〜1.3）投資関連カテゴリほど高い
+#   W_repro: 再現性スコア     （1.0〜1.3）コード・データセット公開で加算
+#   W_hot:  ホット度スコア    （0.9〜1.2）公開直後ほど高い
+#
+#   ★ base_kw_score = 0 の論文（キーワード不一致）は最終スコアも 0
+
+# 投資関連カテゴリ → カテゴリ整合倍率
+_CAT_MULTIPLIER: dict = {
+    "q-fin":     1.30,   # 定量金融（最高）
+    "cs.AI":     1.25,
+    "cs.LG":     1.20,   # 機械学習
+    "stat.ML":   1.20,
+    "cs.CL":     1.15,   # 自然言語処理
+    "cs.CV":     1.10,   # コンピュータビジョン
+    "econ":      1.20,
+    "cs.IR":     1.10,   # 情報検索
+    "cs.NE":     1.05,
+}
+_CAT_MULTIPLIER_DEFAULT = 0.90
+
+# トップ機関キーワード → 著者機関倍率
+_TOP_INSTITUTION_KEYWORDS: dict = {
+    # テック系研究機関（最高評価）
+    "google":           1.80,
+    "deepmind":         1.80,
+    "openai":           1.80,
+    "anthropic":        1.80,
+    "meta ai":          1.75,
+    "microsoft research": 1.75,
+    "nvidia":           1.70,
+    # 北米トップ大学
+    "mit":              1.65,
+    "stanford":         1.65,
+    "berkeley":         1.60,
+    "carnegie mellon":  1.60,
+    "cmu":              1.60,
+    "princeton":        1.55,
+    "harvard":          1.55,
+    "columbia":         1.50,
+    # 欧州・アジアトップ機関
+    "oxford":           1.55,
+    "cambridge":        1.55,
+    "eth":              1.50,
+    "tsinghua":         1.45,
+    "peking":           1.45,
+    "tokyo":            1.35,
+}
+_INST_MULTIPLIER_DEFAULT = 1.00
+
 
 def score_paper(paper: dict) -> tuple:
     """
-    cfg.ARXIV_KEYWORDS に基づいてスコアリングする。
+    5乗数重み付け式でスコアリングする（Wave 0 - Idea1）。
+
+    $final = base\\_kw\\_score \times W_{inst} \times W_{cite}
+             \times W_{cat} \times W_{repro} \times W_{hot}$
 
     Returns:
         (score: int, matched_keywords: list[str])
+        matched_keywords にはキーワードヒット情報と乗数根拠を含む
     """
-    title   = paper["title"].lower()
-    summary = paper["summary"].lower()
-    score   = 0
-    matched = []
+    try:
+        title   = paper.get("title",   "").lower()
+        summary = paper.get("summary", "").lower()
+        authors = paper.get("authors", "").lower()
+        category= paper.get("category","")
+        pub_str = paper.get("published","")
+        arxiv_id= paper.get("id", "")
 
-    for item in cfg.ARXIV_KEYWORDS:
-        if isinstance(item, (list, tuple)) and len(item) == 3:
-            kw, title_pts, summary_pts = item
-        else:
-            # 文字列だけの場合はデフォルト点数（後方互換性）
-            kw, title_pts, summary_pts = str(item), 2, 1
+        # ── ① 基礎スコア（キーワード一致）────────────────────────
+        base_score = 0
+        matched: list[str] = []
 
-        kw_l = kw.lower()
-        if kw_l in title:
-            score += title_pts
-            matched.append(f"[T+{title_pts}]{kw}")
-        elif kw_l in summary:
-            score += summary_pts
-            matched.append(f"[S+{summary_pts}]{kw}")
+        for item in cfg.ARXIV_KEYWORDS:
+            if isinstance(item, (list, tuple)) and len(item) == 3:
+                kw, title_pts, summary_pts = item
+            else:
+                kw, title_pts, summary_pts = str(item), 2, 1
 
-    return score, matched
+            kw_l = kw.lower()
+            if kw_l in title:
+                base_score += title_pts
+                matched.append(f"[T+{title_pts}]{kw}")
+            elif kw_l in summary:
+                base_score += summary_pts
+                matched.append(f"[S+{summary_pts}]{kw}")
+
+        # キーワード不一致 → 乗数計算不要
+        if base_score == 0:
+            return 0, matched
+
+        # ── ② W_inst: 著者機関スコア ─────────────────────────────
+        w_inst = _INST_MULTIPLIER_DEFAULT
+        for kw, mult in _TOP_INSTITUTION_KEYWORDS.items():
+            if kw in authors:
+                w_inst = max(w_inst, mult)
+        if w_inst > _INST_MULTIPLIER_DEFAULT:
+            matched.append(f"[×機関{w_inst:.2f}]")
+
+        # ── ③ W_cite: 引用数スコア（Semantic Scholar）──────────────
+        # ★ 引用数取得はコストが高いため、base_score が高い論文のみ実行
+        w_cite = 1.0
+        if base_score >= 2 and arxiv_id:
+            try:
+                cite_count = get_citation_count(arxiv_id)
+                if cite_count >= 50:
+                    w_cite = 2.0
+                    matched.append(f"[×引用{w_cite:.1f}({cite_count}件)]")
+                elif cite_count >= 20:
+                    w_cite = 1.7
+                    matched.append(f"[×引用{w_cite:.1f}({cite_count}件)]")
+                elif cite_count >= 6:
+                    w_cite = 1.4
+                    matched.append(f"[×引用{w_cite:.1f}({cite_count}件)]")
+                elif cite_count >= 1:
+                    w_cite = 1.2
+                    matched.append(f"[×引用{w_cite:.1f}({cite_count}件)]")
+                # cite_count = 0: 新着または未収録 → 1.0のまま
+            except Exception:
+                pass   # 引用数取得失敗 → 1.0 のまま
+
+        # ── ④ W_cat: カテゴリ整合スコア ─────────────────────────
+        w_cat = _CAT_MULTIPLIER_DEFAULT
+        for cat_prefix, mult in _CAT_MULTIPLIER.items():
+            if category.startswith(cat_prefix):
+                w_cat = max(w_cat, mult)
+        if w_cat > _CAT_MULTIPLIER_DEFAULT:
+            matched.append(f"[×カテゴリ{w_cat:.2f}({category})]")
+
+        # ── ⑤ W_repro: 再現性スコア ─────────────────────────────
+        repro_kws = ["github", "code available", "open source",
+                     "dataset", "open-source", "implementation"]
+        w_repro = 1.0
+        for kw in repro_kws:
+            if kw in summary:
+                w_repro = 1.30
+                matched.append("[×再現性1.30(コード/データ公開)]")
+                break
+        if w_repro == 1.0:
+            bench_kws = ["benchmark", "experiment", "evaluation"]
+            if any(k in summary for k in bench_kws):
+                w_repro = 1.15
+                matched.append("[×再現性1.15(実験あり)]")
+
+        # ── ⑥ W_hot: ホット度スコア（公開直後ほど高い）──────────
+        w_hot = 1.0
+        try:
+            if pub_str:
+                pub_dt = datetime.fromisoformat(pub_str.replace("Z", "+00:00"))
+                days_old = (datetime.now(pub_dt.tzinfo) - pub_dt).days
+                if days_old <= 1:
+                    w_hot = 1.20
+                    matched.append("[×ホット1.20(今日/昨日)]")
+                elif days_old <= 3:
+                    w_hot = 1.10
+                    matched.append("[×ホット1.10(3日以内)]")
+                elif days_old <= 7:
+                    w_hot = 1.05
+                elif days_old > 30:
+                    w_hot = 0.90
+        except Exception:
+            pass
+
+        # ── ⑦ 最終スコア計算 ─────────────────────────────────────
+        # $final = base \times W_{inst} \times W_{cite}
+        #          \times W_{cat} \times W_{repro} \times W_{hot}$
+        final = int(
+            base_score * w_inst * w_cite * w_cat * w_repro * w_hot
+        )
+        return final, matched
+
+    except Exception:
+        # 全体エラー時は従来方式にフォールバック
+        try:
+            title   = paper.get("title",   "").lower()
+            summary = paper.get("summary", "").lower()
+            score, matched_fallback = 0, []
+            for item in cfg.ARXIV_KEYWORDS:
+                if isinstance(item, (list, tuple)) and len(item) == 3:
+                    kw, t_pt, s_pt = item
+                else:
+                    kw, t_pt, s_pt = str(item), 2, 1
+                kw_l = kw.lower()
+                if kw_l in title:
+                    score += t_pt
+                    matched_fallback.append(f"[T+{t_pt}]{kw}")
+                elif kw_l in summary:
+                    score += s_pt
+                    matched_fallback.append(f"[S+{s_pt}]{kw}")
+            return score, matched_fallback
+        except Exception:
+            return 0, []
 
 
 def filter_new_and_score(papers: list, seen: set) -> list:

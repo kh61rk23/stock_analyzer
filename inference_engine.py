@@ -444,16 +444,19 @@ def run_inference_engine(cfg, results: dict) -> dict:
 
     ctx = _Ctx(results)
     # ── [US-4] term structure による crisis 判定強化 ────────
+    # ★ 2026-06-11 バグ修正: モジュール関数内で未定義の self に代入しており
+    #   毎回 NameError → 推論エンジン全体が常時失敗していた。
+    #   ctx 属性に格納し、crisis_signal 時はフェーズを crisis に
+    #   強制する [US-4] の設計意図をここで実装する。
     options_mon = results.get("options_monitor", {})
-    if options_mon.get("crisis_signal"):
-        self.crisis_override = True
-        self.term_score      = options_mon.get("term_score", 50.0)
-    else:
-        self.crisis_override = False
-        self.term_score      = options_mon.get("term_score", 50.0)
+    ctx.crisis_override = bool(options_mon.get("crisis_signal"))
+    ctx.term_score      = options_mon.get("term_score", 50.0)
 
     # Layer 1: 市場フェーズ
     phase_code, phase_label = _detect_phase(ctx)
+    if ctx.crisis_override and phase_code != "crisis":
+        phase_code  = "crisis"
+        phase_label = "⚠️ 危機的状況（オプション期間構造シグナルによる強制判定）"
     print(f"    市場フェーズ: {phase_label}")
 
     # Layer 2: マクロシナリオ

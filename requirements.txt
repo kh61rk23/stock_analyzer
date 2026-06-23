@@ -41,8 +41,13 @@ xgboost>=1.7.0
 
 # 感情分析（RESEARCH-5）
 transformers>=4.30.0
+sentence-transformers
 torch>=2.0.0
 
 # policy_radar PDF抽出（オプション・インストール失敗でもスキップ動作）
 pdfplumber>=0.10.0
 PyMuPDF>=1.23.0
+
+google-cloud-bigquery
+google-auth
+db-dtypes  # BigQueryのDATE型をpandasで扱うのに必要

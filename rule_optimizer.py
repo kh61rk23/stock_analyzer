@@ -75,6 +75,14 @@ SIGNAL_WEIGHT_EMA_ALPHA = 0.05   # 月次更新・変化を緩やかに
 SIGNAL_WEIGHT_MIN       = 0.05
 SIGNAL_WEIGHT_MAX       = 0.40
 
+# ── [Wave 4 - FE-F / S4-F] ファクターモメンタム定数 ─────────────
+# FACTOR_WEIGHTS_FILE : ファクター重みの保存ファイル名
+# FACTOR_WEIGHT_EMA   : ファクター重み EMA 更新率（週次）
+# FACTOR_LOOKBACK_DEF : ファクターリターン計算のデフォルトルックバック週数
+FACTOR_WEIGHTS_FILE = "factor_weights.json"
+FACTOR_WEIGHT_EMA   = 0.10   # 週次更新・MACRO_RULES と同じ更新率
+FACTOR_LOOKBACK_DEF = 12     # デフォルトルックバック期間（12週）
+
 # ファクター発動判定のしきい値（evaluate_macro_signals と整合）
 FACTOR_THRESHOLDS = {
     "interest_rate_rise": {"key": "us10y",   "op": ">",  "val": 4.0},
@@ -513,6 +521,468 @@ def apply_weight_to_signal(factor: str, base_pts: float, weights: dict) -> float
     w = weights.get(factor, {}).get("weight", WEIGHT_INIT) if weights else WEIGHT_INIT
     return round(base_pts * w, 2)
 
+# ==============================================================
+# BLOCK 5.5: ファクターモメンタム（Wave 4 - FE-F / S4-F）
+# ==============================================================
+# F-2: 週次ファクターリターン計算（4ファクター対応）
+# F-3: ルックバック期間加重平均
+# F-4: HHI 上限管理
+# F-5: HMM レジーム連動縮退
+
+def _load_factor_weights(cfg) -> dict:
+    """
+    factor_weights.json を読み込む。
+    なければ config.FACTOR_WEIGHTS_DEFAULT を初期値として返す。
+
+    Returns:
+        {factor_name: {"weight": float, "return_history": [...], ...}}
+    """
+    data_dir = Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
+    p = data_dir / FACTOR_WEIGHTS_FILE
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    # 初期値: config.FACTOR_WEIGHTS_DEFAULT
+    defaults = getattr(cfg, "FACTOR_WEIGHTS_DEFAULT", {
+        "momentum_12m":      0.30,
+        "value_hml":         0.25,
+        "low_volatility":    0.20,
+        "profitability_rmw": 0.25,
+    })
+    return {
+        name: {
+            "weight":         w,
+            "return_history": [],
+            "last_updated":   "",
+        }
+        for name, w in defaults.items()
+    }
+
+
+def _save_factor_weights(cfg, fw: dict) -> None:
+    """factor_weights.json を保存する。失敗は警告のみ。"""
+    data_dir = Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
+    p = data_dir / FACTOR_WEIGHTS_FILE
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(
+            json.dumps(fw, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        print(f"    ⚠️  [factor_weights] 保存失敗: {str(e)[:60]}")
+
+
+def calc_weekly_factor_returns(
+    score_history: dict,
+    cfg,
+    n_weeks: int = FACTOR_LOOKBACK_DEF,
+) -> dict[str, list[float]]:
+    """
+    F-2: score_history から4ファクターの週次リターンを計算する。
+
+    各ファクターの計算:
+      momentum_12m     : 全業種スコアを昇順ソートし上位1/3 - 下位1/3の平均差
+                         $r_{mom} = mean(top\\_third) - mean(bottom\\_third)$
+      value_hml        : PBR逆数（スコアをプロキシ）で同様に計算
+                         ※ score_history に value_score がある場合はそれを使用
+      low_volatility   : スコアの業種間標準偏差の逆数（低分散 = 低ボラ優位）
+                         $r_{lowvol} = -std(weekly\\_score\\_changes)$
+      profitability_rmw: edinet_credit_bonus / bm_bonus を収益性プロキシとして使用
+                         データなし時は 0.0
+
+    Returns:
+        {factor_name: [weekly_return, ...]}  直近 n_weeks 件（昇順）
+    """
+    factor_returns: dict[str, list[float]] = {
+        "momentum_12m":      [],
+        "value_hml":         [],
+        "low_volatility":    [],
+        "profitability_rmw": [],
+    }
+
+    # 週次スコアを昇順ソートで抽出
+    all_dates = sorted(score_history.keys())
+    if len(all_dates) < 2:
+        return factor_returns
+
+    # 7日ごとにサンプリング
+    weekly_snapshots: list[dict] = []
+    seen_weeks: set = set()
+    for d in reversed(all_dates):
+        try:
+            dt       = datetime.strptime(d, "%Y-%m-%d")
+            week_key = f"{dt.isocalendar()[0]}W{dt.isocalendar()[1]}"
+        except Exception:
+            continue
+        if week_key in seen_weeks:
+            continue
+        seen_weeks.add(week_key)
+        weekly_snapshots.append({"date": d, "data": score_history[d]})
+        if len(weekly_snapshots) >= n_weeks + 1:
+            break
+
+    # 昇順に戻す
+    weekly_snapshots.sort(key=lambda x: x["date"])
+    if len(weekly_snapshots) < 2:
+        return factor_returns
+
+    for i in range(1, len(weekly_snapshots)):
+        prev_snap = weekly_snapshots[i - 1]["data"]
+        curr_snap = weekly_snapshots[i]["data"]
+
+        if not isinstance(prev_snap, dict) or not isinstance(curr_snap, dict):
+            continue
+
+        # 両スナップショットに共通する業種コードのスコアを取得
+        codes = set(prev_snap.keys()) & set(curr_snap.keys())
+        if len(codes) < 4:
+            continue
+
+        prev_scores = {}
+        curr_scores = {}
+        for code in codes:
+            p_entry = prev_snap[code]
+            c_entry = curr_snap[code]
+            try:
+                p_s = float(p_entry["score"] if isinstance(p_entry, dict)
+                            else p_entry)
+                c_s = float(c_entry["score"] if isinstance(c_entry, dict)
+                            else c_entry)
+                prev_scores[code] = p_s
+                curr_scores[code] = c_s
+            except (TypeError, ValueError):
+                pass
+
+        if len(prev_scores) < 4:
+            continue
+
+        # 週次変化率
+        changes = {
+            code: curr_scores[code] - prev_scores[code]
+            for code in prev_scores
+        }
+        sorted_by_prev = sorted(prev_scores.items(), key=lambda x: x[1])
+        n = len(sorted_by_prev)
+        third = max(1, n // 3)
+
+        # F-2a: momentum_12m (上位1/3 - 下位1/3の変化差)
+        top_codes    = [c for c, _ in sorted_by_prev[-third:]]
+        bottom_codes = [c for c, _ in sorted_by_prev[:third]]
+        top_ret    = sum(changes.get(c, 0) for c in top_codes)    / len(top_codes)
+        bottom_ret = sum(changes.get(c, 0) for c in bottom_codes) / len(bottom_codes)
+        factor_returns["momentum_12m"].append(round(top_ret - bottom_ret, 4))
+
+        # F-2b: value_hml (low_score = 割安 → 上昇期待)
+        # prev_score が低い業種ほど「割安」とみなし、上昇が大きければ有効
+        value_top    = [c for c, _ in sorted_by_prev[:third]]   # 低スコア=割安
+        value_bottom = [c for c, _ in sorted_by_prev[-third:]]  # 高スコア=割高
+        v_top_ret    = sum(changes.get(c, 0) for c in value_top)    / len(value_top)
+        v_bottom_ret = sum(changes.get(c, 0) for c in value_bottom) / len(value_bottom)
+        factor_returns["value_hml"].append(round(v_top_ret - v_bottom_ret, 4))
+
+        # F-2c: low_volatility (変化の標準偏差の逆符号)
+        # 変化のばらつきが小さい週 = 低ボラ環境 = low_vol ファクターに有利
+        all_changes = list(changes.values())
+        mean_chg    = sum(all_changes) / len(all_changes)
+        var_chg     = sum((c - mean_chg) ** 2 for c in all_changes) / len(all_changes)
+        std_chg     = math.sqrt(var_chg) if var_chg > 0 else 0.0
+        # std が小さい = 低ボラ = +リターン、std が大きい = -リターン
+        lowvol_ret  = -std_chg   # 低ボラ週ほど正のリターン
+        factor_returns["low_volatility"].append(round(lowvol_ret, 4))
+
+        # F-2d: profitability_rmw (edinet_credit_bonus をプロキシ)
+        # curr_snap に edinet_credit_bonus がある業種の平均変化
+        rmw_values = []
+        for code in codes:
+            c_entry = curr_snap.get(code, {})
+            if isinstance(c_entry, dict):
+                bonus = c_entry.get("edinet_credit_bonus")
+                if bonus is not None:
+                    rmw_values.append(
+                        (float(bonus), changes.get(code, 0))
+                    )
+        if rmw_values:
+            high_rmw = sorted(rmw_values, key=lambda x: x[0], reverse=True)
+            top_rmw  = [r for _, r in high_rmw[:third]]
+            bot_rmw  = [r for _, r in high_rmw[-third:]]
+            if top_rmw and bot_rmw:
+                rmw_ret = (sum(top_rmw) / len(top_rmw)
+                           - sum(bot_rmw) / len(bot_rmw))
+                factor_returns["profitability_rmw"].append(round(rmw_ret, 4))
+            else:
+                factor_returns["profitability_rmw"].append(0.0)
+        else:
+            factor_returns["profitability_rmw"].append(0.0)
+
+    return factor_returns
+
+
+def _calc_lookback_weighted_return(
+    returns: list[float],
+    mu: float = None,
+) -> float:
+    """
+    F-3: ルックバック期間加重平均リターンを計算する。
+
+    $w_t = exp(-\\mu \times (T - t))$
+    直近ほど高い重みを付与する指数減衰。
+
+    Args:
+        returns: 週次リターンリスト（昇順）
+        mu:      減衰係数（None のとき FACTOR_LOOKBACK_DECAY_MU を使用）
+
+    Returns:
+        float: 加重平均リターン
+    """
+    if not returns:
+        return 0.0
+
+    if mu is None:
+        mu = 0.05   # FACTOR_LOOKBACK_DECAY_MU のデフォルト値
+
+    n       = len(returns)
+    weights = [math.exp(-mu * (n - 1 - i)) for i in range(n)]
+    total_w = sum(weights)
+    if total_w == 0:
+        return 0.0
+
+    return round(
+        sum(w * r for w, r in zip(weights, returns)) / total_w, 4
+    )
+
+
+def _calc_factor_hhi(weights: dict[str, float]) -> float:
+    """
+    F-4: ファクター重みの集中度 HHI を計算する。
+
+    $HHI = \\sum_{i} w_i^2$
+
+    Returns:
+        float: HHI [0.0, 1.0]
+    """
+    total = sum(weights.values())
+    if total == 0:
+        return 0.0
+    normed = {k: v / total for k, v in weights.items()}
+    return round(sum(v ** 2 for v in normed.values()), 4)
+
+
+def _apply_hhi_rebalance(
+    weights:  dict[str, float],
+    hhi_max:  float,
+    max_iter: int = 10,
+) -> dict[str, float]:
+    """
+    F-4: HHI が上限を超えた場合、均等化方向にリバランスする。
+
+    $w_i' = w_i \times (1 - \alpha) + uniform \times \alpha$
+    $\alpha = 0.2$ (1回あたり20%均等化)
+
+    Returns:
+        dict: リバランス後の重み
+    """
+    for _ in range(max_iter):
+        hhi = _calc_factor_hhi(weights)
+        if hhi <= hhi_max:
+            break
+        n       = len(weights)
+        uniform = 1.0 / n if n > 0 else 0.0
+        weights = {
+            k: round(v * 0.8 + uniform * 0.2, 4)
+            for k, v in weights.items()
+        }
+    return weights
+
+
+def _apply_regime_shrink(
+    weights: dict[str, float],
+    regime:  str,
+    cfg,
+) -> dict[str, float]:
+    """
+    F-5: HMM レジームに応じてファクター重みを縮退させる。
+
+    FACTOR_REGIME_SHRINK で定義した係数を適用:
+      bull/normal: 変更なし
+      bear:        momentum_12m を 0.70 に縮退
+      crisis:      momentum_12m を 0.40 に縮退（低ボラに移行）
+
+    Returns:
+        dict: 縮退後の重み（正規化済み）
+    """
+    regime_shrink = getattr(cfg, "FACTOR_REGIME_SHRINK", {
+        "bull":   1.00,
+        "normal": 1.00,
+        "bear":   0.70,
+        "crisis": 0.40,
+    })
+
+    shrink = regime_shrink.get(regime, 1.00)
+    if shrink == 1.00:
+        return weights
+
+    result = dict(weights)
+    if "momentum_12m" in result:
+        result["momentum_12m"] = round(result["momentum_12m"] * shrink, 4)
+        # 縮退した分を low_volatility に振り替え（低ボラへの移行）
+        freed = weights.get("momentum_12m", 0.0) * (1.0 - shrink)
+        if "low_volatility" in result:
+            result["low_volatility"] = round(
+                result["low_volatility"] + freed, 4
+            )
+
+    # 正規化
+    total = sum(result.values())
+    if total > 0:
+        result = {k: round(v / total, 4) for k, v in result.items()}
+
+    return result
+
+
+def run_factor_momentum_optimizer(cfg, score_history: dict) -> dict:
+    """
+    F-2〜F-5 を統合した週次ファクターリターン計算・重み更新のメイン関数。
+
+    stock_analyzer_main.py の run_rule_optimizer 呼び出し後に
+    続けて呼び出される（または run_rule_optimizer 内部から呼び出す）。
+
+    Args:
+        cfg:           config モジュール
+        score_history: DATA_DIR/score_history.json の内容
+
+    Returns:
+        {
+          "factor_weights":      dict,   # 更新後のファクター重み
+          "factor_returns":      dict,   # 週次リターン系列
+          "weighted_returns":    dict,   # 加重平均リターン
+          "hhi_before":          float,
+          "hhi_after":           float,
+          "regime":              str,
+          "regime_applied":      bool,
+          "rebalanced":          bool,
+        }
+    """
+    print("    📊 [F-2〜F-5] ファクターモメンタム最適化...")
+
+    try:
+        # ── F-2: 週次ファクターリターン計算 ─────────────────────
+        factor_returns = calc_weekly_factor_returns(score_history, cfg)
+        n_rets = {k: len(v) for k, v in factor_returns.items()}
+        print(f"      週次リターン: {n_rets}")
+
+        # ── F-3: ルックバック加重平均 ─────────────────────────
+        mu = float(getattr(cfg, "FACTOR_LOOKBACK_DECAY_MU", 0.05))
+        weighted_returns = {
+            fname: _calc_lookback_weighted_return(returns, mu)
+            for fname, returns in factor_returns.items()
+        }
+        print(f"      加重平均: "
+              f"{', '.join(f'{k}={v:+.4f}' for k,v in weighted_returns.items())}")
+
+        # ── ファクター重み読み込み ─────────────────────────────
+        fw = _load_factor_weights(cfg)
+
+        # EMA 更新: 加重平均リターンを使って重みを更新
+        hhi_max   = float(getattr(cfg, "FACTOR_HHI_MAX", 0.35))
+        curr_weights: dict[str, float] = {}
+
+        for fname, fw_data in fw.items():
+            old_w = float(fw_data.get("weight", 0.25))
+            w_ret = weighted_returns.get(fname, 0.0)
+            # リターンが正 → 重みを増加、負 → 重みを減少
+            new_w = round(
+                max(0.05, min(0.60,
+                    old_w * (1 - FACTOR_WEIGHT_EMA)
+                    + (old_w + w_ret * CORR_SCALE) * FACTOR_WEIGHT_EMA
+                )), 4
+            )
+            fw[fname]["weight"]       = new_w
+            fw[fname]["prev_weight"]  = old_w
+            fw[fname]["delta"]        = round(new_w - old_w, 4)
+            fw[fname]["weighted_return"] = w_ret
+            # リターン履歴を追記（最大52週保持）
+            hist = fw[fname].get("return_history", [])
+            hist.append({
+                "date":   datetime.now().strftime("%Y-%m-%d"),
+                "return": w_ret,
+            })
+            fw[fname]["return_history"] = hist[-52:]
+            fw[fname]["last_updated"]   = datetime.now().strftime("%Y-%m-%d")
+            curr_weights[fname] = new_w
+
+        # ── F-4: HHI 上限管理 ────────────────────────────────
+        hhi_before = _calc_factor_hhi(curr_weights)
+        rebalanced = False
+        if hhi_before > hhi_max:
+            print(
+                f"      ⚠️  HHI={hhi_before:.4f} > {hhi_max} → リバランス実行"
+            )
+            curr_weights = _apply_hhi_rebalance(curr_weights, hhi_max)
+            for fname in curr_weights:
+                if fname in fw:
+                    fw[fname]["weight"]      = curr_weights[fname]
+                    fw[fname]["hhi_rebalanced"] = True
+            rebalanced = True
+        hhi_after = _calc_factor_hhi(curr_weights)
+
+        # ── F-5: HMM レジーム連動縮退 ───────────────────────
+        regime         = "normal"
+        regime_applied = False
+        try:
+            import sys as _sys, importlib as _imp, pathlib as _pl
+            _sys.path.insert(0, str(_pl.Path(__file__).parent))
+            _hmm = _imp.import_module("hmm_regime_detector")
+            if hasattr(_hmm, "get_current_regime"):
+                regime = _hmm.get_current_regime(cfg) or "normal"
+        except Exception:
+            pass   # HMM 未配置時はデフォルトレジームを使用
+
+        if regime in ("bear", "crisis"):
+            print(f"      ⚡ HMMレジーム={regime} → momentum縮退適用")
+            curr_weights = _apply_regime_shrink(curr_weights, regime, cfg)
+            for fname in curr_weights:
+                if fname in fw:
+                    fw[fname]["weight"]         = curr_weights[fname]
+                    fw[fname]["regime_applied"]  = regime
+            regime_applied = True
+
+        # ── 保存 ─────────────────────────────────────────────
+        _save_factor_weights(cfg, fw)
+
+        result = {
+            "factor_weights":   curr_weights,
+            "factor_returns":   {k: v[-12:] for k, v in factor_returns.items()},
+            "weighted_returns": weighted_returns,
+            "hhi_before":       hhi_before,
+            "hhi_after":        hhi_after,
+            "regime":           regime,
+            "regime_applied":   regime_applied,
+            "rebalanced":       rebalanced,
+        }
+
+        print(
+            f"      ✅ ファクター重み更新完了: "
+            f"HHI {hhi_before:.3f}→{hhi_after:.3f} "
+            f"regime={regime} "
+            f"rebalanced={rebalanced}"
+        )
+        return result
+
+    except Exception as e:
+        print(f"    ⚠️  [factor_momentum] エラー（スキップ）: {str(e)[:80]}")
+        return {
+            "factor_weights":   {},
+            "factor_returns":   {},
+            "weighted_returns": {},
+            "hhi_before":       0.0,
+            "hhi_after":        0.0,
+            "regime":           "normal",
+            "regime_applied":   False,
+            "rebalanced":       False,
+        }
 
 # ==============================================================
 # BLOCK 6: レポート生成
@@ -530,6 +1000,8 @@ def format_weight_report(old_weights: dict, new_weights: dict) -> str:
     for factor, entry in sorted(new_weights.items(),
                                   key=lambda x: abs(x[1].get("delta", 0)),
                                   reverse=True):
+        if factor.startswith("_"):
+            continue
         old_w   = entry.get("prev_weight", 1.0)
         new_w   = entry.get("weight", 1.0)
         delta   = entry.get("delta", 0)
@@ -553,6 +1025,414 @@ def format_weight_report(old_weights: dict, new_weights: dict) -> str:
 # BLOCK 7: メインエントリポイント
 # ==============================================================
 
+# ==============================================================
+# BLOCK 7.5: Wave 6 - 第4セッション
+#            緊急縮退フラグ判定・防御セクター相対維持ロジック
+# ==============================================================
+# 【設計方針】
+#   G-1: evaluate_contraction_flag()  → results から複合条件を評価してモード判定
+#   G-2: apply_contraction_to_scores() → カテゴリスコアに縮退係数を一括適用
+#   G-3: is_defensive_sector()         → JP/US 両市場で防御セクターか判定
+#   G-4: apply_defensive_protection()  → 防御セクターのスコアを相対維持
+#   G-5: save_contraction_history()    → 縮退状態を JSONL で永続化
+#   ※ config.py BLOCK 27 の定数群を参照する。
+# ==============================================================
+
+
+def evaluate_contraction_flag(results: dict, cfg) -> dict:
+    """
+    G-1: リスクオフ局面の複合条件を評価し、縮退モードを判定する。
+
+    判定ロジック:
+      各条件が成立するたびに triggered_count をインクリメント。
+      CONTRACTION_WARNING_TRIGGER_COUNT 以上  → "Warning"
+      CONTRACTION_EMERGENCY_TRIGGER_COUNT 以上 → "Emergency"
+      それ未満                                → "Normal"
+
+    Args:
+        results: run_all_tasks() の results dict
+        cfg:     config モジュール
+
+    Returns:
+        {
+          "mode":            str,   # "Normal" / "Warning" / "Emergency"
+          "triggered_count": int,   # 成立条件数
+          "triggered_flags": list,  # 成立した条件名リスト
+          "detail":          dict,  # 各条件の評価値
+          "coefficient":     float, # モード別・縮退係数（0.65〜1.00）
+          "timestamp":       str,
+        }
+    """
+    triggered_count = 0
+    triggered_flags: list = []
+    detail: dict = {}
+
+    # ── 閾値を config から取得（BLOCK 27 定数） ─────────────────
+    vix_thresh     = float(getattr(cfg, "CONTRACTION_VIX_THRESHOLD",       30.0))
+    us10y_rise     = float(getattr(cfg, "CONTRACTION_US10Y_RISE_PCT",       0.30))
+    breadth_min    = float(getattr(cfg, "CONTRACTION_BREADTH_SCORE_MIN",    35.0))
+    pcr_thresh     = float(getattr(cfg, "CONTRACTION_PCR_THRESHOLD",        1.40))
+    geo_thresh     = float(getattr(cfg, "CONTRACTION_GEO_RISK_SCORE",       70.0))
+    score_drop     = float(getattr(cfg, "CONTRACTION_SCORE_DROP_THRESHOLD", 12.0))
+    warn_count     = int(getattr(cfg,   "CONTRACTION_WARNING_TRIGGER_COUNT",   2))
+    emerg_count    = int(getattr(cfg,   "CONTRACTION_EMERGENCY_TRIGGER_COUNT", 4))
+
+    # ── 条件 1: VIX >= vix_thresh ────────────────────────────────
+    try:
+        vix_val = (
+            results.get("options_monitor", {})
+            .get("vix_data", {})
+            .get("vix", {})
+            .get("current")
+        )
+        detail["vix"] = vix_val
+        if vix_val is not None and float(vix_val) >= vix_thresh:
+            triggered_count += 1
+            triggered_flags.append(f"VIX={float(vix_val):.1f}>={vix_thresh}")
+    except Exception:
+        detail["vix"] = None
+
+    # ── 条件 2: 米10年債利回り前週比 >= us10y_rise(%) ────────────
+    try:
+        bond_res   = results.get("bond_commodity", {})
+        us10y_now  = bond_res.get("us10y_yield")
+        us10y_prev = bond_res.get("us10y_yield_prev")
+        detail["us10y_rise"] = None
+        if us10y_now is not None and us10y_prev is not None:
+            rise = float(us10y_now) - float(us10y_prev)
+            detail["us10y_rise"] = round(rise, 4)
+            if rise >= us10y_rise:
+                triggered_count += 1
+                triggered_flags.append(
+                    f"US10Y+{rise:.2f}%>={us10y_rise}%"
+                )
+    except Exception:
+        detail["us10y_rise"] = None
+
+    # ── 条件 3: 市場幅スコア <= breadth_min ──────────────────────
+    try:
+        breadth_score = results.get("market_breadth", {}).get("breadth_score_jp")
+        detail["breadth_score_jp"] = breadth_score
+        if breadth_score is not None and float(breadth_score) <= breadth_min:
+            triggered_count += 1
+            triggered_flags.append(
+                f"breadth={float(breadth_score):.1f}<={breadth_min}"
+            )
+    except Exception:
+        detail["breadth_score_jp"] = None
+
+    # ── 条件 4: PCR >= pcr_thresh ────────────────────────────────
+    try:
+        pcr_val = (
+            results.get("options_monitor", {})
+            .get("pcr_data", {})
+            .get("pcr_current")
+        )
+        detail["pcr"] = pcr_val
+        if pcr_val is not None and float(pcr_val) >= pcr_thresh:
+            triggered_count += 1
+            triggered_flags.append(f"PCR={float(pcr_val):.2f}>={pcr_thresh}")
+    except Exception:
+        detail["pcr"] = None
+
+    # ── 条件 5: 地政学リスクスコア >= geo_thresh ─────────────────
+    try:
+        geo_score = None
+        # geo_risk / country_risk のいずれかから取得を試みる
+        _geo_res = results.get("geo_risk", results.get("country_risk", {}))
+        if isinstance(_geo_res, dict):
+            geo_score = _geo_res.get("risk_score") or _geo_res.get("geo_risk_score")
+        detail["geo_risk_score"] = geo_score
+        if geo_score is not None and float(geo_score) >= geo_thresh:
+            triggered_count += 1
+            triggered_flags.append(
+                f"geo_risk={float(geo_score):.1f}>={geo_thresh}"
+            )
+    except Exception:
+        detail["geo_risk_score"] = None
+
+    # ── 条件 6: 上位業種スコア平均の週次急落 >= score_drop ───────
+    try:
+        sig_res = results.get("signal_aggregator", {})
+        sector_signals = sig_res.get("sector_signals", {})
+        scores_now = [
+            float(v.get("signal_score", 50))
+            for v in sector_signals.values()
+            if isinstance(v, dict)
+        ]
+        # score_history から前週の上位平均を取得（存在すれば）
+        score_hist = results.get("_score_history_prev_avg")
+        detail["score_drop"] = None
+        if scores_now:
+            avg_now = sum(sorted(scores_now, reverse=True)[:6]) / min(6, len(scores_now))
+            if score_hist is not None:
+                drop = float(score_hist) - avg_now
+                detail["score_drop"] = round(drop, 2)
+                if drop >= score_drop:
+                    triggered_count += 1
+                    triggered_flags.append(
+                        f"score_drop={drop:.1f}>={score_drop}"
+                    )
+            # 前週平均を results に格納（次週参照用）
+            results["_score_history_prev_avg"] = round(avg_now, 2)
+    except Exception:
+        detail["score_drop"] = None
+
+    # ── モード判定 ───────────────────────────────────────────────
+    if triggered_count >= emerg_count:
+        mode = "Emergency"
+    elif triggered_count >= warn_count:
+        mode = "Warning"
+    else:
+        mode = "Normal"
+
+    coeff_map = getattr(
+        cfg,
+        "CONTRACTION_MODE_COEFFICIENTS",
+        {"Normal": 1.00, "Warning": 0.85, "Emergency": 0.65},
+    )
+    coefficient = float(coeff_map.get(mode, 1.00))
+
+    return {
+        "mode":            mode,
+        "triggered_count": triggered_count,
+        "triggered_flags": triggered_flags,
+        "detail":          detail,
+        "coefficient":     coefficient,
+        "timestamp":       datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+def is_defensive_sector(
+    sector_code: str,
+    sector_name: str = "",
+    market: str = "JP",
+    cfg=None,
+) -> bool:
+    """
+    G-3: 業種コード / 業種名 / GICS名 から防御セクターか判定する。
+
+    判定優先順:
+      1. JP市場: DEFENSIVE_SECTOR_CODES_JP にコードが含まれるか
+      2. US市場: DEFENSIVE_GICS_SECTORS_US に名称が含まれるか
+      3. 共通: DEFENSIVE_SECTOR_KEYWORDS にキーワードが含まれるか
+
+    Args:
+        sector_code: JP33業種コード ("1008") / GICSセクター名 ("Health Care")
+        sector_name: sector_name_ja 等の表示名（マッチング補完用）
+        market:      "JP" / "US"
+        cfg:         config モジュール（None時はデフォルト定義を使用）
+
+    Returns:
+        bool: 防御セクターなら True
+    """
+    # config 定数を取得（cfg なし時はデフォルト）
+    jp_codes = (
+        getattr(cfg, "DEFENSIVE_SECTOR_CODES_JP", [])
+        if cfg is not None
+        else [
+            "1007", "1008", "1026", "1022",
+            "1023", "1024", "1009", "1028", "1029",
+        ]
+    )
+    us_gics = (
+        getattr(cfg, "DEFENSIVE_GICS_SECTORS_US", [])
+        if cfg is not None
+        else [
+            "Consumer Staples", "Health Care",
+            "Utilities", "Communication Services",
+        ]
+    )
+    keywords = (
+        getattr(cfg, "DEFENSIVE_SECTOR_KEYWORDS", [])
+        if cfg is not None
+        else [
+            "医薬品", "電力", "ガス", "食料", "食品", "生活",
+            "公益", "通信", "インフラ", "保険",
+            "Healthcare", "Utilities", "Staples", "Pharma",
+        ]
+    )
+
+    code_str = str(sector_code).strip()
+    name_str = str(sector_name).strip()
+
+    # 1. JP コードマッチ
+    if market == "JP" and code_str in jp_codes:
+        return True
+
+    # 2. US GICSマッチ
+    if market == "US" and code_str in us_gics:
+        return True
+
+    # 3. キーワードマッチ（sector_code または sector_name に含まれる）
+    combined = code_str + " " + name_str
+    for kw in keywords:
+        if kw in combined:
+            return True
+
+    return False
+
+
+def apply_contraction_to_scores(
+    scores: dict,
+    contraction: dict,
+    cfg,
+    sector_code: str = "",
+    sector_name: str = "",
+    market: str = "JP",
+) -> dict:
+    """
+    G-2: カテゴリ別スコア dict に縮退係数を適用する。
+    防御セクターの場合は係数を適用せず、相対ボーナスを加算する。
+
+    Args:
+        scores:      {"sector_score": 72.0, "macro_signals": 65.0, ...}
+        contraction: evaluate_contraction_flag() の戻り値
+        cfg:         config モジュール
+        sector_code: 業種コード（防御判定に使用）
+        sector_name: 業種名（防御判定に使用）
+        market:      "JP" / "US"
+
+    Returns:
+        補正後の scores dict（元の dict は変更しない）
+    """
+    mode        = contraction.get("mode", "Normal")
+    coefficient = contraction.get("coefficient", 1.00)
+
+    # Normal ならスコアを変更しない
+    if mode == "Normal":
+        return dict(scores)
+
+    # 防御セクターか判定
+    defensive = is_defensive_sector(
+        sector_code=sector_code,
+        sector_name=sector_name,
+        market=market,
+        cfg=cfg,
+    )
+
+    result = {}
+
+    if defensive:
+        # 防御セクター: 係数を適用せず相対ボーナスを加算
+        bonus_map = {
+            "Warning":   float(getattr(cfg, "DEFENSIVE_RELATIVE_BONUS_WARNING",   3.0)),
+            "Emergency": float(getattr(cfg, "DEFENSIVE_RELATIVE_BONUS_EMERGENCY", 7.0)),
+        }
+        bonus = bonus_map.get(mode, 0.0)
+        for cat, val in scores.items():
+            if val is None:
+                result[cat] = val
+                continue
+            try:
+                result[cat] = round(min(100.0, float(val) + bonus), 2)
+            except (TypeError, ValueError):
+                result[cat] = val
+        return result
+
+    # 非防御セクター: カテゴリ別感度係数 × モード係数を適用
+    cat_sensitivity = getattr(cfg, "CONTRACTION_CATEGORY_SENSITIVITY", {})
+
+    for cat, val in scores.items():
+        if val is None:
+            result[cat] = val
+            continue
+        try:
+            sensitivity = float(cat_sensitivity.get(cat, 1.00))
+            # 有効係数 = coefficient ^ sensitivity（感度が高いほどより強く縮退）
+            # 簡易実装: coefficient × (1.0 - (sensitivity - 1.0) × 0.5)
+            effective_coeff = coefficient * (
+                1.0 - (sensitivity - 1.0) * 0.5
+            )
+            effective_coeff = max(0.30, min(1.00, effective_coeff))
+            # スコアは中心50点から縮退させる
+            # $adjusted = 50 + (val - 50) \times effective\_coeff$
+            adjusted = 50.0 + (float(val) - 50.0) * effective_coeff
+            result[cat] = round(max(0.0, min(100.0, adjusted)), 2)
+        except (TypeError, ValueError):
+            result[cat] = val
+
+    return result
+
+
+def apply_defensive_protection(
+    signal_score: float,
+    contraction: dict,
+    cfg,
+    sector_code: str = "",
+    sector_name: str = "",
+    market: str = "JP",
+) -> float:
+    """
+    G-4: 最終 signal_score に対して防御セクター保護を適用する。
+    apply_contraction_to_scores() でカテゴリ単位に補正済みの場合でも、
+    最終スコアの下限保護として使用できる。
+
+    防御セクター かつ Emergency 時は
+    DEFENSIVE_PROTECTION_MULTIPLIER でスコアを保護する。
+
+    Args:
+        signal_score: 縮退補正前の signal_score（0〜100）
+        contraction:  evaluate_contraction_flag() の戻り値
+        cfg:          config モジュール
+
+    Returns:
+        float: 保護適用後の signal_score
+    """
+    mode = contraction.get("mode", "Normal")
+    if mode == "Normal":
+        return signal_score
+
+    defensive = is_defensive_sector(
+        sector_code=sector_code,
+        sector_name=sector_name,
+        market=market,
+        cfg=cfg,
+    )
+    if not defensive:
+        return signal_score
+
+    multiplier = float(
+        getattr(cfg, "DEFENSIVE_PROTECTION_MULTIPLIER", 1.00)
+    )
+    bonus_map = {
+        "Warning":   float(getattr(cfg, "DEFENSIVE_RELATIVE_BONUS_WARNING",   3.0)),
+        "Emergency": float(getattr(cfg, "DEFENSIVE_RELATIVE_BONUS_EMERGENCY", 7.0)),
+    }
+    bonus = bonus_map.get(mode, 0.0)
+    protected = round(
+        min(100.0, signal_score * multiplier + bonus), 1
+    )
+    return protected
+
+
+def save_contraction_history(
+    cfg,
+    contraction: dict,
+) -> None:
+    """
+    G-6: 縮退状態を CACHE_DIR/contraction/contraction_history.jsonl に追記する。
+    1行1JSON（JSON Lines形式）。ファイルが存在しない場合は新規作成する。
+    書き込み失敗は警告のみ（システム全体を止めない）。
+    """
+    try:
+        cache_dir  = Path(getattr(cfg, "CACHE_DIR", "stock_data/cache"))
+        hist_fname = getattr(cfg, "CONTRACTION_HISTORY_PATH", "contraction_history.jsonl")
+        hist_path  = cache_dir / "contraction" / hist_fname
+        hist_path.parent.mkdir(parents=True, exist_ok=True)
+
+        record = {
+            "date":            datetime.now().strftime("%Y-%m-%d"),
+            "mode":            contraction.get("mode", "Normal"),
+            "triggered_count": contraction.get("triggered_count", 0),
+            "triggered_flags": contraction.get("triggered_flags", []),
+            "coefficient":     contraction.get("coefficient", 1.00),
+        }
+        with hist_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print(f"    ⚠️  縮退履歴保存失敗（スキップ）: {str(e)[:60]}")
+
 def run_rule_optimizer(cfg, force: bool = False) -> dict:
     """
     月末（または force=True）のときにルール重みを更新する。
@@ -569,6 +1449,9 @@ def run_rule_optimizer(cfg, force: bool = False) -> dict:
           "old_weights":  dict,      # 更新前の重み
           "report_md":    str,       # Markdown レポート
           "timestamp":    str,
+          "contraction_flag":   dict,  # 緊急縮退フラグ判定結果（Wave 6 - 第4セッション）
+          "contraction_mode":   str,   # "Normal" / "Warning" / "Emergency"
+          "contraction_detail": dict,  # 各条件の評価値
         }
     """
     today = date.today()
@@ -579,23 +1462,37 @@ def run_rule_optimizer(cfg, force: bool = False) -> dict:
         old_weights = load_weights(cfg)
         print("  ⏩ ルールオプティマイザー: 月末以外はスキップ")
         return {
-            "updated":  False,
-            "weights":  old_weights,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "updated":          False,
+            "weights":          old_weights,
+            "contraction_flag": {
+                "mode": "Normal", "triggered_count": 0,
+                "triggered_flags": [], "detail": {}, "coefficient": 1.00,
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            },
+            "contraction_mode":   "Normal",
+            "contraction_detail": {},
+            "timestamp":          datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
 
     print("\n  ⚖️  ルール重み最適化開始...")
 
     # score_history 読み込み
     score_history = load_score_history(cfg)
-    if len(score_history) < LOOKBACK_WEEKS:
+    if len(score_history) < LOOKBACK_WEEKS * 7:
         print(f"    ⚠️  score_history が不足（{len(score_history)}週分 < {LOOKBACK_WEEKS}週）")
         print("    ⏩ スキップ（データ蓄積中）")
         return {
-            "updated":  False,
-            "weights":  load_weights(cfg),
-            "reason":   f"score_history不足: {len(score_history)}週分",
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "updated":            False,
+            "weights":            load_weights(cfg),
+            "reason":             f"score_history不足: {len(score_history)}週分",
+            "contraction_flag": {
+                "mode": "Normal", "triggered_count": 0,
+                "triggered_flags": [], "detail": {}, "coefficient": 1.00,
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            },
+            "contraction_mode":   "Normal",
+            "contraction_detail": {},
+            "timestamp":          datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
 
     # 週次リターン計算
@@ -648,6 +1545,51 @@ def run_rule_optimizer(cfg, force: bool = False) -> dict:
 
     save_weights(cfg, new_weights)
 
+    # ── [RESEARCH-2] クラウディングスコアによる自動重み削減 ──────────
+    try:
+        import sys as _sys, importlib as _imp
+        _sys.path.insert(0, str(Path(__file__).parent))
+        _cfm    = _imp.import_module("factor_crowding_monitor")
+        _c_hist = _cfm._load_crowding_history(cfg)
+        if _c_hist:
+            _latest_week = max(_c_hist.keys())
+            _latest      = _c_hist[_latest_week]
+            _c_score     = _latest.get("crowding_score", 0)
+            _trigger     = getattr(cfg, "CROWDING_REDUCTION_TRIGGER", 80)
+            _rate        = getattr(cfg, "CROWDING_REDUCTION_RATE", 0.85)
+
+            if _c_score >= _trigger:
+                print(f"    ⚠️  [RESEARCH-2] クラウディングスコア{_c_score} "
+                      f"→ 全ファクター重みを{_rate:.0%}に削減")
+                _reduced = 0
+                for _fk in list(new_weights.keys()):
+                    if _fk.startswith("_"):
+                        continue   # _signal_weights等の内部キーはスキップ
+                    _old_w = new_weights[_fk].get("weight", 1.0) if isinstance(new_weights[_fk], dict) else float(new_weights[_fk])
+                    _new_w = round(max(WEIGHT_MIN, _old_w * _rate), 4)
+                    if isinstance(new_weights[_fk], dict):
+                        new_weights[_fk]["weight"]             = _new_w
+                        new_weights[_fk]["crowding_reduced"]   = True
+                        new_weights[_fk]["crowding_score"]     = _c_score
+                    else:
+                        new_weights[_fk] = _new_w
+                    _reduced += 1
+                print(f"      削減対象: {_reduced}ファクター")
+
+            # アンワインドアラート時は追加削減（最も危険なタイミング）
+            if _latest.get("unwind_alert"):
+                print("    🚨 [RESEARCH-2] 解消売りアラート → 追加削減（×0.90）")
+                for _fk in list(new_weights.keys()):
+                    if _fk.startswith("_"):
+                        continue
+                    _entry = new_weights[_fk]
+                    if isinstance(_entry, dict):
+                        _old_w = _entry.get("weight", 1.0)
+                        _entry["weight"] = round(max(WEIGHT_MIN, _old_w * 0.90), 4)
+                        _entry["unwind_reduced"] = True
+    except Exception as _re2e:
+        pass   # クラウディング連携失敗は最適化を止めない
+
     # [統合エンジン] signal_weights を rule_weights.json の "_signal_weights" に保存
     try:
         new_signal_weights = update_signal_weights(cfg, factor_correlations)
@@ -687,13 +1629,68 @@ def run_rule_optimizer(cfg, force: bool = False) -> dict:
 
     report_md = format_weight_report(old_weights, new_weights)
 
+# ── [Wave 6 - 第4セッション] 簡易縮退判定（月末更新時） ──────
+    # score_history の最新スナップショットから VIX・市場幅を簡易チェックする。
+    # 本格的な縮退評価は run_all_tasks() 内で signal_aggregator 呼び出し直前に
+    # evaluate_contraction_flag(results, cfg) が実施するため、ここでは
+    # score_history 内に格納されているマクロ指標を代用する。
+    _contraction_result_monthly: dict = {
+        "mode": "Normal", "triggered_count": 0,
+        "triggered_flags": [], "detail": {}, "coefficient": 1.00,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    try:
+        _latest_date = sorted(score_history.keys())[-1] if score_history else None
+        _latest_snap = score_history.get(_latest_date, {}) if _latest_date else {}
+        _dummy_results_monthly = {
+            "options_monitor": {
+                "vix_data": {
+                    "vix": {"current": _latest_snap.get("vix")}
+                },
+                "pcr_data": {
+                    "pcr_current": _latest_snap.get("pcr")
+                },
+            },
+            "market_breadth": {
+                "breadth_score_jp": _latest_snap.get("breadth_score_jp"),
+            },
+            "bond_commodity": {
+                "us10y_yield":      _latest_snap.get("us10y"),
+                "us10y_yield_prev": _latest_snap.get("us10y_prev"),
+            },
+        }
+        _contraction_result_monthly = evaluate_contraction_flag(
+            _dummy_results_monthly, cfg
+        )
+        save_contraction_history(cfg, _contraction_result_monthly)
+        if _contraction_result_monthly.get("mode") != "Normal":
+            print(
+                f"    🔴 [縮退判定・月末] "
+                f"モード={_contraction_result_monthly['mode']} "
+                f"/ triggers={_contraction_result_monthly['triggered_count']}"
+            )
+    except Exception as _ce_monthly:
+        pass   # 縮退判定失敗は最適化全体を止めない
+
+    # ── [Wave 4 - FE-F / S4-F] ファクターモメンタム最適化（F-2〜F-5）──
+    _factor_result: dict = {}
+    try:
+        _factor_result = run_factor_momentum_optimizer(cfg, score_history)
+    except Exception as _fme:
+        print(f"    ⚠️  ファクターモメンタム最適化エラー（スキップ）: "
+              f"{str(_fme)[:60]}")
+
     print(f"    ✅ ルール最適化完了: rule_weights.json 更新")
 
     return {
-        "updated":     True,
-        "weights":     new_weights,
-        "old_weights": old_weights,
+        "updated":             True,
+        "weights":             new_weights,
+        "old_weights":         old_weights,
         "factor_correlations": factor_correlations,
-        "report_md":   report_md,
-        "timestamp":   datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "report_md":           report_md,
+        "factor_momentum":     _factor_result,           # Wave 4 F-2〜F-5
+        "contraction_flag":    _contraction_result_monthly,  # Wave 6 - 第4セッション
+        "contraction_mode":    _contraction_result_monthly.get("mode", "Normal"),
+        "contraction_detail":  _contraction_result_monthly.get("detail", {}),
+        "timestamp":           datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }

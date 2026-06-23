@@ -532,7 +532,8 @@ def run_google_trends(cfg, results: dict = None) -> dict:
 
     # ── Step4: 求人倍率シグナル ──────────────────────────────
     results = results or {}
-    gov_result = results.get("gov_data", {})
+    # ★ 2026-06-10 バグ修正: main の書き込みキーは "gov"
+    gov_result = results.get("gov", results.get("gov_data", {}))
     job_offers_signal = _calc_job_offers_signal(gov_result)
 
     # ── Step5: キャッシュ保存 ────────────────────────────────

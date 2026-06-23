@@ -616,6 +616,9 @@ def run_position_sizer(
             time.sleep(FETCH_DELAY)
             continue
 
+        # ★ 2026-06-11 バグ修正: 旧実装は未定義変数 _cv_data を参照して
+        #   毎回 NameError。事前構築済みの conviction_map から取得する。
+        _cv_data = conviction_map.get(ticker)
         sizing = calc_position_size(
             atr_data       = atr_data,
             total_assets   = total_assets,

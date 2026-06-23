@@ -213,6 +213,13 @@ def _rows_from_us_sectors(us_result: dict, date_str: str) -> list:
             except (TypeError, ValueError):
                 return ""
 
+        # ★ 2026-06-11 バグ修正: 旧実装は signal_score 行で未定義変数
+        #   signal を参照して毎回 NameError（USセクター行のCSV出力が失敗）。
+        #   "signal" キーと同じ判定を事前計算して両方で使う。
+        _us_signal = ("tailwind" if sr.get("score", 0) >= 65
+                      else ("headwind" if sr.get("score", 0) <= 40
+                            else "neutral"))
+
         rows.append({
             "date":            date_str,
             "market":          "US",
@@ -222,14 +229,12 @@ def _rows_from_us_sectors(us_result: dict, date_str: str) -> list:
             "composite_score": round(float(sr.get("score", 0)), 1),
             "risk_level":      sr.get("risk_level", ""),
             "risk_score":      RISK_SCORE.get(sr.get("risk_level", ""), 0),
-            "signal_score":    SIGNAL_SCORE.get(signal, 0),
+            "signal_score":    SIGNAL_SCORE.get(_us_signal, 0),
             "tailwind_count":  "",
             "headwind_count":  "",
             "ret_1m":          _f(etf.get("ret_1m")),
             "ret_3m":          _f(etf.get("ret_3m")),
-            "signal":          "tailwind" if sr.get("score", 0) >= 65
-                               else ("headwind" if sr.get("score", 0) <= 40
-                                     else "neutral"),
+            "signal":          _us_signal,
             "etfs":            sec.get("etf", ""),
             "heat_score":      "",
             "arxiv_growth":    "",

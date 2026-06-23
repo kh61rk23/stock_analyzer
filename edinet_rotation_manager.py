@@ -51,6 +51,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+from edinet_direct_fetcher import run_fetcher as _run_xbrl_fetcher
 
 # ==============================================================
 # BLOCK 1: 定数・パス管理
@@ -71,41 +72,41 @@ MARKET_PRIORITY = {
 # 東証プライム代表銘柄（sector_code → 上位銘柄リスト）
 # JAPAN_SECTORSの33業種すべてに対応。各業種5社。
 # ※ローテーション初回はこのリストから順に取得する
-SECTOR_REPRESENTATIVE_TICKERS = {
-    "1001": ["1301.T","1332.T","1379.T","2002.T","3941.T"],
-    "1002": ["1662.T","1605.T","1663.T","1664.T","1667.T"],
-    "1003": ["1925.T","1928.T","1803.T","1801.T","1802.T"],
-    "1004": ["2914.T","2802.T","2503.T","2501.T","2282.T"],
-    "1005": ["3401.T","3402.T","3404.T","3405.T","3410.T"],
-    "1006": ["3861.T","3863.T","3864.T","3865.T","3880.T"],
-    "1007": ["4063.T","4183.T","4901.T","4502.T","4188.T"],
-    "1008": ["4502.T","4503.T","4519.T","4523.T","4568.T"],
-    "1009": ["5019.T","5020.T","5021.T","5101.T","5103.T"],
-    "1010": ["5101.T","5108.T","5110.T","5191.T","5214.T"],
-    "1011": ["5201.T","5202.T","5214.T","5233.T","5301.T"],
-    "1012": ["5401.T","5406.T","5411.T","5423.T","5440.T"],
-    "1013": ["5711.T","5713.T","5714.T","5801.T","5802.T"],
-    "1014": ["5901.T","5902.T","5985.T","6011.T","6013.T"],
-    "1015": ["6301.T","6302.T","6305.T","6326.T","6361.T"],
-    "1016": ["6501.T","6503.T","6504.T","6594.T","6702.T"],
-    "1017": ["7203.T","7267.T","7269.T","7270.T","7201.T"],
-    "1018": ["7731.T","7733.T","7741.T","7762.T","7752.T"],
-    "1019": ["3765.T","4902.T","7951.T","7974.T","4684.T"],
-    "1020": ["9501.T","9502.T","9503.T","9531.T","9532.T"],
-    "1021": ["9001.T","9005.T","9007.T","9008.T","9009.T"],
-    "1022": ["9101.T","9104.T","9107.T","9119.T","9132.T"],
-    "1023": ["9201.T","9202.T","9205.T","9207.T","9048.T"],
-    "1024": ["9301.T","9302.T","9303.T","9304.T","9305.T"],
-    "1025": ["9432.T","9433.T","9434.T","9613.T","9984.T"],
-    "1026": ["2768.T","8001.T","8002.T","8031.T","8058.T"],
-    "1027": ["2651.T","3382.T","7532.T","7741.T","8267.T"],
-    "1028": ["8306.T","8316.T","8411.T","8354.T","8308.T"],
-    "1029": ["8601.T","8604.T","8002.T","8630.T","8697.T"],
-    "1030": ["8725.T","8750.T","8766.T","8795.T","8697.T"],
-    "1031": ["8253.T","8591.T","8601.T","8697.T","8725.T"],
-    "1032": ["8801.T","8802.T","8803.T","8804.T","8830.T"],
-    "1033": ["2413.T","2432.T","4307.T","4755.T","6098.T"],
-}
+# SECTOR_REPRESENTATIVE_TICKERS = {
+#     "1001": ["1301.T","1332.T","1379.T","2002.T","3941.T"],
+#     "1002": ["1662.T","1605.T","1663.T","1664.T","1667.T"],
+#     "1003": ["1925.T","1928.T","1803.T","1801.T","1802.T"],
+#     "1004": ["2914.T","2802.T","2503.T","2501.T","2282.T"],
+#     "1005": ["3401.T","3402.T","3404.T","3405.T","3410.T"],
+#     "1006": ["3861.T","3863.T","3864.T","3865.T","3880.T"],
+#     "1007": ["4063.T","4183.T","4901.T","4502.T","4188.T"],
+#     "1008": ["4502.T","4503.T","4519.T","4523.T","4568.T"],
+#     "1009": ["5019.T","5020.T","5021.T","5101.T","5103.T"],
+#     "1010": ["5101.T","5108.T","5110.T","5191.T","5214.T"],
+#    "1011": ["5201.T","5202.T","5214.T","5233.T","5301.T"],
+#     "1012": ["5401.T","5406.T","5411.T","5423.T","5440.T"],
+#     "1013": ["5711.T","5713.T","5714.T","5801.T","5802.T"],
+#     "1014": ["5901.T","5902.T","5985.T","6011.T","6013.T"],
+#     "1015": ["6301.T","6302.T","6305.T","6326.T","6361.T"],
+#     "1016": ["6501.T","6503.T","6504.T","6594.T","6702.T"],
+#     "1017": ["7203.T","7267.T","7269.T","7270.T","7201.T"],
+#     "1018": ["7731.T","7733.T","7741.T","7762.T","7752.T"],
+#     "1019": ["3765.T","4902.T","7951.T","7974.T","4684.T"],
+#     "1020": ["9501.T","9502.T","9503.T","9531.T","9532.T"],
+#     "1021": ["9001.T","9005.T","9007.T","9008.T","9009.T"],
+#     "1022": ["9101.T","9104.T","9107.T","9119.T","9132.T"],
+#     "1023": ["9201.T","9202.T","9205.T","9207.T","9048.T"],
+#     "1024": ["9301.T","9302.T","9303.T","9304.T","9305.T"],
+#     "1025": ["9432.T","9433.T","9434.T","9613.T","9984.T"],
+#     "1026": ["2768.T","8001.T","8002.T","8031.T","8058.T"],
+#     "1027": ["2651.T","3382.T","7532.T","7741.T","8267.T"],
+#     "1028": ["8306.T","8316.T","8411.T","8354.T","8308.T"],
+#     "1029": ["8601.T","8604.T","8002.T","8630.T","8697.T"],
+#     "1030": ["8725.T","8750.T","8766.T","8795.T","8697.T"],
+#     "1031": ["8253.T","8591.T","8601.T","8697.T","8725.T"],
+#    "1032": ["8801.T","8802.T","8803.T","8804.T","8830.T"],
+#     "1033": ["2413.T","2432.T","4307.T","4755.T","6098.T"],
+# }
 
 
 # ==============================================================
@@ -227,17 +228,12 @@ def _save_analysis(cfg, edinet_code: str, data: dict):
 def _build_fetch_queue(cfg, meta: dict, results: dict | None = None) -> list:
     """
     優先順位に従って本日取得すべき銘柄リストを返す。
+    BigQuery edinet.doc_index から取得対象銘柄を動的に構築する。
 
     優先度:
       1. ウォッチリスト銘柄（EDINET_WATCHLIST_TICKERS）
       2. screener通過候補（EDINET_SCREENER_CANDIDATES）
-      3. 期限切れ・未取得のローテーション対象（業種代表銘柄）
-
-    Returns:
-        list of dict: [
-          {"ticker": str, "priority": int, "reason": str},
-          ...
-        ]  （重複なし・取得上限内）
+      3. BQから取得した未取得銘柄（doc_index.fetched_flag=False）
     """
     today       = datetime.now().date()
     cache_days  = getattr(cfg, "EDINET_ROTATION_CACHE_DAYS", 30)
@@ -249,13 +245,33 @@ def _build_fetch_queue(cfg, meta: dict, results: dict | None = None) -> list:
 
     queue     = []
     seen      = set()
+    
+    # BQクライアントのインポート
+    try:
+        from edinet_bq_client import EDINETBQClient
+        bq_client = EDINETBQClient()
+    except ImportError:
+        print("    ⚠️ edinet_bq_client のインポートに失敗しました。")
+        bq_client = None
+
+    # catalyst_proximity_score のマップを事前取得（_add() から参照）
+    _cat_scores: dict[str, float] = {}
+    try:
+        _cat_scores = _get_catalyst_priority_tickers(cfg)
+    except Exception:
+        pass
 
     def _add(ticker: str, priority: int, reason: str):
         t = ticker.strip()
         if t and t not in seen:
             seen.add(t)
-            queue.append({"ticker": t, "priority": priority, "reason": reason})
-
+            queue.append({
+                "ticker":                   t,
+                "priority":                 priority,
+                "reason":                   reason,
+                "catalyst_proximity_score": _cat_scores.get(t, 0.0)
+                    if "_cat_scores" in dir() else 0.0,
+            })
     # ── 優先度1: ウォッチリスト（最大10社） ─────────────────
     for t in watchlist[:10]:
         entry = meta.get(t, {})
@@ -270,61 +286,98 @@ def _build_fetch_queue(cfg, meta: dict, results: dict | None = None) -> list:
         if not last or _days_since(last) >= cache_days:
             _add(t, 2, "screener_pass")
 
-    # ── 優先度3: ローテーション（業種代表銘柄・期限順） ─────
-    rotation_targets = []
-    for sector_code, tickers in SECTOR_REPRESENTATIVE_TICKERS.items():
-        for ticker in tickers:
-            if ticker in seen:
-                continue
-            entry     = meta.get(ticker, {})
-            last      = entry.get("last_fetched")
-            days_old  = _days_since(last) if last else 999
-            if days_old >= cache_days:
-                rotation_targets.append((days_old, ticker, sector_code))
-
-    # 古い順（未取得を最優先）にソートして追加
-    rotation_targets.sort(key=lambda x: -x[0])
-    # ── [問題C] sector_tier による優先度加重ソート ──────────────
-    sector_tier_map = (getattr(results, "get", lambda k, d: d)
-                       ("sector_tier", {}) if results else {})
-    tier_boost = getattr(cfg, "EDINET_TIER_TOP_BOOST",   30)
-    tier_penal = getattr(cfg, "EDINET_TIER_BOT_PENALTY", -20)
-
-    def _tier_sort_key(item):
-        days_old, ticker, sc = item
-        tier  = sector_tier_map.get(sc, "MID")
-        boost = tier_boost if tier == "TOP" else (tier_penal if tier == "BOT" else 0)
-        # days_old + tier_boost を合算してソートキーにする
-        return -(days_old + boost)
-
-    rotation_targets.sort(key=_tier_sort_key)
-    # ── [④] freshness.force_refresh 銘柄を優先度1に昇格 ──────────
-    edinet_db_fresh = (results or {}).get("edinet_db_fresh", {})
-    force_refresh_tickers = [
-        t for t, d in edinet_db_fresh.items()
-        if isinstance(d, dict) and d.get("force_refresh")
-        and t not in seen
-    ]
-    for t in force_refresh_tickers[:5]:   # 最大5社を追加
-        _add(t, 1, "freshness_force_refresh")
-    for days_old, ticker, sector_code in rotation_targets:
-        if len(queue) >= per_day:
+    # ── [Wave 3 - FE-7] 優先度1.5相当: Catalyst 接近銘柄を上位挿入 ──
+    # catalyst_proximity_score ≥ 1.0（14日以内）→ 優先度1へ昇格
+    # catalyst_proximity_score ≥ 0.6（30日以内）→ 優先度2に追加
+    _cat_tickers = _get_catalyst_priority_tickers(cfg)
+    _cat_inserted = 0
+    for _ct, _prox in _cat_tickers.items():
+        if _cat_inserted >= 5:   # Catalyst 枠は最大5社
             break
-        _add(ticker, 3,
-             f"rotation(sector={sector_code}, {days_old}日経過)")
+        _entry = meta.get(_ct, {})
+        _last  = _entry.get("last_fetched")
+        if _last and _days_since(_last) < cache_days:
+            continue   # 最近取得済みはスキップ
+        # proximity_score ≥ 1.0 (14日以内) → 優先度1へ昇格
+        _priority = 1 if _prox >= 1.0 else 2
+        _add(_ct, _priority,
+             f"catalyst_proximity(score={_prox:.1f})")
+        _cat_inserted += 1
 
+    # ── [Wave 4 - S3-4] priority=0: deep_dive_trigger 指定銘柄（最優先）───
+    # deep_dive_trigger.run_deep_dive_trigger() が cfg.EDINET_DEEP_DIVE_TICKERS
+    # に注入したティッカーを最優先で取得する。
+    # priority=0 は既存の priority=1（watchlist）より高優先。
+    # キャッシュ期限（cache_days）に関わらず強制再取得する。
+    _deep_dive_tickers = getattr(cfg, "EDINET_DEEP_DIVE_TICKERS", []) or []
+    if _deep_dive_tickers:
+        _dd_added = 0
+        for t in _deep_dive_tickers[:5]:   # 深掘り枠は最大5社
+            t = t.strip()
+            if not t:
+                continue
+            # キャッシュ期限を無視して強制再取得（meta から last_fetched を無視）
+            if t not in seen:
+                seen.add(t)
+                queue.append({
+                    "ticker":                   t,
+                    "priority":                 0,   # 最優先
+                    "reason":                   "deep_dive_trigger",
+                    "catalyst_proximity_score": _cat_scores.get(t, 0.0),
+                })
+                _dd_added += 1
+        if _dd_added:
+            print(f"    🎯 [deep_dive] priority=0 銘柄を追加: "
+                  f"{_dd_added}社 {_deep_dive_tickers[:_dd_added]}")
+
+    # ── 優先度3: BQから未取得銘柄を動的取得 ─────────────────
     # 予算上限チェック（rankings 2コール + バッファ 5コール を除いた枠）
     effective_budget = min(budget - 7, per_day)
-    queue = queue[:effective_budget]
+    remaining_slots = effective_budget - len(queue)
+
+    if bq_client and remaining_slots > 0:
+        try:
+            # edinet_bq_client.pyのメソッドを利用して未取得銘柄を取得
+            unfetched_df = bq_client.get_unfetched_docs(limit=remaining_slots)
+            
+            # DataFrameとして返ってくる想定で処理
+            if hasattr(unfetched_df, "empty") and not unfetched_df.empty:
+                for _, row in unfetched_df.iterrows():
+                    # カラム名が securities_code か company_code のどちらかであると推測
+                    sec_code = str(row.get("securities_code", row.get("company_code", "")))
+                    if sec_code:
+                        ticker = f"{sec_code}.T" if not sec_code.endswith(".T") else sec_code
+                        _add(ticker, 3, "bq_unfetched")
+            # 辞書のリストとして返ってきた場合のフォールバック（get_unfetched_docsの重複定義への対応）
+            elif isinstance(unfetched_df, list):
+                for doc in unfetched_df:
+                    sec_code = str(doc.get("company_code", doc.get("securities_code", "")))
+                    if sec_code:
+                        ticker = f"{sec_code}.T" if not sec_code.endswith(".T") else sec_code
+                        _add(ticker, 3, "bq_unfetched")
+                        
+        except Exception as e:
+            print(f"    ⚠️ BQからのunfetched取得失敗: {str(e)[:60]}")
+
+    # ── [Wave 3 - FE-7] catalyst_proximity_score で二次ソート ────────
+    # 優先度（priority）が同じ場合は catalyst_proximity_score が高い方を先に配置
+    _cat_scores = _get_catalyst_priority_tickers(cfg)
+    queue = sorted(
+        queue,
+        key=lambda q: (
+            q["priority"],
+            -_cat_scores.get(q["ticker"], 0.0),
+        )
+    )[:effective_budget]
 
     print(f"    📋 取得キュー: {len(queue)}社 "
-          f"（watchlist:{sum(1 for q in queue if q['priority']==1)} / "
+          f"（deep_dive:{sum(1 for q in queue if q['priority']==0)} / "
+          f"watchlist:{sum(1 for q in queue if q['priority']==1)} / "
           f"screener:{sum(1 for q in queue if q['priority']==2)} / "
           f"rotation:{sum(1 for q in queue if q['priority']==3)}）")
     return queue
 
-
-def _days_since(date_str: Optional[str]) -> int:
+def _days_since(date_str: str | None) -> int:
     """'YYYY-MM-DD' 文字列から今日までの経過日数を返す"""
     if not date_str:
         return 999
@@ -334,6 +387,42 @@ def _days_since(date_str: Optional[str]) -> int:
     except Exception:
         return 999
 
+def _get_catalyst_priority_tickers(cfg=None) -> dict[str, float]:
+    """
+    catalyst_calendar.json から proximity_score が高い銘柄を返す。
+
+    edinet_rotation_manager の優先キューで Catalyst 接近銘柄を
+    上位に配置するために使用する。
+
+    Returns:
+        {ticker: proximity_score} — proximity_score 降順
+        proximity_score ≥ 0.6（30日以内）の銘柄のみ返す
+    """
+    try:
+        from catalyst_calendar import load_catalyst_calendar as _lcc
+        cat_data    = _lcc(cfg)
+        if not cat_data:
+            return {}
+
+        ticker_events = cat_data.get("ticker_events", {})
+        result: dict[str, float] = {}
+
+        for ticker, events in ticker_events.items():
+            if not events:
+                continue
+            max_prox = max(
+                (float(e.get("proximity_score", 0.0)) for e in events),
+                default=0.0,
+            )
+            if max_prox >= 0.6:   # 30日以内の閾値
+                result[ticker] = max_prox
+
+        # proximity_score 降順でソート
+        return dict(
+            sorted(result.items(), key=lambda x: -x[1])
+        )
+    except Exception:
+        return {}
 
 # ==============================================================
 # BLOCK 4: edinet_client 動的ロード
@@ -594,7 +683,9 @@ def run_edinet_rotation(cfg, results: dict | None = None) -> dict:
               "スキップ（APIキー未設定）")
         return {"skipped": True, "ok_count": 0, "error_count": 0}
 
-    print("\n  🔄 EdinetDB ローテーション開始...")
+    _dd_count = len(getattr(cfg, "EDINET_DEEP_DIVE_TICKERS", []) or [])
+    _dd_label = f" / deep_dive={_dd_count}社" if _dd_count else ""
+    print(f"\n  🔄 EdinetDB ローテーション開始...{_dd_label}")
     start_time = time.time()
 
     # edinet_client ロード
@@ -612,7 +703,8 @@ def run_edinet_rotation(cfg, results: dict | None = None) -> dict:
     screener_candidates = []
     if results:
         # 日本株screenerの上位銘柄（sector agent結果から）
-        for sector_result in results.get("sector_results", {}).values():
+        # ★ 2026-06-10 バグ修正: main の書き込みキーは "sectors"
+        for sector_result in results.get("sectors", results.get("sector_results", {})).values():
             top_cos = sector_result.get("top_companies", [])
             for co in top_cos[:2]:
                 t = co.get("ticker", "")
@@ -733,7 +825,11 @@ def run_edinet_rotation(cfg, results: dict | None = None) -> dict:
     print(f"     APIコール使用: {budget_used}/{budget_max}")
     print(f"     DBカバレッジ: {coverage:.1f}%")
     print(f"     所要時間: {elapsed:.0f}秒")
-
+    # ---- XBRL 取得・BQ 格納（E2追加）----
+    # doc_index の未取得レコードを本日の処理枠分だけ取得・格納する
+    # daily_limit は既存の rotation 処理枠（API budget）から残余を渡す
+    xbrl_result = _run_xbrl_fetcher(daily_limit=33)
+    results["edinet_xbrl_fetch"] = xbrl_result
     return {
         "skipped":       False,
         "fetch_results": fetch_results,

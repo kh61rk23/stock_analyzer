@@ -157,6 +157,17 @@ def extract_alerts(cfg, results: dict) -> list:
                 "severity": "medium",
             })
             
+    # ── ④b イベントホライズン事前アラート [EVT-1] ────────────────
+    evh = results.get("event_horizon", {})
+    for a in evh.get("alerts", []):
+        if isinstance(a, dict) and a.get("title"):
+            alerts.append({
+                "trigger":  a.get("trigger", "event_horizon"),
+                "title":    a["title"],
+                "body":     a.get("body", ""),
+                "severity": a.get("severity", "medium"),
+            })
+
     # ── ⑤ 本日の注目ニュース ─────────────────────────────────
     news_result = results.get("news", {})
     if news_result and isinstance(news_result, dict):
@@ -1129,6 +1140,516 @@ def extract_alerts(cfg, results: dict) -> list:
                     "body":     f"  avg_corr={f_data.get('avg_corr',0):.3f}",
                     "severity": "low",
                 })
+    # ── [Pearl Ph1] 光る原石 SS ティア即時通知 ────────────────────
+    # 条件: pearl_score >= PEARL_MIN_SCORE_ALERT(80) AND
+    #       市価総額 <= PEARL_MCAP_MAX_ALERT_B(500億円)
+    if getattr(cfg, "ENABLE_PEARL_SCORE", True):
+        try:
+            _pearl_min   = float(getattr(cfg, "PEARL_MIN_SCORE_ALERT",   80.0))
+            _pearl_mcap  = float(getattr(cfg, "PEARL_MCAP_MAX_ALERT_B", 500.0))
+            _screener    = results.get("screener", {})
+            _passed      = _screener.get("passed",
+                           _screener.get("candidates", []))
+            _ss_stocks   = [
+                c for c in _passed
+                if float(c.get("pearl_score", 0)) >= _pearl_min
+                and (c.get("market_cap_b") is None
+                     or float(c.get("market_cap_b", 999)) <= _pearl_mcap)
+            ]
+            _ss_stocks.sort(
+                key=lambda x: float(x.get("pearl_score", 0)), reverse=True
+            )
+            if _ss_stocks:
+                lines = []
+                for _s in _ss_stocks[:5]:
+                    _tier = _s.get("pearl_tier", "SS")
+                    _kap  = _s.get("market_cap_b")
+                    _kap_str = f"{_kap:.0f}億" if _kap is not None else "不明"
+                    lines.append(
+                        f"  💎 [{_tier}] "
+                        f"{_s.get('ticker', _s.get('code',''))} "
+                        f"Pearl:{float(_s.get('pearl_score',0)):.1f}pt "
+                        f"時価総額:{_kap_str}"
+                    )
+                    # D1/D3/D4 の内訳も追記
+                    _d1 = _s.get("d1_score") or _s.get("pearl_d1")
+                    _d3 = _s.get("d3_score") or _s.get("pearl_d3")
+                    _d4 = _s.get("d4_score") or _s.get("pearl_d4")
+                    if _d1 is not None:
+                        lines.append(
+                            f"    D1方向性:{float(_d1):.0f} "
+                            f"D3利益品質:{float(_d3 or 0):.0f} "
+                            f"D4発見Gap:{float(_d4 or 0):.0f}"
+                        )
+                alerts.append({
+                    "trigger":  "pearl_ss_alert",
+                    "title":    f"💎 光る原石 SS ティア {len(_ss_stocks)}銘柄発見"
+                                f"（Pearl≥{_pearl_min:.0f} / 時価総額≤{_pearl_mcap:.0f}億）",
+                    "body":     "\n".join(lines),
+                    "severity": "high",   # LINE即時通知対象
+                })
+        except Exception:
+            pass
+    # ── [Wave0-⑭] 重要議員取引シグナルアラート（Policy Ph1）─────
+    if getattr(cfg, "ENABLE_POLITICIAN_MONITOR", True):
+        pm_result = results.get("politician_monitor", {})
+        if pm_result and not pm_result.get("skipped"):
+            min_score = int(getattr(cfg, "ALERT_POLITICIAN_MIN_SCORE", 60))
+            high_trades = pm_result.get("high_score_trades", [])
+            if high_trades:
+                lines = []
+                for t in high_trades[:5]:
+                    direction = "買" if t.get("direction") == "buy" else "売"
+                    lines.append(
+                        f"  [{t.get('score', 0):.0f}pt] "
+                        f"{t.get('politician', '')[:16]} "
+                        f"{direction}: {t.get('asset', '')[:30]}"
+                    )
+                jp_signals = pm_result.get("jp_sector_signals", {})
+                if jp_signals:
+                    lines.append(
+                        f"  🇯🇵 JP波及シグナル: {len(jp_signals)}業種に補正"
+                    )
+                alerts.append({
+                    "trigger":  "politician_signal",
+                    "title":    f"🏛️ 重要議員取引 {len(high_trades)}件"
+                                f"（スコア≥{min_score}）",
+                    "body":     "\n".join(lines),
+                    "severity": "high",
+                })
+
+    # ── [Wave0-⑲] screener急増業種アラート（Idea2-C）─────────────
+    sh_result = results.get("screener_heatmap", {})
+    if sh_result and not sh_result.get("skipped"):
+        surge_sectors = sh_result.get("surge_sectors", [])
+        if len(surge_sectors) >= 2:
+            sector_names = {
+                code: info.get("name_ja", code)
+                for code, info in getattr(cfg, "JAPAN_SECTORS", {}).items()
+            }
+            lines = []
+            for s in surge_sectors[:5]:
+                code = s.get("sector_code", "")
+                name = sector_names.get(code, code)
+                lines.append(
+                    f"  🚀 {name}({code}): "
+                    f"今週{s.get('current', 0)}件 "
+                    f"(前4週平均{s.get('avg_4w', 0):.1f}件 "
+                    f"+{s.get('change_rate', 0):.0f}%)"
+                )
+            alerts.append({
+                "trigger":  "screener_surge",
+                "title":    f"🚀 screener急増業種 {len(surge_sectors)}業種"
+                            f"（変化率+50%以上）",
+                "body":     "\n".join(lines),
+                "severity": "medium",
+            })
+    # ==============================================================
+    # [Wave 2 - FE-2] トリガーW2-⑳: アナリスト修正×Ignition Cat-B 重複
+    # 条件: セクター平均 revision_score > 0.5 かつ Ignition Cat-B detected
+    # チャネル: Gmail 週次通知（severity: medium）
+    # ==============================================================
+    try:
+        screener_res = results.get("screener", {})
+        candidates   = (screener_res.get("passed")
+                        or screener_res.get("candidates", []))
+        ignition_res = results.get("ignition", {})
+        ign_alerts   = ignition_res.get("alerts", [])
+
+        # Ignition Cat-B が detected のセクターコードセットを構築
+        catb_sectors = {
+            str(a.get("sector_code", ""))
+            for a in ign_alerts
+            if a.get("category_b", {}).get("detected")
+        }
+
+        if catb_sectors and candidates:
+            # セクター別 revision_score 平均を算出
+            from collections import defaultdict as _dd
+            _rev_by_sec: dict = _dd(list)
+            for _c in candidates:
+                _sc = str(_c.get("sector_code", ""))
+                _rv = _c.get("revision_score")
+                if _rv is not None:
+                    _rev_by_sec[_sc].append(float(_rv))
+
+            _hit_lines = []
+            for _sc, _rvs in _rev_by_sec.items():
+                if _sc not in catb_sectors:
+                    continue
+                _avg_rev = sum(_rvs) / len(_rvs)
+                if _avg_rev > 0.5:
+                    _sec_name = str(
+                        results.get("sectors", {})
+                        .get(_sc, {}).get("sector_name_ja", _sc)
+                    )
+                    _hit_lines.append(
+                        f"  📈 {_sec_name}({_sc}): "
+                        f"avg revision={_avg_rev:+.2f}pt"
+                        f" / Ignition Cat-B検出"
+                    )
+
+            if _hit_lines:
+                alerts.append({
+                    "trigger":  "wave2_revision_ignition",
+                    "title":    f"📊 [Wave2-⑳] アナリスト修正×Ignition重複"
+                                f"（{len(_hit_lines)}業種）",
+                    "body":     "\n".join(_hit_lines),
+                    "severity": "medium",
+                    "channel":  "gmail",   # Gmail 週次通知
+                })
+    except Exception:
+        pass
+
+    # ==============================================================
+    # [Wave 2 - FE-4] トリガーW2-㉑: Ignition Detector 収束シグナル
+    # 条件A: convergence_score ≥ 3.0    → LINE 即時通知（severity: high）
+    # 条件B: ≥ 3.5 かつ is_critical True → 最高警戒LINE（severity: critical）
+    # ==============================================================
+    try:
+        ignition_res = results.get("ignition", {})
+        ign_alerts   = ignition_res.get("alerts", [])
+
+        if not ign_alerts:
+            # results に ignition がない場合は ignition_alerts.json から直接ロード
+            try:
+                from ignition_detector import load_current_alerts as _lca
+                ign_alerts = _lca(cfg)
+            except Exception:
+                ign_alerts = []
+
+        min_score  = float(getattr(cfg, "IGNITION_MIN_SCORE_LINE",      3.0))
+        crit_score = float(getattr(cfg, "IGNITION_MAX_SCORE_LINE_CRITICAL", 3.5))
+
+        _normal_lines   = []
+        _critical_lines = []
+
+        for _a in ign_alerts:
+            _csc  = float(_a.get("convergence_score", 0.0))
+            _sn   = _a.get("sector_name", _a.get("sector_code", ""))
+            _sc   = _a.get("sector_code", "")
+            _is_c = _a.get("is_critical", False)
+
+            _cat_a = _a.get("category_a", {}).get("score", 0)
+            _cat_b = _a.get("category_b", {}).get("score", 0)
+            _cat_c = _a.get("category_c", {}).get("score", 0)
+            _detail = (
+                f"A(資金)={_cat_a:.2f} "
+                f"B(ナラ)={_cat_b:.2f} "
+                f"C(価格)={_cat_c:.2f}"
+            )
+
+            if _is_c and _csc >= crit_score:
+                _critical_lines.append(
+                    f"  🚨 {_sn}({_sc}): convergence={_csc:.2f} [{_detail}]"
+                    f" ← 14日以内2回目検出"
+                )
+            elif _csc >= min_score:
+                _normal_lines.append(
+                    f"  🔥 {_sn}({_sc}): convergence={_csc:.2f} [{_detail}]"
+                )
+
+        # 通常 Ignition アラート
+        if _normal_lines:
+            alerts.append({
+                "trigger":  "wave2_ignition_convergence",
+                "title":    f"🔥 [Wave2-㉑] Ignition収束シグナル"
+                            f"（{len(_normal_lines)}業種）",
+                "body":     "\n".join(_normal_lines),
+                "severity": "high",
+                "channel":  "line",   # LINE 即時通知
+            })
+
+        # 最高警戒アラート（critical）
+        if _critical_lines:
+            alerts.append({
+                "trigger":  "wave2_ignition_critical",
+                "title":    f"🚨🚨 [Wave2-㉑最高警戒] Ignition反復検出"
+                            f"（{len(_critical_lines)}業種）",
+                "body":     "\n".join(_critical_lines),
+                "severity": "high",
+                "channel":  "line",   # 最高警戒 LINE
+            })
+
+    except Exception:
+        pass
+
+# ==============================================================
+    # [Wave 3 - Independence Ph1] トリガー⑰: Latent Pearl プロモーション
+    # 条件: promoted_score ≥ 0.7 → LINE 即時通知
+    # ==============================================================
+    try:
+        from latent_pearl_manager import get_promoted_tickers as _get_promo
+        _promoted_tickers = _get_promo(cfg)
+        if not _promoted_tickers:
+            pass
+        else:
+            # Wave 7: get_promoted_tickers は list[str] を返す
+            # latent_pearl_cache から詳細を取得して通知を組み立てる
+            import json as _jal
+            from pathlib import Path as _pal
+            _lp_path_al = (
+                _pal(getattr(cfg, "CACHE_DIR", "stock_data/cache"))
+                / "latent_pearl_cache.json"
+            )
+            _lp_detail: dict = {}
+            if _lp_path_al.exists():
+                try:
+                    _lp_all = _jal.loads(_lp_path_al.read_text(encoding="utf-8"))
+                    _lp_detail = _lp_all.get("latent_pearls", {})
+                except Exception:
+                    pass
+
+            _new_promoted = [
+                t for t in _promoted_tickers
+                if float(
+                    _lp_detail.get(t, {}).get("latent_pearl_score", 0)
+                ) >= 70.0
+            ]
+            if _new_promoted:
+                _lines = []
+                for _ticker_al in _new_promoted[:5]:
+                    _e_al = _lp_detail.get(_ticker_al, {})
+                    _lines.append(
+                        f"  ⭐ [{_ticker_al}] "
+                        f"lp_score={_e_al.get('latent_pearl_score', 0):.1f}pt "
+                        f"ind={_e_al.get('independence_score', 0):.0f}pt "
+                        f"conds={'/'.join(_e_al.get('detection_conditions', []))}"
+                    )
+                alerts.append({
+                    "trigger":  "wave7_latent_promoted",
+                    "title":    f"⭐ [Wave7] 潜伏Pearl昇格（{len(_new_promoted)}銘柄）",
+                    "body":     "\n".join(_lines),
+                    "severity": "high",
+                    "channel":  "line",
+                })
+    except Exception:
+        pass
+
+    # ==============================================================
+    # [Wave 3 - Independence Ph1] トリガー⑱: セクター反転検出
+    # 条件: sector_reversal (LAGGING→IMPROVING) かつ Latent Pearl 存在
+    #       → Gmail 週次通知
+    # ==============================================================
+    try:
+        # Wave 7: load_latent_pearl_cache は廃止。直接 JSON を読み込む
+        import json as _jrev
+        from pathlib import Path as _prev
+        _lp_cache_path = (
+            _prev(getattr(cfg, "CACHE_DIR", "stock_data/cache"))
+            / "latent_pearl_cache.json"
+        )
+        if not _lp_cache_path.exists():
+            raise FileNotFoundError("latent_pearl_cache.json not found")
+        _lp_raw   = _jrev.loads(_lp_cache_path.read_text(encoding="utf-8"))
+        _lp_cache = _lp_raw.get("latent_pearls", {})
+        _bridge   = results.get("jp_us_bridge", {})
+        _rot      = _bridge.get("rotation_phases", {})
+
+        _reversal_lines = []
+        _lagging_phases = {"LAGGING", "WEAKENING"}
+        for _sc, _phase_info in _rot.items():
+            _curr_phase = str(_phase_info.get("phase", ""))
+            if _curr_phase not in ("IMPROVING", "LEADING"):
+                continue
+            # このセクターに Latent Pearl が存在するか確認
+            _sec_latents = [
+                t for t, e in _lp_cache.items()
+                if str(e.get("sector_code", "")) == str(_sc)
+            ]
+            if _sec_latents:
+                _reversal_lines.append(
+                    f"  🔄 セクター{_sc}: 局面={_curr_phase} "
+                    f"潜伏銘柄={','.join(_sec_latents[:3])}"
+                )
+
+        if _reversal_lines:
+            alerts.append({
+                "trigger":  "wave3_sector_reversal",
+                "title":    f"🔄 [Wave3-⑱] セクター反転検出"
+                            f"（{len(_reversal_lines)}業種）",
+                "body":     "\n".join(_reversal_lines),
+                "severity": "medium",
+                "channel":  "gmail",
+            })
+    except Exception:
+        pass
+
+    # ==============================================================
+    # [Wave 3 - FE-5] トリガー㉒: PEAD スコアアラート
+    # 条件: pead_score ≥ threshold かつ volume_ratio ≥ 1.5 → LINE通知
+    # ==============================================================
+    try:
+        from pead_monitor import get_alert_candidates as _get_pead_alerts
+        _pead_alerts = _get_pead_alerts(cfg)
+
+        if _pead_alerts:
+            _pead_lines = [
+                f"  📈 [{a['ticker']}] "
+                f"score={a.get('pead_score', 0):.1f}pt "
+                f"vol={a.get('volume_ratio', 0):.2f}x "
+                f"dir={a.get('direction', '')} "
+                f"sector={a.get('sector_code', '')}"
+                for a in _pead_alerts[:5]
+            ]
+            alerts.append({
+                "trigger":  "wave3_pead_alert",
+                "title":    f"📈 [Wave3-㉒] PEAD検出"
+                            f"（{len(_pead_alerts)}銘柄）",
+                "body":     "\n".join(_pead_lines),
+                "severity": "high",
+                "channel":  "line",
+            })
+    except Exception:
+        pass
+
+    # ==============================================================
+    # [Wave 3 - FE-6] トリガー㉓: ポートフォリオ集中警告
+    # 条件: HHI > 0.30 かつ 高相関ペア ≥ 3組 → Gmail週次警告
+    #       Ignition 抑制中は skip
+    # ==============================================================
+    try:
+        _div = results.get("diversity", {})
+        if (
+            _div.get("should_alert")
+            and not _div.get("alert_suppressed")
+            and float(_div.get("hhi", 0)) > 0.30
+            and int(_div.get("high_corr_pair_count", 0)) >= 3
+        ):
+            _conc = _div.get("concentrated_sectors", [])
+            _pairs = _div.get("high_corr_pairs", [])[:3]
+            _body_lines = [
+                f"  HHI={_div.get('hhi', 0):.3f} [{_div.get('hhi_status', '?')}]",
+                f"  高相関ペア: {_div.get('high_corr_pair_count', 0)}組",
+            ]
+            if _conc:
+                _body_lines.append(
+                    "  集中業種: "
+                    + " / ".join(f"{s['sector_code']}({s['weight']*100:.0f}%)"
+                                  for s in _conc[:3])
+                )
+            if _pairs:
+                _body_lines.append(
+                    "  高相関代表: "
+                    + " / ".join(f"{p['ticker1']}×{p['ticker2']}"
+                                  f"(ρ={p['correlation']:.2f})"
+                                  for p in _pairs)
+                )
+            alerts.append({
+                "trigger":  "wave3_diversity_warning",
+                "title":    f"⚠️ [Wave3-㉓] ポートフォリオ集中警告"
+                            f" HHI={_div.get('hhi',0):.3f}",
+                "body":     "\n".join(_body_lines),
+                "severity": "medium",
+                "channel":  "gmail",
+            })
+    except Exception:
+        pass
+
+    # ==============================================================
+    # [Wave 3 - FE-7] トリガー㉔: Triple Catalyst 最優先通知
+    # 条件: 3種以上のカタリストが14日以内に重複 → LINE最優先通知
+    # ==============================================================
+    try:
+        _cat = results.get("catalyst", {})
+        _triple_tickers = _cat.get("triple_tickers", [])
+
+        if _triple_tickers:
+            _triple_lines = [
+                f"  ⭐ [{t['ticker']}] "
+                f"カタリスト{t['catalyst_count']}種重複 "
+                f"最短{t['min_days']}日後 "
+                f"[{'+'.join(t['types'][:3])}]"
+                for t in _triple_tickers[:5]
+            ]
+            _crit_label = "🚨🚨 最優先" if len(_triple_tickers) >= 3 else "⭐"
+            alerts.append({
+                "trigger":  "wave3_triple_catalyst",
+                "title":    f"{_crit_label} [Wave3-㉔] Triple Catalyst検出"
+                            f"（{len(_triple_tickers)}銘柄）",
+                "body":     "\n".join(_triple_lines),
+                "severity": "high",
+                "channel":  "line",
+            })
+    except Exception:
+        pass
+
+    # ==============================================================
+    # [Wave 4 - Policy Ph3] トリガー⑮: Buffett新規取得 → LINE即時
+    # 条件: institutional_13f の new_tier1 に Tier1（Berkshire）の
+    #       new_position が含まれる
+    # チャネル: LINE 即時通知（severity: critical）
+    # ==============================================================
+    try:
+        _inst = results.get("institutional_13f", {})
+        _new_tier1 = _inst.get("new_tier1", [])
+        if _new_tier1:
+            _t1_lines = []
+            for _t1 in _new_tier1[:5]:
+                _val_b = _t1.get("value_usd", 0) / 1_000_000_000
+                _t1_lines.append(
+                    f"  🏆 {_t1.get('institution', '')} "
+                    f"新規取得: {_t1.get('ticker', '')} "
+                    f"({_t1.get('name', '')[:20]})\n"
+                    f"     取得額: ${_val_b:.1f}B "
+                    f"株数: {_t1.get('shares', 0):,}"
+                )
+            alerts.append({
+                "trigger":  "buffett_new_position",
+                "title":    f"🏆🚨 Buffett新規取得！{len(_new_tier1)}銘柄 "
+                            f"({_inst.get('quarter', '')})",
+                "body":     "\n".join(_t1_lines),
+                "severity": "critical",
+                "channel":  "line",   # LINE即時通知
+            })
+    except Exception:
+        pass
+
+    # ==============================================================
+    # [Wave 4 - Policy Ph3] トリガー⑯: 大手機関新規取得10億ドル超 → Gmail
+    # 条件: institutional_13f の new_large に
+    #       value_usd >= INSTITUTION_MIN_NEW_POSITION_USD(10億ドル) の
+    #       Tier2/Tier3 機関の new_position が含まれる
+    # チャネル: Gmail 通知（severity: high）
+    # ※ Tier1（Buffett）は⑮で処理済みのため除外
+    # ==============================================================
+    try:
+        _inst     = results.get("institutional_13f", {})
+        _new_large = [
+            c for c in _inst.get("new_large", [])
+            if c.get("tier", 3) >= 2   # Tier1は⑮で処理済みのため除外
+        ]
+        if _new_large:
+            _min_usd = float(
+                getattr(cfg, "INSTITUTION_MIN_NEW_POSITION_USD", 1_000_000_000)
+            )
+            _large_lines = []
+            for _lg in _new_large[:5]:
+                _val_b = _lg.get("value_usd", 0) / 1_000_000_000
+                _tier_label = (
+                    "アクティビスト" if _lg.get("tier") == 2
+                    else "大手機関"
+                )
+                _large_lines.append(
+                    f"  🏦 [{_tier_label}] {_lg.get('institution', '')[:25]}\n"
+                    f"     新規取得: {_lg.get('ticker', '')} "
+                    f"({_lg.get('name', '')[:20]})\n"
+                    f"     取得額: ${_val_b:.1f}B "
+                    f"(閾値: ${_min_usd/1e9:.0f}B超)"
+                )
+            alerts.append({
+                "trigger":  "large_institution_new_position",
+                "title":    f"🏦 大手機関・アクティビスト新規取得 "
+                            f"{len(_new_large)}件 "
+                            f"(${_min_usd/1e9:.0f}B超) "
+                            f"({_inst.get('quarter', '')})",
+                "body":     "\n".join(_large_lines),
+                "severity": "high",
+                "channel":  "gmail",   # Gmail通知
+            })
+    except Exception:
+        pass
+
     return alerts
 
 
@@ -1394,33 +1915,49 @@ def run_alert_notifier(cfg, results: dict) -> dict:
     errors   = []
     sent     = 0
 
-    # LINE 送信
-    if has_line:
-        line_msg = build_message(alerts, mode="line")
-        ok, err  = send_line(line_token, line_msg)
-        if ok:
-            channels.append("LINE")
-            messages.append(line_msg)
-            sent += 1
-            print("    ✅ LINE 通知 送信成功")
-        else:
-            errors.append(f"LINE: {err}")
-            print(f"    ⚠️  LINE: {err}")
+    # ── チャネル指定アラートを分離 ────────────────────────────
+    # "channel": "line"  → LINE のみ即時送信
+    # "channel": "gmail" → Gmail のみ送信
+    # "channel" なし     → 両方に送信（従来動作）
+    _line_only  = [a for a in alerts if a.get("channel") == "line"]
+    _gmail_only = [a for a in alerts if a.get("channel") == "gmail"]
+    _both       = [a for a in alerts if not a.get("channel")]
 
-    # Gmail 送信
+    # LINE 送信（LINE専用 + 両方送信）
+    if has_line:
+        _line_alerts = _line_only + _both
+        if _line_alerts:
+            line_msg = build_message(_line_alerts, mode="line")
+            ok, err  = send_line(line_token, line_msg)
+            if ok:
+                channels.append("LINE")
+                messages.append(line_msg)
+                sent += 1
+                print(f"    ✅ LINE 通知 送信成功 "
+                      f"({len(_line_alerts)}件 / うち即時{len(_line_only)}件)")
+            else:
+                errors.append(f"LINE: {err}")
+                print(f"    ⚠️  LINE: {err}")
+
+    # Gmail 送信（Gmail専用 + 両方送信）
     if has_gmail:
-        now_str   = datetime.now().strftime("%Y-%m-%d")
-        subject   = f"【投資AIエージェント】{len(alerts)}件のアラート ({now_str})"
-        html_body = build_message(alerts, mode="email")
-        ok, err   = send_gmail(gmail_from, gmail_pwd, gmail_to, subject, html_body)
-        if ok:
-            channels.append("Gmail")
-            messages.append(subject)
-            sent += 1
-            print("    ✅ Gmail 通知 送信成功")
-        else:
-            errors.append(f"Gmail: {err}")
-            print(f"    ⚠️  Gmail: {err}")
+        _gmail_alerts = _gmail_only + _both
+        if _gmail_alerts:
+            now_str   = datetime.now().strftime("%Y-%m-%d")
+            subject   = (
+                f"【投資AIエージェント】{len(_gmail_alerts)}件のアラート ({now_str})"
+            )
+            html_body = build_message(_gmail_alerts, mode="email")
+            ok, err   = send_gmail(gmail_from, gmail_pwd, gmail_to, subject, html_body)
+            if ok:
+                channels.append("Gmail")
+                messages.append(subject)
+                sent += 1
+                print(f"    ✅ Gmail 通知 送信成功 "
+                      f"({len(_gmail_alerts)}件 / うちGmail専用{len(_gmail_only)}件)")
+            else:
+                errors.append(f"Gmail: {err}")
+                print(f"    ⚠️  Gmail: {err}")
 
     return {
         "alerts_sent": sent,

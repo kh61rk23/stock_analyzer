@@ -28,9 +28,8 @@
 # ==============================================================
 
 import json
-from datetime import datetime, date, timedelta
+from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 
 # ==============================================================
@@ -122,6 +121,471 @@ def _section_jp_sectors(results: dict) -> list:
     lines.append("")
     return lines
 
+# ==============================================================
+# BLOCK 2.5: セクション生成関数（Wave 6 - G-N：国別リスク）
+# ==============================================================
+
+def _section_geo_country_risk(results: dict, cfg=None) -> list:
+    """
+    国別リスク要約セクションを生成する（Wave 6 - G-N）。
+
+    results["geo_risk"] から以下の情報を取得:
+      - composite_risk_score が高い国のランキング
+      - 外務省危険レベル・米国務省警告レベル
+      - GDELT 不安定性スコア
+
+    表示条件:
+      - results["geo_risk"] が存在し skipped でないこと
+      - high_risk（composite_risk_score >= 50）が1件以上あること
+
+    Returns:
+        list[str]: Markdown セクション行リスト
+    """
+    lines = ["## 🌐 国別地政学リスク（Wave 6 - G-N）", ""]
+
+    geo_risk = results.get("geo_risk", {})
+    if not geo_risk or geo_risk.get("skipped"):
+        lines.append("*国別リスクデータなし（ENABLE_COUNTRY_RISK_UPDATE=False またはスキップ）*")
+        lines.append("")
+        return lines
+
+    risk_scores  = geo_risk.get("risk_scores",  {})
+    mofa_levels  = geo_risk.get("mofa_levels",  {})
+    state_levels = geo_risk.get("state_levels", {})
+    gdelt_scores = geo_risk.get("gdelt_scores", {})
+    high_risk    = geo_risk.get("high_risk",    [])
+    updated      = geo_risk.get("timestamp",    "N/A")
+
+    # config から閾値を取得（未設定時はデフォルト値）
+    _top_n = getattr(cfg, "GEO_REPORT_TOP_N_COUNTRIES", 10) if cfg else 10
+    _high_thresh = getattr(cfg, "GEO_RISK_HIGH_THRESHOLD", 50.0) if cfg else 50.0
+    _med_thresh  = getattr(cfg, "GEO_RISK_MED_THRESHOLD",  25.0) if cfg else 25.0
+
+    # 更新日時
+    try:
+        _ts = updated[:10] if updated and updated != "N/A" else "N/A"
+    except Exception:
+        _ts = "N/A"
+    lines.append(f"**更新日**: {_ts} | **監視国数**: {len(risk_scores)}カ国")
+    lines.append("")
+
+    # ── ① 高リスク国テーブル ──────────────────────────────────
+    if high_risk:
+        lines.append(f"### 🔴 高リスク国（スコア{_high_thresh:.0f}以上）")
+        lines.append("")
+        lines.append(
+            "| 国コード | 総合スコア | GDELT不安定性 | 外務省レベル | 国務省レベル |"
+        )
+        lines.append("|---------|-----------|------------|------------|------------|")
+
+        for code in high_risk[:_top_n]:
+            composite = risk_scores.get(code, 0.0)
+            gdelt     = gdelt_scores.get(code, -1.0)
+            mofa      = mofa_levels.get(code, 0)
+            state     = state_levels.get(code, 0)
+
+            # スコアアイコン
+            if composite >= 75:
+                icon = "🔴"
+            elif composite >= 50:
+                icon = "🟠"
+            else:
+                icon = "🟡"
+
+            # 外務省レベル表示
+            mofa_str = {
+                0: "情報なし",
+                1: "Lv.1 注意",
+                2: "Lv.2 不要不急",
+                3: "Lv.3 渡航禁止",
+                4: "Lv.4 退避勧告",
+            }.get(mofa, f"Lv.{mofa}")
+
+            # 国務省レベル表示
+            state_str = {
+                0: "情報なし",
+                1: "Lv.1 通常注意",
+                2: "Lv.2 注意強化",
+                3: "Lv.3 再考慮",
+                4: "Lv.4 渡航禁止",
+            }.get(state, f"Lv.{state}")
+
+            gdelt_str = (
+                f"{gdelt:.1f}"
+                if gdelt >= 0
+                else "取得失敗"
+            )
+
+            lines.append(
+                f"| {icon} `{code}` "
+                f"| **{composite:.1f}**/100 "
+                f"| {gdelt_str} "
+                f"| {mofa_str} "
+                f"| {state_str} |"
+            )
+
+        lines.append("")
+    else:
+        lines.append("*高リスク国（スコア50以上）の検出なし*")
+        lines.append("")
+
+    # ── ② 中リスク国サマリー（25〜49） ────────────────────────
+    mid_risk = sorted(
+        [
+            (code, score)
+            for code, score in risk_scores.items()
+            if _med_thresh <= score < _high_thresh
+        ],
+        key=lambda x: -x[1],
+    )[:5]   # 上位5件のみ表示
+
+    if mid_risk:
+        lines.append(f"### 🟡 中リスク国（スコア{_med_thresh:.0f}〜{_high_thresh:.0f}未満）")
+        lines.append("")
+        mid_parts = [
+            f"`{code}` ({score:.0f}pt)"
+            for code, score in mid_risk
+        ]
+        lines.append("注目国: " + " / ".join(mid_parts))
+        lines.append("")
+
+    # ── ③ シーレーン別リスク警告 ─────────────────────────────
+    _sealanes = getattr(
+        cfg, "GEO_MONITORED_SEALANES", []
+    ) if cfg else []
+
+    if _sealanes and high_risk:
+        # 高リスク国が隣接するシーレーンを country_profile_builder から参照
+        try:
+            import importlib, sys as _sys
+            from pathlib import Path as _Path
+            for p in ["/content", str(_Path(__file__).parent)]:
+                if p not in _sys.path:
+                    _sys.path.insert(0, p)
+            _cpb = importlib.import_module("country_profile_builder")
+
+            alerted_sealanes: list[str] = []
+            for lane in _sealanes:
+                lane_countries = _cpb.get_countries_by_sealane(lane)
+                # 高リスク国がシーレーン隣接国に含まれるか
+                if any(c in high_risk for c in lane_countries):
+                    alerted_sealanes.append(lane)
+
+            if alerted_sealanes:
+                lines.append("### ⚠️ シーレーンリスク警告")
+                lines.append("")
+                for lane in alerted_sealanes:
+                    lane_hr = [
+                        c for c in _cpb.get_countries_by_sealane(lane)
+                        if c in high_risk
+                    ]
+                    lines.append(
+                        f"- **{lane}**: 隣接高リスク国 → "
+                        f"{', '.join(f'`{c}`' for c in lane_hr)}"
+                    )
+                lines.append("")
+
+        except Exception:
+            pass
+
+    # ── ④ 資源別リスク影響サマリー ────────────────────────────
+    _commodities = getattr(
+        cfg, "GEO_MONITORED_COMMODITIES", []
+    ) if cfg else []
+
+    if _commodities and high_risk:
+        try:
+            import importlib, sys as _sys
+            from pathlib import Path as _Path
+            for p in ["/content", str(_Path(__file__).parent)]:
+                if p not in _sys.path:
+                    _sys.path.insert(0, p)
+            _cpb = importlib.import_module("country_profile_builder")
+
+            commodity_alerts: list[tuple] = []
+            for com in _commodities[:8]:   # 主要8資源のみ
+                com_countries = _cpb.get_countries_by_commodity(com)
+                affected_hr   = [
+                    c for c in com_countries if c in high_risk
+                ]
+                if affected_hr:
+                    avg_risk = sum(
+                        risk_scores.get(c, 0.0) for c in affected_hr
+                    ) / len(affected_hr)
+                    commodity_alerts.append((com, affected_hr, avg_risk))
+
+            if commodity_alerts:
+                commodity_alerts.sort(key=lambda x: -x[2])
+                lines.append("### 🏭 資源別リスク影響")
+                lines.append("")
+                lines.append(
+                    "| 資源コード | 高リスク産出国 | 平均リスクスコア |"
+                )
+                lines.append("|----------|------------|--------------|")
+                for com, countries, avg in commodity_alerts[:6]:
+                    countries_str = " / ".join(
+                        f"`{c}`" for c in countries[:3]
+                    )
+                    if len(countries) > 3:
+                        countries_str += f" 他{len(countries)-3}カ国"
+                    lines.append(
+                        f"| {com} "
+                        f"| {countries_str} "
+                        f"| {avg:.1f}/100 |"
+                    )
+                lines.append("")
+
+        except Exception:
+            pass
+
+    return lines
+
+def _section_geo_exposure(results: dict, cfg=None) -> list:
+    """
+    企業×海外権益マッピングと地政学影響セクションを生成する（Wave 6 - G-X）。
+
+    表示内容:
+      ① geo_impact_bonus 上位・下位銘柄ランキング
+      ② 資源権益別リスク影響マトリクス
+      ③ 地政学追い風・逆風サマリー
+
+    Returns:
+        list[str]: Markdown セクション行リスト
+    """
+    lines = ["## ⛏️ 資源権益・地政学影響（Wave 6 - G-X）", ""]
+
+    # geo_signal モジュール経由でサマリーを取得
+    try:
+        import importlib, sys as _sys
+        from pathlib import Path as _Path
+        for p in ["/content", str(_Path(__file__).parent)]:
+            if p not in _sys.path:
+                _sys.path.insert(0, p)
+        _gs = importlib.import_module("geo_signal")
+
+        geo_summary = _gs.build_geo_weekly_summary(
+            results = results,
+            cfg     = cfg,
+            top_n   = 5,
+        )
+
+        # ── ① 地政学シグナルサマリーテキスト（geo_signal が生成）────
+        summary_text = geo_summary.get("summary_text", "")
+        if summary_text:
+            # "### 🌐 地政学リスク・資源権益サマリー" ヘッダーは除去
+            # （本セクションのヘッダーと重複するため）
+            for _line in summary_text.split("\n"):
+                if _line.startswith("### 🌐"):
+                    continue
+                lines.append(_line)
+            lines.append("")
+
+        # ── ② geo_impact_bonus ランキングテーブル ─────────────────
+        top_pos = geo_summary.get("top_positive_tickers", [])
+        top_neg = geo_summary.get("top_negative_tickers", [])
+
+        if top_pos or top_neg:
+            lines.append("### 📊 geo_impact_bonus ランキング")
+            lines.append("")
+            lines.append("| 市場 | ティッカー | geo_impact_bonus | 方向 |")
+            lines.append("|-----|----------|----------------|-----|")
+
+            for d in top_pos[:5]:
+                bonus = d.get("bonus", 0.0)
+                lines.append(
+                    f"| {d.get('market', '?')} "
+                    f"| `{d.get('ticker', '?')}` "
+                    f"| {bonus:+.2f}pt "
+                    f"| 🟢 追い風 |"
+                )
+            for d in top_neg[:5]:
+                bonus = d.get("bonus", 0.0)
+                lines.append(
+                    f"| {d.get('market', '?')} "
+                    f"| `{d.get('ticker', '?')}` "
+                    f"| {bonus:+.2f}pt "
+                    f"| 🔴 逆風 |"
+                )
+            lines.append("")
+
+        # ── ③ 資源権益マトリクス（BQ から集計）──────────────────────
+        _pid = getattr(
+            cfg, "GEO_BQ_PROJECT_ID", "stock-analyzer-edinet"
+        ) if cfg else "stock-analyzer-edinet"
+
+        try:
+            _bq_mod = importlib.import_module("edinet_bq_client")
+            _bq     = _bq_mod.EDINETBQClient()
+            raw_bq  = _bq.client
+
+            query = f"""
+            SELECT
+              e.commodity_code,
+              COUNT(DISTINCT e.ticker) AS ticker_count,
+              ROUND(AVG(r.composite_risk_score), 1) AS avg_risk,
+              COUNT(DISTINCT e.country_code) AS country_count,
+              COUNTIF(e.verified_flag = TRUE) AS verified_count
+            FROM `{_pid}.geopolitics.company_country_exposure` AS e
+            LEFT JOIN (
+              SELECT country_code, composite_risk_score
+              FROM (
+                SELECT country_code, composite_risk_score,
+                       ROW_NUMBER() OVER (
+                         PARTITION BY country_code ORDER BY risk_date DESC
+                       ) AS rn
+                FROM `{_pid}.geopolitics.country_risk_daily`
+              )
+              WHERE rn = 1
+            ) AS r ON e.country_code = r.country_code
+            WHERE e.commodity_code IS NOT NULL
+              AND (e.valid_to IS NULL OR e.valid_to > CURRENT_DATE())
+            GROUP BY e.commodity_code
+            ORDER BY avg_risk DESC
+            LIMIT 10
+            """
+            rows = list(raw_bq.query(query).result())
+
+            if rows:
+                lines.append("### 🏭 資源別権益マトリクス")
+                lines.append("")
+                lines.append(
+                    "| 資源コード | 関連銘柄数 | 平均リスクスコア "
+                    "| 関連国数 | 確認済み |"
+                )
+                lines.append(
+                    "|----------|----------|--------------|--------|------|"
+                )
+                for row in rows:
+                    commodity     = row.get("commodity_code") or "?"
+                    ticker_count  = int(row.get("ticker_count") or 0)
+                    avg_risk      = float(row.get("avg_risk") or 0.0)
+                    country_count = int(row.get("country_count") or 0)
+                    verified      = int(row.get("verified_count") or 0)
+
+                    risk_icon = (
+                        "🔴" if avg_risk >= 50
+                        else ("🟡" if avg_risk >= 25 else "🟢")
+                    )
+                    lines.append(
+                        f"| {commodity} "
+                        f"| {ticker_count}社 "
+                        f"| {risk_icon} {avg_risk:.1f}/100 "
+                        f"| {country_count}カ国 "
+                        f"| {verified}件 |"
+                    )
+                lines.append("")
+
+        except Exception:
+            lines.append(
+                "*資源権益マトリクス: BQ 未接続またはデータなし*"
+            )
+            lines.append("")
+
+        # ── ④ 高リスク国への権益エクスポージャー上位銘柄 ──────────
+        high_risk_countries = geo_summary.get("high_risk_countries", [])
+        if high_risk_countries:
+            lines.append("### ⚠️ 高リスク国への権益エクスポージャー")
+            lines.append("")
+
+            for hrc in high_risk_countries[:3]:   # 上位3カ国
+                code         = hrc.get("country_code", "?")
+                risk_score   = hrc.get("risk_score", 0.0)
+                affected     = hrc.get("affected_tickers", [])
+
+                lines.append(
+                    f"**`{code}`** リスクスコア {risk_score:.0f}/100"
+                )
+                if affected:
+                    lines.append(
+                        "権益保有銘柄: "
+                        + " / ".join(f"`{t}`" for t in affected[:5])
+                    )
+                else:
+                    lines.append("権益保有銘柄: データなし")
+                lines.append("")
+
+    except ModuleNotFoundError:
+        lines.append(
+            "*geo_signal.py 未配置のため地政学シグナルセクションをスキップ*"
+        )
+        lines.append("")
+    except Exception as e:
+        lines.append(
+            f"*地政学シグナルセクション生成エラー: {str(e)[:80]}*"
+        )
+        lines.append("")
+
+    return lines
+
+
+def _section_geo_signal_detail(results: dict, cfg=None) -> list:
+    """
+    signal_aggregator の geo_signal スコアを業種別に表示する（Wave 6 - G-X）。
+
+    signal_aggregator の結果から geo_signal コンポーネントを抽出し、
+    業種別の地政学シグナル強度をランキング表示する。
+
+    Returns:
+        list[str]: Markdown セクション行リスト
+    """
+    lines = ["### 📡 業種別 地政学シグナルスコア", ""]
+
+    sa_result = results.get("signal_aggregator", {})
+    if not sa_result or sa_result.get("skipped"):
+        lines.append("*signal_aggregator データなし*")
+        lines.append("")
+        return lines
+
+    sector_signals = sa_result.get("sector_signals", {})
+    if not sector_signals:
+        lines.append("*業種別シグナルデータなし*")
+        lines.append("")
+        return lines
+
+    # geo_signal コンポーネントを持つ業種を抽出
+    geo_entries: list[tuple] = []
+    for code, d in sector_signals.items():
+        if not isinstance(d, dict):
+            continue
+        geo_comp = d.get("components", {}).get("geo_signal", {})
+        geo_score = geo_comp.get("score")
+        if geo_score is None:
+            continue
+        geo_entries.append((code, float(geo_score)))
+
+    if not geo_entries:
+        lines.append("*地政学シグナルを持つ業種なし（ENABLE_GEO_SIGNAL=False または BQデータ未蓄積）*")
+        lines.append("")
+        return lines
+
+    geo_entries.sort(key=lambda x: -x[1])
+
+    lines.append("| 業種コード | 業種名 | geo_score | シグナル |")
+    lines.append("|----------|------|---------|--------|")
+
+    try:
+        import importlib, sys as _sys
+        from pathlib import Path as _Path
+        for p in ["/content", str(_Path(__file__).parent)]:
+            if p not in _sys.path:
+                _sys.path.insert(0, p)
+        _cfg_mod = importlib.import_module("config")
+        _sectors = getattr(_cfg_mod, "JAPAN_SECTORS", {})
+    except Exception:
+        _sectors = {}
+
+    for code, score in geo_entries[:10]:
+        name    = _sectors.get(str(code), {}).get("name_ja", code)
+        icon    = (
+            "🟢 追い風" if score >= 60
+            else ("🔴 逆風" if score <= 40 else "⚪ 中立")
+        )
+        lines.append(
+            f"| `{code}` | {name} | {score:.0f}/100 | {icon} |"
+        )
+
+    lines.append("")
+    return lines
 
 # ==============================================================
 # BLOCK 3: 米国セクター
@@ -267,23 +731,57 @@ def _section_screener(results: dict) -> list:
             lines.append("")
 
     # ── ここから Top candidates 表示ループ ──
-    lines.append("| 銘柄 | 業種 | スコア | PER | PBR | ROE | 配当 | 推奨 |")
-    lines.append("|------|------|-------|-----|-----|-----|-----|-----|")
-    
-    # スコア順に上位10件を表示
-    top_candidates = sorted(passed, key=lambda x: x.get("composite_score", 0), reverse=True)[:10]
+    lines.append("| 銘柄 | 業種 | スコア | ボラ調整後 | PER | PBR | ROE | 配当 | 推奨 |")
+    lines.append("|------|------|-------|-----------|-----|-----|-----|-----|-----|")
+
+    # composite_score 順に上位10件を表示
+    top_candidates = sorted(
+        passed, key=lambda x: x.get("composite_score", 0), reverse=True
+    )[:10]
     for c in top_candidates:
         name  = (c.get("name", c.get("ticker", "")))[:12]
         sec   = c.get("sector_name", "")[:8]
         score = c.get("composite_score", 0)
+        ra    = c.get("risk_adjusted_score", score)
         per_s = f"{c['per']:.1f}x"  if c.get("per")  else "N/A"
         pbr_s = f"{c['pbr']:.2f}x"  if c.get("pbr")  else "N/A"
         roe_s = _pct(c.get("roe"))
         dy_s  = _pct(c.get("dividend_yield"))
         rec   = c.get("rec_key", "N/A")
-        lines.append(f"| {name} | {sec} | {score:.0f} | {per_s} | {pbr_s} | {roe_s} | {dy_s} | {rec} |")
+        # ボラ調整後スコアが元スコアより大幅に低い場合に ▼ マークを表示
+        ra_mark = "▼" if (score - ra) > 5 else ""
+        lines.append(
+            f"| {name} | {sec} | {score:.0f} | {ra:.0f}{ra_mark}"
+            f" | {per_s} | {pbr_s} | {roe_s} | {dy_s} | {rec} |"
+        )
 
     lines.append("")
+
+    # ── ボラ調整後ランキング（Wave 2 - FE-1） ──────────────────
+    if any(c.get("risk_adjusted_score") for c in passed):
+        lines.append("### 📉 ボラ調整後ランキング TOP10（FE-1）")
+        lines.append("")
+        lines.append("| 銘柄 | 業種 | ボラ調整後 | 元スコア | 差分 | size_tier |")
+        lines.append("|------|------|-----------|---------|------|-----------|")
+        ra_sorted = sorted(
+            passed,
+            key=lambda x: x.get("risk_adjusted_score",
+                                  x.get("composite_score", 0)),
+            reverse=True,
+        )[:10]
+        for c in ra_sorted:
+            name  = (c.get("name", c.get("ticker", "")))[:12]
+            sec   = c.get("sector_name", "")[:8]
+            score = c.get("composite_score", 0)
+            ra    = c.get("risk_adjusted_score", score)
+            diff  = ra - score
+            tier  = c.get("size_tier", "-")
+            diff_s = f"{diff:+.0f}"
+            lines.append(
+                f"| {name} | {sec} | {ra:.0f} | {score:.0f} | {diff_s} | {tier} |"
+            )
+        lines.append("")
+
     return lines
         
 def _section_strategy_breakdown(results: dict) -> list:
@@ -387,6 +885,38 @@ def _section_earnings_watchlist(results: dict) -> list:
     lines.append("")
     return lines
 
+def _section_options_advisor(results: dict) -> list:
+    """[OPT-1] オプション戦略提案セクション"""
+    oa = results.get("options_advisor", {})
+    sugg = oa.get("suggestions", [])
+    if not sugg:
+        return []
+    lines = ["## 🎯 オプション戦略提案（defined-risk/カバードのみ・執行は人間）", ""]
+    lines.append("| 銘柄 | 戦略 | 満期 | 期待変動 | 根拠 |")
+    lines.append("|---|---|---|---|---|")
+    for s in sugg[:8]:
+        lines.append(
+            f"| {s.get('ticker','')} | {s.get('strategy','')} "
+            f"| {s.get('expiry','')} | {s.get('expected_move_pct','?')}% "
+            f"| {str(s.get('rationale',''))[:40]} |")
+    warns = {w for s in sugg for w in s.get("warnings", [])}
+    for w in list(warns)[:3]:
+        lines.append(f"- {w}")
+    lines.append("")
+    return lines
+
+
+def _section_module_ledger(cfg) -> list:
+    """[OBS-1] モジュール実行台帳（システム健全性）セクション"""
+    try:
+        import sys as _sys, importlib as _imp
+        _sys.path.insert(0, __file__.rsplit("/", 1)[0])
+        _ml = _imp.import_module("module_ledger")
+        return _ml.format_ledger_section(cfg)
+    except Exception:
+        return []
+
+
 def _section_midterm_tracker(results: dict) -> list:
     """[I-5] 中期経営計画達成状況セクション"""
     mt_result = results.get("midterm_tracker", {})
@@ -396,7 +926,9 @@ def _section_midterm_tracker(results: dict) -> list:
         import sys as _sys, importlib as _imp
         _sys.path.insert(0, __file__.rsplit("/", 1)[0])
         _mt = _imp.import_module("midterm_plan_tracker")
-        return _mt.format_midterm_section(mt_result.get("results", {}))
+        # ★ 2026-06-11 バグ修正: run_midterm_plan_tracker の戻りキーは "plans"
+        return _mt.format_midterm_section(
+            mt_result.get("plans", mt_result.get("results", {})))
     except Exception:
         return []
     
@@ -612,7 +1144,6 @@ def _section_finbert_sentiment(results: dict) -> list:
     if not by_sector:
         return []
 
-    cfg_sectors = results.get("_config_sectors", {})  # Japan_sectors の参照
     lines = ["## 🧠 FinBERT ニュース感情分析（月次）", ""]
     lines.append(f"**分析対象**: {sentiment.get('articles_scored',0)}件 "
                  f"/ **モデル**: {sentiment.get('model_used','')[:30]}")
@@ -726,6 +1257,256 @@ def _section_jp_us_bridge(results: dict) -> list:
     if not bridge or bridge.get("skipped"):
         return []
     return bridge.get("summary_text", "").split("\n")
+
+def _section_rule_optimizer_alert(results: dict, cfg=None) -> list:
+    """
+    Wave 6 - 第4セッション: 緊急縮退アラートセクション。
+
+    出力内容:
+      1. 現在の縮退モード（Normal / Warning / Emergency）とバッジ表示
+      2. 発動条件一覧（VIX / 市場幅 / PCR / 地政学リスク 等）
+      3. 統合スコア（total_signal_score）の上位/下位推移
+      4. 防御セクターの防衛状況（スコア維持・相対優位）
+      5. 縮退係数・補正内訳サマリー
+
+    データ取得元:
+      results["rule_optimizer"]["contraction_flag"]   → モード・係数・発動条件
+      results["signal_aggregator"]["sector_signals"]  → 業種別スコア（防御判定）
+      results["signal_aggregator"]["total_signal"]    → total_signal_score
+    """
+    try:
+        ro          = results.get("rule_optimizer", {})
+        contraction = ro.get("contraction_flag", {})
+        mode        = contraction.get("mode", "Normal")
+
+        # ── モードに応じたヘッダーアイコン ───────────────────────
+        mode_meta = {
+            "Normal":    ("✅", "通常モード", "#27ae60"),
+            "Warning":   ("⚠️",  "警戒モード", "#f39c12"),
+            "Emergency": ("🚨", "緊急縮退モード", "#c0392b"),
+        }
+        icon, label, _ = mode_meta.get(mode, ("✅", "通常モード", "#27ae60"))
+
+        lines = [
+            f"## {icon} 緊急縮退アラート（Wave 6 - 第4セッション）",
+            "",
+            f"**現在の縮退ステータス: {icon} {label}**",
+            "",
+        ]
+
+        # ── 1. 縮退モードサマリーバッジ ──────────────────────────
+        coeff       = float(contraction.get("coefficient", 1.00))
+        trig_count  = int(contraction.get("triggered_count", 0))
+        trig_flags  = contraction.get("triggered_flags", [])
+        ts          = contraction.get("timestamp", "")
+
+        # config から閾値を取得（cfg なし時はデフォルト）
+        warn_count  = 2
+        emerg_count = 4
+        if cfg is not None:
+            warn_count  = int(getattr(cfg, "CONTRACTION_WARNING_TRIGGER_COUNT",   2))
+            emerg_count = int(getattr(cfg, "CONTRACTION_EMERGENCY_TRIGGER_COUNT", 4))
+
+        lines.append("| 項目 | 値 |")
+        lines.append("|---|---|")
+        lines.append(f"| モード | **{label}** |")
+        lines.append(f"| 縮退係数 | **{coeff:.2f}** （1.00=無補正 / 0.65=最大35%抑制）|")
+        lines.append(f"| 発動条件数 | **{trig_count}** / Warning閾値:{warn_count} / Emergency閾値:{emerg_count} |")
+        lines.append(f"| 最終判定時刻 | {ts} |")
+        lines.append("")
+
+        # ── 2. 発動条件一覧 ──────────────────────────────────────
+        detail = contraction.get("detail", {})
+        if trig_flags or detail:
+            lines.append("### 📋 各条件の評価値")
+            lines.append("")
+            lines.append("| 条件 | 評価値 | 発動 |")
+            lines.append("|---|---|---|")
+
+            # 条件名・表示名マッピング
+            condition_labels = {
+                "vix":             ("VIX（恐怖指数）",             f">= {30.0}"),
+                "us10y_rise":      ("米10年債利回り上昇幅(%/週)",  f">= {0.30}"),
+                "breadth_score_jp":("市場幅スコア（0-100）",        f"<= {35.0}"),
+                "pcr":             ("PCR（プット/コール比）",        f">= {1.40}"),
+                "geo_risk_score":  ("地政学リスクスコア（0-100）",  f">= {70.0}"),
+                "score_drop":      ("上位業種スコア平均週次急落幅", f">= {12.0}"),
+            }
+            if cfg is not None:
+                condition_labels = {
+                    "vix":             ("VIX（恐怖指数）",             f">= {getattr(cfg,'CONTRACTION_VIX_THRESHOLD',30.0)}"),
+                    "us10y_rise":      ("米10年債利回り上昇幅(%/週)",  f">= {getattr(cfg,'CONTRACTION_US10Y_RISE_PCT',0.30)}"),
+                    "breadth_score_jp":("市場幅スコア（0-100）",        f"<= {getattr(cfg,'CONTRACTION_BREADTH_SCORE_MIN',35.0)}"),
+                    "pcr":             ("PCR（プット/コール比）",        f">= {getattr(cfg,'CONTRACTION_PCR_THRESHOLD',1.40)}"),
+                    "geo_risk_score":  ("地政学リスクスコア（0-100）",  f">= {getattr(cfg,'CONTRACTION_GEO_RISK_SCORE',70.0)}"),
+                    "score_drop":      ("上位業種スコア平均週次急落幅", f">= {getattr(cfg,'CONTRACTION_SCORE_DROP_THRESHOLD',12.0)}"),
+                }
+
+            for key, (cond_name, threshold_str) in condition_labels.items():
+                val = detail.get(key)
+                val_str = f"{val:.2f}" if isinstance(val, float) else (str(val) if val is not None else "N/A")
+                # 発動しているかどうかは triggered_flags の文字列前方一致で判定
+                fired = any(
+                    key.split("_")[0].lower() in f.lower() or
+                    cond_name[:4] in f
+                    for f in trig_flags
+                )
+                fired_icon = "🔴 発動" if fired else "🟢 正常"
+                lines.append(f"| {cond_name}（閾値: {threshold_str}）| {val_str} | {fired_icon} |")
+            lines.append("")
+
+        # ── 3. 統合スコア上位/下位推移 ───────────────────────────
+        sa_res        = results.get("signal_aggregator", {})
+        sector_sigs   = sa_res.get("sector_signals", {})
+        # ★ 2026-06-10 バグ修正: main の書き込みキーは "total_signal_score"
+        total_sig_res = results.get("total_signal_score", results.get("total_signal", {}))
+        tss_score     = total_sig_res.get("total_signal_score") if total_sig_res else None
+        tss_coeff     = total_sig_res.get("contraction_coefficient", 1.00) if total_sig_res else 1.00
+
+        if tss_score is not None:
+            lines.append("### 📊 統合スコア（total_signal_score）")
+            lines.append("")
+            lines.append(f"- **現在値**: {tss_score:.1f}点")
+            lines.append(f"- **縮退係数適用後**: 係数={tss_coeff:.2f}")
+            lines.append("")
+
+        # 業種別スコア上位/下位推移
+        if sector_sigs:
+            sorted_sigs = sorted(
+                [(code, d) for code, d in sector_sigs.items() if isinstance(d, dict)],
+                key=lambda x: x[1].get("signal_score", 50),
+                reverse=True,
+            )
+
+            if sorted_sigs:
+                lines.append("### 📈 業種別シグナルスコア上位5（縮退補正後）")
+                lines.append("")
+                lines.append("| 業種コード | 業種名 | シグナルスコア | 縮退モード | 防御セクター |")
+                lines.append("|---|---|---|---|---|")
+                for code, d in sorted_sigs[:5]:
+                    name      = d.get("sector_name_ja", code)
+                    score     = d.get("signal_score", 50)
+                    c_mode    = d.get("contraction_mode", "Normal")
+                    is_def    = d.get("is_defensive", False)
+                    def_mark  = "🛡️ 防御" if is_def else "-"
+                    lines.append(f"| {code} | {name} | **{score:.1f}点** | {c_mode} | {def_mark} |")
+                lines.append("")
+
+                lines.append("### 📉 業種別シグナルスコア下位5（縮退補正後）")
+                lines.append("")
+                lines.append("| 業種コード | 業種名 | シグナルスコア | 縮退モード | 防御セクター |")
+                lines.append("|---|---|---|---|---|")
+                for code, d in sorted_sigs[-5:]:
+                    name      = d.get("sector_name_ja", code)
+                    score     = d.get("signal_score", 50)
+                    c_mode    = d.get("contraction_mode", "Normal")
+                    is_def    = d.get("is_defensive", False)
+                    def_mark  = "🛡️ 防御" if is_def else "-"
+                    lines.append(f"| {code} | {name} | **{score:.1f}点** | {c_mode} | {def_mark} |")
+                lines.append("")
+
+        # ── 4. 防御セクター防衛状況 ──────────────────────────────
+        defensive_codes = sa_res.get("defensive_sectors", [])
+        if defensive_codes and mode != "Normal":
+            bonus_warning   = 3.0
+            bonus_emergency = 7.0
+            if cfg is not None:
+                bonus_warning   = float(getattr(cfg, "DEFENSIVE_RELATIVE_BONUS_WARNING",   3.0))
+                bonus_emergency = float(getattr(cfg, "DEFENSIVE_RELATIVE_BONUS_EMERGENCY", 7.0))
+            bonus_applied = bonus_warning if mode == "Warning" else bonus_emergency
+
+            lines.append("### 🛡️ 防御セクター防衛状況")
+            lines.append("")
+            lines.append(
+                f"縮退モード: **{label}** のため、以下 **{len(defensive_codes)}** 業種に "
+                f"相対ボーナス **+{bonus_applied:.1f}pt** を適用済み。"
+            )
+            lines.append("")
+            lines.append("| 業種コード | 業種名 | 縮退前スコア | ボーナス | 補正後スコア |")
+            lines.append("|---|---|---|---|---|")
+            for code in defensive_codes:
+                d          = sector_sigs.get(code, {})
+                name       = d.get("sector_name_ja", code)
+                score_now  = d.get("signal_score", 50)
+                # 補正前スコアを逆算（bonus加算前）
+                score_pre  = round(score_now - bonus_applied, 1)
+                lines.append(
+                    f"| {code} | {name} "
+                    f"| {score_pre:.1f}点 "
+                    f"| **+{bonus_applied:.1f}pt** "
+                    f"| **{score_now:.1f}点** |"
+                )
+            lines.append("")
+        elif mode == "Normal":
+            lines.append(
+                "> 縮退モード: Normal のため、全業種への縮退補正・防御セクターボーナスは未適用。"
+            )
+            lines.append("")
+
+        # ── 5. 縮退履歴サマリー（直近7件）──────────────────────
+        try:
+            from pathlib import Path as _Path
+            _cache_dir  = _Path(getattr(cfg, "CACHE_DIR", "stock_data/cache")) if cfg else _Path("stock_data/cache")
+            _hist_fname = getattr(cfg, "CONTRACTION_HISTORY_PATH", "contraction_history.jsonl") if cfg else "contraction_history.jsonl"
+            _hist_path  = _cache_dir / "contraction" / _hist_fname
+            if _hist_path.exists():
+                _records = []
+                with _hist_path.open(encoding="utf-8") as _f:
+                    for _line in _f:
+                        _line = _line.strip()
+                        if _line:
+                            try:
+                                _records.append(json.loads(_line))
+                            except Exception:
+                                pass
+                # 直近7件のみ表示
+                _recent = _records[-7:]
+                if _recent:
+                    lines.append("### 📅 縮退状態履歴（直近7週）")
+                    lines.append("")
+                    lines.append("| 日付 | モード | 発動数 | 係数 |")
+                    lines.append("|---|---|---|---|")
+                    for _r in reversed(_recent):
+                        _r_icon = {
+                            "Normal":    "✅",
+                            "Warning":   "⚠️",
+                            "Emergency": "🚨",
+                        }.get(_r.get("mode", "Normal"), "✅")
+                        lines.append(
+                            f"| {_r.get('date', '')} "
+                            f"| {_r_icon} {_r.get('mode', 'Normal')} "
+                            f"| {_r.get('triggered_count', 0)} "
+                            f"| {_r.get('coefficient', 1.00):.2f} |"
+                        )
+                    lines.append("")
+        except Exception:
+            pass   # 履歴読み込み失敗はセクション全体を止めない
+
+        # ── US株縮退サマリー（us_stock_screener 結果から取得） ───
+        us_screener = results.get("us_screener", results.get("screener_us", {}))
+        if us_screener and isinstance(us_screener, dict):
+            _us_c_mode = us_screener.get("contraction_mode", "Normal")
+            _us_def_n  = us_screener.get("contraction_defensive_count", 0)
+            _us_adj_n  = us_screener.get("contraction_adjusted_count",  0)
+            if _us_c_mode != "Normal" or _us_def_n > 0:
+                lines.append("### 🇺🇸 米国株スクリーニング縮退適用状況")
+                lines.append("")
+                lines.append(f"- 縮退モード: **{_us_c_mode}**")
+                lines.append(f"- 防御セクター相対維持: **{_us_def_n}社**")
+                lines.append(f"- 縮退係数適用（抑制）: **{_us_adj_n}社**")
+                lines.append("")
+
+        lines.append("---")
+        lines.append("")
+        return lines
+
+    except Exception as _e:
+        return [
+            "## ⚠️ 緊急縮退アラート（Wave 6 - 第4セッション）",
+            "",
+            f"*セクション生成エラー（スキップ）: {str(_e)[:80]}*",
+            "",
+        ]
 
 def _section_rule_optimizer(results: dict, cfg=None) -> list:
     lines = []
@@ -885,6 +1666,1168 @@ def _section_dcf(results: dict) -> list:
                      f"| {intr:,.0f}円 | {curr:,.0f}円 "
                      f"| {disc:+.1f}% | {bonus:+.0f}pt |")
     return lines
+
+# ==============================================================
+# BLOCK 8.5: Wave 0 新規セクション（Policy Ph1 / Idea2-A）
+# ==============================================================
+
+def _section_politician_highlight(results: dict) -> list:
+    """[Wave0 Policy Ph1] 今週の議員取引ハイライト & JP波及シグナル"""
+    pm = results.get("politician_monitor", {})
+    if not pm or pm.get("skipped"):
+        return []
+
+    high_trades = pm.get("high_score_trades", [])
+    jp_signals  = pm.get("jp_sector_signals", {})
+    stats       = pm.get("stats", {})
+
+    if not high_trades and not jp_signals:
+        return []
+
+    lines = ["## 🏛️ 今週の議員取引ハイライト（Policy Ph1）", ""]
+
+    if high_trades:
+        lines.append(f"**高スコア取引（閾値60pt以上）: {len(high_trades)}件**")
+        lines.append("")
+        lines.append("| スコア | 議員名 | 売買 | 資産名 | 委員会 |")
+        lines.append("|-------|-------|-----|------|------|")
+        for t in high_trades[:8]:
+            direction = "🟢 買" if t.get("direction") == "buy" else "🔴 売"
+            lines.append(
+                f"| {t.get('score', 0):.0f}pt "
+                f"| {t.get('politician', '')[:16]} "
+                f"| {direction} "
+                f"| {t.get('asset', '')[:25]} "
+                f"| {t.get('committee', '')[:14]} |"
+            )
+        lines.append("")
+
+    if jp_signals:
+        lines.append("**🇯🇵 JP業種波及シグナル**")
+        lines.append("")
+        for code, delta in sorted(
+            jp_signals.items(), key=lambda x: abs(x[1]), reverse=True
+        )[:6]:
+            icon = "📈" if delta > 0 else "📉"
+            lines.append(f"  {icon} [{code}]: {delta:+.1f}pt")
+        lines.append("")
+
+    ts = pm.get("timestamp", "")
+    lines.append(
+        f"*新規検出: {stats.get('new_count', 0)}件 | "
+        f"高スコア: {stats.get('high_score_count', 0)}件 | "
+        f"更新: {ts}*"
+    )
+    lines.append("")
+    return lines
+
+
+def _section_jp_us_correlation(results: dict) -> list:
+    """[Wave0 Idea2-A] JP×US相関マトリクス（直近60日）"""
+    corr = results.get("jp_us_sector_correlation", {})
+    if not corr or corr.get("stats", {}).get("insufficient_data"):
+        return []
+
+    pairs = corr.get("significant_pairs", [])
+    stats = corr.get("stats", {})
+
+    if not pairs:
+        return []
+
+    lines = ["## 🔗 JP×US相関マトリクス（直近60日）", ""]
+    lines.append(
+        f"**有意ペア（|r|≥0.7）: {stats.get('significant_count', 0)}件** "
+        f"| 検証ペア数: {stats.get('total_pairs_checked', 0)} "
+        f"| データ点数: {stats.get('data_points', 0)}日"
+    )
+    lines.append("")
+    lines.append("| JP業種 | US ETF | 相関 | n | シグナル |")
+    lines.append("|--------|--------|------|---|--------|")
+
+    for p in pairs[:10]:
+        r    = p.get("correlation", 0)
+        sign = "+" if r >= 0 else ""
+        sig  = {
+            "aligned_up":   "📈 同調上昇",
+            "aligned_down": "📉 同調下落",
+            "mixed":        "↔ 乖離",
+        }.get(p.get("signal", ""), "—")
+        lines.append(
+            f"| {p.get('jp_name', p.get('jp_code', ''))[:10]} "
+            f"| {p.get('us_etf', '')}({p.get('us_sector_ja', '')[:6]}) "
+            f"| **{sign}{r:.3f}** "
+            f"| {p.get('n_observations', 0)} "
+            f"| {sig} |"
+        )
+
+    lines.append("")
+    lines.append(f"*更新: {corr.get('timestamp', '')}*")
+    lines.append("")
+    return lines
+
+def _fmt(v) -> str:
+    """スコア値を '99.9' 形式の文字列に変換する。None は '—' を返す。"""
+    if v is None:
+        return "—"
+    try:
+        return f"{float(v):.1f}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _format_pearl_row_detail(c: dict) -> str:
+    """
+    Tier SS 銘柄の1行サマリを生成する。
+    Wave 7: EDINETセグメント文脈・カタリストフラグ・潜伏Pearlスコアを追加表示。
+    """
+    ticker = c.get("ticker", c.get("code", ""))
+    ps     = c.get("pearl_score", 0)
+    d1     = c.get("d1_score")
+    d3     = c.get("d3_score")
+    d4     = c.get("d4_score")
+    bonus  = c.get("pearl_bonus", 0)
+
+    # ── Wave 7 追加フィールド ────────────────────────────────────
+    lp_score    = float(c.get("latent_pearl_score", 0.0))
+    cat_flags   = c.get("catalyst_flags", [])
+    cat_preview = " / ".join(str(f).split("（")[0] for f in cat_flags[:2])
+    mt_traj     = c.get("midterm_trajectory", "")
+    mt_score    = c.get("midterm_overall_score", 0.0)
+
+    # EDINETセグメント文脈サマリ（50字以内）
+    seg_text = str(c.get("edinet_segment_text", "") or "")
+    seg_preview = seg_text[:50].replace("\n", " ") if seg_text else ""
+
+    # 軌道アイコン
+    traj_icon = {
+        "ahead":    "🚀", "on_track": "✅",
+        "behind":   "⚠️", "critical": "🔴",
+    }.get(mt_traj, "")
+
+    base = (
+        f"**⭐ {ticker}** "
+        f"| Pearl: **{ps:.1f}pt** "
+        f"| D1方向性={_fmt(d1)} "
+        f"/ D3利益品質={_fmt(d3)} "
+        f"/ D4発見Gap={_fmt(d4)} "
+        f"| +{bonus:.1f}pt ボーナス"
+    )
+    # Wave 7 拡張行
+    ext_parts = []
+    if lp_score >= 30.0:
+        ext_parts.append(f"💎潜伏Pearl={lp_score:.0f}pt")
+    if cat_preview:
+        ext_parts.append(f"カタリスト: {cat_preview}")
+    if mt_traj:
+        ext_parts.append(f"中計{traj_icon}{mt_score:.0f}pt")
+    if seg_preview:
+        ext_parts.append(f"セグメント: 「{seg_preview}…」")
+
+    if ext_parts:
+        return base + "\n  → " + " / ".join(ext_parts)
+    return base
+
+
+def _section_pearl_ranking(results: dict, cfg=None) -> list:
+    """
+    [Wave0 Pearl Ph1] 光る原石ランキング
+    pearl_candidates.json（キャッシュ）を優先参照し、
+    未生成の場合は results["screener"]["passed"] から pearl_tier のある銘柄を抽出する。
+    """
+    # ── データ取得（キャッシュ優先） ──────────────────────────────
+    candidates: list = []
+    try:
+        from pearl_score_calculator import load_pearl_candidates as _load_pc
+        candidates = _load_pc(cfg) or []
+    except Exception:
+        pass
+
+    # ── フォールバック: results["screener"] から抽出 ───────────────
+    if not candidates:
+        try:
+            screener = results.get("screener", {})
+            passed   = screener.get("passed",
+                       screener.get("candidates", []))
+            for c in passed:
+                if c.get("pearl_tier") and float(c.get("pearl_score", 0)) >= 50:
+                    candidates.append({
+                        "ticker":      c.get("ticker", c.get("code", "")),
+                        "pearl_score": float(c.get("pearl_score", 0)),
+                        "pearl_tier":  c.get("pearl_tier"),
+                        "pearl_bonus": float(c.get("pearl_bonus", 0)),
+                        "d1_score":    c.get("d1_score"),
+                        "d3_score":    c.get("d3_score"),
+                        "d4_score":    c.get("d4_score"),
+                    })
+            _tier_order = {"SS": 0, "S": 1, "A": 2, "B": 3}
+            candidates.sort(key=lambda x: (
+                _tier_order.get(x.get("pearl_tier", "B"), 9),
+                -x.get("pearl_score", 0),
+            ))
+        except Exception:
+            pass
+
+    if not candidates:
+        return []
+
+    lines = ["## 💎 光る原石ランキング（Pearl Ph1）", ""]
+
+    # ── Tier SS（≥80pt）: 特別強調 ────────────────────────────────
+    ss_stocks = [c for c in candidates if c.get("pearl_tier") == "SS"]
+    if ss_stocks:
+        min_score_str = f"{getattr(cfg, 'PEARL_MIN_SCORE_ALERT', 80):.0f}" if cfg else "80"
+        mcap_str      = f"{getattr(cfg, 'PEARL_MCAP_MAX_ALERT_B', 500):.0f}" if cfg else "500"
+        lines.append(
+            f"### ⭐⭐ Tier SS（Pearl≥{min_score_str}pt × 時価総額≤{mcap_str}億 → LINE即時通知対象）"
+        )
+        lines.append("")
+        for c in ss_stocks[:5]:
+            lines.append(_format_pearl_row_detail(c))
+        lines.append("")
+
+    # ── Tier S / A / B: 一覧表 ────────────────────────────────────
+    other_stocks = [
+        c for c in candidates if c.get("pearl_tier") in ("S", "A", "B")
+    ]
+    if other_stocks:
+        lines.append("### 💎 Tier S / A / B（注目候補）")
+        lines.append("")
+        lines.append(
+            "| # | Tier | 銘柄 | Pearl | D1 方向性 | D3 利益品質 | D4 発見Gap | bonus |"
+        )
+        lines.append(
+            "|---|------|------|-------|----------|-----------|---------|-------|"
+        )
+        _tier_icon = {"S": "💎", "A": "🔷", "B": "🔹"}
+        for i, c in enumerate(other_stocks[:15], 1):
+            tier   = c.get("pearl_tier", "")
+            ticker = c.get("ticker", c.get("code", ""))
+            ps     = c.get("pearl_score", 0)
+            bonus  = c.get("pearl_bonus", 0)
+            lines.append(
+                f"| {i} "
+                f"| {_tier_icon.get(tier, '')}{tier} "
+                f"| {ticker} "
+                f"| **{ps:.1f}pt** "
+                f"| {_fmt(c.get('d1_score'))} "
+                f"| {_fmt(c.get('d3_score'))} "
+                f"| {_fmt(c.get('d4_score'))} "
+                f"| +{bonus:.1f}pt |"
+            )
+        lines.append("")
+
+    # ── フッター統計 ──────────────────────────────────────────────
+    n_ss = len(ss_stocks)
+    n_s  = sum(1 for c in candidates if c.get("pearl_tier") == "S")
+    n_a  = sum(1 for c in candidates if c.get("pearl_tier") == "A")
+    n_b  = sum(1 for c in candidates if c.get("pearl_tier") == "B")
+    lines.append(
+        f"*発見: SS={n_ss} / S={n_s} / A={n_a} / B={n_b}"
+        f"（計{len(candidates)}銘柄）"
+        f" | D2 持続性・D5 バリュエーションは Ph2 以降実装予定*"
+    )
+    lines.append("")
+    return lines
+
+# ==============================================================
+# BLOCK 8.8: Wave 2 新規セクション
+# ==============================================================
+
+def _section_analyst_revision(results: dict, cfg=None) -> list:
+    """
+    [Wave 2 - FE-2] アナリスト注目度変化セクション。
+
+    screener 通過銘柄の revision_score を集計し、
+    セクター別の注目度変化をランキング表示する。
+    PEAD_TRIGGER_MIN_REVISION を超えるセクターを強調。
+    """
+    try:
+        lines = ["## 📊 アナリスト注目度変化（Wave 2 - FE-2）", ""]
+        screener  = results.get("screener", {})
+        candidates = (
+            screener.get("passed")
+            or [c for c in screener.get("candidates", [])
+                if c.get("pass_filters")]
+        )
+        if not candidates:
+            lines.append("*スクリーナーデータなし*")
+            lines.append("")
+            return lines
+
+        min_rev = float(getattr(cfg, "PEAD_TRIGGER_MIN_REVISION", 0.3)
+                        if cfg else 0.3)
+
+        # セクター別 revision_score 集計
+        from collections import defaultdict as _dd
+        _rev_by_sec: dict = _dd(list)
+        _names: dict      = {}
+        for c in candidates:
+            sc = str(c.get("sector_code", "その他"))
+            rv = c.get("revision_score")
+            if rv is not None:
+                _rev_by_sec[sc].append(float(rv))
+                _names[sc] = c.get("sector_name", sc)
+
+        if not _rev_by_sec:
+            lines.append("*revision_score データなし*")
+            lines.append("")
+            return lines
+
+        # セクター別平均を算出してソート
+        _sec_avgs = [
+            (sc, sum(rvs) / len(rvs), _names.get(sc, sc))
+            for sc, rvs in _rev_by_sec.items()
+        ]
+        _sec_avgs.sort(key=lambda x: x[1], reverse=True)
+
+        # テーブル出力
+        lines.append("| 業種 | 平均修正スコア | 対象銘柄数 | PEAD発動 |")
+        lines.append("|------|--------------|-----------|---------|")
+        for sc, avg, name in _sec_avgs[:10]:
+            n     = len(_rev_by_sec[sc])
+            pead  = "🚀 Yes" if avg >= min_rev else "-"
+            mark  = "⭐" if avg >= min_rev else ""
+            lines.append(
+                f"| {name[:10]} | {avg:+.2f}pt{mark} | {n}社 | {pead} |"
+            )
+        lines.append("")
+
+        # 個別銘柄: 上位 / 下位
+        by_rev = sorted(
+            [c for c in candidates if c.get("revision_score") is not None],
+            key=lambda x: x.get("revision_score", 0),
+            reverse=True,
+        )
+        if by_rev:
+            lines.append("**📈 アナリスト注目度UP（上位5銘柄）**")
+            lines.append("")
+            for c in by_rev[:5]:
+                rv = c.get("revision_score", 0)
+                if rv <= 0:
+                    break
+                lines.append(
+                    f"- {c.get('name', c.get('ticker',''))[:14]}"
+                    f"（{c.get('ticker','')}）: "
+                    f"revision={rv:+.2f}pt "
+                    f"composite={c.get('composite_score', 0):.0f}点"
+                )
+            lines.append("")
+
+            dn = [c for c in by_rev if (c.get("revision_score") or 0) < 0]
+            if dn:
+                lines.append("**📉 アナリスト注目度DOWN（下位3銘柄）**")
+                lines.append("")
+                for c in sorted(dn, key=lambda x: x.get("revision_score", 0))[:3]:
+                    rv = c.get("revision_score", 0)
+                    lines.append(
+                        f"- {c.get('name', c.get('ticker',''))[:14]}"
+                        f"（{c.get('ticker','')}）: "
+                        f"revision={rv:+.2f}pt"
+                    )
+                lines.append("")
+
+        return lines
+
+    except Exception:
+        return ["## 📊 アナリスト注目度変化", "", "*生成エラー*", ""]
+
+
+def _section_ignition_alert(results: dict, cfg=None) -> list:
+    """
+    [Wave 2 - FE-4] 今週の収束シグナル（Ignition Alert）セクション。
+
+    results["ignition"] または ignition_alerts.json から
+    アラートを読み込み、収束スコアとカテゴリ別内訳を表示する。
+    """
+    try:
+        lines = ["## 🔥 今週の収束シグナル（Ignition Alert）", ""]
+
+        # データ取得（results優先 → JSON fallback）
+        ign_alerts: list = []
+        ign_result = results.get("ignition", {})
+        if ign_result:
+            ign_alerts = ign_result.get("alerts", [])
+
+        if not ign_alerts:
+            try:
+                from ignition_detector import load_current_alerts as _lca
+                ign_alerts = _lca(cfg)
+            except Exception:
+                pass
+
+        if not ign_alerts:
+            lines.append("*今週の収束シグナルなし*")
+            lines.append("")
+            return lines
+
+        min_sc   = float(getattr(cfg, "IGNITION_MIN_SCORE_LINE",       3.0)
+                         if cfg else 3.0)
+
+        # サマリー
+        n_total  = len(ign_alerts)
+        n_crit   = sum(1 for a in ign_alerts if a.get("is_critical"))
+        lines.append(
+            f"**検出数**: {n_total}業種"
+            f"（うち最高警戒🚨: {n_crit}件）"
+        )
+        lines.append("")
+
+        # 詳細テーブル
+        lines.append("| 業種 | 収束スコア | Cat-A 資金 | Cat-B ナラ | Cat-C 価格 | 警戒 |")
+        lines.append("|------|-----------|-----------|-----------|-----------|------|")
+        for a in sorted(ign_alerts,
+                        key=lambda x: x.get("convergence_score", 0),
+                        reverse=True):
+            name  = a.get("sector_name", a.get("sector_code", ""))[:10]
+            csc   = a.get("convergence_score", 0.0)
+            sa    = a.get("category_a", {}).get("score", 0.0)
+            sb    = a.get("category_b", {}).get("score", 0.0)
+            sc_   = a.get("category_c", {}).get("score", 0.0)
+            crit  = "🚨最高警戒" if a.get("is_critical") else (
+                    "🔥発火" if csc >= min_sc else "-")
+            lines.append(
+                f"| {name} | **{csc:.2f}** "
+                f"| {sa:.2f} | {sb:.2f} | {sc_:.2f} | {crit} |"
+            )
+        lines.append("")
+
+        # 最高警戒セクターの詳細
+        crit_alerts = [a for a in ign_alerts if a.get("is_critical")]
+        if crit_alerts:
+            lines.append("### 🚨 最高警戒セクター 詳細")
+            lines.append("")
+            for a in crit_alerts:
+                name = a.get("sector_name", a.get("sector_code", ""))
+                lines.append(f"**{name}** — convergence_score: {a.get('convergence_score', 0):.2f}")
+                for cat, label in [("category_a", "資金フロー"),
+                                   ("category_b", "ナラティブ"),
+                                   ("category_c", "価格")]:
+                    cat_d = a.get(cat, {})
+                    sigs  = cat_d.get("signals", [])
+                    if sigs:
+                        lines.append(
+                            f"- {label}({cat_d.get('score',0):.2f}): "
+                            + " / ".join(sigs[:3])
+                        )
+                lines.append("")
+
+        return lines
+
+    except Exception:
+        return ["## 🔥 今週の収束シグナル（Ignition Alert）", "", "*生成エラー*", ""]
+
+# ==============================================================
+# BLOCK 8.9: Wave 3 新規セクション
+# ==============================================================
+
+def _section_latent_pearl_promotion(results: dict, cfg=None) -> list:
+    """
+    [Wave 3/7 - Independence] 潜伏銘柄プロモーションセクション。
+    Wave 7: latent_pearl_cache.json を直接参照し、
+    潜伏Pearlスコア・カタリストフラグ・EDINETセグメント文脈を詳細表示する。
+    """
+    try:
+        lines = ["## 💎 潜伏銘柄プロモーション（Wave 7）", ""]
+
+        # ── データ取得 ────────────────────────────────────────────
+        bridge     = results.get("jp_us_bridge", {})
+        rot_phases = bridge.get("rotation_phases", {})
+        reversal_secs = {
+            sc for sc, info in rot_phases.items()
+            if info.get("phase") in ("IMPROVING", "LEADING")
+        }
+        cross_latent = bridge.get("cross_market_latent", [])
+
+        # Wave 7: latent_pearl_cache から取得
+        latent_entries: list = []
+        promoted_tickers: list = []
+        try:
+            from latent_pearl_manager import (
+                get_latent_pearls_list as _gll,
+                get_promoted_tickers   as _gpt,
+            )
+            latent_entries   = _gll(cfg, min_score=30.0)
+            promoted_tickers = _gpt(cfg)
+        except Exception:
+            # フォールバック: results から取得
+            lp_res = results.get("latent_pearl", {})
+            latent_entries = list(lp_res.get("latent_pearls", {}).values())
+            promoted_tickers = lp_res.get("promoted", [])
+
+        if not latent_entries and not cross_latent:
+            lines.append("*潜伏銘柄なし*")
+            lines.append("")
+            return lines
+
+        # ── 統計サマリー ──────────────────────────────────────────
+        n_total    = len(latent_entries)
+        n_promoted = len(promoted_tickers)
+        n_eligible = sum(1 for e in latent_entries if e.get("promotion_eligible"))
+        lines.append(
+            f"**潜伏銘柄={n_total}件 / 昇格対象={n_eligible}件 / 昇格済={n_promoted}件**"
+        )
+        lines.append("")
+
+        # ── 昇格対象銘柄テーブル ──────────────────────────────────
+        eligible = [e for e in latent_entries if e.get("promotion_eligible")]
+        if eligible:
+            lines.append("### 🚀 昇格対象銘柄（latent_pearl_score ≥ 70）")
+            lines.append("")
+            lines.append(
+                "| 銘柄 | LP Score | 独立性 | カタリスト | 中計 | 検出条件 |"
+            )
+            lines.append(
+                "|------|---------|-------|----------|-----|---------|"
+            )
+            for e in sorted(eligible, key=lambda x: x.get("latent_pearl_score", 0), reverse=True)[:8]:
+                ticker   = e.get("ticker", "")
+                lp_score = float(e.get("latent_pearl_score", 0))
+                ind      = float(e.get("independence_score", 0))
+                cat      = float(e.get("catalyst_score", 0))
+                mt_score = float(e.get("midterm_score", 0))
+                mt_traj  = e.get("midterm_trajectory", "")
+                conds    = "/".join(e.get("detection_conditions", []))
+                traj_icon = {"ahead": "🚀", "on_track": "✅", "behind": "⚠️", "critical": "🔴"}.get(mt_traj, "")
+                cat_flags = e.get("catalyst_flags", [])
+                cat_str   = " ".join(str(f).split("（")[0] for f in cat_flags[:2])
+                lines.append(
+                    f"| **{ticker}** "
+                    f"| **{lp_score:.1f}** "
+                    f"| {ind:.0f}pt "
+                    f"| {cat:.1f}pt {cat_str[:15]} "
+                    f"| {traj_icon}{mt_score:.0f}pt "
+                    f"| {conds} |"
+                )
+            lines.append("")
+
+        # ── Wave 7: size×taxonomy コンテキスト付き潜伏候補 ────────
+        tax_notable = [
+            e for e in latent_entries
+            if float(e.get("latent_pearl_score", 0)) >= 30.0
+            and e.get("detection_conditions")
+        ]
+        if tax_notable:
+            lines.append("### 📋 潜伏銘柄詳細（Wave 7 コンテキスト）")
+            lines.append("")
+            for e in tax_notable[:6]:
+                ticker      = e.get("ticker", "")
+                lp_score    = float(e.get("latent_pearl_score", 0))
+                cross_str   = e.get("cross_signal_strength", 0)
+                cross_types = " / ".join(e.get("cross_signal_types", [])[:2])
+                cat_flags   = e.get("catalyst_flags", [])
+                cat_detail  = " / ".join(str(f) for f in cat_flags[:3])
+                mt_traj     = e.get("midterm_trajectory") or ""
+                conds       = e.get("detection_conditions", [])
+                promoted    = "✅昇格済" if ticker in promoted_tickers else ""
+                lines.append(
+                    f"**{ticker}** {promoted} — LP={lp_score:.1f}pt"
+                )
+                lines.append(
+                    f"  検出条件: {'/'.join(conds)} | "
+                    f"cross_signal: {cross_str:.2f}（{cross_types}）"
+                )
+                if cat_detail:
+                    lines.append(f"  カタリスト: {cat_detail}")
+                if mt_traj:
+                    traj_icon = {"ahead": "🚀", "on_track": "✅", "behind": "⚠️", "critical": "🔴"}.get(mt_traj, "")
+                    lines.append(f"  中計軌道: {traj_icon} {mt_traj}")
+                lines.append("")
+
+        # ── クロスマーケット潜伏銘柄 ──────────────────────────────
+        if cross_latent:
+            lines.append("### 🌐 クロスマーケット潜伏候補（JP/US独立性高）")
+            lines.append("")
+            for cl in cross_latent[:5]:
+                lines.append(
+                    f"- [{cl['ticker']}] "
+                    f"独立性={cl.get('independence_score', 0):.0f}pt "
+                    f"US先行adj={cl.get('us_lead_adj', 0):+.1f}pt "
+                    f"cross_size={cl.get('cross_size_type', '-')} "
+                    f"信頼度={cl.get('confidence', '-')} "
+                    f"Tier={cl.get('size_tier', '-')}"
+                )
+            lines.append("")
+
+        # ── セクター反転 × 潜伏銘柄の重複 ───────────────────────
+        if reversal_secs:
+            lines.append(f"**🔄 セクター反転検出: {', '.join(sorted(reversal_secs)[:5])}**")
+            lines.append("")
+
+        return lines
+
+    except Exception:
+        return ["## 💎 潜伏銘柄プロモーション", "", "*生成エラー*", ""]
+
+# ==============================================================
+# BLOCK 8.9-B: Wave 7 新規セクション（市場形成前シグナル / size×taxonomy）
+# ==============================================================
+
+def _section_wave7_premarket_signals(results: dict, cfg=None) -> list:
+    """
+    [Wave 7] 市場形成前シグナルセクション。
+    学術発表・標準化動向・中計達成率の3インプット層を統合表示する。
+    """
+    try:
+        lines = ["## 📡 市場形成前シグナル（Wave 7）", ""]
+        trackers = results.get("wave7_trackers", {})
+
+        # ── 標準化動向 ────────────────────────────────────────────
+        std_data = trackers.get("standardization", {})
+        if std_data and not std_data.get("cached") is False or std_data:
+            top5_std = std_data.get("stats", {}).get("top_5_companies", [])
+            total_std = std_data.get("stats", {}).get("total_standards_tracked", 0)
+            lines.append(f"### 📋 標準化動向（3GPP / ISO / IEEE）— {total_std}標準追跡中")
+            lines.append("")
+            if top5_std:
+                lines.append("| 銘柄 | 標準化スコア |")
+                lines.append("|------|------------|")
+                for e in top5_std[:5]:
+                    lines.append(f"| {e.get('ticker', '')} | {e.get('score', 0):.1f}pt |")
+            else:
+                lines.append("*データ取得中*")
+            lines.append("")
+
+        # ── 学術カンファレンス ────────────────────────────────────
+        ac_data = trackers.get("academic", {})
+        if ac_data:
+            top5_ac = ac_data.get("stats", {}).get("top_5_companies", [])
+            total_papers = ac_data.get("stats", {}).get("total_papers", 0)
+            lines.append(f"### 🎓 学術カンファレンス（ISSCC / IEDM / NeurIPS 等）— {total_papers}論文")
+            lines.append("")
+            if top5_ac:
+                lines.append("| 銘柄 | 学術スコア |")
+                lines.append("|------|----------|")
+                for e in top5_ac[:5]:
+                    lines.append(f"| {e.get('ticker', '')} | {e.get('score', 0):.1f}pt |")
+            else:
+                lines.append("*データ取得中*")
+            lines.append("")
+
+        # ── 中計達成率 ────────────────────────────────────────────
+        mt_data = trackers.get("midterm", {})
+        if mt_data:
+            plans     = mt_data.get("plans", {})
+            at_risk   = mt_data.get("stats", {}).get("at_risk_tickers", [])
+            high_list = [
+                (t, p.get("overall_score", 0), p.get("trajectory", ""))
+                for t, p in plans.items()
+                if p.get("achievement_tier") == "HIGH"
+            ]
+            lines.append(f"### 📊 中計達成率（{len(plans)}社追跡）")
+            lines.append("")
+            if high_list:
+                lines.append("**HIGH達成銘柄:**")
+                for ticker, score, traj in sorted(high_list, key=lambda x: -x[1])[:5]:
+                    icon = {"ahead": "🚀", "on_track": "✅"}.get(traj, "")
+                    lines.append(f"  - {ticker}: {score:.0f}pt {icon} {traj}")
+                lines.append("")
+            if at_risk:
+                lines.append(f"**⚠️ AT_RISK銘柄: {', '.join(at_risk[:5])}**")
+                lines.append("")
+
+        if not std_data and not ac_data and not mt_data:
+            lines.append("*Wave 7 トラッカー未実行（Feature Flag OFF）*")
+            lines.append("")
+
+        return lines
+
+    except Exception:
+        return ["## 📡 市場形成前シグナル", "", "*生成エラー*", ""]
+
+
+def _section_wave7_size_taxonomy(results: dict, cfg=None) -> list:
+    """
+    [Wave 7 / Size Ph4] size × taxonomy 比較セクション。
+    各規模帯の taxonomy 別補正係数と有効シグナルを表示する。
+    """
+    try:
+        lines = ["## 📐 規模×業種（Size × Taxonomy）分析（Wave 7）", ""]
+
+        # size_decay_state.json から読み込み
+        import json as _j
+        from pathlib import Path as _p
+        cache_dir = _p(getattr(cfg, "CACHE_DIR", "stock_data/cache")) if cfg else _p("stock_data/cache")
+        decay_p   = cache_dir / "size_decay_state.json"
+
+        if not decay_p.exists():
+            lines.append("*size_decay_state.json 未生成（size_decay_manager 未実行）*")
+            lines.append("")
+            return lines
+
+        decay_data = _j.loads(decay_p.read_text(encoding="utf-8"))
+        tickers_data = decay_data.get("tickers", {})
+
+        # Tier別集計
+        tier_order = ["Large", "Mid", "Small", "Micro", "Nano"]
+        tier_stats: dict = {t: {"count": 0, "avg_eff": 0.0, "avg_corr": 0.0, "vals": []} for t in tier_order}
+
+        for tk, entry in tickers_data.items():
+            tier = entry.get("size_tier", "Mid")
+            if tier not in tier_stats:
+                continue
+            eff  = float(entry.get("effective_signal", 0.0))
+            corr = float(entry.get("taxonomy_size_correction", 1.0))
+            tier_stats[tier]["count"] += 1
+            tier_stats[tier]["vals"].append((eff, corr))
+
+        lines.append("### Tier別 有効シグナル × taxonomy補正 サマリー")
+        lines.append("")
+        lines.append("| Tier | 銘柄数 | avg有効Signal | avg補正係数 | 半減期 |")
+        lines.append("|------|-------|-------------|-----------|-------|")
+
+        from size_decay_manager import _DECAY_HALF_LIFE  # 定数参照
+        for tier in tier_order:
+            st   = tier_stats[tier]
+            vals = st["vals"]
+            if not vals:
+                continue
+            avg_eff  = round(sum(v[0] for v in vals) / len(vals), 3)
+            avg_corr = round(sum(v[1] for v in vals) / len(vals), 3)
+            half     = _DECAY_HALF_LIFE.get(tier, 0)
+            lines.append(
+                f"| {tier} | {len(vals)} | {avg_eff:.3f} | {avg_corr:.3f}× | {half:.1f}日 |"
+            )
+        lines.append("")
+
+        # taxonomy×size で補正係数が高い上位銘柄
+        top_corr = sorted(
+            [(tk, float(e.get("taxonomy_size_correction", 1.0)), e.get("size_tier", ""))
+             for tk, e in tickers_data.items()],
+            key=lambda x: -x[1]
+        )[:8]
+        if top_corr:
+            lines.append("### taxonomy×size 補正上位銘柄（高ブースト）")
+            lines.append("")
+            lines.append("| 銘柄 | Tier | 補正係数 |")
+            lines.append("|------|------|---------|")
+            for tk, corr, tier in top_corr:
+                if corr > 1.0:
+                    lines.append(f"| {tk} | {tier} | **{corr:.3f}×** |")
+            lines.append("")
+
+        return lines
+
+    except Exception:
+        return ["## 📐 規模×業種分析", "", "*生成エラー*", ""]
+
+
+def _section_wave7_independence(results: dict, cfg=None) -> list:
+    """
+    [Wave 7] 市場独立性スコアセクション。
+    independence_scores.json から HIGH/MID 銘柄を表示する。
+    """
+    try:
+        lines = ["## 📐 市場独立性スコア（Wave 7）", ""]
+
+        import json as _j
+        from pathlib import Path as _p
+        cache_dir = _p(getattr(cfg, "CACHE_DIR", "stock_data/cache")) if cfg else _p("stock_data/cache")
+        ind_p     = cache_dir / "independence_scores.json"
+
+        if not ind_p.exists():
+            lines.append("*independence_scores.json 未生成*")
+            lines.append("")
+            return lines
+
+        ind_data = _j.loads(ind_p.read_text(encoding="utf-8"))
+        scores   = ind_data.get("scores", {})
+        stats    = ind_data.get("stats", {})
+
+        lines.append(
+            f"**追跡銘柄={stats.get('total_tickers', 0)} / "
+            f"HIGH独立={stats.get('high_independence_count', 0)} / "
+            f"平均|β|={stats.get('avg_beta_abs', 0):.3f}**"
+        )
+        lines.append("")
+
+        # HIGH独立銘柄テーブル
+        high_list = sorted(
+            [e for e in scores.values() if e.get("independence_tier") == "HIGH"],
+            key=lambda x: x.get("combined_score", 0),
+            reverse=True,
+        )[:8]
+
+        if high_list:
+            lines.append("### HIGH独立銘柄（β低 × α高 × カタリスト）")
+            lines.append("")
+            lines.append("| 銘柄 | 独立性 | β60d | α年率 | 複合スコア | カタリスト |")
+            lines.append("|------|-------|------|------|----------|---------|")
+            for e in high_list:
+                ticker  = e.get("ticker", "")
+                ind_sc  = e.get("independence_score", 0)
+                beta    = e.get("beta_60d", 0)
+                alpha_p = e.get("alpha_annual_pct", 0)
+                comb    = e.get("combined_score", 0)
+                cats    = " / ".join(
+                    str(f).split("（")[0] for f in e.get("catalyst_flags", [])[:2]
+                )
+                lines.append(
+                    f"| **{ticker}** | {ind_sc:.0f}pt "
+                    f"| {beta:.3f} | {alpha_p:+.1f}% "
+                    f"| **{comb:.0f}pt** | {cats[:20]} |"
+                )
+        else:
+            lines.append("*HIGH独立銘柄なし（データ蓄積中）*")
+
+        lines.append("")
+        return lines
+
+    except Exception:
+        return ["## 📐 市場独立性スコア", "", "*生成エラー*", ""]
+
+def _section_wave7_pearl_backtest(results: dict, cfg=None) -> list:
+    """
+    [Wave 7] Pearl / 潜伏Pearl バックテスト結果セクション。
+    self_evaluator.py が生成した pearl_backtest_log.json を参照して表示する。
+    """
+    try:
+        lines = ["## 💎 Pearl バックテスト検証（Wave 7）", ""]
+
+        # pearl_backtest_log.json を直接読み込む
+        import json as _j
+        from pathlib import Path as _p
+        cache_dir = _p(getattr(cfg, "CACHE_DIR", "stock_data/cache")) if cfg else _p("stock_data/cache")
+        bt_path   = cache_dir / "pearl_backtest_log.json"
+
+        # results["self_evaluator"] からも取得を試みる
+        se_result    = results.get("self_evaluator", {})
+        bt_summary   = se_result.get("pearl_bt_summary", {})
+        latest_bt    = se_result.get("pearl_backtest", {})
+
+        if bt_path.exists():
+            try:
+                bt_data    = _j.loads(bt_path.read_text(encoding="utf-8"))
+                bt_summary = bt_summary or bt_data.get("summary", {})
+                bt_entries = bt_data.get("entries", [])
+                latest_bt  = latest_bt or (bt_entries[-1] if bt_entries else {})
+            except Exception:
+                bt_entries = []
+        else:
+            bt_entries = []
+
+        if not bt_summary and not latest_bt:
+            lines.append("*pearl_backtest_log.json 未生成（self_evaluator 未実行 or Pearl BT データ蓄積中）*")
+            lines.append("")
+            return lines
+
+        # ── 生涯サマリー ────────────────────────────────────────
+        if bt_summary:
+            n_weeks   = bt_summary.get("total_weeks_evaluated", 0)
+            lt_hr     = bt_summary.get("lifetime_latent_hr")
+            lt_alp    = bt_summary.get("avg_latent_alpha")
+            vs_non    = bt_summary.get("avg_vs_non_latent")
+            trend     = bt_summary.get("trend", "—")
+            trend_icon = {"improving": "📈", "degrading": "📉", "stable": "➡️", "accumulating": "📦"}.get(trend, "")
+
+            lt_hr_str  = f"{lt_hr:.1%}"   if lt_hr  is not None else "—"
+            lt_alp_str = f"{lt_alp:+.2f}%" if lt_alp is not None else "—"
+            vs_str     = f"{vs_non:+.3f}%" if vs_non is not None else "—"
+
+            lines.append(f"**生涯検証 {n_weeks}週分** | 潜伏Pearl的中率: **{lt_hr_str}** | 平均α: **{lt_alp_str}** | 非潜伏比較: **{vs_str}**")
+            lines.append(f"精度トレンド: {trend_icon} {trend}")
+            lines.append("")
+
+        # ── 直近週の詳細 ────────────────────────────────────────
+        if latest_bt:
+            week_str = latest_bt.get("week", "—")
+            lines.append(f"### 最新週（{week_str}）詳細")
+            lines.append("")
+
+            lp_stats = latest_bt.get("latent_pearl_stats", {})
+            n_lat    = lp_stats.get("n_latent", 0) or latest_bt.get("n_latent_evaluated", 0)
+            lp_hr    = lp_stats.get("hit_rate") or latest_bt.get("latent_hit_rate")
+            lp_alp   = lp_stats.get("avg_alpha") or latest_bt.get("latent_avg_alpha")
+            hi_hr    = lp_stats.get("high_indep_hit_rate") or latest_bt.get("high_indep_hr")
+            cat_hr   = lp_stats.get("catalyst_hit_rate") or latest_bt.get("catalyst_hr")
+            mt_hr    = lp_stats.get("midterm_ahead_hit_rate") or latest_bt.get("midterm_ahead_hr")
+
+            lp_hr_str  = f"{lp_hr:.1%}"   if lp_hr  is not None else "—"
+            lp_alp_str = f"{lp_alp:+.2f}%" if lp_alp is not None else "—"
+
+            lines.append(f"潜伏Pearl評価件数: {n_lat}件 | 的中率: **{lp_hr_str}** | 平均α: **{lp_alp_str}**")
+            lines.append("")
+
+            # サブセット別的中率
+            subset_rows = []
+            if hi_hr  is not None: subset_rows.append(("高独立性（indep≥65）",  hi_hr))
+            if cat_hr is not None: subset_rows.append(("カタリスト有り",        cat_hr))
+            if mt_hr  is not None: subset_rows.append(("中計ahead",           mt_hr))
+
+            if subset_rows:
+                lines.append("| サブセット | 的中率 |")
+                lines.append("|----------|-------|")
+                for label, hr in subset_rows:
+                    lines.append(f"| {label} | {hr:.1%} |")
+                lines.append("")
+
+            # Pearl Tier別
+            p_stats = latest_bt.get("pearl_stats", {})
+            tier_rows = [(t, p_stats.get(t, {})) for t in ["SS", "S", "A", "all_pearl"] if p_stats.get(t, {}).get("n", 0) > 0]
+            if tier_rows:
+                lines.append("| Pearl Tier | 件数 | 的中率 | 平均α |")
+                lines.append("|-----------|------|-------|------|")
+                for tier, ps in tier_rows:
+                    n   = ps.get("n", 0)
+                    hr  = ps.get("hit_rate")
+                    avg = ps.get("avg_alpha")
+                    lines.append(
+                        f"| {'**全Pearl**' if tier == 'all_pearl' else tier} "
+                        f"| {n} "
+                        f"| {f'{hr:.1%}' if hr is not None else '—'} "
+                        f"| {f'{avg:+.2f}%' if avg is not None else '—'} |"
+                    )
+                lines.append("")
+
+        return lines
+
+    except Exception:
+        return ["## 💎 Pearl バックテスト検証", "", "*生成エラー*", ""]
+
+def _section_pead_drift_candidates(results: dict, cfg=None) -> list:
+    """
+    [Wave 3 - FE-5] 決算後ドリフト候補セクション。
+
+    PEAD Monitor の alert_candidates（正方向）と
+    negative_candidates（陰性・回避候補）を表示する。
+    """
+    try:
+        lines = ["## 📈 決算後ドリフト候補（PEAD Monitor）", ""]
+
+        pead_result = results.get("pead", {})
+        pead_summary = pead_result.get("summary", {})
+
+        if not pead_result and not pead_summary:
+            # フォールバック: キャッシュから直接取得
+            try:
+                from pead_monitor import get_pead_summary as _gps
+                pead_summary = _gps(cfg)
+            except Exception:
+                pass
+
+        total    = pead_summary.get("total", 0)
+        pos      = pead_summary.get("positive", 0)
+        neg      = pead_summary.get("negative", 0)
+        n_alert  = pead_summary.get("alert_count", 0)
+
+        lines.append(
+            f"**追跡中**: {total}銘柄"
+            f"（正方向{pos}件 / 陰性{neg}件 / アラート{n_alert}件）"
+        )
+        lines.append("")
+
+        # 正 PEAD 上位（アラート候補）
+        top_pos = pead_summary.get("top_positive", [])
+        if top_pos:
+            lines.append("### 📈 ドリフト継続候補（買い方向）")
+            lines.append("")
+            lines.append(
+                "| 銘柄 | PEADスコア | 出来高倍率 | ドリフト率 | 検出日数 | アラート |"
+            )
+            lines.append(
+                "|------|-----------|-----------|-----------|---------|---------|"
+            )
+            for c in top_pos:
+                alert_mark = "🚨" if c.get("is_alert") else "-"
+                lines.append(
+                    f"| {c.get('ticker', '')} "
+                    f"| {c.get('pead_score', 0):.1f}pt "
+                    f"| {c.get('volume_ratio', 0):.2f}x "
+                    f"| {c.get('price_drift', 0)*100:+.1f}% "
+                    f"| {c.get('days_since_detect', 0)}日 "
+                    f"| {alert_mark} |"
+                )
+            lines.append("")
+
+        # 陰性 PEAD（回避候補）
+        top_neg = pead_summary.get("top_negative", [])
+        if top_neg:
+            lines.append("### 📉 ドリフト継続懸念（回避候補）")
+            lines.append("")
+            for c in top_neg:
+                lines.append(
+                    f"- [{c.get('ticker', '')}] "
+                    f"PEADスコア={c.get('pead_score', 0):.1f}pt "
+                    f"ドリフト={c.get('price_drift', 0)*100:+.1f}%"
+                )
+            lines.append("")
+
+        return lines
+
+    except Exception:
+        return ["## 📈 決算後ドリフト候補（PEAD Monitor）", "", "*生成エラー*", ""]
+
+
+def _section_portfolio_concentration(results: dict, cfg=None) -> list:
+    """
+    [Wave 3 - FE-6] ポートフォリオ集中警告セクション。
+
+    HHI・高相関ペア・Ignition 抑制状況を表示する。
+    HHI が WARNING 未満かつ高相関ペアが少ない場合は省略表示。
+    """
+    try:
+        lines = ["## 🔀 ポートフォリオ集中リスク（FE-6）", ""]
+
+        div = results.get("diversity", {})
+        if not div:
+            lines.append("*多様性フィルターデータなし（週次実行時に生成）*")
+            lines.append("")
+            return lines
+
+        hhi        = float(div.get("hhi", 0))
+        hhi_status = div.get("hhi_status", "UNKNOWN")
+        n_pairs    = int(div.get("high_corr_pair_count", 0))
+        div_score  = div.get("diversity_score", 50.0)
+        suppressed = div.get("alert_suppressed", False)
+
+        # ステータス表示
+        status_mark = (
+            "🚨" if hhi_status == "CRITICAL"
+            else "⚠️" if hhi_status == "WARNING"
+            else "✅"
+        )
+        lines.append(
+            f"**HHI**: {hhi:.3f} {status_mark}[{hhi_status}] "
+            f"| 多様性スコア: {div_score:.0f}pt "
+            f"| 高相関ペア: {n_pairs}組"
+        )
+        if suppressed:
+            lines.append(
+                "*Ignition収束検出中のため集中警告を抑制（意図的収束）*"
+            )
+        lines.append("")
+
+        # 集中業種
+        concentrated = div.get("concentrated_sectors", [])
+        if concentrated:
+            lines.append("**集中業種（ウェイト20%以上）:**")
+            lines.append("")
+            lines.append("| 業種コード | ウェイト | 銘柄数 | Ignition発火 |")
+            lines.append("|-----------|---------|-------|------------|")
+            ign_overlap = {
+                s.get("sector_code", "") if isinstance(s, dict) else ""
+                for s in div.get("ignition_overlap", [])
+            }
+            for s in concentrated:
+                sc       = s.get("sector_code", "")
+                ign_mark = "🔥" if sc in ign_overlap else "-"
+                lines.append(
+                    f"| {sc} "
+                    f"| {s.get('weight', 0)*100:.1f}% "
+                    f"| {s.get('count', 0)}社 "
+                    f"| {ign_mark} |"
+                )
+            lines.append("")
+
+        # 高相関ペア上位
+        high_pairs = div.get("high_corr_pairs", [])[:5]
+        if high_pairs:
+            lines.append("**高相関ペア（上位5組）:**")
+            lines.append("")
+            for p in high_pairs:
+                rho = p.get("correlation", 0)
+                lines.append(
+                    f"- {p.get('ticker1', '')} × {p.get('ticker2', '')} "
+                    f"ρ={rho:.3f}"
+                )
+            lines.append("")
+
+        return lines
+
+    except Exception:
+        return ["## 🔀 ポートフォリオ集中リスク（FE-6）", "", "*生成エラー*", ""]
+
+
+def _section_catalyst_upcoming(results: dict, cfg=None) -> list:
+    """
+    [Wave 3 - FE-7] 今後2週間のカタリスト予定セクション。
+
+    global_events（中央銀行・経済指標）と
+    Triple Catalyst 銘柄を2週間以内に絞って表示する。
+    """
+    try:
+        lines = ["## 📅 今後2週間のカタリスト予定（FE-7）", ""]
+
+        cat = results.get("catalyst", {})
+        if not cat:
+            try:
+                from catalyst_calendar import load_catalyst_calendar as _lcc
+                cat = _lcc(cfg) or {}
+            except Exception:
+                pass
+
+        if not cat:
+            lines.append("*カタリストカレンダーデータなし（週次実行時に生成）*")
+            lines.append("")
+            return lines
+
+        # ── 14日以内グローバルイベント ──────────────────────────
+        upcoming = [
+            e for e in cat.get("upcoming_14d", [])
+            if 0 <= e.get("days_until", 9999) <= 14
+        ]
+        if upcoming:
+            lines.append("### 🌐 グローバルカタリスト（14日以内）")
+            lines.append("")
+            lines.append("| 日付 | 残日数 | 種別 | 内容 | 市場 |")
+            lines.append("|------|-------|------|-----|------|")
+            for e in sorted(upcoming, key=lambda x: x.get("days_until", 999)):
+                lines.append(
+                    f"| {e.get('date', '')} "
+                    f"| {e.get('days_until', '')}日後 "
+                    f"| {e.get('subtype', e.get('type', ''))} "
+                    f"| {e.get('description', '')[:30]} "
+                    f"| {e.get('market', '')} |"
+                )
+            lines.append("")
+
+        # ── Triple Catalyst 銘柄 ──────────────────────────────
+        triple_t = cat.get("triple_tickers", [])
+        if triple_t:
+            lines.append(
+                f"### ⭐ Triple Catalyst 銘柄（{len(triple_t)}件）"
+            )
+            lines.append("")
+            lines.append(
+                "*14日以内に3種以上のカタリストが重複している銘柄*"
+            )
+            lines.append("")
+            lines.append(
+                "| 銘柄 | カタリスト数 | 最短日数 | 種別 | proximity |"
+            )
+            lines.append(
+                "|------|------------|---------|------|----------|"
+            )
+            for t in triple_t[:8]:
+                types_str = "+".join(t.get("types", [])[:3])
+                lines.append(
+                    f"| {t.get('ticker', '')} "
+                    f"| {t.get('catalyst_count', 0)}種 "
+                    f"| {t.get('min_days', 0)}日後 "
+                    f"| {types_str} "
+                    f"| {t.get('max_prox', 0):.1f} |"
+                )
+            lines.append("")
+
+        # ── Triple Catalyst セクター ──────────────────────────
+        triple_s = cat.get("triple_sectors", [])
+        if triple_s:
+            lines.append(
+                f"### 🏭 Triple Catalyst セクター（{len(triple_s)}件）"
+            )
+            lines.append("")
+            for s in triple_s[:5]:
+                lines.append(
+                    f"- セクター{s.get('sector_code', '')} "
+                    f"[{'+'.join(s.get('types', []))}] "
+                    f"{s.get('catalyst_count', 0)}種重複"
+                )
+            lines.append("")
+
+        return lines
+
+    except Exception:
+        return ["## 📅 今後2週間のカタリスト予定（FE-7）", "", "*生成エラー*", ""]
+
 # ==============================================================
 # BLOCK 9: アクション候補（来週の投資判断ガイド）
 # ==============================================================
@@ -1009,6 +2952,447 @@ def _section_risk_constraints(results: dict) -> list:
     return lines
 
 # ==============================================================
+# BLOCK 8.95: Wave 6 - B 新規セクション（技術クラスター）
+# ==============================================================
+
+def _section_technology_cluster(results: dict, cfg=None) -> list:
+    """
+    [Wave 6 - B] 技術クラスター × 萌芽テーマセクションを生成する。
+
+    cluster_phase_cache / emerging_technology_cache の内容を表示する。
+    データ未存在時・エラー時は空リストを返す（レポート全体を止めない）。
+    """
+    try:
+        cluster_phase  = results.get("cluster_phase") or {}
+        emerging_tech  = results.get("emerging_tech")  or {}
+        cluster_export = results.get("cluster_export") or {}
+
+        clusters = cluster_phase.get("clusters", []) or []
+        themes   = (emerging_tech.get("emerging_themes", []) or [])[:5]
+
+        # データが両方とも空ならセクション自体を省略
+        if not clusters and not themes:
+            return []
+
+        lines = ["## 🔬 技術クラスター分析（Wave 6 - B）", ""]
+
+        # ── 1. クラスターフェーズサマリー ──────────────────────────
+        if clusters:
+            # フェーズ内訳集計
+            phase_count: dict[str, int] = {}
+            for c in clusters:
+                ph = c.get("phase", "unknown")
+                phase_count[ph] = phase_count.get(ph, 0) + 1
+
+            phase_labels = {
+                "acceleration": "🚀 技術加速",
+                "expansion":    "📈 テーマ拡張",
+                "mature":       "🟡 成熟",
+                "deceleration": "📉 減速",
+                "unknown":      "❓ 不明",
+            }
+
+            lines.append("### クラスターフェーズ内訳")
+            lines.append("")
+            for phase, count in sorted(
+                phase_count.items(),
+                key=lambda x: {"acceleration":0,"expansion":1,
+                               "mature":2,"deceleration":3,"unknown":4}.get(x[0],5)
+            ):
+                label = phase_labels.get(phase, phase)
+                lines.append(f"- {label}: **{count}**クラスター")
+            lines.append("")
+
+            # 加速・拡張フェーズのクラスターを詳細表示（最大5件）
+            accel_clusters = [
+                c for c in clusters
+                if c.get("phase") in ("acceleration", "expansion")
+            ]
+            accel_clusters.sort(key=lambda x: -x.get("phase_bonus", 0))
+
+            if accel_clusters:
+                lines.append("### 📈 注目クラスター（加速・拡張フェーズ）")
+                lines.append("")
+                lines.append(
+                    "| クラスター | 市場 | 業種数 | フェーズ | ボーナス | 代表技術ノード |"
+                )
+                lines.append(
+                    "|-----------|------|-------|---------|---------|-------------|"
+                )
+                for c in accel_clusters[:5]:
+                    cid        = c.get("cluster_id", "")
+                    market     = c.get("market", "JP")
+                    sec_count  = c.get("sector_count", len(c.get("sectors", [])))
+                    phase_lbl  = phase_labels.get(c.get("phase",""), c.get("phase",""))
+                    bonus      = c.get("phase_bonus", 0)
+                    centroid   = " / ".join(c.get("centroid_nodes", [])[:3])
+                    bonus_str  = f"{bonus:+.1f}pt"
+                    lines.append(
+                        f"| {cid} | {market} | {sec_count}業種 "
+                        f"| {phase_lbl} | {bonus_str} | {centroid} |"
+                    )
+                lines.append("")
+
+            # upstream / downstream 差分（T-3: サプライチェーン視点）
+            # cluster_master の meta から supply_chain_position を集計
+            cluster_master = results.get("cluster_master") or {}
+            markets_data   = cluster_master.get("markets", {}) or {}
+
+            sc_breakdown: dict[str, list[str]] = {}
+            for c in accel_clusters[:5]:
+                market   = c.get("market", "JP")
+                m_data   = markets_data.get(market, {})
+                for sector_code in c.get("sectors", []):
+                    meta = m_data.get(str(sector_code), {}).get("meta", {})
+                    pos  = meta.get("supply_chain_position", "unknown")
+                    sc_breakdown.setdefault(pos, []).append(sector_code)
+
+            if sc_breakdown:
+                lines.append("#### サプライチェーン分布（加速クラスター内）")
+                lines.append("")
+                sc_labels = {
+                    "upstream":   "⬆️ 上流",
+                    "midstream":  "↔️ 中流",
+                    "downstream": "⬇️ 下流",
+                    "service":    "🔧 サービス",
+                    "financial":  "💴 金融",
+                }
+                for pos, codes in sc_breakdown.items():
+                    lbl = sc_labels.get(pos, pos)
+                    lines.append(
+                        f"- {lbl}: {len(codes)}業種 "
+                        f"（{', '.join(codes[:4])}{'…' if len(codes)>4 else ''}）"
+                    )
+                lines.append("")
+
+        # ── 2. 萌芽テーマランキング（T-3 / emerging_detector）────────
+        if themes:
+            lines.append("### 🌱 注目技術テーマ（萌芽検知 TOP5）")
+            lines.append("")
+            lines.append(
+                "| ランク | 技術ノード | 萌芽スコア | クラスター | ArXiv | ニュース | 影響業種数 |"
+            )
+            lines.append(
+                "|--------|----------|----------|---------|------|--------|---------|"
+            )
+            for t in themes:
+                rank    = t.get("rank", 0)
+                node_id = t.get("node_id", "")
+                escore  = t.get("emerging_score", 0)
+                signals = t.get("signals", {})
+                c_delta = signals.get("cluster_delta", 0)
+                arxiv   = signals.get("arxiv", 0)
+                news    = signals.get("news", 0)
+                sec_cnt = len(t.get("affected_sectors", []))
+
+                # スコアをシグナル強度バーに変換（最大5目盛り）
+                def _bar(v: float) -> str:
+                    n = round(v * 5)
+                    return "█" * n + "░" * (5 - n)
+
+                lines.append(
+                    f"| {rank} | `{node_id}` | **{escore:.2f}** "
+                    f"| {_bar(c_delta)} | {_bar(arxiv)} "
+                    f"| {_bar(news)} | {sec_cnt}業種 |"
+                )
+            lines.append("")
+
+            # キーワード急増テーマの注記
+            surge_nodes = [
+                t["node_id"] for t in themes
+                if t.get("signals", {}).get("news", 0) >= 0.5
+            ]
+            if surge_nodes:
+                lines.append(
+                    f"⚡ **ニュースキーワード急増テーマ**: "
+                    f"{', '.join(f'`{n}`' for n in surge_nodes[:3])}"
+                )
+                lines.append("")
+
+        # ── 3. クラスターシグナル統計（cluster_export から）────────
+        stats = cluster_export.get("stats", {}) or {}
+        if stats:
+            bq_count = cluster_export.get("taxonomy_rows_count", 0)
+            lines.append("### 📊 クラスター統計")
+            lines.append("")
+            lines.append(
+                f"- 総クラスター数: **{stats.get('total_clusters', 0)}**"
+            )
+            lines.append(
+                f"- JP対象業種: **{stats.get('total_sectors_jp', 0)}**業種 "
+                f"/ US対象セクター: **{stats.get('total_sectors_us', 0)}**セクター"
+            )
+            lines.append(
+                f"- BQ taxonomy 書込: **{bq_count}**行"
+            )
+            lines.append("")
+
+        return lines
+
+    except Exception as _e:
+        return [
+            "## 🔬 技術クラスター分析（Wave 6 - B）",
+            "",
+            f"*生成エラー: {str(_e)[:80]}*",
+            "",
+        ]
+
+# ==============================================================
+# BLOCK 9-B: Wave 6 - I系 オルタナティブデータセクション
+# ==============================================================
+
+def _section_hiring_signal(results: dict, cfg=None) -> list:
+    """
+    Wave 6 - I-1: 人材投資急増セクション。
+    job_posting_monitor の結果を Markdown 表形式で出力する。
+
+    出力形式:
+      ## 👥 人材投資シグナル（Wave 6 - I-1）
+      急増カテゴリ一覧 + sector_boost 表
+    """
+    lines = ["## 👥 人材投資シグナル（Wave 6 - I-1）", ""]
+
+    try:
+        jpm = results.get("job_posting", {})
+        if not jpm or jpm.get("skipped"):
+            lines.append("*データなし（モニタースキップ or 未実行）*")
+            lines.append("")
+            return lines
+
+        if jpm.get("cached"):
+            lines.append("*（キャッシュ利用中）*")
+            lines.append("")
+
+        surge   = jpm.get("surge_detected", [])
+        boosts  = jpm.get("sector_boosts", {})
+        counts  = jpm.get("keyword_counts", {})
+        prev    = jpm.get("prev_counts", {})
+        total_p = jpm.get("total_postings", 0)
+        ts      = jpm.get("timestamp", "")
+
+        lines.append(f"取得求人票: **{total_p}件** | 更新: {ts}")
+        lines.append("")
+
+        # 急増カテゴリ
+        if surge:
+            lines.append("### 🚨 急増カテゴリ（前月比1.5倍以上）")
+            lines.append("")
+            lines.append("| カテゴリ | 今月 | 前月 | 倍率 |")
+            lines.append("|---|---|---|---|")
+            for cat in surge:
+                curr_c = counts.get(cat, 0)
+                prev_c = prev.get(cat, 0)
+                ratio  = round(curr_c / max(prev_c, 1), 2)
+                lines.append(
+                    f"| **{cat}** | {curr_c}件 | {prev_c}件 | **{ratio}x** |"
+                )
+            lines.append("")
+        else:
+            lines.append("急増カテゴリ: なし（前月比1.5倍以上の急増なし）")
+            lines.append("")
+
+        # 全カテゴリカウント
+        if counts:
+            lines.append("### 📊 カテゴリ別求人票カウント")
+            lines.append("")
+            lines.append("| カテゴリ | 今月 | 前月 | 変化 |")
+            lines.append("|---|---|---|---|")
+            for cat, curr_c in sorted(counts.items(), key=lambda x: -x[1]):
+                prev_c = prev.get(cat, 0)
+                diff   = curr_c - prev_c
+                arrow  = "↑" if diff > 0 else ("↓" if diff < 0 else "→")
+                lines.append(
+                    f"| {cat} | {curr_c}件 | {prev_c}件 | {arrow}{abs(diff)} |"
+                )
+            lines.append("")
+
+        # sector_boost
+        if boosts:
+            lines.append("### 📈 業種別 sector_boost")
+            lines.append("")
+            lines.append("| 業種コード | boost_pt |")
+            lines.append("|---|---|")
+            for sc, pt in sorted(boosts.items(), key=lambda x: -x[1]):
+                lines.append(f"| {sc} | **+{pt}pt** |")
+            lines.append("")
+
+    except Exception as e:
+        lines.append(f"*生成エラー: {str(e)[:80]}*")
+        lines.append("")
+
+    return lines
+
+
+def _section_executive_transition(results: dict, cfg=None) -> list:
+    """
+    Wave 6 - I-3: 役員体制転換セクション。
+    executive_transition_tracker の結果を Markdown で出力する。
+
+    出力形式:
+      ## 👔 役員体制転換シグナル（Wave 6 - I-3）
+      転換シグナル企業一覧 + スキルカテゴリ表
+    """
+    lines = ["## 👔 役員体制転換シグナル（Wave 6 - I-3）", ""]
+
+    try:
+        ett = results.get("executive_transition", {})
+        if not ett or ett.get("skipped"):
+            lines.append("*データなし（モニタースキップ or 未実行）*")
+            lines.append("")
+            return lines
+
+        if ett.get("cached"):
+            lines.append("*（キャッシュ利用中）*")
+            lines.append("")
+
+        alerts       = ett.get("transition_alerts", [])
+        boosts       = ett.get("sector_boosts", {})
+        total_a      = ett.get("total_analyzed", 0)
+        total_t      = ett.get("total_transitions", 0)
+        ts           = ett.get("timestamp", "")
+
+        lines.append(
+            f"分析: **{total_a}社** | 転換シグナル: **{total_t}社** | 更新: {ts}"
+        )
+        lines.append("")
+
+        if alerts:
+            lines.append("### 🚨 経営方針転換シグナル企業")
+            lines.append("")
+            lines.append("| ティッカー | 企業名 | 新任役員数 | 主なスキル | 決算期 |")
+            lines.append("|---|---|---|---|---|")
+            for alert in alerts[:10]:   # 上位10件
+                ticker     = alert.get("ticker", "")
+                company    = alert.get("company", "")[:15]
+                hire_count = alert.get("new_hire_count", 0)
+                skills     = list(alert.get("new_skills", {}).keys())
+                skill_str  = " / ".join(skills[:3])
+                fy_end     = alert.get("fiscal_year_end", "")
+                lines.append(
+                    f"| {ticker} | {company} | {hire_count}名 "
+                    f"| {skill_str} | {fy_end} |"
+                )
+            lines.append("")
+
+            # 新任役員の詳細（上位3社のみ）
+            for alert in alerts[:3]:
+                ticker  = alert.get("ticker", "")
+                new_off = alert.get("new_officers", [])
+                if not new_off:
+                    continue
+                lines.append(f"**{ticker} 新任役員詳細:**")
+                lines.append("")
+                for o in new_off[:3]:
+                    title  = o.get("title",  "")
+                    name   = o.get("name",   "")
+                    skills = " / ".join(o.get("skills", []))
+                    career = o.get("career_text", "")[:60]
+                    lines.append(
+                        f"  - {title}（{name}）スキル: {skills} "
+                        f"— {career}..."
+                    )
+                lines.append("")
+        else:
+            lines.append(
+                "転換シグナル: なし（外部人材登用2名以上の企業なし）"
+            )
+            lines.append("")
+
+        # sector_boost
+        if boosts:
+            lines.append("### 📈 業種別 sector_boost")
+            lines.append("")
+            lines.append("| 業種コード | boost_pt |")
+            lines.append("|---|---|")
+            for sc, pt in sorted(boosts.items(), key=lambda x: -x[1]):
+                lines.append(f"| {sc} | **+{pt}pt** |")
+            lines.append("")
+
+    except Exception as e:
+        lines.append(f"*生成エラー: {str(e)[:80]}*")
+        lines.append("")
+
+    return lines
+
+
+def _section_facility_expansion(results: dict, cfg=None) -> list:
+    """
+    Wave 6 - I-4: 施設着工シグナルセクション。
+    facility_expansion_monitor の結果を Markdown で出力する。
+
+    出力形式:
+      ## 🏭 施設着工シグナル（Wave 6 - I-4）
+      大規模着工案件一覧 + sector_boost 表
+    """
+    lines = ["## 🏭 施設着工シグナル（Wave 6 - I-4）", ""]
+
+    try:
+        fem = results.get("facility_expansion", {})
+        if not fem or fem.get("skipped"):
+            lines.append("*データなし（モニタースキップ or 未実行）*")
+            lines.append("")
+            return lines
+
+        if fem.get("cached"):
+            lines.append("*（キャッシュ利用中）*")
+            lines.append("")
+
+        signals     = fem.get("signal_projects", [])
+        boosts      = fem.get("sector_boosts", {})
+        total_f     = fem.get("total_fetched", 0)
+        total_l     = fem.get("total_large", 0)
+        total_s     = fem.get("total_signals", 0)
+        ts          = fem.get("timestamp", "")
+
+        lines.append(
+            f"取得: **{total_f}件** | 大規模案件: **{total_l}件** "
+            f"| シグナル: **{total_s}件** | 更新: {ts}"
+        )
+        lines.append("")
+
+        if signals:
+            lines.append("### 🏗️ 大規模着工シグナル案件")
+            lines.append("")
+            lines.append(
+                "| 事業名 | 種別 | 事業者 | 都道府県 | 面積(㎡) | 対応業種 |"
+            )
+            lines.append("|---|---|---|---|---|---|")
+            for sp in signals[:15]:   # 上位15件
+                name    = sp.get("project_name", "")[:20]
+                ftype   = sp.get("matched_type",  "")
+                company = sp.get("company_name",  "")[:12]
+                pref    = sp.get("prefecture",    "")
+                area    = sp.get("area_sqm",      0.0)
+                scs     = " / ".join(sp.get("sector_codes", [])[:3])
+                area_str = f"{area:,.0f}" if area > 0 else "不明"
+                lines.append(
+                    f"| {name} | {ftype} | {company} "
+                    f"| {pref} | {area_str} | {scs} |"
+                )
+            lines.append("")
+        else:
+            lines.append(
+                "着工シグナル: なし（大規模施設着工案件の検知なし）"
+            )
+            lines.append("")
+
+        # sector_boost
+        if boosts:
+            lines.append("### 📈 業種別 sector_boost")
+            lines.append("")
+            lines.append("| 業種コード | boost_pt |")
+            lines.append("|---|---|")
+            for sc, pt in sorted(boosts.items(), key=lambda x: -x[1]):
+                lines.append(f"| {sc} | **+{pt}pt** |")
+            lines.append("")
+
+    except Exception as e:
+        lines.append(f"*生成エラー: {str(e)[:80]}*")
+        lines.append("")
+
+    return lines
+
+# ==============================================================
 # BLOCK 10: メインレポート生成
 # ==============================================================
 
@@ -1030,7 +3414,7 @@ def generate_weekly_report(cfg, results: dict) -> dict:
     dow_names = ["月", "火", "水", "木", "金", "土", "日"]
     dow       = dow_names[datetime.now().weekday()]
 
-    print(f"\n  📊 週次レポート生成中 ({today} {dow}曜)...")
+    print("\n  📊 週次レポート生成中 ({today} {dow}曜)...")
 
     # 全セクションを構築
     sections = []
@@ -1044,15 +3428,27 @@ def generate_weekly_report(cfg, results: dict) -> dict:
     ])
     sections.append(_section_inference(results))
     sections.append(_section_signal_aggregator(results))
+    sections.append(_section_module_ledger(cfg))                  # Wave OBS-1: 実行台帳（健全性）
+    sections.append(_section_rule_optimizer_alert(results, cfg))  # Wave 6 - 第4セッション: 縮退アラート
     sections.append(_section_macro(results))
     sections.append(_section_us_macro(results))     # ★ Phase US-2追加
     sections.append(_section_anomaly_season(results))
     sections.append(_section_market_breadth(results))
     sections.append(_section_jp_sectors(results))
+    sections.append(_section_geo_country_risk(results, cfg))# Wave 6 - G-N: 国別リスクセクション追加(G-Xで作成)
     sections.append(_section_us_sectors(results))
     sections.append(_section_etf(results))
     sections.append(_section_risk_constraints(results))   # ★ C-1/C-2追加
     sections.append(_section_screener(results))
+    sections.append(_section_analyst_revision(results, cfg))        # Wave 2 - FE-2
+    sections.append(_section_ignition_alert(results, cfg))          # Wave 2 - FE-4
+    sections.append(_section_pead_drift_candidates(results, cfg))   # Wave 3 - FE-5
+    sections.append(_section_portfolio_concentration(results, cfg)) # Wave 3 - FE-6
+    sections.append(_section_pearl_ranking(results, cfg))           # Wave0 Pearl Ph1
+    sections.append(_section_latent_pearl_promotion(results, cfg))  # Wave 3 - Independence Ph1
+    sections.append(_section_wave7_premarket_signals(results, cfg))  # Wave 7: 市場形成前シグナル
+    sections.append(_section_wave7_size_taxonomy(results, cfg))      # Wave 7: size×taxonomy比較
+    sections.append(_section_wave7_independence(results, cfg))       # Wave 7: 市場独立性スコア
     sections.append(_section_strategy_breakdown(results))
     sections.append(_section_earnings_watchlist(results))   # ★ I-2追加
     sections.append(_section_midterm_tracker(results))     # ★ I-5追加
@@ -1062,19 +3458,28 @@ def generate_weekly_report(cfg, results: dict) -> dict:
     sections.append(_section_position_sizer(results))
     sections.append(_section_biz_summaries(results))
     sections.append(_section_news(results))
-    sections.append(_section_policy_radar(results))   # ★ policy_radar追加
+    sections.append(_section_policy_radar(results))           # ★ policy_radar追加
+    sections.append(_section_catalyst_upcoming(results, cfg)) # Wave 3 - FE-7
+    sections.append(_section_politician_highlight(results))   # Wave0 Policy Ph1
     sections.append(_section_finbert_sentiment(results))   # ★ RESEARCH-5追加
+    sections.append(_section_technology_cluster(results, cfg))  # Wave 6 - B: 技術クラスター
+    sections.append(_section_hiring_signal(results, cfg))       # Wave 6 - I-1: 人材投資急増
+    sections.append(_section_executive_transition(results, cfg))# Wave 6 - I-3: 役員体制転換
+    sections.append(_section_facility_expansion(results, cfg))  # Wave 6 - I-4: 施設着工シグナル
     sections.append(_section_action_guide(results))
     sections.append(_section_stress_test(results))
     sections.append(_section_dividend_calendar(results))
     sections.append(_section_options_monitor(results))
+    sections.append(_section_options_advisor(results))   # Wave OPT-1
     sections.append(_section_sr_vp(results))
     sections.append(_section_jp_us_bridge(results))
+    sections.append(_section_jp_us_correlation(results))      # Wave0 Idea2-A
     sections.append(_section_rule_optimizer(results))
     sections.append(_section_alpha_attribution(results))    # ★ GAP-8追加
     sections.append(_section_backtest(results))
     sections.append(_section_comps(results))
     sections.append(_section_self_evaluator(results))
+    sections.append(_section_wave7_pearl_backtest(results, cfg))  # Wave 7: Pearl BT
     sections.append(_section_screener_heatmap(results))
     sections.append(_section_portfolio_optimizer(results))
     sections.append(_section_dcf(results))
@@ -1094,6 +3499,34 @@ def generate_weekly_report(cfg, results: dict) -> dict:
         f"*自動生成: stock_analyzer_main.py | {today}*",
         "",
     ])
+
+    # Wave 6 - G-X: 資源権益・地政学影響セクション
+    try:
+        if getattr(cfg, "ENABLE_GEO_SIGNAL", False):
+            sections.append("")
+            sections += _section_geo_exposure(results, cfg)
+            sections += _section_geo_signal_detail(results, cfg)
+        elif results.get("geo_risk") and not results["geo_risk"].get("skipped"):
+            # ENABLE_GEO_SIGNAL=False でも国別リスクデータがあれば簡易表示
+            sections.append("")
+            sections.append("## ⛏️ 資源権益・地政学影響（Wave 6 - G-X）")
+            sections.append("")
+            sections.append(
+                "*ENABLE_GEO_SIGNAL=False のため geo_impact_bonus 計算はスキップ。*"
+            )
+            sections.append(
+                "*BQ に country_risk_daily / company_country_exposure "
+                "のデータが蓄積されたら True に切り替えてください。*"
+            )
+            sections.append("")
+    except Exception as _gx_err:
+        # G-X セクション生成失敗はレポート全体を止めない
+        sections.append("")
+        sections.append(
+            f"*[G-X] 地政学セクション生成エラー（スキップ）: "
+            f"{str(_gx_err)[:80]}*"
+        )
+        sections.append("")
 
     # Markdown全文結合
     report_md = "\n".join(line for sec in sections for line in sec)
@@ -1157,10 +3590,8 @@ def build_weekly_email_html(report_md: str, summary: dict) -> str:
     alert_notifier.py の send_gmail() に渡す用。
     Markdown の見出し・太字・リストを最小限のHTMLに変換する。
     """
-    import re
     today    = summary.get("report_date", datetime.now().strftime("%Y-%m-%d"))
     top3     = summary.get("top3_sectors", [])
-    bot3     = summary.get("bottom3_sectors", [])
     n_pass   = summary.get("screener_pass", 0)
     picks    = summary.get("top_picks", [])
 
@@ -1239,7 +3670,6 @@ def build_weekly_email_html(report_md: str, summary: dict) -> str:
 
     body_html = md_to_html(report_md)
 
-    top3_str  = " ＞ ".join(top3) if top3 else "N/A"
     picks_str = " / ".join(picks) if picks else "なし"
 
     return f"""
@@ -1303,7 +3733,7 @@ def build_weekly_line_message(summary: dict) -> str:
     lines = [
         f"【週次レポート】{today}",
         "",
-        f"📈 注目業種TOP3",
+        "📈 注目業種TOP3",
     ]
     for i, name in enumerate(top3[:3], 1):
         lines.append(f"  {i}. {name}")
@@ -1426,7 +3856,7 @@ def run_weekly_report(cfg, results: dict) -> dict:
 # ==============================================================
 
 if __name__ == "__main__":
-    import importlib.util, sys
+    import importlib.util
     from pathlib import Path
 
     cfg = None

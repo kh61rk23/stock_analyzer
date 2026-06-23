@@ -63,7 +63,7 @@ def _fetch_detail_data(ticker: str) -> dict:
     ROIC / FCF マージン / 自己資本比率 も計算する。
     """
     try:
-        import yfinance as yf
+        import yfinance as yf # type: ignore
         t    = yf.Ticker(ticker)
         info = t.info or {}
 

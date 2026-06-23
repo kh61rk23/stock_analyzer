@@ -268,6 +268,74 @@ def calc_score_trend_3m(
 
     return results
 
+# ==============================================================
+# BLOCK 4.5: 週次トレンド変化率・急増業種検出（Wave 0 - Idea2-C）
+# ==============================================================
+
+def calc_sector_trend_change(weekly_counts: dict) -> dict:
+    """
+    今週のscreener通過数 ÷ 前4週平均の変化率を計算する（Idea2-C）。
+
+    Returns:
+        {sector_code: {"current": int, "avg_4w": float, "change_rate": float}}
+        change_rate > 0 → 増加（単位: %）/ 0 → 変化なし / データ不足
+    """
+    weeks = sorted(weekly_counts.keys())
+    if len(weeks) < 2:
+        return {}
+
+    current_week = weekly_counts[weeks[-1]]
+    past_weeks   = weeks[-5:-1]   # 今週を除く直近4週
+
+    all_codes: set = set(current_week.keys())
+    for w in past_weeks:
+        all_codes.update(weekly_counts.get(w, {}).keys())
+
+    result = {}
+    for code in all_codes:
+        curr      = current_week.get(code, 0)
+        past_vals = [weekly_counts.get(w, {}).get(code, 0) for w in past_weeks]
+        avg_4w    = sum(past_vals) / len(past_vals) if past_vals else 0.0
+
+        if avg_4w > 0:
+            change_rate = round((curr - avg_4w) / avg_4w * 100, 1)
+        elif curr > 0:
+            change_rate = 100.0   # 前4週ゼロ → 今週あり = +100%
+        else:
+            change_rate = 0.0
+
+        result[code] = {
+            "current":     curr,
+            "avg_4w":      round(avg_4w, 2),
+            "change_rate": change_rate,
+        }
+
+    return result
+
+
+def get_surge_sectors(
+    trend_change: dict,
+    threshold:    float = 50.0,
+) -> list:
+    """
+    変化率 +threshold% 以上の業種を「急増業種」として返す（Idea2-C）。
+    alert_notifier トリガー⑲（急増業種≥2業種 → Gmail週次通知）が参照する。
+
+    Args:
+        trend_change: calc_sector_trend_change() の返り値
+        threshold:    急増とみなす変化率（デフォルト: +50%）
+
+    Returns:
+        [{"sector_code": str, "current": int, "avg_4w": float,
+          "change_rate": float}, ...]  ← change_rate 降順
+    """
+    surge = [
+        {"sector_code": code, **data}
+        for code, data in trend_change.items()
+        if data.get("change_rate", 0) >= threshold and data.get("current", 0) > 0
+    ]
+    surge.sort(key=lambda x: x["change_rate"], reverse=True)
+    return surge
 
 # ==============================================================
 # BLOCK 5: Markdown ヒートマップ生成
@@ -422,6 +490,12 @@ def run_screener_sector_heatmap(cfg) -> dict:
     weekly_counts = calc_weekly_sector_counts(history)
     rotation      = detect_rotation(weekly_counts)
 
+    # Idea2-C: 週次トレンド変化率・急増業種を計算
+    trend_change  = calc_sector_trend_change(weekly_counts)
+    surge_sectors = get_surge_sectors(trend_change)
+    if surge_sectors:
+        print(f"    🚀 急増業種: {len(surge_sectors)}業種（変化率+50%以上）")
+
     weeks = sorted(weekly_counts.keys())
     current_week  = weekly_counts.get(weeks[-1], {}) if weeks else {}
 
@@ -454,6 +528,8 @@ def run_screener_sector_heatmap(cfg) -> dict:
         "rotation_in":    rotation.get("rotation_in", []),
         "rotation_out":   rotation.get("rotation_out", []),
         "score_trend_3m": score_trend_3m,
+        "trend_change":   trend_change,
+        "surge_sectors":  surge_sectors,
         "heatmap_md":     heatmap_md,
         "timestamp":      datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }

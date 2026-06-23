@@ -31,7 +31,6 @@
 # ==============================================================
 
 import json
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -453,6 +452,22 @@ def score_sector(sector_def: dict, etf_data: dict,
         elif pts < 0:
             signals.append(f"高VIX（{vix:.1f}）がリスクオフ逆風")
 
+    # ドル円
+    if usdjpy > 150 and macro_sens.get("dollar_up", 0) != 0:
+        pts = macro_sens["dollar_up"] * 5
+        macro_score += pts
+        if pts > 0:
+            signals.append(f"円安（{usdjpy:.1f}円）が追い風")
+        elif pts < 0:
+            signals.append(f"円安（{usdjpy:.1f}円）が逆風")
+    elif usdjpy < 130 and macro_sens.get("dollar_down", 0) != 0:
+        pts = macro_sens["dollar_down"] * 5
+        macro_score += pts
+        if pts > 0:
+            signals.append(f"円高（{usdjpy:.1f}円）が追い風")
+        elif pts < 0:
+            signals.append(f"円高（{usdjpy:.1f}円）が逆風")
+
     score += macro_score
     components["macro"] = macro_score
 
@@ -685,6 +700,28 @@ def run_us_sector_pipeline(cfg, macro_snapshot: Optional[dict] = None) -> dict:
     print(f"\n  🏆 トップ3:   {' > '.join(top3)}")
     print(f"  ⚠️  ボトム3:  {' < '.join(bottom3[::-1])}")
 
+    # US セクタースコアを日次ファイルに保存（jp_us_bridge が参照）
+    # ★ 2026-06-11 バグ修正: 本ブロックは return 文の後に置かれた到達不能
+    #   コードで一度も実行されず、jp_us_bridge の US スコア履歴
+    #   （us_sector_scores_*.json）が永続的に空だった。さらに未定義変数
+    #   result と存在しないキー composite_score を参照していたため、
+    #   sectors_dict（キーは "score"）から正しく出力するよう修正して
+    #   return の前に移設。保存先は report/csv と同じ us_dir
+    #   （= INSIGHT_DIR/us_sectors = ブリッジの探索先）。
+    try:
+        out_path = us_dir / f"us_sector_scores_{today_str}.json"
+        out_path.write_text(
+            json.dumps({
+                "date": today_str,
+                "sectors": {
+                    etf: {"composite_score": data.get("score", 0)}
+                    for etf, data in sectors_dict.items()
+                }
+            }, ensure_ascii=False), encoding="utf-8")
+        print(f"  💾 us_sector_scores_{today_str}.json 出力")
+    except Exception as e:
+        print(f"  ⚠️  USセクタースコア保存失敗: {e}")
+
     return {
         "sectors":     sectors_dict,
         "sector_list": sorted_results,
@@ -694,23 +731,6 @@ def run_us_sector_pipeline(cfg, macro_snapshot: Optional[dict] = None) -> dict:
         "bottom3":     bottom3,
         "skipped":     False,
     }
-    # US セクタースコアを日次ファイルに保存（jp_us_bridge が参照）
-    today = datetime.now().strftime("%Y-%m-%d")
-    out_dir = Path(cfg.DATA_DIR).parent / "insights" / "us_sectors"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"us_sector_scores_{today}.json"
-    try:
-        out_path.write_text(
-            json.dumps({
-                "date": today,
-                "sectors": {
-                    etf: {"composite_score": data.get("composite_score", 0)}
-                    for etf, data in (result.get("sectors") or {}).items()
-                }
-            }, ensure_ascii=False), encoding="utf-8")
-        print(f"  💾 us_sector_scores_{today}.json 出力")
-    except Exception as e:
-        print(f"  ⚠️  USセクタースコア保存失敗: {e}")
 
 
 def main(cfg=None, macro_snapshot=None):

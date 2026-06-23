@@ -1,10 +1,14 @@
 # ==============================================================
-# policy_tracker.py  v1.0  (3-C)
-# 日銀・FRB 金融政策変更の自動検知
+# policy_tracker.py  v1.1  (3-C / Wave 4 - Idea3-P2)
+# 日銀・FRB 金融政策変更の自動検知 + 官庁PDF拡張
 # ==============================================================
 # 【役割】
 #   日銀・FRBの政策金利変化を市場データから自動検知し、
 #   変化イベントを蓄積・レポート出力する。
+#   [Wave 4 - Idea3-P2] 追加: 経産省・内閣府・防衛省プレスリリース
+#   PDFのテキスト抽出（テキスト型のみ）と、3ソース以上の裏付けで
+#   policy_short_cache から policy_medium_cache (L3) へ自動昇格する
+#   累積スコア判定ロジック。
 #
 # 【検知ロジック】
 #   yfinance で下記4指標を取得し「前回キャッシュ値」と比較する。
@@ -50,8 +54,8 @@
 from datetime import datetime, timedelta
 from pathlib import Path
 import json
+import re
 import time
-
 
 # ==============================================================
 # BLOCK 1: 監視対象の定義
@@ -478,9 +482,351 @@ def run_policy_tracker(cfg) -> dict:
         "timestamp":     datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
+    # ── [Wave 4 - Idea3-P2] PDF テキスト抽出・L3 自動昇格（週次） ──
+    _pdf_items   = []
+    _l3_promoted = 0
+    try:
+        _pdf_items = fetch_gov_pdf_texts(cfg, data_dir)
+        if _pdf_items:
+            _l3_promoted = promote_to_medium_cache_from_pdf(
+                _pdf_items, cfg, data_dir
+            )
+    except Exception as _pdfe:
+        print(f"    ⚠️  [policy_tracker] PDF/L3処理エラー（スキップ）: "
+              f"{str(_pdfe)[:60]}")
+
+    result["pdf_items"]     = _pdf_items
+    result["l3_promoted"]   = _l3_promoted
+
     _save_policy_report(result, cfg)
     return result
 
+# ==============================================================
+# BLOCK 9: 官庁PDF テキスト抽出（Wave 4 - Idea3-P2 P2）
+# ==============================================================
+# 対象: 経産省(METI)・内閣府(CAO)・防衛省(MOD)のプレスリリースPDF
+# 実行: 週次（月曜のみ）・テキスト型PDFのみ（OCR不使用）
+# キャッシュ: DATA_DIR/pdf_url_cache.json  TTL: PDF_URL_CACHE_TTL_DAYS(30日)
+
+_GOV_PDF_SOURCES: list[dict] = [
+    {
+        "name":     "経産省プレスリリース",
+        "rss_url":  "https://www.meti.go.jp/press/atom.xml",
+        "priority": "high",
+    },
+    {
+        "name":     "内閣府経済財政",
+        "rss_url":  "https://www.cao.go.jp/rss/news_all.xml",
+        "priority": "medium",
+    },
+    {
+        "name":     "防衛省調達",
+        "rss_url":  "https://www.mod.go.jp/j/procurement/rss.xml",
+        "priority": "medium",
+    },
+]
+
+
+def _load_pdf_url_cache(data_dir: Path, ttl_days: int = 30) -> dict:
+    """
+    pdf_url_cache.json を読み込む。TTL切れエントリを除去して返す。
+
+    Returns:
+        {url: {"text": str, "fetched_at": str}, ...}
+    """
+    p = data_dir / "pdf_url_cache.json"
+    if not p.exists():
+        return {}
+    try:
+        raw    = json.loads(p.read_text(encoding="utf-8"))
+        cutoff = datetime.now() - timedelta(days=ttl_days)
+        return {
+            url: meta for url, meta in raw.items()
+            if _safe_parse_dt(meta.get("fetched_at", "")) >= cutoff
+        }
+    except Exception:
+        return {}
+
+
+def _save_pdf_url_cache(data_dir: Path, cache: dict) -> None:
+    p = data_dir / "pdf_url_cache.json"
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(
+            json.dumps(cache, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        print(f"    ⚠️  [policy_tracker] pdf_url_cache 保存失敗: {str(e)[:50]}")
+
+
+def _safe_parse_dt(s: str) -> datetime:
+    try:
+        return datetime.fromisoformat(s)
+    except Exception:
+        return datetime(2000, 1, 1)
+
+
+def _find_pdf_links(text: str) -> list[str]:
+    """テキスト中の PDF URL を抽出する。"""
+    return list(set(re.findall(
+        r'https?://[^\s\'"<>]+\.pdf', text, re.IGNORECASE
+    )))[:5]
+
+
+def _extract_pdf_text(url: str, pdf_cache: dict, timeout: int = 15) -> str:
+    """
+    PDF URL からテキストを抽出する（テキスト型PDFのみ）。
+    pdfplumber → PyMuPDF fitz の順にフォールバック。
+    キャッシュ済み URL は再取得しない。
+
+    Returns:
+        str: 抽出テキスト（最大2000文字）。失敗時は ""
+    """
+    if url in pdf_cache:
+        return pdf_cache[url].get("text", "")
+
+    text = ""
+    try:
+        import urllib.request, io
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "stock_analyzer/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            pdf_bytes = resp.read()
+
+        # pdfplumber で試みる
+        try:
+            import pdfplumber
+            with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+                pages_text = []
+                for page in pdf.pages[:5]:
+                    t = page.extract_text()
+                    if t:
+                        pages_text.append(t)
+                text = " ".join(pages_text)[:2000]
+        except Exception:
+            pass
+
+        # PyMuPDF (fitz) フォールバック
+        if not text:
+            try:
+                import fitz
+                doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+                pages_text = []
+                for i, page in enumerate(doc):
+                    if i >= 5:
+                        break
+                    pages_text.append(page.get_text())
+                doc.close()
+                text = " ".join(pages_text)[:2000]
+            except Exception:
+                pass
+
+    except Exception as e:
+        print(f"    ⚠️  [policy_tracker] PDF取得失敗 ({url[:50]}): "
+              f"{str(e)[:40]}")
+
+    pdf_cache[url] = {
+        "text":       text,
+        "fetched_at": datetime.now().isoformat(),
+    }
+    return text
+
+
+def fetch_gov_pdf_texts(cfg, data_dir: Path) -> list[dict]:
+    """
+    官庁 RSS から PDF リンクを取得し、テキストを抽出する。
+    週次（月曜のみ）実行。
+
+    Returns:
+        [{"source_name": str, "url": str, "text": str,
+          "title": str, "published": str}, ...]
+    """
+    # 月曜日のみ実行（0=月曜）
+    if datetime.now().weekday() != 0:
+        return []
+
+    if not getattr(cfg, "ENABLE_PDF_EXTRACTION", True):
+        return []
+
+    ttl_days = int(getattr(cfg, "PDF_URL_CACHE_TTL_DAYS", 30))
+    pdf_cache = _load_pdf_url_cache(data_dir, ttl_days)
+    results   = []
+
+    try:
+        import feedparser
+    except ImportError:
+        print("    ⚠️  [policy_tracker] feedparser 未インストール → PDF取得スキップ")
+        _save_pdf_url_cache(data_dir, pdf_cache)
+        return []
+
+    for source in _GOV_PDF_SOURCES:
+        try:
+            parsed = feedparser.parse(source["rss_url"])
+            for entry in parsed.entries[:10]:
+                title   = getattr(entry, "title",   "") or ""
+                summary = getattr(entry, "summary", "") or ""
+                link    = getattr(entry, "link",    "") or ""
+                pub     = getattr(entry, "published","") or ""
+
+                # PDF リンクを探す（entry.link 自体が PDF / summary 内のリンク）
+                pdf_urls = []
+                if link.lower().endswith(".pdf"):
+                    pdf_urls.append(link)
+                pdf_urls.extend(_find_pdf_links(f"{summary} {link}"))
+
+                for purl in pdf_urls[:2]:
+                    text = _extract_pdf_text(purl, pdf_cache)
+                    if text:
+                        results.append({
+                            "source_name": source["name"],
+                            "url":         purl,
+                            "text":        text,
+                            "title":       title[:80],
+                            "published":   pub,
+                        })
+                import time as _time
+                _time.sleep(0.5)
+
+        except Exception as e:
+            print(f"    ⚠️  [policy_tracker] {source['name']} PDF取得エラー: "
+                  f"{str(e)[:50]}")
+
+    _save_pdf_url_cache(data_dir, pdf_cache)
+    print(f"    📄 [policy_tracker] PDF抽出: {len(results)}件")
+    return results
+
+
+# ==============================================================
+# BLOCK 10: 累積スコア → L3 自動昇格（Wave 4 - Idea3-P2）
+# ==============================================================
+# policy_short_cache のシグナルが3ソース以上の裏付けを得た場合、
+# policy_medium_cache (L3) へ自動昇格する。
+
+# 政策キーワード → 業種コードのマッピング（PDF テキスト解析用）
+_PDF_KEYWORD_SECTOR_MAP: dict = {
+    "半導体":      ["1016", "1025"],
+    "防衛":        ["1015", "1016", "1018"],
+    "GX":          ["1020", "1009"],
+    "グリーン":    ["1020", "1009"],
+    "デジタル":    ["1025"],
+    "医療":        ["1008", "1025"],
+    "インフラ":    ["1003", "1014", "1021"],
+    "観光":        ["1033", "1021"],
+    "子育て":      ["1004", "1027", "1033"],
+    "農業":        ["1001"],
+    "エネルギー":  ["1020", "1009"],
+}
+
+_L3_SOURCE_THRESHOLD  = 3    # L3 昇格に必要な裏付けソース数
+_L3_SCORE_THRESHOLD   = 1.5  # 累積 realization_score の合計閾値
+
+
+def _extract_sector_signals_from_pdf(
+    pdf_items: list[dict],
+) -> dict[str, list[str]]:
+    """
+    PDF テキストからキーワードに紐づく業種コードを抽出する。
+
+    Returns:
+        {sector_code: [source_name, ...]}  ソース数の多い業種ほど信頼度高
+    """
+    sector_sources: dict[str, list[str]] = {}
+
+    for item in pdf_items:
+        text   = item.get("text", "")
+        source = item.get("source_name", "")
+        for kw, sectors in _PDF_KEYWORD_SECTOR_MAP.items():
+            if kw not in text:
+                continue
+            for sc in sectors:
+                sector_sources.setdefault(sc, []).append(source)
+
+    return sector_sources
+
+
+def promote_to_medium_cache_from_pdf(
+    pdf_items:  list[dict],
+    cfg,
+    data_dir:   Path,
+) -> int:
+    """
+    PDF テキスト解析結果から L3 自動昇格を判定・実行する。
+
+    昇格条件:
+      sector_sources[sc] のソース数 >= _L3_SOURCE_THRESHOLD(3)
+
+    policy_medium_cache.json に昇格エントリを追記する。
+
+    Returns:
+        int: 昇格件数
+    """
+    if not pdf_items:
+        return 0
+
+    sector_sources = _extract_sector_signals_from_pdf(pdf_items)
+    promoted       = 0
+    today          = datetime.now().strftime("%Y-%m-%d")
+
+    # policy_medium_cache.json を読み込み
+    medium_path = Path(getattr(cfg, "CACHE_DIR", "/tmp")) \
+                  / "policy_medium_cache.json"
+    try:
+        if medium_path.exists():
+            medium = json.loads(medium_path.read_text(encoding="utf-8"))
+        else:
+            medium = {"signals": [], "last_updated": ""}
+    except Exception:
+        medium = {"signals": [], "last_updated": ""}
+
+    existing_keys = {
+        s.get("policy_key") for s in medium.get("signals", [])
+    }
+
+    for sc, sources in sector_sources.items():
+        if len(sources) < _L3_SOURCE_THRESHOLD:
+            continue  # 裏付けソース数が閾値未満
+
+        key = f"pdf_l3_{sc}_{today}"
+        if key in existing_keys:
+            continue  # 本日分は登録済み
+
+        boost_pt = min(8.0, len(sources) * 2.0)  # 最大 +8pt
+        medium.setdefault("signals", []).append({
+            "policy_key":      key,
+            "sector_code":     sc,
+            "base_adj":        round(boost_pt, 2),
+            "direction":       "tailwind",
+            "registered_at":   today,
+            "source":          "policy_tracker_pdf_l3",
+            "label":           f"PDF裏付け自動昇格: {sc} ({len(sources)}ソース)",
+            "source_list":     list(set(sources)),
+            "cumulative_count": len(sources),
+        })
+        existing_keys.add(key)
+        promoted += 1
+        print(
+            f"    ⭐ [policy_tracker] L3自動昇格: "
+            f"sector={sc} "
+            f"({len(sources)}ソース: {list(set(sources))[:3]}) "
+            f"→ policy_medium_cache +{boost_pt:.1f}pt"
+        )
+
+    if promoted:
+        medium["last_updated"] = today
+        try:
+            medium_path.parent.mkdir(parents=True, exist_ok=True)
+            medium_path.write_text(
+                json.dumps(medium, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            print(f"    ⚠️  [policy_tracker] medium_cache 保存失敗: "
+                  f"{str(e)[:60]}")
+
+    return promoted
 
 # ==============================================================
 # BLOCK 8: Markdown レポート保存
@@ -547,6 +893,49 @@ def _save_policy_report(result: dict, cfg) -> None:
     except Exception as e:
         print(f"    ⚠️  政策レポート保存失敗: {str(e)[:60]}")
 
+def record_score_drift(cfg, updated_results: dict) -> None:
+    """
+    [GAP-1] score_explainer.apply_bayesian_to_sector_results() が
+    生成したドリフトイベントを policy_events.json に記録する。
+    stock_analyzer_main.py の [GAP-1] ブロックから呼ばれる。
+
+    Args:
+        cfg:             config モジュール
+        updated_results: apply_bayesian_to_sector_results() の返り値
+    """
+    try:
+        data_dir    = Path(getattr(cfg, "DATA_DIR", "data"))
+        events_path = data_dir / "policy_events.json"
+        all_events  = load_events(events_path)
+
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        added   = 0
+
+        for code, res in updated_results.items():
+            drift = res.get("bayesian_drift")
+            if not drift:
+                continue
+            all_events.append({
+                "detected_at":  now_str,
+                "ticker":       code,
+                "label":        f"sector_score drift [{code}]",
+                "prev_value":   drift.get("prev", 0),
+                "curr_value":   drift.get("today", 0),
+                "change_pt":    drift.get("drift", 0),
+                "direction":    drift.get("direction", ""),
+                "severity":     drift.get("severity", ""),
+                "bank":         "score_drift",
+                "sector_impact": [],
+            })
+            added += 1
+
+        if added:
+            save_events(events_path, all_events)
+            print(f"    📋 [policy_tracker] score_drift 記録: {added}件")
+
+    except Exception as e:
+        print(f"    ⚠️  [policy_tracker] record_score_drift エラー: "
+              f"{str(e)[:60]}")
 
 # 単体テスト
 if __name__ == "__main__":

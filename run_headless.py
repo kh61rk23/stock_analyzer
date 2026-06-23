@@ -24,17 +24,19 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-
+#指定されたパスにあるPythonファイルを、指定した名前のモジュールとして動的に読み込む関数
 def _load_module(name: str, path: Path):
     if not path.exists():
         print(f"  WARNING: {name}: {path} が見つかりません")
         return None
     spec   = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        return None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
-
+#github action secreatsの読み込み
 def apply_env_overrides(cfg):
     ENV_MAP = {
         "ALERT_GMAIL_FROM":           "ALERT_GMAIL_FROM",
@@ -56,6 +58,8 @@ def apply_env_overrides(cfg):
         "GOOGLE_OAUTH_CLIENT_SECRET": "GOOGLE_OAUTH_CLIENT_SECRET",
         "GOOGLE_OAUTH_REFRESH_TOKEN": "GOOGLE_OAUTH_REFRESH_TOKEN",
         "GOOGLE_DRIVE_FOLDER_ID":     "GOOGLE_DRIVE_FOLDER_ID",
+        "NOTION_API_KEY":             "NOTION_API_KEY",  # 2026-06-10 ハードコード廃止に伴い追加
+        "CONGRESS_API_KEY":           "CONGRESS_API_KEY",  # 2026-06-10 congress_monitor配線復元に伴い追加
     }
     overridden = []
     for attr, env_key in ENV_MAP.items():
@@ -75,21 +79,20 @@ def apply_env_overrides(cfg):
     cfg.SECTOR_DIR  = base / "insights" / "sectors"
     cfg.MACRO_DIR   = base / "insights" / "macro"
     cfg.LOG_DIR     = base / "logs"
-    cfg.AGENTS_DIR  = Path(__file__).parent / "sector_agents"
 
     if overridden:
         print(f"  KEY 環境変数を適用: {', '.join(overridden)}")
     print(f"  DIR BASE_DIR: {base}")
     return cfg
 
-
+# OAuth認証を用いてGoogle Drive APIの操作環境を構築・実行する関数
 def _upload_to_gdrive_oauth(client_id, client_secret, refresh_token,
                              folder_id, insight_dir, log_dir):
     try:
-        from google.oauth2.credentials import Credentials
-        from google.auth.transport.requests import Request
-        from googleapiclient.discovery import build
-        from googleapiclient.http import MediaFileUpload
+        from google.oauth2.credentials import Credentials # type: ignore
+        from google.auth.transport.requests import Request # type: ignore
+        from googleapiclient.discovery import build # type: ignore
+        from googleapiclient.http import MediaFileUpload # type: ignore
     except ImportError:
         import subprocess
         subprocess.run(
@@ -98,10 +101,10 @@ def _upload_to_gdrive_oauth(client_id, client_secret, refresh_token,
              "google-auth-oauthlib"],
             capture_output=True
         )
-        from google.oauth2.credentials import Credentials
-        from google.auth.transport.requests import Request
-        from googleapiclient.discovery import build
-        from googleapiclient.http import MediaFileUpload
+        from google.oauth2.credentials import Credentials # type: ignore
+        from google.auth.transport.requests import Request # type: ignore
+        from googleapiclient.discovery import build # type: ignore
+        from googleapiclient.http import MediaFileUpload # type: ignore
 
     creds = Credentials(
         token=None,
@@ -114,6 +117,7 @@ def _upload_to_gdrive_oauth(client_id, client_secret, refresh_token,
     creds.refresh(Request())
     service = build("drive", "v3", credentials=creds)
 
+    #グーグルドライブの既存フォルダの特定、または新規作成によるID取得をする関数
     def _get_or_create_folder(name, parent_id):
         q = (f"name='{name}' and "
              f"mimeType='application/vnd.google-apps.folder' and "
@@ -127,6 +131,7 @@ def _upload_to_gdrive_oauth(client_id, client_secret, refresh_token,
                 "parents": [parent_id]}
         return service.files().create(body=meta, fields="id").execute()["id"]
 
+    #グーグルドライブに既存確認を伴うファイルの新規作成または更新（同期）する関数
     def _upload_file(local_path, parent_id):
         name = local_path.name
         q = (f"name='{name}' and '{parent_id}' in parents and trashed=false")
@@ -159,7 +164,7 @@ def _upload_to_gdrive_oauth(client_id, client_secret, refresh_token,
 
     print(f"  OK Google Drive アップロード完了: {total} ファイル")
 
-
+# 環境設定・分析実行・結果のクラウド保存までを全自動で一気通貫に行う、システムの実行制御（メインルーチン）関数
 def main():
     parser = argparse.ArgumentParser(description="Stock Analyzer ヘッドレス実行")
     parser.add_argument(
@@ -168,13 +173,9 @@ def main():
         default=os.environ.get("STOCK_ANALYZER_MODE", "daily"),
     )
     args = parser.parse_args()
-
-    # ── 単体テストモード: 環境変数 SINGLE_MODULE が設定されていれば
-    #    そのモジュールだけ実行するよう mode を上書きする
-    single_mod = os.environ.get("SINGLE_MODULE", "").strip()
     
     print(f"\n{'='*60}")
-    print(f"  Stock Analyzer ヘッドレス実行")
+    print("  Stock Analyzer ヘッドレス実行")
     print(f"  モード: {args.mode.upper()}")
     print(f"  開始: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*60}")
@@ -182,7 +183,7 @@ def main():
     here     = Path(__file__).parent
     cfg_path = here / "config.py"
     if not cfg_path.exists():
-        print(f"ERROR: config.py が見つかりません")
+        print("ERROR: config.py が見つかりません")
         sys.exit(1)
 
     cfg_mod = _load_module("config", cfg_path)
@@ -202,7 +203,7 @@ def main():
 
     main_path = here / "stock_analyzer_main.py"
     if not main_path.exists():
-        print(f"ERROR: stock_analyzer_main.py が見つかりません")
+        print("ERROR: stock_analyzer_main.py が見つかりません")
         sys.exit(1)
 
     sys.modules["config"] = cfg_mod
@@ -210,14 +211,14 @@ def main():
     if main_mod is None:
         sys.exit(1)
 
-    main_mod.cfg = cfg_mod
+    setattr(main_mod, "cfg", cfg_mod)
 
     # 単体テストモード: SINGLE_MODULE が設定されている場合は
     # DAILY_MODULES / WEEKLY_MODULES をそのモジュールだけに上書きする
     single_mod = os.environ.get("SINGLE_MODULE", "").strip()
     if single_mod:
-        cfg_mod.DAILY_MODULES  = [single_mod]
-        cfg_mod.WEEKLY_MODULES = [single_mod]
+        cfg_mod.DAILY_MODULES  = [single_mod] # type: ignore
+        cfg_mod.WEEKLY_MODULES = [single_mod] # type: ignore
         args.mode = "all"   # all にすることで _in_mode() が必ず True を返す
         print(f"  🧪 単体テストモード: [{single_mod}] のみ実行")
     
@@ -229,8 +230,8 @@ def main():
             import options_monitor
             if isinstance(results, dict):
                 # モジュールを実行し、結果を dict に格納する
-                results["anomaly_season"] = anomaly_season.run_analysis(cfg_mod)
-                results["options_monitor"] = options_monitor.run_analysis(cfg_mod)
+                results["anomaly_season"] = anomaly_season.run_analysis(cfg_mod) # type: ignore
+                results["options_monitor"] = options_monitor.run_analysis(cfg_mod) # type: ignore
         except Exception as e:
             print(f"  WARNING 分析モジュールの追加実行に失敗しました: {e}")
         n_sectors = len(results.get("sectors", {})) if isinstance(results, dict) else 0

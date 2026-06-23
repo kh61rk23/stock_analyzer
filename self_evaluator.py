@@ -1,5 +1,5 @@
 # ==============================================================
-# self_evaluator.py  v1.0  (5-5)
+# self_evaluator.py  v1.1  (Wave 7 - Step 8)
 # パフォーマンス自己検証 — screener予測精度の継続的測定
 # ==============================================================
 # 【役割】
@@ -75,6 +75,12 @@ FETCH_DELAY      = 0.25
 LOG_FILENAME     = "performance_log.json"
 MAX_LOG_ENTRIES  = 52     # 1年分保持
 
+# ── Wave 7 追加定数（Pearl バックテスト）──────────────────────────
+PEARL_BACKTEST_FILENAME  = "pearl_backtest_log.json"
+PEARL_BACKTEST_MAX_ENTRY = 52           # 1年分保持
+PEARL_HIT_ALPHA_THRESHOLD = 3.0        # 的中とみなすα（%）
+PEARL_HOLD_DAYS           = 28         # Pearlのホールド期間（通常と同じ）
+PEARL_TRACK_TIERS = ["SS", "S", "A"]   # 追跡対象 Pearl Tier
 
 # ==============================================================
 # BLOCK 1: データ読み込み
@@ -216,6 +222,15 @@ def build_evaluation_batch(
                 "value_score":     c.get("value_score", 50) or 50,
                 "quality_score":   c.get("quality_score", 50) or 50,
                 "technical_score": c.get("technical_score", 50) or 50,
+                # ── Wave 7 追加フィールド ────────────────────────
+                "pearl_tier":          c.get("pearl_tier"),
+                "pearl_score":         float(c.get("pearl_score", 0) or 0),
+                "latent_pearl_score":  float(c.get("latent_pearl_score", 0) or 0),
+                "independence_score":  float(c.get("independence_score", 0) or 0),
+                "catalyst_flags":      c.get("catalyst_flags", []),
+                "midterm_trajectory":  c.get("midterm_trajectory", ""),
+                "midterm_score":       float(c.get("midterm_overall_score", 0) or 0),
+                "is_latent_pearl":     bool(c.get("is_latent_pearl", False)),
             })
     return records
 
@@ -361,9 +376,108 @@ def build_weekly_summary(
         "component_corrs":   component_corrs,
         "n_high_score_miss": sum(1 for r in evaluated
                                   if r.get("composite_score",0) >= 65 and (r.get("alpha",0) or 0) < -3),
+        # ── Wave 7: Pearl / 潜伏Pearl 別パフォーマンス ──────────
+        "pearl_stats":       _calc_pearl_win_stats(evaluated),
+        "latent_pearl_stats": _calc_latent_pearl_win_stats(evaluated),
         "timestamp":         datetime.now().isoformat(),
     }
 
+def _calc_pearl_win_stats(evaluated: list) -> dict:
+    """
+    Pearl Tier 別の的中率・平均αを計算する。
+
+    $hit\\_rate = \\frac{|\\{r: r.alpha \\geq PEARL\\_HIT\\_ALPHA\\_THRESHOLD\\}|}{N}$
+
+    Returns:
+        {
+          "SS": {"n": int, "hit_rate": float, "avg_alpha": float},
+          "S":  {...},
+          "A":  {...},
+          "all_pearl": {...},
+        }
+    """
+    result: dict = {}
+    for tier in PEARL_TRACK_TIERS + ["all_pearl"]:
+        if tier == "all_pearl":
+            group = [r for r in evaluated if r.get("pearl_tier") in PEARL_TRACK_TIERS]
+        else:
+            group = [r for r in evaluated if r.get("pearl_tier") == tier]
+        if not group:
+            result[tier] = {"n": 0, "hit_rate": None, "avg_alpha": None}
+            continue
+        alphas   = [float(r.get("alpha", 0) or 0) for r in group]
+        hit_rate = sum(1 for a in alphas if a >= PEARL_HIT_ALPHA_THRESHOLD) / len(alphas)
+        result[tier] = {
+            "n":         len(group),
+            "hit_rate":  round(hit_rate, 4),
+            "avg_alpha": round(sum(alphas) / len(alphas), 3),
+        }
+    return result
+
+
+def _calc_latent_pearl_win_stats(evaluated: list) -> dict:
+    """
+    潜伏銘柄（is_latent_pearl == True）の的中率・平均αを計算する。
+    independence_score・catalyst の存在別にもブレークダウンする。
+
+    $hit\\_rate_{latent} = \\frac{|\\{r: r.is\\_latent\\_pearl \\wedge r.alpha \\geq threshold\\}|}{N_{latent}}$
+
+    Returns:
+        {
+          "n_latent":              int,
+          "hit_rate":              float,
+          "avg_alpha":             float,
+          "vs_non_latent_alpha":   float,    # 非潜伏との平均αの差
+          "high_indep_hit_rate":   float,    # independence_score>=65 のサブセット
+          "catalyst_hit_rate":     float,    # catalyst_flags 有りのサブセット
+          "midterm_ahead_hit_rate": float,   # midterm_trajectory=="ahead" のサブセット
+        }
+    """
+    latent = [r for r in evaluated if r.get("is_latent_pearl")]
+    non_latent = [r for r in evaluated if not r.get("is_latent_pearl")]
+
+    if not latent:
+        return {
+            "n_latent":               0,
+            "hit_rate":               None,
+            "avg_alpha":              None,
+            "vs_non_latent_alpha":    None,
+            "high_indep_hit_rate":    None,
+            "catalyst_hit_rate":      None,
+            "midterm_ahead_hit_rate": None,
+        }
+
+    def _stats(group: list) -> tuple:
+        if not group:
+            return None, None
+        alphas = [float(r.get("alpha", 0) or 0) for r in group]
+        hr = sum(1 for a in alphas if a >= PEARL_HIT_ALPHA_THRESHOLD) / len(alphas)
+        return round(hr, 4), round(sum(alphas) / len(alphas), 3)
+
+    hr_all, avg_all = _stats(latent)
+    _, avg_non = _stats(non_latent) if non_latent else (None, None)
+
+    # サブセット
+    high_indep = [r for r in latent if float(r.get("independence_score", 0)) >= 65.0]
+    hr_hi, _   = _stats(high_indep)
+
+    has_cat    = [r for r in latent if r.get("catalyst_flags")]
+    hr_cat, _  = _stats(has_cat)
+
+    ahead      = [r for r in latent if r.get("midterm_trajectory") == "ahead"]
+    hr_mt, _   = _stats(ahead)
+
+    return {
+        "n_latent":               len(latent),
+        "hit_rate":               hr_all,
+        "avg_alpha":              avg_all,
+        "vs_non_latent_alpha":    round(
+            (avg_all or 0) - (avg_non or 0), 3
+        ) if avg_all is not None and avg_non is not None else None,
+        "high_indep_hit_rate":    hr_hi,
+        "catalyst_hit_rate":      hr_cat,
+        "midterm_ahead_hit_rate": hr_mt,
+    }
 
 # ==============================================================
 # BLOCK 6: ログサマリー更新
@@ -483,6 +597,64 @@ def format_self_eval_report(log: dict, latest_entry: Optional[dict]) -> str:
             lines.append("")
 
         comp = entry.get("component_corrs", {})
+        # ── Wave 7: Pearl / 潜伏Pearl バックテスト結果 ──────────
+        pearl_stats  = entry.get("pearl_stats", {})
+        latent_stats = entry.get("latent_pearl_stats", {})
+
+        if pearl_stats or latent_stats:
+            lines.append("### 💎 Pearl / 潜伏Pearl バックテスト（Wave 7）")
+            lines.append("")
+
+            any_pearl = any(
+                (pearl_stats.get(t) or {}).get("n", 0) > 0
+                for t in ["SS", "S", "A", "all_pearl"]
+            )
+            if any_pearl:
+                lines.append("**Pearl Tier別的中率（α≥3%を的中と定義）:**")
+                lines.append("")
+                lines.append("| Tier | 件数 | 的中率 | 平均α |")
+                lines.append("|------|------|-------|------|")
+                for tier in ["SS", "S", "A", "all_pearl"]:
+                    ps = pearl_stats.get(tier, {})
+                    n  = ps.get("n", 0)
+                    if n == 0:
+                        continue
+                    hr  = ps.get("hit_rate")
+                    avg = ps.get("avg_alpha")
+                    hr_str  = f"{hr:.1%}"   if hr  is not None else "—"
+                    avg_str = f"{avg:+.2f}%" if avg is not None else "—"
+                    tier_label = "**全Pearl**" if tier == "all_pearl" else tier
+                    lines.append(f"| {tier_label} | {n} | {hr_str} | {avg_str} |")
+                lines.append("")
+
+            n_latent = latent_stats.get("n_latent", 0)
+            if n_latent > 0:
+                lp_hr  = latent_stats.get("hit_rate")
+                lp_alp = latent_stats.get("avg_alpha")
+                vs_non = latent_stats.get("vs_non_latent_alpha")
+                hi_hr  = latent_stats.get("high_indep_hit_rate")
+                cat_hr = latent_stats.get("catalyst_hit_rate")
+                mt_hr  = latent_stats.get("midterm_ahead_hit_rate")
+
+                lp_hr_str  = f"{lp_hr:.1%}"   if lp_hr  is not None else "—"
+                lp_alp_str = f"{lp_alp:+.2f}%" if lp_alp is not None else "—"
+                vs_str     = f"{vs_non:+.3f}%" if vs_non is not None else "—"
+
+                lines.append(f"**潜伏Pearl（is_latent_pearl=True）: {n_latent}件**")
+                lines.append("")
+                lines.append(f"  - 的中率: **{lp_hr_str}** / 平均α: **{lp_alp_str}**")
+                lines.append(f"  - 非潜伏との平均α差: **{vs_str}**")
+                if hi_hr  is not None: lines.append(f"  - 高独立性（indep≥65）的中率: {hi_hr:.1%}")
+                if cat_hr is not None: lines.append(f"  - カタリスト有り的中率: {cat_hr:.1%}")
+                if mt_hr  is not None: lines.append(f"  - 中計ahead的中率: {mt_hr:.1%}")
+                lines.append("")
+                if   lp_hr is not None and lp_hr >= 0.55:
+                    lines.append("  🎯 **潜伏Pearlモデルは有効**（的中率55%超）")
+                elif lp_hr is not None and lp_hr <  0.40:
+                    lines.append("  ⚠️ **潜伏Pearlモデル要改善**（的中率40%未満）")
+                else:
+                    lines.append("  ➡️ 潜伏Pearlモデルは標準的（40〜55%）")
+                lines.append("")
         if comp:
             lines.append("### 📊 スコア成分 × リターン相関")
             lines.append("")
@@ -600,11 +772,114 @@ def run_self_evaluator(cfg) -> dict:
 
     report_md = format_self_eval_report(log, entry)
 
+    # ── Wave 7: Pearl バックテスト本格評価 ──────────────────────
+    # Pearl / 潜伏Pearl の的中率を pearl_backtest_log.json に蓄積する
+    pearl_bt_result: dict = {}
+    try:
+        if getattr(cfg, "ENABLE_LATENT_PEARL_MANAGER", False) or \
+           any(r.get("pearl_tier") for r in evaluated):
+
+            # ① 当週の Pearl 統計
+            pearl_stats  = entry.get("pearl_stats", {})
+            latent_stats = entry.get("latent_pearl_stats", {})
+
+            # ② pearl_backtest_log.json の読み込み・更新
+            bt_log_path = (
+                Path(getattr(cfg, "CACHE_DIR", "stock_data/cache"))
+                / PEARL_BACKTEST_FILENAME
+            )
+            bt_log: dict = {}
+            if bt_log_path.exists():
+                try:
+                    bt_log = json.loads(bt_log_path.read_text(encoding="utf-8"))
+                except Exception:
+                    bt_log = {}
+            bt_log.setdefault("entries", [])
+
+            bt_entry = {
+                "week":              week_str,
+                "pearl_stats":       pearl_stats,
+                "latent_pearl_stats": latent_stats,
+                "n_latent_evaluated": latent_stats.get("n_latent", 0),
+                "latent_hit_rate":   latent_stats.get("hit_rate"),
+                "latent_avg_alpha":  latent_stats.get("avg_alpha"),
+                "vs_non_latent":     latent_stats.get("vs_non_latent_alpha"),
+                "high_indep_hr":     latent_stats.get("high_indep_hit_rate"),
+                "catalyst_hr":       latent_stats.get("catalyst_hit_rate"),
+                "midterm_ahead_hr":  latent_stats.get("midterm_ahead_hit_rate"),
+                "timestamp":         datetime.now().isoformat(),
+            }
+
+            # 同週エントリは上書き
+            existing_bt_weeks = [e.get("week") for e in bt_log["entries"]]
+            if week_str in existing_bt_weeks:
+                bt_log["entries"][existing_bt_weeks.index(week_str)] = bt_entry
+            else:
+                bt_log["entries"].append(bt_entry)
+
+            # 最大エントリ数を超えた場合は古いものを削除
+            if len(bt_log["entries"]) > PEARL_BACKTEST_MAX_ENTRY:
+                bt_log["entries"] = bt_log["entries"][-PEARL_BACKTEST_MAX_ENTRY:]
+
+            # ③ サマリー更新
+            # $lifetime\\_latent\\_hr = avg(hit\\_rate_i)$ for all entries with n_latent >= MIN_SAMPLES
+            valid_entries = [
+                e for e in bt_log["entries"]
+                if e.get("n_latent_evaluated", 0) >= MIN_SAMPLES
+                and e.get("latent_hit_rate") is not None
+            ]
+            if valid_entries:
+                hrs       = [e["latent_hit_rate"] for e in valid_entries]
+                avg_alphas = [e["latent_avg_alpha"] for e in valid_entries if e.get("latent_avg_alpha") is not None]
+                vs_nonlat  = [e["vs_non_latent"] for e in valid_entries if e.get("vs_non_latent") is not None]
+
+                # トレンド判定: 直近4週 vs 直前4週
+                recent  = hrs[-4:] if len(hrs) >= 4 else hrs
+                earlier = hrs[-8:-4] if len(hrs) >= 8 else []
+                if earlier:
+                    trend = (
+                        "improving" if sum(recent)/len(recent) > sum(earlier)/len(earlier) + 0.02
+                        else "degrading" if sum(recent)/len(recent) < sum(earlier)/len(earlier) - 0.02
+                        else "stable"
+                    )
+                else:
+                    trend = "accumulating"
+
+                bt_log["summary"] = {
+                    "total_weeks_evaluated":  len(valid_entries),
+                    "lifetime_latent_hr":     round(sum(hrs) / len(hrs), 4),
+                    "avg_latent_alpha":       round(sum(avg_alphas) / len(avg_alphas), 3) if avg_alphas else None,
+                    "avg_vs_non_latent":      round(sum(vs_nonlat) / len(vs_nonlat), 3) if vs_nonlat else None,
+                    "trend":                  trend,
+                    "last_updated":           datetime.now().strftime("%Y-%m-%d"),
+                }
+
+            bt_log_path.write_text(
+                json.dumps(bt_log, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+            pearl_bt_result = bt_entry
+            hr_str = f"{latent_stats.get('hit_rate', 0):.1%}" if latent_stats.get("hit_rate") is not None else "N/A"
+            alp_str = f"{latent_stats.get('avg_alpha', 0):+.2f}%" if latent_stats.get("avg_alpha") is not None else "N/A"
+            print(
+                f"    💎 Pearl BT: 潜伏={latent_stats.get('n_latent', 0)}件 "
+                f"的中率={hr_str} avg_α={alp_str} "
+                f"vs非潜伏α={latent_stats.get('vs_non_latent_alpha', 0):+.3f}%"
+                if latent_stats.get("vs_non_latent_alpha") is not None
+                else f"    💎 Pearl BT: 潜伏={latent_stats.get('n_latent', 0)}件 的中率={hr_str} avg_α={alp_str}"
+            )
+
+    except Exception as _bt_e:
+        print(f"    ⚠️  Pearl BT 更新エラー（スキップ）: {str(_bt_e)[:80]}")
+
     return {
         "latest_entry": entry,
         "summary":      log["summary"],
         "log_entries":  log["log_entries"][-4:],   # 直近4週のみ返す（サイズ削減）
         "report_md":    report_md,
         "updated":      True,
+        "pearl_backtest":  pearl_bt_result,
+        "pearl_bt_summary": bt_log.get("summary", {}) if isinstance(bt_log, dict) else {},
         "timestamp":    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }

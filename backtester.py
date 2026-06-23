@@ -96,6 +96,7 @@ def extract_backtest_records(
             "exit_date":     str,     # entry_date + hold_days
             "composite_score": float,
             "sector_code":   str,
+            "cluster_phase_bonus": float,
           },
           ...
         ]
@@ -136,6 +137,7 @@ def extract_backtest_records(
                 "entry_price":     float(price),
                 "exit_date":       exit_dt.strftime("%Y-%m-%d"),
                 "composite_score": float(score),
+                "cluster_phase_bonus": float(c.get("cluster_phase_bonus", 0) or 0),
                 "sector_code":     c.get("sector_code", ""),
             })
 
@@ -345,6 +347,39 @@ def run_backtest_analysis(records: list, exit_prices: dict) -> dict:
         if len(rets) >= 3
     }
 
+    # ── [Wave 6 - B / T-4] クラスターシグナル有無による精度比較 ──────────
+    # cluster_phase_bonus が記録されているレコードのみを対象に、
+    # ボーナス有（>0）/ ボーナス無（==0）の2群に分けて勝率・アルファを比較する。
+    # データ未存在時（cluster_phase_bonus キー欠落）はサイレントスキップ。
+    cluster_comparison: dict = {}
+    try:
+        with_cluster    = [
+            e["return_pct"] for e in evaluated
+            if float(e.get("cluster_phase_bonus", 0) or 0) > 0
+        ]
+        without_cluster = [
+            e["return_pct"] for e in evaluated
+            if float(e.get("cluster_phase_bonus", 0) or 0) == 0
+        ]
+        if with_cluster and without_cluster:
+            cluster_comparison = {
+                "with_cluster_bonus": {
+                    **calc_performance_stats(with_cluster, avg_bm),
+                    "n": len(with_cluster),
+                },
+                "without_cluster_bonus": {
+                    **calc_performance_stats(without_cluster, avg_bm),
+                    "n": len(without_cluster),
+                },
+                "alpha_lift": round(
+                    (sum(with_cluster)    / len(with_cluster))
+                    - (sum(without_cluster) / len(without_cluster)),
+                    3,
+                ),
+            }
+    except Exception:
+        cluster_comparison = {}
+
     return {
         "overall":        overall,
         "by_score_tier":  by_score,
@@ -354,6 +389,7 @@ def run_backtest_analysis(records: list, exit_prices: dict) -> dict:
         "avg_benchmark":  round(avg_bm, 3),
         "top_performers": sorted(evaluated, key=lambda x: -x["return_pct"])[:5],
         "worst":          sorted(evaluated, key=lambda x:  x["return_pct"])[:3],
+        "cluster_comparison": cluster_comparison,   # Wave 6 - B / T-4
     }
 
 
@@ -378,8 +414,8 @@ def format_backtest_report(bt_result: dict) -> str:
         return "\n".join(lines)
 
     lines += [
-        f"| 指標 | 値 |",
-        f"|------|---|",
+        "| 指標 | 値 |",
+        "|------|---|",
         f"| 評価銘柄数 | {n}件 |",
         f"| ベンチマーク平均 | {bm:+.2f}% |",
         f"| 平均リターン | {ov.get('avg_return',0):+.2f}% |",
@@ -407,6 +443,29 @@ def format_backtest_report(bt_result: dict) -> str:
                     f"| {d.get('win_rate',0):.1%} |"
                 )
         lines.append("")
+
+    # クラスターシグナル有無の比較セクション
+    cc = bt_result.get("cluster_comparison", {})
+    if cc.get("with_cluster_bonus") and cc.get("without_cluster_bonus"):
+        wc  = cc["with_cluster_bonus"]
+        woc = cc["without_cluster_bonus"]
+        alpha_lift = cc.get("alpha_lift", 0)
+        lines += [
+            "### 🔬 クラスターシグナル 精度比較（Wave 6 - B）",
+            "",
+            "| 区分 | N | 平均α | 勝率 |",
+            "|------|---|------|-----|",
+            f"| クラスターボーナス有 | {wc.get('n',0)} "
+            f"| {wc.get('avg_alpha',0):+.2f}% "
+            f"| {wc.get('win_rate',0):.1%} |",
+            f"| クラスターボーナス無 | {woc.get('n',0)} "
+            f"| {woc.get('avg_alpha',0):+.2f}% "
+            f"| {woc.get('win_rate',0):.1%} |",
+            "",
+            f"**アルファ改善幅**: {alpha_lift:+.2f}% "
+            f"({'改善' if alpha_lift > 0 else '悪化'})",
+            "",
+        ]
 
     # 改善提案
     alpha = ov.get("avg_alpha", 0)
@@ -491,4 +550,16 @@ def run_backtester(cfg) -> dict:
         print(f"    ⚠️  保存失敗: {e}")
 
     bt_result["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # cluster_comparison サマリーをログ出力
+    try:
+        cc = bt_result.get("cluster_comparison", {})
+        if cc.get("with_cluster_bonus"):
+            lift = cc.get("alpha_lift", 0)
+            print(
+                f"    🔬 クラスターシグナル精度比較: "
+                f"ボーナス有={cc['with_cluster_bonus']['n']}件 "
+                f"/ アルファ改善幅={lift:+.2f}%"
+            )
+    except Exception:
+        pass
     return bt_result

@@ -46,11 +46,11 @@
 from __future__ import annotations
 
 import json
-import time
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
-
+# analyze_sections 用シングルトン pipeline キャッシュ
+_FINBERT_PIPELINE = None
 
 # ==============================================================
 # BLOCK 0: 定数
@@ -259,6 +259,138 @@ def enrich_articles_with_sentiment(
 
     return articles
 
+# ==============================================================
+# BLOCK 2-B: セクション別テキスト分析（Wave 5 - E4対応）
+# ==============================================================
+
+def analyze_sections(
+    sections_dict: dict,
+    nlp=None,
+    cfg=None,
+) -> dict:
+    """
+    text_extractor.extract_sections() の出力（セクション別テキストdict）を受け取り、
+    各セクションの感情スコアを返す。
+
+    Args:
+        sections_dict: {
+            "securities_code": str,
+            "company_name":    str,
+            "period_end":      str,
+            "sections": {
+                "business":   str,
+                "risk":       str,
+                "strategy":   str,
+                "governance": str,
+            },
+            "source":     str,
+            "fetched_at": str,
+        }
+        nlp: transformers pipeline（省略時は内部で初期化を試みる）
+        cfg: config モジュール（省略可）
+
+    Returns:
+        {
+            "securities_code": str,
+            "period_end":      str,
+            "section_scores": {
+                "business":   {"label": str, "score": float, "sentiment_score": float},
+                "risk":       {...},
+                "strategy":   {...},
+                "governance": {...},
+            },
+            "analyzed_at": str (ISO8601),
+        }
+        分析失敗セクションは score=0.5, label="NEUTRAL" で補完。
+        全セクション失敗時は None を返す。
+    """
+    if not sections_dict or not isinstance(sections_dict, dict):
+        return None
+
+    inner = sections_dict.get("sections", {})
+    if not inner or not any(inner.values()):
+        return None
+
+    # nlp pipeline の初期化（未注入時）
+    _nlp = nlp
+    if _nlp is None:
+        try:
+            _nlp = _get_or_init_pipeline()
+        except Exception as _e:
+            print(f"    ⚠️  [finbert] analyze_sections: pipeline初期化失敗 → {str(_e)[:60]}")
+            return None
+
+    section_scores: dict = {}
+    _SECTIONS = ("business", "risk", "strategy", "governance")
+
+    for sec_key in _SECTIONS:
+        text = inner.get(sec_key, "") or ""
+        if not text.strip():
+            # テキスト未取得セクションはニュートラルで補完
+            section_scores[sec_key] = {
+                "label":           "NEUTRAL",
+                "score":           0.5,
+                "sentiment_score": 0.5,
+            }
+            continue
+
+        try:
+            # FinBERT の最大トークン長（512）に収まるよう先頭512文字を使用
+            truncated = text[:512]
+            result    = _nlp(truncated)[0]
+
+            raw_label = result.get("label", "NEUTRAL").upper()
+            raw_score = float(result.get("score", 0.5))
+
+            # sentiment_score: POSITIVE=0.5〜1.0, NEUTRAL=0.5, NEGATIVE=0.0〜0.5
+            if raw_label == "POSITIVE":
+                sentiment_score = 0.5 + raw_score * 0.5
+            elif raw_label == "NEGATIVE":
+                sentiment_score = 0.5 - raw_score * 0.5
+            else:
+                sentiment_score = 0.5
+
+            section_scores[sec_key] = {
+                "label":           raw_label,
+                "score":           round(raw_score, 4),
+                "sentiment_score": round(sentiment_score, 4),
+            }
+
+        except Exception as _sec_e:
+            print(f"    ⚠️  [finbert] analyze_sections [{sec_key}] スコアリング失敗: "
+                  f"{str(_sec_e)[:60]}")
+            section_scores[sec_key] = {
+                "label":           "NEUTRAL",
+                "score":           0.5,
+                "sentiment_score": 0.5,
+            }
+
+    return {
+        "securities_code": sections_dict.get("securities_code", ""),
+        "period_end":      sections_dict.get("period_end", ""),
+        "section_scores":  section_scores,
+        "analyzed_at":     datetime.now().isoformat(),
+    }
+
+
+def _get_or_init_pipeline():
+    """
+    モジュールレベルで FinBERT pipeline をシングルトン初期化して返す。
+    既に初期化済みであればキャッシュを返す。
+    """
+    global _FINBERT_PIPELINE
+    if _FINBERT_PIPELINE is not None:
+        return _FINBERT_PIPELINE
+
+    from transformers import pipeline as hf_pipeline
+    _FINBERT_PIPELINE = hf_pipeline(
+        "sentiment-analysis",
+        model       = "ProsusAI/finbert",
+        tokenizer   = "ProsusAI/finbert",
+        return_all_scores = False,
+        device      = -1,   # CPU実行（GPU未搭載環境対応）
+    )
+    return _FINBERT_PIPELINE
 
 # ==============================================================
 # BLOCK 3: 業種別センチメントスコア集計

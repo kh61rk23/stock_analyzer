@@ -50,7 +50,6 @@ from __future__ import annotations
 
 import json
 import re
-import time
 import urllib.request
 from datetime import datetime, timedelta
 from html.parser import HTMLParser

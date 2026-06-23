@@ -151,7 +151,18 @@ def collect_all_signals(results: dict, cfg=None) -> list[dict]:
 
     # ── D-2 債務サイクル補正 ─────────────────────────────────
     dc = results.get("debt_cycle", {})
-    for code, adj_pts in dc.get("sector_adj", {}).items():
+    _dc_sector_adj = dc.get("sector_adj", 0.0)
+    # sector_adj は float（全業種一律）または dict（業種別）の両形式に対応
+    if isinstance(_dc_sector_adj, dict):
+        _dc_items = list(_dc_sector_adj.items())
+    elif isinstance(_dc_sector_adj, (int, float)) and abs(_dc_sector_adj) >= 0.5:
+        # float → results["sectors"] にある全業種コードに一律適用
+        _all_sector_codes = list(results.get("sectors", {}).keys())
+        _dc_items = [(_c, float(_dc_sector_adj)) for _c in _all_sector_codes]
+    else:
+        _dc_items = []
+
+    for code, adj_pts in _dc_items:
         if abs(adj_pts) < 0.5:
             continue
         signals.append({

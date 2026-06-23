@@ -189,6 +189,50 @@ def enrich_result_with_reason(
     return result
 
 
+def explain_score(
+    sector_code:     str,
+    composite_score: float,
+    sector_result:   Optional[dict] = None,
+    macro_snapshot:  Optional[dict] = None,
+    max_factors:     int = 3,
+) -> str:
+    """
+    投資判断カード（D-1）用の1行根拠文を返す薄いアダプタ。
+
+    ★ 2026-06-10 バグ修正: stock_analyzer_main._generate_investment_cards()
+      が本関数名で呼び出していたが実体が存在せず、AttributeError が
+      try/except に握り潰されてカードの「スコア根拠」行が常時欠落していた。
+      既存 build_reason_text() への委譲として実装。
+
+    Args:
+        sector_code:     業種コード
+        composite_score: 総合スコア
+        sector_result:   base_agent build_result() の戻り値辞書
+                         （macro_signals / reason_text を含み得る）
+        macro_snapshot:  {"usdjpy":float, "us10y":float, ...}
+        max_factors:     表示する要因の最大数
+
+    Returns:
+        1行の根拠文字列（生成不能時は空文字）
+    """
+    sector_result = sector_result or {}
+    # 既に enrich_result_with_reason() 適用済みならそれを再利用
+    cached = sector_result.get("reason_text", "")
+    if cached:
+        return str(cached)
+    try:
+        return build_reason_text(
+            sector_code     = sector_code,
+            composite_score = composite_score,
+            macro_signals   = sector_result.get("macro_signals", []) or [],
+            gov_signals     = None,
+            us_macro        = macro_snapshot,
+            max_factors     = max_factors,
+        )
+    except Exception:
+        return ""
+
+
 # ==============================================================
 # BLOCK 3: Gmailアラート・Markdownレポート用フォーマッタ
 # ==============================================================

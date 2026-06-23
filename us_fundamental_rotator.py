@@ -54,7 +54,6 @@
 from __future__ import annotations
 
 import json
-import math
 import time
 from datetime import datetime, timedelta, date
 from pathlib import Path
@@ -209,6 +208,25 @@ def lookup_us_fundamentals(cfg, ticker: str) -> Optional[dict]:
     if not p.exists():
         return None
     try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def lookup_us_fundamentals_by_path(data_dir, ticker: str) -> Optional[dict]:
+    """
+    cfg 非依存でディレクトリを直接指定する lookup_us_fundamentals の別形。
+
+    ★ 2026-06-11 バグ修正: us_stock_screener.py が本関数名で呼んでいたが
+      実体が存在せず、XBRL補完（eps_accel_score_xbrl / latest_fcf）が
+      常時欠落していた。_ticker_path と同じレイアウト
+      （<data_dir>/us_fundamentals_db/<ticker>.json）を参照する。
+    """
+    try:
+        safe = ticker.replace("/", "_").replace(".", "_")
+        p = Path(data_dir) / DB_DIR_NAME / f"{safe}.json"
+        if not p.exists():
+            return None
         return json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return None
@@ -594,10 +612,30 @@ def _build_fetch_queue(cfg, meta: dict, cik_map: dict) -> list[dict]:
         if _days_since(entry.get("last_fetched")) >= cache_days:
             _add(t, 1, "watchlist")
 
-    # ── 優先度2: S&P500 ローテーション（期限切れ順） ─────────
-    sp500_tickers = getattr(cfg, "SP500_TICKERS", [])
+    # ── 優先度2: custom_universe 全カテゴリのローテーション ──────
+    # SP500_TICKERS ではなく custom_universe/*.json を全件読み込む
+    all_universe_tickers = []
+    try:
+        _udir_cfg = getattr(cfg, "US_CUSTOM_UNIVERSE_DIR", "data/custom_universe")
+        _universe_dir = Path(__file__).parent / _udir_cfg
+        if not _universe_dir.exists():
+            # フォールバック: DRIVE_BASE の親（リポジトリルート）を試す
+            _universe_dir = Path(getattr(cfg, "DRIVE_BASE", "")).parent / _udir_cfg
+        if _universe_dir.exists():
+            for _jf in sorted(_universe_dir.glob("*.json")):
+                try:
+                    _data = json.loads(_jf.read_text(encoding="utf-8"))
+                    for _t in _data.get("tickers", []):
+                        t_up = str(_t).strip().upper()
+                        if t_up and t_up not in all_universe_tickers:
+                            all_universe_tickers.append(t_up)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
     rotation_targets = []
-    for t in sp500_tickers:
+    for t in all_universe_tickers:
         tu = t.upper()
         if tu in seen or tu not in cik_map:
             continue
@@ -611,7 +649,7 @@ def _build_fetch_queue(cfg, meta: dict, cik_map: dict) -> list[dict]:
     for days_old, t in rotation_targets:
         if len(queue) >= limit:
             break
-        _add(t, 2, f"sp500_rotation({days_old}日経過)")
+        _add(t, 2, f"universe_rotation({days_old}日経過)")
 
     queue = queue[:limit]
 

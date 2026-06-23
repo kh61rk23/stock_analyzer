@@ -20,6 +20,7 @@
 #   cfg.DATA_DIR / cfg.MACRO_RULES など
 # ==============================================================
 
+import os
 from pathlib import Path
 
 # ==============================================================
@@ -36,17 +37,28 @@ ARXIV_DIR    = INSIGHT_DIR / "arxiv"
 SECTOR_DIR   = INSIGHT_DIR / "sectors"       # Step 2 以降で使用
 MACRO_DIR    = INSIGHT_DIR / "macro"         # Step 2 以降で使用
 LOG_DIR      = DRIVE_BASE / "logs"
-AGENTS_DIR   = DRIVE_BASE / "sector_agents"  # Step 2 以降で使用
+CACHE_DIR    = DRIVE_BASE / "cache"          # Wave 0 以降で使用
 
 # setup_dirs() で一括作成するフォルダ一覧
 ALL_DIRS = [
     DATA_DIR, RESULT_DIR, INSIGHT_DIR,
     ARXIV_DIR, SECTOR_DIR, MACRO_DIR,
-    LOG_DIR, AGENTS_DIR,
+    LOG_DIR,
     INSIGHT_DIR / "ideas",
     INSIGHT_DIR / "edinet_rotation",
     INSIGHT_DIR / "screener",
+    CACHE_DIR,
+    INSIGHT_DIR / "politician",
+    INSIGHT_DIR / "correlation",
+    INSIGHT_DIR / "rotation",
 ]
+
+# ==============================================================
+# BLOCK 0.5: サブテーマ JSON パス（Wave 2 - R-1）
+# ==============================================================
+
+SUBTHEME_JSON_PATH_JP = DRIVE_BASE / "data" / "jp_sector_subtheme.json"
+SUBTHEME_JSON_PATH_US = DRIVE_BASE / "data" / "us_sector_subtheme.json"
 
 # ==============================================================
 # BLOCK 1: API / 実行設定
@@ -56,13 +68,13 @@ SPREADSHEET_ID   = "1CePiavYj_6OR0cOz84V4RkA0c0S6IwZlcHCv8_bsOjc"
 CREDENTIALS_PATH = str(VIEWER_BASE / "service_account.json")
 WRITE_SHEET      = True   # True にすると Google Sheets に書き込む
 
-RUN_SCHEDULE_HOUR   = 8    # 毎朝何時に自動実行するか（0〜23）
+RUN_SCHEDULE_HOUR   = 6    # 毎朝何時に自動実行するか（0〜23）※GitHub Actions は 06:00 JST 実行に統一
 RUN_SCHEDULE_MINUTE = 0
 
 # モジュール有効フラグ（False にすると当該モジュールをスキップ）
 ENABLE_GOV_PIPELINE = True
 ENABLE_ARXIV        = True
-ENABLE_SECTOR       = True   # 2-A 完了: 6業種エージェント実装済み
+ENABLE_SECTOR       = True  # 33業種: base_agent.run_sector_analysis() で一括処理
 ENABLE_MACRO        = True  # Step 2 以降で True に変更
 
 LOG_MAX_ENTRIES = 500
@@ -191,7 +203,7 @@ ARXIV_KEYWORDS = [
 # BLOCK 3: 日本株 33業種 定義（東証業種コード準拠）
 # ==============================================================
 # 【v1.0 との差分】新規追加
-# 将来: sector_agents/{code}_agent.py のファイル名キーとして使用
+# JAPAN_SECTORS のキー
 
 JAPAN_SECTORS = {
     "1001": {"name_ja": "水産・農林業",         "name_en": "Fishery, Agriculture & Forestry",    "group": "素材"},
@@ -1068,8 +1080,7 @@ GOV_RULES = {
 # ==============================================================
 # 【v1.0 との差分】新規追加
 #
-# Step 2 以降で sector_agents/{code}_agent.py を実装する際の
-# 共通インターフェース定義。stock_analyzer_main.py が動的ロードする。
+# base_agent.run_sector_analysis() 参照
 #
 # 各エージェントが export すべき関数シグネチャ:
 #   run_analysis(sector_code: str, config: module) -> dict
@@ -1087,9 +1098,8 @@ SECTOR_AGENT_RESULT_SCHEMA = {
 }
 
 # Step 1 時点で実装済みのエージェント（空リスト）
-# Step 2 以降: ["1028", "1032", "1017", ...] と追記していく
-# 2-A 完了: 6業種エージェントを追加
-# 追加方法: sector_agents/{code}_agent.py を実装したらここにコードを追記するだけ
+# Step 2 以降: base_agent.run_sector_analysis() が全33業種を処理
+# IMPLEMENTED_AGENTS は daily ループ対象の業種コードリスト
 IMPLEMENTED_AGENTS: list = [
     "1001",  # 水産・農林業
     "1002",  # 鉱業
@@ -1175,9 +1185,28 @@ GOV_VEGPRICE_API = "https://api.cultivationdata.net/yasai_kakaku?div=all&type=cs
 # ★ 空文字のままにしておくと EDINET 取得をスキップして
 #   他の分析には影響を与えない（エラーにならない）
 
-EDINET_API_KEY: str = "REDACTED_EDINET_API_KEY"  # ここは金融庁のEDINETになる
-EDINETDB_API_KEY: str = "REDACTED_EDINETDB" # ここは民間のEDINETDBなので使う
-ESTAT_API_KEY: str = "REDACTED_ESTAT_API_KEY"
+# ★ 2026-06-10 セキュリティ修正: APIキーのハードコードを廃止し環境変数化。
+#   GitHub Actions は Secrets→run_headless.py の ENV_MAP 経由で注入（従来から登録済み）。
+#   Colab / ローカル手動実行時は os.environ に設定してから起動すること。
+#   旧キーはコードに露出していたため失効・再発行を推奨。
+EDINET_API_KEY: str = os.getenv("EDINET_API_KEY", "")      # 金融庁 EDINET
+EDINETDB_API_KEY: str = os.getenv("EDINETDB_API_KEY", "")  # 民間 EdinetDB
+ESTAT_API_KEY: str = os.getenv("ESTAT_API_KEY", "")
+
+# 深掘り分析対象ティッカー（S3-4）
+# ★ 2026-06-10 SSOT修正: deep_dive_trigger.py が実行時に cfg.__dict__ へ
+#   注入する動的属性だったため、契約の明示としてデフォルト値をここに定義。
+#   edinet_rotation_manager.py が priority=0（最優先）で処理する。
+EDINET_DEEP_DIVE_TICKERS: list = []
+
+# BigQuery 接続設定
+# ★ 2026-06-10 SSOT修正: edinet_bq_client.py は「config優先→環境変数
+#   フォールバック」設計だが、config 側に定義が無く ImportError 経由の
+#   フォールバックが常態化していた。SSOT としてここに定義する
+#   （値は従来どおり環境変数由来のため挙動変更なし）。
+BQ_PROJECT_ID: str       = os.getenv("BQ_PROJECT_ID", "")
+BQ_CREDENTIALS_PATH: str = os.getenv("BQ_CREDENTIALS_PATH", "")
+BQ_DATASET: str          = os.getenv("BQ_DATASET", "edinet")
 
 # 有報の検索期間（日）: 直近 60 日以内の有報を検索（60回/社の検索）
 EDINET_LOOKBACK_DAYS = 60
@@ -1203,7 +1232,7 @@ EDINET_WATCHLIST_TICKERS: list  = []  # 空ならPRIORITY_TICKERSを参照
 EDINET_SCREENER_CANDIDATES: list = [] # 前日screener通過銘柄（自動注入される）
 
 # EDINETDB を有効化するフラグ（APIキーが設定されていれば自動的に有効）
-ENABLE_EDINET: bool = False  
+ENABLE_EDINET: bool = True
 # APIキー設定後に True に変更。
 # 現在はEDINETDBの業種ごとの検索を止めており、
 # 別フラグの箇所にて、EDINETDBを動かしている。
@@ -1258,7 +1287,7 @@ ENABLE_US_SECTOR: bool = True
 # 設定すると FFレート(FEDFUNDS)・IOER 実績値も取得できる。
 # APIキー取得: https://fred.stlouisfed.org/docs/api/api_key.html
 # 未設定（空文字）の場合は yfinance 市場プロキシのみ使用する。
-POLICY_FRED_API_KEY: str = "REDACTED_POLICY_FRED_API_KEY"    # ← 任意。取得後ここに貼り付ける
+POLICY_FRED_API_KEY: str = os.getenv("POLICY_FRED_API_KEY", "")  # ★ 2026-06-10 環境変数化（GitHub Secrets 登録済み）
 
 # 変化として検知する閾値（単位: %pt）
 # 0.05 = 0.05%ポイント以上の変動を変化として記録
@@ -1349,7 +1378,7 @@ ETF_THEME_IDS = None                # None=全テーマ / 例: ["quantum","ai_in
 # ==============================================================
 ENABLE_NEWS: bool = True          # ニュースRSS取得の有効化
 # Google Custom Search API（有料メディア記事検索）
-GOOGLE_CSE_API_KEY: str = "REDACTED_GOOGLE"   # Google Cloud Console で取得
+GOOGLE_CSE_API_KEY: str = os.getenv("GOOGLE_CSE_API_KEY", "")   # ★ 2026-06-10 環境変数化（GitHub Secrets 登録済み）
 GOOGLE_CSE_ID:      str = "033b43821c3a5442b"   # cse.google.com で取得
 ENABLE_PAID_MEDIA_SEARCH: bool = True  # API設定後に True に変更
 
@@ -1389,11 +1418,13 @@ DAILY_MODULES = [
     "news",          # ニュースRSSパイプライン（Step B）
     "screener",      # スキャナーの追加
     "excel_export",  # Excel ダッシュボード CSV エクスポート（Step D）
+    "event_horizon",   # ★ 2026-06-13 EVT-1: イベント事前アラート（日次）
+    "options_advisor", # ★ 2026-06-13 OPT-1: オプション戦略提案（日次）
     "signal_aggregator",  # 統合シグナル [4-9]
     "inference",          # 推論エンジン [4-10]
-    "us_screener",   # 米国株スクリーニング0310
     "edinet_rotation", # edinetのローテーション
-    "us_fundamentals", # ★ US財務DBローテーター（Phase US-1）
+    "us_fundamentals", # ★ US財務DBローテーター（Phase US-1）← screenerより先に実行
+    "us_screener",   # 米国株スクリーニング（US財務DB補完後に実行）
     "us_8k",           # ★ US 8-K リアルタイム監視（Phase US-3）
     "us_sector_bridge",  # ★ US-5 SIC/JP業種連携
     "multi_currency", # 多通貨モニタリング [A-6]
@@ -1402,13 +1433,24 @@ DAILY_MODULES = [
     "volume_profile",   # 出来高プロファイル分析 [4-7]
     "notion_obsidian",   # Notion/Obsidian書き込み [6-4]（毎日実行）
     "policy_radar",     # ★ 政策レーダー追加
+    "policy_signal_applier",       # Wave 3 - Policy Ph2（17.8番・日次）
+    "pead_monitor",                # Wave 3 - FE-5（screener直後・日次）
 ]
 
 # ── ウィークリーサイクル（月曜朝に追加実行）───────────────────
 WEEKLY_MODULES = [
     "arxiv",         # ArXiv 論文取得
     "semantic_scholar", # ★ 論文追加分析
+    "congress_monitor",  # ★ 2026-06-10 配線復元: US法案議会進行追跡 [Ph4]（L4キャッシュ減衰で日次適用）
+    "ontology_export",   # ★ 2026-06-12 ONT-1: エンティティグラフBQ追記（週次）
     "correlation",   # 米国債×業種 相関監査
+    "size_tier_classifier",      # Wave0 Size Ph1（sector実行直後・週次）
+    "business_model_classifier", # Wave0 BM Ph1（size_tier_classifierの直後・週次）
+    "jp_us_sector_correlation",   # Wave0 Idea2-A（correlation_auditの直後）
+    "sector_rotation_detector",    # Wave0 Idea2-B（signal_aggregatorの直前・必須）
+    "portfolio_diversity_filter",  # Wave 3 - FE-6（screener直後・Ignitionの前）
+    "ignition_detector",           # Wave 2 - FE-4（sector_rotation_detectorの直後）
+    "catalyst_calendar",           # Wave 3 - FE-7（NEDO/policy_radar直後）
     "credit_data",   # 信用残高週次取得 [3-5]
     "idea",          # アイデア生成
     "evaluation",    # アイデア評価・週次集計
@@ -1431,6 +1473,10 @@ WEEKLY_MODULES = [
     "longterm_scenario",   # 10年単位のシナリオ R-5追加
     "google_trends",    # ★ RESEARCH-3追加
     "finbert",          # ★ RESEARCH-5追加
+    "technology_mapper",        # Wave 6 - B: 企業×技術マッピング
+    "cluster_engine",           # Wave 6 - B: 技術クラスター生成
+    "emerging_detector",        # Wave 6 - B: 萌芽テーマ検知
+    "cluster_graph_exporter",   # Wave 6 - B: クラスター結果出力
     "factor_crowding",  # ★ RESEARCH-2追加
 ]
 
@@ -1438,7 +1484,9 @@ WEEKLY_MODULES = [
 WEEKLY_RUN_WEEKDAY: int = 0
 
 # ==============================================================
-# BLOCK 14: アラート通知設定（5-B 追加）
+# BLOCK 14b: アラート通知設定（5-B 追加）
+# ★ 2026-06-10 SSOT修正: 旧表記「BLOCK 14」はニュースRSS設定と
+#   番号衝突していたため 14b に改番（MODULE_INDEX の表記と一致）。
 # ==============================================================
 
 # アラート通知を有効化するマスタフラグ
@@ -1494,7 +1542,7 @@ ENABLE_BIZ_SUMMARY: bool = True
 
 # DeepL API 無料キー（末尾が :fx のもの）
 # 取得: https://www.deepl.com/pro-api （無料枠: 50万字/月）
-DEEPL_API_KEY: str = "REDACTED_DEEPL_API_KEY"  # 例: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx"
+DEEPL_API_KEY: str = os.getenv("DEEPL_API_KEY", "")  # ★ 2026-06-10 環境変数化（GitHub Secrets 登録済み / 末尾 :fx の無料キー）
 
 # 業種あたり取得社数（2社 × 33業種 = 66社/日 → DeepL約20,000字/月）
 BIZ_SUMMARY_MAX_COMPANIES: int = 2
@@ -1588,7 +1636,9 @@ VIEWER_SERVICE_ACCOUNT_PATH: str = "service_account.json"
 VIEWER_WATCHLIST_SHEET: str = "watchlist"
 
 # ==============================================================
-# BLOCK 19: 米国株スクリーニング設定（BLOCK 19）
+# BLOCK 17: 米国株スクリーニング設定
+# ★ 2026-06-10 SSOT修正: 旧表記「BLOCK 19」は EdinetDB ローテーション
+#   （BLOCK 19）と番号衝突していたため BLOCK 17 に改番（MODULE_INDEX と一致）。
 # ==============================================================
 ENABLE_US_SCREENER: bool = True
 US_SCREENER_MAX_WORKERS: int = 5
@@ -1632,13 +1682,16 @@ ENABLE_DCF_VALUATION:      bool = True    # DCF理論株価 [6-3]
 ENABLE_NOTION_OBSIDIAN:    bool = True    # Notion/Obsidian連携 [6-4]
 
 # Notion API設定（未設定でもObsidianのみ動作）
-NOTION_API_KEY:            str  = "REDACTED_NOTION"     # Notion Integration Secret
+# ★ 2026-06-10 セキュリティ修正: APIキーのハードコードを廃止し環境変数化。
+#   GitHub Actions では Secrets に NOTION_API_KEY を登録すること。
+#   旧キー（ntn_4870...）はコードに露出していたため失効・再発行を推奨。
+NOTION_API_KEY:            str  = os.getenv("NOTION_API_KEY", "")  # Notion Integration Secret
 NOTION_DATABASE_ID:        str  = "331b571e4f7e8092b27dded753e5c3fe"     # スクリーナー銘柄DB の ID
 
 # Obsidian Vault パス（Google Drive上）
-# 例: DRIVE_BASE / "obsidian_vault"
-OBSIDIAN_VAULT_DIR:        str  = ""     # 空の場合DRIVE_BASE/stock_analyzer_vaultを使用
-OBSIDIAN_VAULT_DIR = str(DRIVE_BASE / "obsidian_vault")
+# ★ 2026-06-10 SSOT修正: 「空文字定義→直後に無条件上書き」の二重定義を単一化。
+#   実効値は従来どおり DRIVE_BASE/obsidian_vault（挙動変更なし）。
+OBSIDIAN_VAULT_DIR: str = str(DRIVE_BASE / "obsidian_vault")
 
 # signal_aggregatorのデフォルト重み（rule_optimizerが月次で調整）
 SIGNAL_WEIGHTS = {
@@ -1746,7 +1799,9 @@ ENABLE_MISS_FACTOR_ALERT: bool     = True
 # ==============================================================
 ENABLE_BAYESIAN_UPDATE: bool    = True
 CONFIDENCE_PRIOR_MAX_DAYS: int  = 30    # 信頼度1.0になる基準日数
-DRIFT_ALERT_THRESHOLD: float    = 15.0  # 乖離アラート発動閾値（pt）
+# ★ 2026-06-10 SSOT修正: DRIFT_ALERT_THRESHOLD はここ（15.0）と BLOCK 35
+#   （20.0）で二重定義され後勝ちで 20.0 が有効だった。実効値を維持するため
+#   本ブロックの定義を削除し BLOCK 35 を正とする（drift_detector.py 参照）。
 CONFIDENCE_PRIOR_MIN_HIST: int  =  3    # 最低何日分あれば更新するか
 
 # ==============================================================
@@ -1968,10 +2023,19 @@ US_WATCHLIST_TICKERS:      list  = [    # 優先取得銘柄（watchlist）
     "META", "TSLA", "BRK-B", "JPM", "V",
 ]
 
+# S&P500 ティッカー一覧（us_fundamental_rotator.py のローテーション対象）
+# US_SCREENER_CATEGORIES の "sp500" カテゴリ JSON から動的に読み込む
+# → ここには直接列挙せず、rotator 起動時に custom_universe/sp500.json を参照する
+SP500_TICKERS: list = []   # ★ 実値は run_us_fundamental_rotator() 内で補完する
+
 # ==============================================================
 # BLOCK US-2: 米国マクロ拡張パイプライン設定
 # ==============================================================
-ENABLE_US_MACRO: bool = True
+# ★ 2026-06-10 バグ修正: us_macro_pipeline.py がリポジトリに存在しない
+#   （未実装）にもかかわらずフラグが True で、毎日サイレントスキップ
+#   されていた。実装完了までは False とし、状態を明示する。
+#   実装後は run_us_macro_pipeline(cfg, results) を定義して True に戻すこと。
+ENABLE_US_MACRO: bool = False
 
 # FRED APIキーは既存の POLICY_FRED_API_KEY を共用（再設定不要）
 
@@ -2044,12 +2108,16 @@ B1_KESSAN_CATEGORIES: list = [
 ]
 
 # ==============================================================
-# BLOCK B-2: 政府統計先行指標ルール設定
+# BLOCK B-2b: 政府統計先行指標ルール 有効化フラグ
+# ★ 2026-06-10 SSOT修正: ルール本体（BLOCK B-2）と番号衝突していたため
+#   B-2b に改番。GOV_RULES 本体は BLOCK B-2 を参照。
 # ==============================================================
 ENABLE_GOV_RULES: bool = True
 
 # ==============================================================
-# BLOCK D-1: 投資判断カード設定
+# BLOCK D-1b: 投資判断カード設定
+# ★ 2026-06-10 SSOT修正: 旧表記「BLOCK D-1」は経済サイクルフェーズ判定
+#   （BLOCK D-1）と番号衝突していたため D-1b に改番。
 # ==============================================================
 ENABLE_INVESTMENT_CARD: bool = True
 
@@ -2075,3 +2143,2074 @@ CROWDING_REDUCTION_RATE:     float = 0.85   # 重みをこの比率で削減
 ENABLE_SEMANTIC_SCHOLAR: bool = True  # True で重み付き論文スコア有効化
 # 注: SS APIは無料・APIキー不要だが、1論文あたり約0.1秒の追加処理が発生
 # 上位候補のみに限定するため WEEKLY_MODULES での実行を推奨
+
+# ============================================================
+# XBRL タグマッピング（E2追加 / 2026-04-11）
+# ============================================================
+# キー: BigQuery financials テーブルのカラム名
+# 値 : EDINET XBRL のローカルタグ名（名前空間プレフィックスなし）
+# 日本基準（J-GAAP）のみ対応。IFRS は E5 フェーズで追加予定。
+XBRL_TAG_MAP = {
+    # ---- 損益計算書（PL）----
+    "net_sales":                   "NetSales",
+    "operating_income":            "OperatingIncome",
+    "ordinary_income":             "OrdinaryIncome",
+    "net_income":                  "ProfitLoss",              # 連結
+    # ---- 貸借対照表（BS）----
+    "total_assets":                "Assets",
+    "equity":                      "NetAssets",
+    "interest_bearing_debt":       "InterestBearingDebt",
+    "cash":                        "CashAndDeposits",
+    # ---- キャッシュフロー（CF）----
+    "operating_cf":                "NetCashProvidedByUsedInOperatingActivities",
+    "investing_cf":                "NetCashProvidedByUsedInInvestingActivities",
+    # free_cf は edinet_direct_fetcher.py 内で operating_cf + investing_cf から計算
+    # ---- 人的資本 ----
+    "num_employees":               "NumberOfEmployees",
+    "avg_age":                     "AverageAgeYearsInformationAboutEmployees",
+    "avg_salary":                  "AverageAnnualSalaryInformationAboutEmployees",
+    # ---- 役員報酬 ----
+    "total_director_remuneration": "TotalAmountOfRemunerationEtcDirectors",
+    "max_director_remuneration":   "RemunerationEtcOfHighestPaidDirector",
+    # ---- 設備投資 ----
+    "capex":                       "PurchaseOfPropertyPlantAndEquipmentIntangibleAssets",
+    "depreciation":                "DepreciationAndAmortization",
+}
+
+# セグメント情報のタグマッピング
+# 値: EDINET XBRL のセグメント数値タグ名
+XBRL_SEGMENT_TAGS = {
+    "segment_sales":   "NetSalesByReportableSegment",
+    "segment_profit":  "ProfitLossByReportableSegment",
+    "segment_assets":  "AssetsByReportableSegment",
+}
+
+# EDINET API リクエスト設定
+EDINET_REQUEST_INTERVAL = 1.5   # レート制限対策（秒）
+EDINET_REQUEST_TIMEOUT  = 30    # タイムアウト（秒）
+
+# ==============================================================
+# BLOCK 24: Pearl Score 設定（Wave 0 - Pearl Ph1）
+# ==============================================================
+
+ENABLE_PEARL_SCORE:           bool  = True
+PEARL_MIN_SCORE_ALERT:        float = 80.0    # LINE即時通知閾値（SS tier）
+PEARL_MCAP_MAX_ALERT_B:       float = 500.0   # 時価総額上限（億円）。超過は通知対象外
+PEARL_BONUS_CAP:              float = 15.0    # quality_score への最大加算ボーナス（pt）
+PEARL_CACHE_TTL_DAYS:         int   = 7       # pearl_candidates.json TTL
+PEARL_HISTORY_TTL_DAYS:       int   = 180     # pearl_history.json TTL
+PEARL_DIRECTION_TTL_DAYS:     int   = 90      # direction_momentum.json TTL
+PEARL_SMART_MONEY_TTL_DAYS:   int   = 90      # smart_money_trail.json TTL
+
+# Pearl ティア閾値（スコア 0〜100）
+PEARL_TIER_SS_MIN: float = 80.0
+PEARL_TIER_S_MIN:  float = 70.0
+PEARL_TIER_A_MIN:  float = 60.0
+PEARL_TIER_B_MIN:  float = 50.0
+
+# Pearl ティア → quality_score ボーナスマッピング
+PEARL_TIER_BONUS: dict = {
+    "SS": 15.0,
+    "S":  10.0,
+    "A":   5.0,
+    "B":   2.0,
+}
+
+# Ph1 で有効化するディメンション（D2・D5 は将来拡張用プレースホルダー）
+PEARL_ENABLED_DIMENSIONS: list = ["D1", "D3", "D4"]
+
+# 各ディメンションの重み（合計 = 1.0）
+# D1: 方向性 / D3: 利益品質・M-Score proxy / D4: 発見ギャップ
+PEARL_DIMENSION_WEIGHTS: dict = {
+    "D1": 0.35,
+    "D3": 0.40,
+    "D4": 0.25,
+}
+
+# Semantic Scholar API キャッシュ（citation_cache.json）
+SEMANTIC_SCHOLAR_CACHE_TTL_DAYS: int   = 30   # TTL: 30日
+SEMANTIC_SCHOLAR_API_URL:        str   = (
+    "https://api.semanticscholar.org/graph/v1/paper/arXiv:{arxiv_id}"
+    "?fields=citationCount,influentialCitationCount,authors"
+)
+
+# ==============================================================
+# BLOCK 25: 規模分類 / 業態判定設定（Wave 0 - Size Ph1 / BM Ph1）
+# ==============================================================
+
+# ── Size Tier（JP 時価総額基準、単位: 億円）──────────────────
+SIZE_TIER_THRESHOLDS_JP: dict = {
+    "Large": 10_000,   # 1兆円以上
+    "Mid":    1_000,   # 1000億円以上
+    "Small":    100,   # 100億円以上
+    "Micro":     50,   # 50億円以上
+    "Nano":       0,   # 50億円未満
+}
+
+# ── Size Tier（US 時価総額基準、単位: 億USD）──────────────────
+SIZE_TIER_THRESHOLDS_US: dict = {
+    "Large": 1_000,   # 1000億USD以上（Mega/Large Cap）
+    "Mid":     200,   # 200億USD以上（Large Cap）
+    "Small":    20,   # 20億USD以上（Mid Cap）
+    "Micro":     5,   # 5億USD以上（Small Cap）
+    "Nano":      0,   # 5億USD未満（Micro Cap）
+}
+
+# ペニー株フラグ（JP: 株価300円未満）
+PENNY_FLAG_THRESHOLD_JP: float = 300.0
+
+# Nano 評価上限（API 負荷軽減のため、1日あたりの評価数上限）
+NANO_EVALUATION_MAX_PER_DAY: int = 5
+
+# size_tier_master.json TTL
+SIZE_TIER_CACHE_TTL_DAYS: int = 7
+
+# ── 業態定義（BM-01〜BM-12）─────────────────────────────────
+BUSINESS_MODEL_TYPES: dict = {
+    "BM-01": "装置産業（重工業・鉄鋼・化学）",
+    "BM-02": "消耗品製造（食品・日用品・医薬品）",
+    "BM-03": "組立製造（自動車・電機・精密機器）",
+    "BM-04": "ソフトウェア・SaaS",
+    "BM-05": "プラットフォーム（マーケットプレイス）",
+    "BM-06": "金融サービス（銀行・保険・証券）",
+    "BM-07": "不動産・REIT",
+    "BM-08": "インフラ・公益（電力・ガス・通信・運輸）",
+    "BM-09": "小売・流通・卸売",
+    "BM-10": "サービス（ヘルスケア・教育・外食）",
+    "BM-11": "資源・エネルギー採掘",
+    "BM-12": "持株会社・コングロマリット",
+}
+
+# 業種コード（JP東証33業種）→ 業態マッピング
+BM_SECTOR_MAP: dict = {
+    "1001": ["BM-11"],               # 水産・農林
+    "1002": ["BM-11"],               # 鉱業
+    "1003": ["BM-01"],               # 建設
+    "1004": ["BM-02"],               # 食料品
+    "1005": ["BM-01"],               # 繊維製品
+    "1006": ["BM-01"],               # パルプ・紙
+    "1007": ["BM-01"],               # 化学
+    "1008": ["BM-02"],               # 医薬品
+    "1009": ["BM-11"],               # 石油・石炭製品
+    "1010": ["BM-01"],               # ゴム製品
+    "1011": ["BM-01"],               # ガラス・土石製品
+    "1012": ["BM-01"],               # 鉄鋼
+    "1013": ["BM-01"],               # 非鉄金属
+    "1014": ["BM-01"],               # 金属製品
+    "1015": ["BM-03"],               # 機械
+    "1016": ["BM-03", "BM-04"],      # 電気機器
+    "1017": ["BM-03"],               # 輸送用機器
+    "1018": ["BM-03"],               # 精密機器
+    "1019": ["BM-01"],               # その他製品
+    "1020": ["BM-08"],               # 電力・ガス
+    "1021": ["BM-08"],               # 陸運
+    "1022": ["BM-08"],               # 海運
+    "1023": ["BM-08"],               # 空運
+    "1024": ["BM-08"],               # 倉庫・運輸関連
+    "1025": ["BM-08"],               # 情報通信
+    "1026": ["BM-09"],               # 卸売業
+    "1027": ["BM-09"],               # 小売業
+    "1028": ["BM-06"],               # 銀行業
+    "1029": ["BM-06"],               # 証券・商品先物
+    "1030": ["BM-06"],               # 保険業
+    "1031": ["BM-06"],               # その他金融
+    "1032": ["BM-07"],               # 不動産業
+    "1033": ["BM-10"],               # サービス業
+}
+
+# 業態別 ROE ベンチマーク（超過リターン判定の基準値）
+BM_ROE_BENCHMARKS: dict = {
+    "BM-01": 0.06,
+    "BM-02": 0.10,
+    "BM-03": 0.08,
+    "BM-04": 0.15,
+    "BM-05": 0.15,
+    "BM-06": 0.08,
+    "BM-07": 0.05,
+    "BM-08": 0.07,
+    "BM-09": 0.08,
+    "BM-10": 0.10,
+    "BM-11": 0.07,
+    "BM-12": 0.06,
+}
+
+# 業態自動判定の財務比率閾値
+BM_DETECTION_THRESHOLDS: dict = {
+    "recurring_revenue_ratio_min": 0.70,      # BM-04/05: 繰返し売上比率
+    "asset_turnover_heavy_max":    0.50,      # BM-01: 資産回転率≤0.5 = 装置産業
+    "gross_margin_saas_min":       0.60,      # BM-04: 粗利率60%以上
+    "debt_ratio_bank_min":         0.80,      # BM-06: 負債比率80%以上
+    "revenue_per_employee_saas":   20_000_000, # BM-04: 1人あたり売上2000万円以上
+}
+
+# ==============================================================
+# BLOCK 26: 議員取引監視設定（Wave 0 - Policy Ph1）
+# ==============================================================
+ENABLE_POLITICIAN_MONITOR:   bool  = True
+ALERT_POLITICIAN_MIN_SCORE:  int   = 60      # この点数以上でLINE即時通知
+ALERT_BUFFETT_THRESHOLD:     bool  = True    # 著名委員会所属議員を優先スコアリング
+POLITICIAN_HISTORY_MAX_ROWS: int   = 5000    # historian_history.json 最大保持行数
+
+# 議員取引キャッシュのTTL設定
+POLITICIAN_CACHE_TTL_DAYS:   int   = 180     # politician_history.json 保持日数
+EVENT_CACHE_TTL_DAYS:        int   = 7       # event_cache.json 保持日数
+
+# 取得対象年（空リストの場合は当年のみ）
+POLITICIAN_TARGET_YEARS:     list  = []      # 例: [2024, 2025] で複数年取得
+
+# 実行曜日（datetime.weekday(): 0=月 1=火 ... 4=金 6=日）
+POLITICIAN_RUN_WEEKDAYS: tuple[int, ...] = (1, 4)
+def is_politician_run_day(now=None) -> bool:
+    """火・金かどうかを判定（TZ=Asia/Tokyo 前提で datetime.now() を使う）"""
+    from datetime import datetime
+    dt = now or datetime.now()
+    return dt.weekday() in POLITICIAN_RUN_WEEKDAYS
+
+# ==============================================================
+# BLOCK 23: US GICSセクター設定（Wave 1 - U-1 / U-2）
+# ★ 2026-06-10 SSOT修正: 旧表記「BLOCK 27」は Wave 6 縮退モード設定
+#   （BLOCK 27）と番号衝突していたため BLOCK 23 に改番。
+# ==============================================================
+
+# ── GICSセクター別マクロ感応度ルール（U-1）─────────────────────────
+# us_stock_screener._calc_score() がこの辞書を参照し、
+# アクティブなマクロファクターに応じて composite_score を加算/減算する。
+#
+# key:         US セクターETFシンボル（"XLK" 等）
+# score_delta: 1ファクターあたりの加算量（正=追い風/負=逆風）
+# factor キー一覧:
+#   "interest_rate_rise"  / "interest_rate_fall"
+#   "oil_price_rise"
+#   "recession_risk"
+#   "yen_depreciation"    / "yen_appreciation"
+US_SECTOR_RULES: dict = {
+    "XLK":  {
+        "name_ja":          "情報技術",
+        "macro_sensitivity": {
+            "interest_rate_rise": {
+                "score_delta": -4,
+                "reason": "DCF割引率上昇→グロース株バリュエーション圧縮",
+            },
+            "interest_rate_fall": {
+                "score_delta": +4,
+                "reason": "割引率低下でグロース評価が改善",
+            },
+            "recession_risk": {
+                "score_delta": -3,
+                "reason": "IT設備投資削減・広告費カットリスク",
+            },
+        },
+    },
+    "XLY":  {
+        "name_ja":          "一般消費財",
+        "macro_sensitivity": {
+            "interest_rate_rise": {
+                "score_delta": -3,
+                "reason": "消費ローン・住宅ローン金利上昇→耐久財需要抑制",
+            },
+            "recession_risk": {
+                "score_delta": -5,
+                "reason": "景気後退で耐久財・高額商品需要が激減",
+            },
+            "oil_price_rise": {
+                "score_delta": -2,
+                "reason": "ガソリン高→家計の可処分所得が縮小",
+            },
+        },
+    },
+    "XLF":  {
+        "name_ja":          "金融",
+        "macro_sensitivity": {
+            "interest_rate_rise": {
+                "score_delta": +6,
+                "reason": "NIM（純利鞘）拡大で銀行・証券の収益が改善",
+            },
+            "interest_rate_fall": {
+                "score_delta": -4,
+                "reason": "NIM圧縮→銀行収益低下",
+            },
+            "recession_risk": {
+                "score_delta": -8,
+                "reason": "不良債権増加・信用コスト急騰・貸し渋り",
+            },
+        },
+    },
+    "XLV":  {
+        "name_ja":          "ヘルスケア",
+        "macro_sensitivity": {
+            "recession_risk": {
+                "score_delta": +3,
+                "reason": "ディフェンシブ・景気後退でも医療需要は不変",
+            },
+            "interest_rate_rise": {
+                "score_delta": -1,
+                "reason": "R&D資金調達コスト増（軽微）",
+            },
+        },
+    },
+    "XLE":  {
+        "name_ja":          "エネルギー",
+        "macro_sensitivity": {
+            "oil_price_rise": {
+                "score_delta": +8,
+                "reason": "原油価格上昇で探鉱・生産コンパニーの収益に直結",
+            },
+            "recession_risk": {
+                "score_delta": -4,
+                "reason": "需要減退でエネルギー消費量が低下",
+            },
+            "interest_rate_rise": {
+                "score_delta": -1,
+                "reason": "探鉱・開発コスト増（軽微）",
+            },
+        },
+    },
+    "XLB":  {
+        "name_ja":          "素材",
+        "macro_sensitivity": {
+            "recession_risk": {
+                "score_delta": -4,
+                "reason": "工業・建設需要の減退で素材需要が低下",
+            },
+            "interest_rate_rise": {
+                "score_delta": -2,
+                "reason": "設備投資減退→素材需要間接減",
+            },
+            "oil_price_rise": {
+                "score_delta": -1,
+                "reason": "エネルギーコスト増（製造コスト上昇）",
+            },
+        },
+    },
+    "XLI":  {
+        "name_ja":          "資本財",
+        "macro_sensitivity": {
+            "recession_risk": {
+                "score_delta": -5,
+                "reason": "設備投資が凍結され受注が急減",
+            },
+            "interest_rate_rise": {
+                "score_delta": -3,
+                "reason": "設備投資コスト増加→受注減退",
+            },
+        },
+    },
+    "XLC":  {
+        "name_ja":          "通信サービス",
+        "macro_sensitivity": {
+            "interest_rate_rise": {
+                "score_delta": -3,
+                "reason": "借入依存度の高い通信会社の金利負担が増大",
+            },
+            "recession_risk": {
+                "score_delta": -1,
+                "reason": "デジタル広告収入減少リスク（軽微）",
+            },
+        },
+    },
+    "XLU":  {
+        "name_ja":          "公益事業",
+        "macro_sensitivity": {
+            "interest_rate_rise": {
+                "score_delta": -5,
+                "reason": "ボンドプロキシ・調達コスト増・配当利回りの相対魅力低下",
+            },
+            "interest_rate_fall": {
+                "score_delta": +4,
+                "reason": "配当利回りの相対的魅力が回復",
+            },
+            "recession_risk": {
+                "score_delta": +2,
+                "reason": "ディフェンシブ・公益需要は景気に非弾力的",
+            },
+            "oil_price_rise": {
+                "score_delta": -3,
+                "reason": "発電燃料調達コストの上昇",
+            },
+        },
+    },
+    "XLRE": {
+        "name_ja":          "不動産",
+        "macro_sensitivity": {
+            "interest_rate_rise": {
+                "score_delta": -6,
+                "reason": "REIT評価下落・住宅ローン金利急騰・物件評価額低下",
+            },
+            "interest_rate_fall": {
+                "score_delta": +5,
+                "reason": "不動産評価上昇・借入コスト低下でREIT需要回復",
+            },
+            "recession_risk": {
+                "score_delta": -4,
+                "reason": "空室率上昇・賃料低下・物件流動性低下",
+            },
+        },
+    },
+    "XLP":  {
+        "name_ja":          "生活必需品",
+        "macro_sensitivity": {
+            "recession_risk": {
+                "score_delta": +4,
+                "reason": "最強ディフェンシブ・食料・日用品需要は景気に非弾力的",
+            },
+            "oil_price_rise": {
+                "score_delta": -2,
+                "reason": "物流・包材・農業燃料コスト上昇",
+            },
+            "interest_rate_rise": {
+                "score_delta": -1,
+                "reason": "影響軽微（事業安定性が高いため）",
+            },
+        },
+    },
+}
+
+# ── GICSセクター別金利感応度ルール（U-2）─────────────────────────
+# bond_commodity_pipeline.py の calc_rate_sensitivity_deltas() が参照する。
+# FRED API から取得した US10Y / US2Y の変化量（bps）に対して
+# GICSセクターETFのスコア補正量を算出するためのルール。
+#
+# sensitivity:        "positive"（金利上昇有利）/ "negative"（不利）/ "neutral"
+# magnitude:          1bps変化あたりの score_delta の目安（スケーリング係数）
+#                     例: magnitude=0.06 かつ rate_change=50bps → delta=3.0pt
+# rate_threshold_bp:  この bps 以上変化したときのみ発動（ノイズ除去）
+# max_delta:          単一ルールの上限クリップ（±pt）
+US_RATE_SENSITIVITY_RULES: dict = {
+    "XLF":  {
+        "sensitivity":       "positive",
+        "magnitude":          0.12,
+        "rate_threshold_bp":  25,
+        "max_delta":          8,
+        "reason":            "NIM拡大で銀行・証券収益が直接改善",
+    },
+    "XLRE": {
+        "sensitivity":       "negative",
+        "magnitude":         -0.12,
+        "rate_threshold_bp":  25,
+        "max_delta":          8,
+        "reason":            "REIT借入コスト増・物件評価額下落・住宅ローン急騰",
+    },
+    "XLU":  {
+        "sensitivity":       "negative",
+        "magnitude":         -0.10,
+        "rate_threshold_bp":  25,
+        "max_delta":          6,
+        "reason":            "ボンドプロキシ・配当利回りの相対魅力が低下",
+    },
+    "XLK":  {
+        "sensitivity":       "negative",
+        "magnitude":         -0.08,
+        "rate_threshold_bp":  25,
+        "max_delta":          6,
+        "reason":            "DCF割引率上昇でグロース株の将来CF現在価値が大幅圧縮",
+    },
+    "XLC":  {
+        "sensitivity":       "negative",
+        "magnitude":         -0.06,
+        "rate_threshold_bp":  25,
+        "max_delta":          5,
+        "reason":            "借入依存度の高い通信会社の金利負担増",
+    },
+    "XLY":  {
+        "sensitivity":       "negative",
+        "magnitude":         -0.06,
+        "rate_threshold_bp":  25,
+        "max_delta":          5,
+        "reason":            "消費ローン・住宅ローン金利上昇で耐久財需要が抑制",
+    },
+    "XLI":  {
+        "sensitivity":       "negative",
+        "magnitude":         -0.04,
+        "rate_threshold_bp":  25,
+        "max_delta":          4,
+        "reason":            "設備投資コスト増加→受注減退",
+    },
+    "XLB":  {
+        "sensitivity":       "negative",
+        "magnitude":         -0.04,
+        "rate_threshold_bp":  25,
+        "max_delta":          4,
+        "reason":            "工業材料需要の設備投資減退に連動",
+    },
+    "XLE":  {
+        "sensitivity":       "neutral",
+        "magnitude":          0.01,
+        "rate_threshold_bp":  50,
+        "max_delta":          2,
+        "reason":            "油価に強く依存・金利感応度は相対的に低い",
+    },
+    "XLV":  {
+        "sensitivity":       "neutral",
+        "magnitude":         -0.02,
+        "rate_threshold_bp":  50,
+        "max_delta":          2,
+        "reason":            "R&D調達コスト増（軽微）・需要は金利に非弾力的",
+    },
+    "XLP":  {
+        "sensitivity":       "neutral",
+        "magnitude":         -0.02,
+        "rate_threshold_bp":  50,
+        "max_delta":          2,
+        "reason":            "生活必需品需要は金利に非弾力的・影響軽微",
+    },
+}
+
+# ==============================================================
+# BLOCK 28: 先行指標ルール設定（Wave 1 - A-1 / A-2）
+# ==============================================================
+
+# ── A-1: 貿易品目 → 業種コードマッピング ─────────────────────────
+# gov_data_pipeline.fetch_trade_item_signals() が参照する。
+# statsCode / searchWord はe-Stat財務省貿易統計から対応する品目表を使用する。
+# weight: スコア増幅係数（1.0 = 基準。1.5 = 1.5倍の影響を与える）
+# ★ 2026-06-10 SSOT修正: 旧名 LEADING_INDICATOR_RULES は BLOCK R-2 と
+#   同名衝突し後勝ち上書きが発生していたため GOV_TRADE_JOB_RULES に改名。
+GOV_TRADE_JOB_RULES: dict = {
+    "trade_items": {
+        "semiconductor_exports": {
+            "name_ja":    "半導体・電子部品輸出",
+            "statsCode":  "00350300",
+            "searchWord": "半導体等電子部品",
+            "sectors":    ["1016", "1018"],       # 電気機器, 精密機器
+            "direction":  "higher_is_good",
+            "weight":     1.5,
+            "stat_id":    "trade_semiconductor",
+            "description": "半導体輸出増は電気機器・精密機器メーカーの受注先行指標",
+        },
+        "auto_exports": {
+            "name_ja":    "自動車輸出",
+            "statsCode":  "00350300",
+            "searchWord": "自動車",
+            "sectors":    ["1017"],                # 輸送用機器
+            "direction":  "higher_is_good",
+            "weight":     1.3,
+            "stat_id":    "trade_auto",
+            "description": "自動車輸出増は輸送用機器メーカーの生産・収益先行指標",
+        },
+        "machinery_exports": {
+            "name_ja":    "一般機械輸出",
+            "statsCode":  "00350300",
+            "searchWord": "一般機械",
+            "sectors":    ["1015"],                # 機械
+            "direction":  "higher_is_good",
+            "weight":     1.2,
+            "stat_id":    "trade_machinery",
+            "description": "一般機械輸出増は機械業種の設備投資受注先行指標",
+        },
+        "chemical_exports": {
+            "name_ja":    "化学製品輸出（有機化合物）",
+            "statsCode":  "00350300",
+            "searchWord": "有機化合物",
+            "sectors":    ["1007"],                # 化学
+            "direction":  "higher_is_good",
+            "weight":     1.1,
+            "stat_id":    "trade_chemical",
+            "description": "有機化合物輸出増は化学業種の生産・販売先行指標",
+        },
+        "steel_exports": {
+            "name_ja":    "鉄鋼輸出",
+            "statsCode":  "00350300",
+            "searchWord": "鉄鋼",
+            "sectors":    ["1012"],                # 鉄鋼
+            "direction":  "higher_is_good",
+            "weight":     1.1,
+            "stat_id":    "trade_steel",
+            "description": "鉄鋼輸出増は鉄鋼業の生産・価格の先行指標",
+        },
+        "pharma_imports": {
+            "name_ja":    "医薬品輸入",
+            "statsCode":  "00350300",
+            "searchWord": "医薬品",
+            "sectors":    ["1008"],                # 医薬品
+            "direction":  "higher_is_good",
+            "weight":     1.0,
+            "stat_id":    "trade_pharma",
+            "description": "医薬品輸入増は国内医薬品需要の高まりを示す先行指標",
+        },
+        "crude_oil_imports": {
+            "name_ja":    "原油輸入",
+            "statsCode":  "00350300",
+            "searchWord": "原油",
+            "sectors":    ["1009", "1020"],        # 石油石炭, 電力ガス
+            "direction":  "lower_is_good",         # 輸入増=コスト増=逆風
+            "weight":     1.2,
+            "stat_id":    "trade_crude_oil",
+            "description": "原油輸入増はエネルギーコスト上昇→石油精製・電力ガスに逆風",
+        },
+    },
+
+    # ── A-2: 職種別求人倍率 → 業種コードマッピング ──────────────────
+    # ★ Ph1 プレースホルダー: 統計ID確定後に実装
+    # 厚生労働省「一般職業紹介状況（職業別）」
+    #   statsCode 候補: "00450022"（要e-Stat API確認）
+    "job_openings": {
+        "it_specialist": {
+            "name_ja":    "IT・情報系専門職求人倍率",
+            "statsCode":  "",                      # TODO: 統計ID調査後に設定
+            "searchWord": "情報処理・通信技術者",
+            "sectors":    ["1025", "1016"],        # 情報通信, 電気機器
+            "direction":  "higher_is_good",
+            "weight":     1.3,
+            "stat_id":    "job_it",
+            "placeholder": True,
+            "description": "IT専門職求人増は情報通信・電気機器の事業拡大先行指標",
+        },
+        "construction": {
+            "name_ja":    "建設・土木系技術者求人倍率",
+            "statsCode":  "",                      # TODO: 統計ID調査後に設定
+            "searchWord": "建設・土木・測量技術者",
+            "sectors":    ["1003", "1015"],        # 建設, 機械
+            "direction":  "higher_is_good",
+            "weight":     1.2,
+            "stat_id":    "job_construction",
+            "placeholder": True,
+            "description": "建設求人増は建設・機械発注増の先行指標",
+        },
+        "healthcare": {
+            "name_ja":    "医療・介護系求人倍率",
+            "statsCode":  "",                      # TODO: 統計ID調査後に設定
+            "searchWord": "医療・福祉",
+            "sectors":    ["1008", "1033"],        # 医薬品, サービス
+            "direction":  "higher_is_good",
+            "weight":     1.1,
+            "stat_id":    "job_healthcare",
+            "placeholder": True,
+            "description": "医療介護求人増は医薬品・サービス業の需要拡大先行指標",
+        },
+        "manufacturing": {
+            "name_ja":    "製造技能系求人倍率",
+            "statsCode":  "",                      # TODO: 統計ID調査後に設定
+            "searchWord": "生産工程・労務",
+            "sectors":    ["1015", "1016", "1017"], # 機械, 電気機器, 輸送用機器
+            "direction":  "higher_is_good",
+            "weight":     1.2,
+            "stat_id":    "job_manufacturing",
+            "placeholder": True,
+            "description": "製造求人増は機械・電気・自動車の生産拡大先行指標",
+        },
+        "logistics": {
+            "name_ja":    "運輸・物流系求人倍率",
+            "statsCode":  "",                      # TODO: 統計ID調査後に設定
+            "searchWord": "輸送・機械運転",
+            "sectors":    ["1021", "1022", "1023"], # 陸運, 海運, 空運
+            "direction":  "higher_is_good",
+            "weight":     1.1,
+            "stat_id":    "job_logistics",
+            "placeholder": True,
+            "description": "物流求人増は陸海空運の事業拡大シグナル",
+        },
+    },
+}
+
+# ==============================================================
+# BLOCK 29: Wave 2 Feature Engineering 定数（FE-1 / FE-2 / FE-3）
+# ==============================================================
+
+# ── FE-1: リスク調整スコア（ATR基準） ────────────────────────────
+# _calc_risk_adjusted_score() が参照する。
+# ATR_WINDOW: ATR計算ウィンドウ（日数）
+# RISK_ADJ_PENALTY_LOW_VOL : ボラ低銘柄への乗数（≤1.0 = ボーナス扱い）
+# RISK_ADJ_PENALTY_HIGH_VOL: ボラ高銘柄への乗数（>1.0 = ペナルティ扱い）
+ATR_WINDOW                 = 14
+RISK_ADJ_PENALTY_LOW_VOL   = 0.85   # $risk\_adj = composite \times 0.85$ (低ボラ優遇)
+RISK_ADJ_PENALTY_HIGH_VOL  = 1.20   # $risk\_adj = composite \div 1.20$ (高ボラ割引)
+GARCH_ENABLED              = False   # True にすると ARCH ライブラリが必要
+
+# ── FE-2: アナリスト修正トラッカー ───────────────────────────────
+# ANALYST_REVISION_WINDOW_DAYS: upgrade/downgrade 集計ウィンドウ（日数）
+# PEAD_TRIGGER_MIN_REVISION   : PEAD トリガー発動最小 revision_score
+# PEAD_TRIGGER_DAYS           : PEAD シグナル有効期間（日数）
+ANALYST_REVISION_WINDOW_DAYS = 30
+PEAD_TRIGGER_MIN_REVISION    = 0.3
+PEAD_TRIGGER_DAYS            = 5
+
+# ── FE-3: M-Score proxy ペナルティ閾値 ──────────────────────────
+# Beneish(1999)の操作判定閾値。D3スコアに乗数ペナルティを適用。
+# M_SCORE_PENALTY_THRESHOLD : この値超 → D3 × M_SCORE_STRONG_MULTIPLIER
+# M_SCORE_MEDIUM_THRESHOLD  : この値超（かつ閾値以下）→ D3 × M_SCORE_MEDIUM_MULTIPLIER
+M_SCORE_PENALTY_THRESHOLD  = -1.78   # 強操作リスク閾値（Beneish 1999）
+M_SCORE_MEDIUM_THRESHOLD   = -2.22   # 中操作リスク閾値（Beneish 1999）
+M_SCORE_STRONG_MULTIPLIER  = 0.50    # 強ペナルティ乗数（D3 を半減）
+M_SCORE_MEDIUM_MULTIPLIER  = 0.75    # 中ペナルティ乗数（D3 を0.75倍）
+
+# ==============================================================
+# BLOCK 30: Ignition Detector 定数（Wave 2 - FE-4）
+# ==============================================================
+# ignition_detector.py が参照する。
+# カテゴリA（資金フロー）・B（ナラティブ）・C（価格）のシグナルが
+# IGNITION_CONVERGENCE_WINDOW_DAYS 以内に同一セクター/テーマへ収束した
+# 場合に convergence_score を算出し、LINE通知トリガーを判定する。
+
+# 収束ウィンドウ（日数）
+IGNITION_CONVERGENCE_WINDOW_DAYS  = 14
+
+# LINE通知閾値
+IGNITION_MIN_SCORE_LINE            = 3.0   # convergence_score ≥ 3.0 → LINE即時通知
+IGNITION_MAX_SCORE_LINE_CRITICAL   = 3.5   # ≥ 3.5 かつ反復検出 → 最高警戒LINE
+
+# 最高警戒判定: IGNITION_CRITICAL_REPEAT_DAYS 以内に2回以上検出で発動
+IGNITION_CRITICAL_REPEAT_DAYS     = 14
+
+# カテゴリD（将来拡張用）
+IGNITION_CATEGORY_D_ENABLED       = False
+
+# キャッシュ TTL
+IGNITION_ALERT_TTL_DAYS           = 14    # ignition_alerts.json
+IGNITION_HISTORY_TTL_DAYS         = 180   # ignition_history.json
+
+# ==============================================================
+# BLOCK 31: Wave 3 - Policy Ph2 定数
+# ==============================================================
+# policy_signal_applier.py / politician_signal_scorer.py が参照する。
+# POLITICIAN_CACHE_LAYERS : 4層減衰キャッシュの層数
+# EMERGENCY_VIX_THRESHOLD : この値超で EMERGENCY_OVERRIDE_FLAG を立てる
+# SCORE_MAX_POLICY_L4_ADJ : Level 4 Override 時の composite_score 最大加算量
+
+POLITICIAN_CACHE_LAYERS    = 4
+EMERGENCY_VIX_THRESHOLD    = 45.0   # VIX > 45 → 緊急介入フラグ
+SCORE_MAX_POLICY_L4_ADJ    = 25.0   # $composite\_score + min(bonus, 25.0)$
+
+# ==============================================================
+# BLOCK 32: Wave 3 - FE-5 PEAD監視定数
+# ==============================================================
+# pead_monitor.py が参照する。
+# PEAD_SCORE_ALERT_THRESHOLD: この値以上かつ出来高条件で LINE通知（トリガー㉒）
+# PEAD_DECAY_DAILY          : 毎日スコアに乗じる減衰係数（$score \times 0.85$）
+# PEAD_VOLUME_MIN_RATIO     : トリガー発動に必要な出来高倍率（平均比）
+# PEAD_MAX_HOLDING_DAYS_JP  : JP株の PEAD 有効期間上限（日）
+
+PEAD_SCORE_ALERT_THRESHOLD = 5.0
+PEAD_DECAY_DAILY           = 0.85
+PEAD_VOLUME_MIN_RATIO      = 1.5
+PEAD_MAX_HOLDING_DAYS_JP   = 60
+
+# ==============================================================
+# BLOCK 33: Wave 3 - FE-6 ポートフォリオ相関管理定数
+# ==============================================================
+# portfolio_diversity_filter.py が参照する。
+# DIVERSITY_CORRELATION_THRESHOLD: この値超のペアを「高相関」と判定
+# DIVERSITY_HHI_WARNING          : HHI がこの値超で警告（Gmail週次 トリガー㉓）
+# DIVERSITY_HHI_CRITICAL         : HHI がこの値超で危険レベル
+# DIVERSITY_OPTION_B_ENABLED     : Option B（強制分散リバランス）の有効化フラグ
+# DIVERSITY_CORR_WINDOW_DAYS     : 相関行列の計算ウィンドウ（日）
+# HHI: $HHI = \sum_{i} w_i^2$（Herfindahl-Hirschman Index）
+
+DIVERSITY_CORRELATION_THRESHOLD = 0.70
+DIVERSITY_HHI_WARNING           = 0.25
+DIVERSITY_HHI_CRITICAL          = 0.35
+DIVERSITY_OPTION_B_ENABLED      = False
+DIVERSITY_CORR_WINDOW_DAYS      = 60
+
+# ==============================================================
+# BLOCK 34: Wave 3 - FE-7 カタリストカレンダー定数
+# ==============================================================
+# catalyst_calendar.py が参照する。
+# CATALYST_BONUS_MAX         : _calc_catalyst_bonus() の上限加算量（+5pt）
+# CATALYST_PROXIMITY_DAYS    : 接近日数の区間定義（[14, 30, 60]日）
+# CATALYST_PROXIMITY_SCORES  : 各区間に対応するスコア（[1.0, 0.6, 0.3]）
+#   $proximity\_score = SCORES[i]$ if $days\_until \leq DAYS[i]$
+# CATALYST_CALENDAR_TTL_DAYS : catalyst_calendar.json の TTL（日）
+# CATALYST_HISTORY_TTL_DAYS  : catalyst_history.json の TTL（日）
+
+CATALYST_BONUS_MAX          = 5.0
+CATALYST_PROXIMITY_DAYS     = [14, 30, 60]
+CATALYST_PROXIMITY_SCORES   = [1.0, 0.6, 0.3]
+CATALYST_CALENDAR_TTL_DAYS  = 30
+CATALYST_HISTORY_TTL_DAYS   = 365
+
+# カテゴリ別スコア重み（A+B+C = 1.0）
+IGNITION_WEIGHT_CATEGORY_A        = 0.40   # 資金フロー（最重要）
+IGNITION_WEIGHT_CATEGORY_B        = 0.35   # ナラティブ
+IGNITION_WEIGHT_CATEGORY_C        = 0.25   # 価格シグナル
+
+# ==============================================================
+# BLOCK 35: Wave 4 全定数（E3 / Policy Ph3-Ph4 / S3-S4 / FE-F）
+# ==============================================================
+# 参照モジュール:
+#   E3      → segment_mapper.py / segment_signal.py / base_agent.py
+#   Ph3     → institutional_13f_monitor.py / institutional_signal_scorer.py
+#             policy_signal_applier.py / alert_notifier.py
+#   Ph4     → congress_monitor.py / policy_signal_applier.py / policy_radar.py
+#   S3      → deep_dive_trigger.py / stock_analyzer_main.py
+#             edinet_rotation_manager.py
+#   S4/FE-F → score_prior_manager.py / drift_detector.py
+#             rule_optimizer.py / stock_analyzer_main.py
+# ==============================================================
+
+# ── E3: セグメント名寄せ ─────────────────────────────────────────
+# GEMINI_API_KEY          : Gemini API (無料枠) キー - google.colab.userdata から取得
+# SEGMENT_SIMILARITY_THRESHOLD : コサイン類似度がこの値以下→Gemini判定に委譲
+# SEGMENT_GEMINI_MODEL    : Gemini API で使用するモデル名
+# SEGMENT_VERIFIED_AUTO   : sentence-transformers の類似度がこの値超→verified_flag=True
+# SEGMENT_MAPPER_TTL_DAYS : segment_mapper キャッシュ有効期間（日）
+# SEGMENT_BONUS_MAX       : edinet_segment_bonus の上限（+7pt）
+# SEGMENT_BONUS_MIN       : edinet_segment_bonus の下限（-5pt）
+# HHI: $HHI = \sum_{i} s_i^2$（セグメント集中度、si=売上構成比）
+try:
+    from google.colab import userdata as _ud
+    GEMINI_API_KEY = _ud.get("GEMINI_API_KEY") or ""
+except Exception:
+    GEMINI_API_KEY = ""
+
+SEGMENT_SIMILARITY_THRESHOLD = 0.85
+SEGMENT_GEMINI_MODEL          = "gemini-1.5-flash"
+SEGMENT_VERIFIED_AUTO         = 0.90
+SEGMENT_MAPPER_TTL_DAYS       = 90
+SEGMENT_BONUS_MAX             = 7.0
+SEGMENT_BONUS_MIN             = -5.0
+
+# ── Policy Ph3: 機関投資家（13F）定数 ────────────────────────────
+# INSTITUTION_TIER_MAP    : 機関名 → Tier（1=Buffett, 2=Ackman, 3=大手）
+# SCORE_MAX_INSTITUTION_ADJ: 機関投資家シグナルによる最大加算量（+15pt）
+# INSTITUTION_HISTORY_TTL_DAYS : institutional_history.json TTL（日）
+# POLICY_MEDIUM_CACHE_TTL_DAYS : policy_medium_cache.json TTL（日）
+# INSTITUTION_MIN_NEW_POSITION_USD: 大手機関アラートの最小取得額（ドル）
+# 重み: $institutional\_signal = 0.02$（signal_aggregator DEFAULT_WEIGHTS）
+
+INSTITUTION_TIER_MAP: dict = {
+    # Tier 1: 超大型バリュー投資家（最高優先度）
+    "Berkshire Hathaway":            1,
+    "Berkshire Hathaway Inc":        1,
+    # Tier 2: 著名アクティビスト
+    "Pershing Square Capital":       2,
+    "Pershing Square Capital Management": 2,
+    "Elliott Investment Management": 2,
+    "Third Point":                   2,
+    "Third Point LLC":               2,
+    # Tier 3: 大手機関投資家（運用残高1兆ドル超）
+    "BlackRock":                     3,
+    "BlackRock Inc":                 3,
+    "Vanguard Group":                3,
+    "State Street":                  3,
+    "Fidelity":                      3,
+    "T. Rowe Price":                 3,
+    "Capital Research":              3,
+}
+SCORE_MAX_INSTITUTION_ADJ         = 15.0
+INSTITUTION_HISTORY_TTL_DAYS      = 180
+POLICY_MEDIUM_CACHE_TTL_DAYS      = 90
+INSTITUTION_MIN_NEW_POSITION_USD  = 1_000_000_000   # 10億ドル
+
+# ── Policy Ph3 追加設定（Wave 6 - U-4）────────────────────────
+# 既存の INSTITUTION_TIER_MAP / SCORE_MAX_INSTITUTION_ADJ を流用し、
+# 以下の追加定数のみ Wave 6 で新規追加する。
+
+# 13F取得の有効フラグ（False でモジュール全体をスキップ）
+ENABLE_INSTITUTIONAL_13F: bool = True
+
+# SEC EDGAR API エンドポイント
+EDGAR_SUBMISSIONS_URL: str = "https://data.sec.gov/submissions"
+EDGAR_ARCHIVES_URL:    str = "https://www.sec.gov/Archives/edgar/data"
+
+# institutional_bonus の composite_score への適用上限（us_stock_screener.py 参照）
+INSTITUTIONAL_BONUS_MAX: float =  8.0   # 最大 +8pt
+INSTITUTIONAL_BONUS_MIN: float = -5.0   # 最小 -5pt（機関投資家売越時）
+
+# institutional_history.json のキャッシュパス（CACHE_DIR 配下）
+INSTITUTIONAL_CACHE_PATH: str = "institutional_history.json"
+
+# 四半期提出期間の判定補助設定
+# 具体的な判定ロジックは institutional_13f_monitor._is_quarter_filing_period() に実装済み
+# ここでは月次設定のみ定数として保持する
+INSTITUTIONAL_QUARTER_MONTHS: tuple = (1, 4, 7, 10)  # 提出期間の月
+INSTITUTIONAL_QUARTER_DAY_FROM: int = 15              # 提出期間開始日（各月15日〜）
+
+# ── Policy Ph4: 構造変化L4・congress_monitor 定数 ─────────────────
+# SCORE_MAX_POLICY_L4_ADJ    : L4 Override 最大加算量（+25pt）← BLOCK31の値を上書き
+# EMERGENCY_DAILY_DROP_THRESHOLD: 緊急オーバーライド発動の日次下落率閾値
+# POLICY_STRUCTURAL_CACHE_TTL_MONTHS: policy_structural_cache.json TTL（月）
+# PDF_URL_CACHE_TTL_DAYS     : pdf_url_cache.json TTL（日）
+# CONGRESS_BILL_STAGES       : 議会進行ステージ定義（進行順）
+# POLICY_SECTOR_IMPACT_MAP   : 法案種別 → 影響業種コード＆スコア方向の定義
+# $L4\_override = min(impact\_score, SCORE\_MAX\_POLICY\_L4\_ADJ)$
+
+SCORE_MAX_POLICY_L4_ADJ_W4          = 25.0   # Wave 4 L4専用（BLOCK31と区別）
+EMERGENCY_DAILY_DROP_THRESHOLD       = -0.04  # 日次-4%超で緊急フラグ
+POLICY_STRUCTURAL_CACHE_TTL_MONTHS   = 12
+PDF_URL_CACHE_TTL_DAYS               = 30
+ENABLE_PDF_EXTRACTION                = True   # pdfplumber 有効フラグ
+
+# ★ 2026-06-10 配線復元に伴い追加: congress_monitor 実行フラグ・APIキー
+#   CONGRESS_API_KEY 未設定時はキャッシュのみで動作（API取得スキップ）。
+#   キー取得: https://api.congress.gov/sign-up/
+ENABLE_CONGRESS_MONITOR: bool = True
+CONGRESS_API_KEY: str = os.getenv("CONGRESS_API_KEY", "")
+CONGRESS_SESSION: int = 119   # 第119議会（2025-2027）
+
+CONGRESS_BILL_STAGES: list = [
+    "introduced",          # 提出
+    "committee",           # 委員会審議
+    "floor_vote",          # 本会議採決
+    "passed",              # 可決
+    "signed",              # 成立
+]
+
+# 法案種別 → 影響業種コード＆方向（+pt=追い風, -pt=逆風）
+# $impact\_score = base\_score \times stage\_multiplier$
+POLICY_SECTOR_IMPACT_MAP: dict = {
+    "semiconductor_subsidy": {
+        "sectors": ["1016", "1025"],
+        "base_score": 15.0,
+        "direction": "tailwind",
+        "description": "半導体補助金・輸出優遇→電気機器・情報通信に追い風",
+    },
+    "clean_energy": {
+        "sectors": ["1020", "1009"],
+        "base_score": 12.0,
+        "direction": "tailwind",
+        "description": "再エネ推進法案→電力ガス・石油に影響",
+    },
+    "tariff_steel": {
+        "sectors": ["1012", "1013"],
+        "base_score": -10.0,
+        "direction": "headwind",
+        "description": "鉄鋼関税→鉄鋼・非鉄に逆風",
+    },
+    "pharma_pricing": {
+        "sectors": ["1008"],
+        "base_score": -8.0,
+        "direction": "headwind",
+        "description": "医薬品価格規制法案→医薬品に逆風",
+    },
+    "defense_spending": {
+        "sectors": ["1015", "1016", "1018"],
+        "base_score": 10.0,
+        "direction": "tailwind",
+        "description": "防衛予算増→機械・電気機器・精密機器に追い風",
+    },
+    "financial_regulation": {
+        "sectors": ["1028", "1029", "1030"],
+        "base_score": -6.0,
+        "direction": "headwind",
+        "description": "金融規制強化→銀行・証券・保険に逆風",
+    },
+    "infrastructure": {
+        "sectors": ["1003", "1014", "1021"],
+        "base_score": 8.0,
+        "direction": "tailwind",
+        "description": "インフラ投資法案→建設・金属製品・陸運に追い風",
+    },
+}
+
+# 議会ステージ別スコア乗数（成立に近いほど影響大）
+CONGRESS_STAGE_MULTIPLIER: dict = {
+    "introduced":  0.20,
+    "committee":   0.40,
+    "floor_vote":  0.70,
+    "passed":      0.90,
+    "signed":      1.00,
+}
+
+# ── S3: Stage3 リエンジニアリング定数 ───────────────────────────
+# SECTOR_TIER_THRESHOLDS : sector_tier（TOP/MID/BOT）分類の閾値
+# DEEP_DIVE_CONFIDENCE_DROP: confidence がこの値以上下落で deep_dive 発動
+# DEEP_DIVE_RANK_JUMP      : screener順位がこの値以上急変で deep_dive 発動
+# DEEP_DIVE_HISTORY_TTL    : deep_dive_history.json TTL（日）
+# CONFIDENCE_PRIOR_ALPHA   : confidence_prior の EMA 更新率
+
+SECTOR_TIER_THRESHOLDS: dict = {
+    "TOP": 65.0,   # composite_score >= 65 → TOP tier
+    "BOT": 35.0,   # composite_score <= 35 → BOT tier（それ以外は MID）
+}
+DEEP_DIVE_CONFIDENCE_DROP = 15.0   # confidence の1週間低下量（pt）
+DEEP_DIVE_RANK_JUMP       = 10     # screener順位の急変幅（位）
+DEEP_DIVE_HISTORY_TTL     = 30     # deep_dive_history.json TTL（日）
+CONFIDENCE_PRIOR_ALPHA    = 0.15   # EMA 更新率（S3-3 confidence_prior）
+
+# ── S4/FE-F: スコア事前確率・ファクターモメンタム定数 ─────────────
+# SCORE_PRIOR_TTL_DAYS     : score_prior_manager のキャッシュ TTL（日）
+# SCORE_PRIOR_FRESHNESS_HALF_LIFE: 鮮度係数の半減期（日）
+#   $freshness = exp(-\lambda \times days\_elapsed)$, $\lambda = \ln(2) / half\_life$
+# DRIFT_ALERT_THRESHOLD    : 急変ドリフト検出閾値（pt/week）
+# DRIFT_DECAY_THRESHOLD    : 緩慢劣化検出閾値（連続低下週数）
+# FACTOR_HHI_MAX           : ファクター重み集中度の上限
+#   $HHI = \sum_{i} w_i^2 \leq FACTOR\_HHI\_MAX$
+
+SCORE_PRIOR_TTL_DAYS              = 90
+SCORE_PRIOR_FRESHNESS_HALF_LIFE   = 14    # 2週間で重みが半減
+DRIFT_ALERT_THRESHOLD             = 20.0  # 1週間で20pt超の変化を「急変」と判定
+DRIFT_DECAY_THRESHOLD             = 4     # 4週連続低下で「緩慢な劣化」を検出
+DRIFT_HISTORY_TTL_DAYS            = 180   # drift_history.json TTL（日）
+
+# ── FE-F: ファクター定義（4ファクター対応）────────────────────────
+# FACTOR_DEFINITIONS: rule_optimizer.py の週次ファクターリターン計算に使用
+# ── BLOCK 29 との接続メモ ────────────────────────────────────────
+# low_volatility は FE-1（ATR）の計算結果を流用する。
+# FE-1 の ATR ティッカーは BLOCK 29 の FE_ATR_TICKERS で定義済み。
+# rule_optimizer.calc_weekly_factor_returns() は
+# FACTOR_DEFINITIONS["low_volatility"]["source"] = "atr" を参照し、
+# score_history の weekly_score_changes の std を ATR プロキシとして使用する。
+# （完全な ATR 取得は FE-1 の atr_pipeline.py に委譲）
+# 各ファクターの計算ソース・方向・重み・危機局面での重み変化を定義
+# low_volatility: FE-1の ATR を流用（危機局面で weight_crisis に切り替え）
+# profitability_rmw: Fama-French RMW（Robust Minus Weak）
+# $factor\_return = \sum_{i \in long} r_i - \sum_{j \in short} r_j$
+
+FACTOR_DEFINITIONS: dict = {
+    "momentum_12m": {
+        "source":        "score_history",
+        "lookback_days": 252,
+        "direction":     "higher_is_good",
+        "weight_normal": 0.30,
+        "weight_crisis": 0.15,   # 危機局面（VIX>30）で削減
+        "description":   "12ヶ月スコアモメンタム（Fama-French UMD）",
+    },
+    "value_hml": {
+        "source":        "screener",
+        "lookback_days": 126,
+        "direction":     "lower_per_is_good",
+        "weight_normal": 0.25,
+        "weight_crisis": 0.30,   # 危機局面でバリュー効果が強まる
+        "description":   "バリューファクター（High Minus Low PBR逆数）",
+    },
+    "low_volatility": {
+        "source":        "atr",   # FE-1 の ATR を流用
+        "lookback_days": 60,
+        "direction":     "lower_atr_is_good",
+        "weight_normal": 0.20,
+        "weight_crisis": 0.40,   # 危機局面で低ボラ効果が最大化
+        "description":   "低ボラティリティファクター（ATR逆数ベース）",
+    },
+    "profitability_rmw": {
+        "source":        "financials",
+        "lookback_days": 252,
+        "direction":     "higher_op_margin_is_good",
+        "weight_normal": 0.25,
+        "weight_crisis": 0.15,
+        "description":   "収益性ファクター（Fama-French RMW - Robust Minus Weak）",
+    },
+}
+
+# ファクター重みの初期値（rule_optimizer が EMA 更新する）
+FACTOR_WEIGHTS_DEFAULT: dict = {
+    "momentum_12m":      0.30,
+    "value_hml":         0.25,
+    "low_volatility":    0.20,
+    "profitability_rmw": 0.25,
+}
+
+# ファクター重み集中度の上限（HHI）
+# $HHI = \sum_{i} w_i^2 \leq 0.35$ を超えたら均等化方向にリバランス
+FACTOR_HHI_MAX = 0.35
+
+# ルックバック期間加重平均の減衰係数（F-3）
+# 直近期間ほど高い重みを付与する指数減衰
+# $w_t = exp(-\mu \times (T - t))$, $\mu = 0.05$
+FACTOR_LOOKBACK_DECAY_MU = 0.05
+
+# HMMレジーム連動縮退係数（F-5）
+# regime="bear" or "crisis" 時に momentum_12m を縮退させる乗数
+FACTOR_REGIME_SHRINK: dict = {
+    "bull":   1.00,
+    "normal": 1.00,
+    "bear":   0.70,   # bear では momentum を 70% に縮退
+    "crisis": 0.40,   # crisis では momentum を 40% に縮退（低ボラに移行）
+}
+
+# ── モジュール鮮度特性定義（S4/Phase 0用）──────────────────────
+# 各指標の遅行特性と先行性を定義し、鮮度係数計算の半減期パラメータを設定。
+# $freshness\_weight = exp(-\ln(2) \times days / half\_life)$
+# ★ 2026-06-10 SSOT修正: 旧名 LEADING_INDICATOR_RULES は BLOCK R-2 の
+#   先行指標ライブラリを後勝ち上書きで無効化していたため
+#   MODULE_FRESHNESS_RULES に改名。
+# ★ 注意: 現時点で本定数を参照するモジュールは存在しない
+#   （score_prior_manager.py は SCORE_PRIOR_FRESHNESS_HALF_LIFE を使用）。
+#   Phase 0 の鮮度係数をモジュール別に細分化する際の定義として保持する。
+
+MODULE_FRESHNESS_RULES: dict = {
+    "gov_pipeline": {
+        "half_life_days": 14,
+        "lead_lag":       "coincident",
+        "weight_in_phase0": 0.15,
+        "description":    "政府統計（e-Stat）: 概ね一致系指標",
+    },
+    "policy_tracker": {
+        "half_life_days": 7,
+        "lead_lag":       "leading",
+        "weight_in_phase0": 0.20,
+        "description":    "政策金利変化: 先行性高・即時影響",
+    },
+    "arxiv": {
+        "half_life_days": 60,
+        "lead_lag":       "leading",
+        "weight_in_phase0": 0.05,
+        "description":    "ArXiv学術論文: 長期先行指標・半減期長",
+    },
+    "news_pipeline": {
+        "half_life_days": 3,
+        "lead_lag":       "coincident",
+        "weight_in_phase0": 0.10,
+        "description":    "ニュースRSS: 即時性高・劣化も速い",
+    },
+    "edinet_rotation": {
+        "half_life_days": 30,
+        "lead_lag":       "lagging",
+        "weight_in_phase0": 0.10,
+        "description":    "EDINET有報: 遅行指標・四半期更新",
+    },
+    "screener": {
+        "half_life_days": 7,
+        "lead_lag":       "coincident",
+        "weight_in_phase0": 0.15,
+        "description":    "スクリーナー通過銘柄: 週次更新・鮮度重要",
+    },
+    "institutional_13f": {
+        "half_life_days": 45,
+        "lead_lag":       "lagging",
+        "weight_in_phase0": 0.10,
+        "description":    "13F機関投資家: 四半期開示・遅行指標",
+    },
+    "congress_monitor": {
+        "half_life_days": 21,
+        "lead_lag":       "leading",
+        "weight_in_phase0": 0.10,
+        "description":    "議会法案進行: 可決に近づくほど先行性上昇",
+    },
+    "segment_signal": {
+        "half_life_days": 90,
+        "lead_lag":       "lagging",
+        "weight_in_phase0": 0.05,
+        "description":    "セグメント収益性: 年次有報ベース・最遅行",
+    },
+}
+
+# ── ALL_DIRS への Wave 4 フォルダ追加 ────────────────────────────
+# 既存 ALL_DIRS リストに Wave 4 で使用するディレクトリを追加
+# （setup_dirs() が一括作成するため、ここで定義する）
+_WAVE4_DIRS = [
+    CACHE_DIR / "institutional",   # institutional_history.json
+    CACHE_DIR / "congress",        # congress_bill_cache.json
+    CACHE_DIR / "segment",         # segment_mapper キャッシュ
+    CACHE_DIR / "score_prior",     # score_prior_manager キャッシュ
+    INSIGHT_DIR / "drift",         # drift_detector レポート
+]
+for _d in _WAVE4_DIRS:
+    if _d not in ALL_DIRS:
+        ALL_DIRS.append(_d)
+
+# ==============================================================
+# BLOCK Wave5: テキストシグナル定数（Wave 5 - E4 / Idea3-P3）
+# ==============================================================
+
+# ── Wave 5 - E4: テキストシグナルキャッシュ定数 ─────────────────
+# TEXT_SIGNAL_CACHE_FILE : text_signal.py が生成するキャッシュ JSON ファイル名
+# TEXT_SIGNAL_TTL_DAYS   : キャッシュ有効期間（日）
+# TEXT_SIGNAL_FIRST_RUN_LIMIT : 初回実行時のテキスト抽出対象銘柄数の上限
+# ENABLE_TEXT_SIGNAL     : False にすると text_signal を完全スキップ
+
+TEXT_SIGNAL_CACHE_FILE       = "text_signal_cache.json"
+TEXT_SIGNAL_TTL_DAYS         = 30
+TEXT_SIGNAL_FIRST_RUN_LIMIT  = 50
+ENABLE_TEXT_SIGNAL           = True
+
+# ── Wave 5 - E4: リスクカテゴリ定義 ─────────────────────────────
+# text_signal.py でリスクをカテゴリ別に分類するためのキーワードマップ。
+# 各カテゴリのキーワードにヒットしたセクションのネガティブスコアを
+# そのカテゴリに帰属させる。
+
+TEXT_SIGNAL_RISK_CATEGORIES: dict = {
+    "geopolitical": [
+        "地政学", "輸出規制", "安全保障", "制裁", "関税",
+        "米中", "ウクライナ", "台湾", "軍事", "紛争",
+        "サプライチェーン", "経済安保", "輸入規制", "戦争リスク",
+    ],
+    "financial": [
+        "流動性リスク", "信用リスク", "為替リスク", "金利リスク",
+        "与信", "不良債権", "資金繰り", "債務超過", "損失",
+        "引当金", "のれん減損", "減損リスク", "財務悪化",
+        "負債", "デフォルト", "信用格付け", "格下げ",
+    ],
+}
+
+# ── Wave 5 - E4: テキストシグナルスコア範囲 ─────────────────────
+# YoY 差分スコアおよびリスクカテゴリスコアの上下限値（クランプ用）
+# $text\_risk\_bonus \in [TEXT\_SIGNAL\_SCORE\_MIN, 0]$
+
+TEXT_SIGNAL_SCORE_MIN  = -10.0   # ネガティブ方向上限（リスク検出）
+TEXT_SIGNAL_SCORE_MAX  =   0.0   # テキストリスクはネガティブ側のみ
+
+# ── Wave 5 - Idea3-P3: policy_radar 実現度判定定数 ────────────────
+# POLICY_RADAR_INTENT_CACHE_TTL_DAYS : policy_radar_cache の TTL（日）
+# POLICY_RADAR_ENABLE_FINBERT_INTENT : FinBERT 文意分類の有効フラグ
+
+POLICY_RADAR_INTENT_CACHE_TTL_DAYS    = 30
+POLICY_RADAR_ENABLE_FINBERT_INTENT    = True
+
+# FinBERT 文意分類: 3クラス判定の確信度閾値
+# $p(確定) \geq INTENT\_CONFIRMED\_THRESHOLD$ → 確定
+# $p(否決) \geq INTENT\_REJECTED\_THRESHOLD$  → 否決
+# それ以外 → 検討中
+
+POLICY_INTENT_CONFIRMED_THRESHOLD = 0.70
+POLICY_INTENT_REJECTED_THRESHOLD  = 0.65
+
+# 文意3分類ラベル
+POLICY_INTENT_LABELS: dict = {
+    "confirmed":   "確定",
+    "considering": "検討中",
+    "rejected":    "否決",
+}
+
+# 文意クラス別の実現度スコア乗数（既存 _SOURCE_WEIGHTS への補正係数）
+# 「確定」ならスコアをそのまま使用、「検討中」は削減、「否決」はゼロ
+POLICY_INTENT_MULTIPLIERS: dict = {
+    "confirmed":   1.00,
+    "considering": 0.50,
+    "rejected":    0.00,
+}
+
+# ==============================================================
+# BLOCK Wave6: 地政学・海外権益・リスク設定（Wave 6 - G-N / G-C / G-X）
+# ==============================================================
+
+# ── Wave 6 - G-N: 国別リスク監視設定 ──────────────────────────
+
+# BigQuery プロジェクトID（geopolitics データセットの所在）
+GEO_BQ_PROJECT_ID = "stock-analyzer-edinet"
+
+# 国別リスク更新の有効フラグ
+# False にすると run_all_tasks() での country_risk_updater 実行をスキップ
+ENABLE_COUNTRY_RISK_UPDATE = True
+
+# GDELT API スキップフラグ
+# True にすると外務省RSS + 国務省RSS のみで composite_risk_score を算出
+# GitHub Actions のネットワーク制限・レート制限時に使用
+GEO_SKIP_GDELT = False
+
+# 国別リスク高閾値（composite_risk_score がこの値以上で「高リスク」判定）
+# $composite\_risk\_score \geq GEO_RISK_HIGH\_THRESHOLD$ → 高リスク
+GEO_RISK_HIGH_THRESHOLD = 50.0
+
+# 国別リスク中閾値（composite_risk_score がこの値以上で「中リスク」判定）
+# $composite\_risk\_score \geq GEO_RISK_MED\_THRESHOLD$ → 中リスク
+GEO_RISK_MED_THRESHOLD = 25.0
+
+# 週次レポートに掲載する高リスク国の最大件数
+GEO_REPORT_TOP_N_COUNTRIES = 10
+
+# 国別リスクスコアのキャッシュ TTL（秒）
+# 日次更新なので 86400 秒（24時間）以内は BQ 再取得しない
+GEO_RISK_CACHE_TTL_SEC = 86400
+
+# 監視対象シーレーン（リスク波及分析に使用）
+# geo_signal.py がこのリストを参照して関係国を特定する
+GEO_MONITORED_SEALANES: list = [
+    "strait_of_hormuz",    # ホルムズ海峡（中東原油輸送の要衝）
+    "strait_of_malacca",   # マラッカ海峡（アジア〜中東・欧州のシーレーン）
+    "south_china_sea",     # 南シナ海（東アジア最重要航路）
+    "suez_canal",          # スエズ運河（欧州〜アジア航路）
+    "bab_el_mandeb",       # バブ・エル・マンデブ海峡（紅海入口）
+    "taiwan_strait",       # 台湾海峡（東アジア安全保障の焦点）
+    "cape_of_good_hope",   # 喜望峰（スエズ迂回路）
+    "cape_horn",           # ホーン岬（南米迂回路）
+    "arctic_route",        # 北極海航路（ロシア制裁時の代替）
+]
+
+# 監視対象資源コード（権益マッピング・シグナル計算に使用）
+# jogmec_scraper / edinet_exposure_extractor がこのリストを参照
+GEO_MONITORED_COMMODITIES: list = [
+    "crude_oil",           # 原油
+    "lng",                 # 液化天然ガス
+    "natural_gas",         # 天然ガス
+    "coal",                # 石炭
+    "iron_ore",            # 鉄鉱石
+    "copper",              # 銅
+    "lithium",             # リチウム（EV電池材料）
+    "cobalt",              # コバルト（EV電池材料）
+    "nickel",              # ニッケル（EV電池材料）
+    "rare_earth",          # レアアース
+    "gold",                # 金
+    "uranium",             # ウラン
+    "aluminum",            # アルミニウム
+    "platinum",            # 白金族
+    "wheat",               # 小麦（食糧安全保障）
+    "soybeans",            # 大豆（食糧安全保障）
+    "palm_oil",            # パーム油
+]
+
+# ── Wave 6 - G-C: 企業×海外権益マッピング設定 ──────────────────
+
+# 日本株の権益マッピング優先ティッカーリスト
+# edinet_exposure_extractor / jogmec_scraper が優先的に処理する
+IMPORTANT_TICKERS_JP: list = [
+    # エネルギー（石油・ガス権益保有企業）
+    "5020.T",   # ENEOS ホールディングス
+    "5019.T",   # 出光興産
+    "1605.T",   # INPEX（旧国際石油開発帝石）
+    "9531.T",   # 東京ガス
+    "9532.T",   # 大阪ガス
+    # 商社（多様な海外権益）
+    "8058.T",   # 三菱商事
+    "8053.T",   # 住友商事
+    "8001.T",   # 伊藤忠商事
+    "8002.T",   # 丸紅
+    "8031.T",   # 三井物産
+    # 素材・資源（鉱物権益）
+    "5713.T",   # 住友金属鉱山
+    "5711.T",   # 三菱マテリアル
+    "5706.T",   # 三井金属鉱業
+    "5707.T",   # 東邦亜鉛
+    # 製造（海外生産拠点比率高）
+    "7203.T",   # トヨタ自動車
+    "7267.T",   # 本田技研工業
+    "6758.T",   # ソニーグループ
+    "6501.T",   # 日立製作所
+    "6702.T",   # 富士通
+    "6752.T",   # パナソニックホールディングス
+]
+
+# 米国株の権益マッピング優先ティッカーリスト
+# sec_geographic_extractor が優先的に処理する
+IMPORTANT_TICKERS_US: list = [
+    # エネルギー
+    "XOM",    # エクソンモービル
+    "CVX",    # シェブロン
+    "COP",    # コノコフィリップス
+    "EOG",    # EOGリソーシズ
+    "SLB",    # シュルンベルジェ
+    # 素材・資源
+    "FCX",    # フリーポート・マクモラン（銅）
+    "NEM",    # ニューモント（金）
+    "AA",     # アルコア（アルミ）
+    "MP",     # MPマテリアルズ（レアアース）
+    "ALB",    # アルベマール（リチウム）
+    # テック（地政学リスク大）
+    "NVDA",   # エヌビディア（中国・台湾依存）
+    "QCOM",   # クアルコム（中国売上依存）
+    "AMAT",   # アプライドマテリアルズ
+    "LRCX",   # ラムリサーチ
+    "ASML",   # ASMLホールディング（半導体製造装置）
+]
+
+# 権益マッピングの自動抽出信頼度の最低閾値
+# この値未満の exposure_strength は BQ に格納しない
+GEO_EXPOSURE_MIN_STRENGTH = 0.05
+
+# exposure_review_ui での手動確認が必要な exposure_strength の上限
+# この値未満は「要確認」フラグを立てる
+GEO_EXPOSURE_REVIEW_THRESHOLD = 0.20
+
+# EDINET有報テキスト抽出の対象セクション
+# edinet_exposure_extractor がこのセクションリストを参照
+GEO_EDINET_TARGET_SECTIONS: list = [
+    "事業の概況",
+    "主要な事業内容",
+    "海外事業",
+    "地域別事業概況",
+    "リスク情報",
+    "重要な会計上の見積り",
+]
+
+# SEC EDGAR 10-K の対象セクション（英語）
+# sec_geographic_extractor がこのセクションリストを参照
+GEO_SEC_TARGET_SECTIONS: list = [
+    "Geographic Information",
+    "Geographic Segments",
+    "International Operations",
+    "Geographic Areas",
+    "Risk Factors",
+    "Business Overview",
+]
+
+# ── Wave 6 - G-C 追加: スクレイパー実行制御 ─────────────────────
+
+# JOGMEC スクレイパーの有効フラグ
+# False にすると run_all_tasks() での jogmec_scraper 実行をスキップ
+ENABLE_JOGMEC_SCRAPER = True
+
+# JOGMEC スクレイパーの実行頻度（日数）
+# 毎日ではなく月次相当（30日）で実行する
+JOGMEC_SCRAPER_INTERVAL_DAYS = 30
+
+# SEC Geographic Extractor の有効フラグ
+ENABLE_SEC_GEO_EXTRACTOR = True
+
+# SEC Geographic Extractor の実行頻度（日数）
+SEC_GEO_EXTRACTOR_INTERVAL_DAYS = 30
+
+# EDINET Exposure Extractor の有効フラグ
+ENABLE_EDINET_EXPOSURE_EXTRACTOR = True
+
+# EDINET Exposure Extractor の実行頻度（日数）
+EDINET_EXPOSURE_INTERVAL_DAYS = 30
+
+# exposure_review_ui のポート番号（Streamlit 起動時）
+EXPOSURE_REVIEW_UI_PORT = 8502
+
+# ── Wave 6 - G-X: 地政学×権益統合シグナル設定 ──────────────────
+
+# geo_impact_bonus の上限・下限（composite_score への加算点）
+# $geo\_impact\_bonus \in [GEO\_IMPACT\_MIN, GEO\_IMPACT\_MAX]$
+GEO_IMPACT_MAX = 15.0    # 地政学的追い風の最大加点
+GEO_IMPACT_MIN = -15.0   # 地政学的逆風の最大減点
+
+# composite_risk_score → geo_impact への変換係数
+# リスクスコアが高いほど影響が大きくなる非線形変換に使用
+# $raw\_impact = exposure\_strength \times risk\_score \times GEO\_IMPACT\_SCALE$
+GEO_IMPACT_SCALE = 0.30
+
+# 方向性係数テーブル
+# 資源コード → 日本株への影響方向（+1=追い風 / -1=逆風）
+# 例: 原油高は石油株に追い風だが、輸送・素材株には逆風
+GEO_COMMODITY_DIRECTION_JP: dict = {
+    # エネルギー資源
+    "crude_oil":    {"1009": +1.0, "1021": -0.8, "1022": -0.6,
+                     "1007": -0.5, "1004": -0.4, "1023": -0.7},
+    "lng":          {"1009": +1.0, "1020": -0.5, "1007": -0.3},
+    "natural_gas":  {"1009": +0.8, "1020": -0.5},
+    "coal":         {"1009": +0.7, "1012": +0.3, "1020": -0.3},
+    # 金属資源
+    "iron_ore":     {"1012": +0.9, "1013": +0.3, "1015": -0.3,
+                     "1017": -0.2},
+    "copper":       {"1013": +1.0, "1016": -0.4, "1015": -0.3},
+    "lithium":      {"1016": +0.8, "1017": +0.6, "1013": +0.4},
+    "cobalt":       {"1016": +0.7, "1017": +0.5},
+    "nickel":       {"1013": +1.0, "1016": +0.4, "1017": +0.3},
+    "rare_earth":   {"1016": +0.9, "1018": +0.7, "1015": +0.5},
+    "aluminum":     {"1013": +0.8, "1017": -0.3, "1016": -0.2},
+    "platinum":     {"1007": +0.5, "1017": +0.4},
+    # 農産物
+    "wheat":        {"1004": -0.6, "1027": -0.4},
+    "soybeans":     {"1004": -0.5, "1007": -0.3},
+    "palm_oil":     {"1004": -0.4, "1007": -0.2},
+    # その他
+    "gold":         {"1028": -0.2},   # 金高は市場不安の代理変数
+    "uranium":      {"1020": +0.5},   # 核燃料→電力に追い風
+}
+
+# 方向性係数テーブル（US株・GICSセクターETF別）
+# 資源コード → US セクターETFへの影響方向
+GEO_COMMODITY_DIRECTION_US: dict = {
+    "crude_oil":    {"XLE": +1.0, "XLI": -0.5, "XLP": -0.3,
+                     "XLY": -0.3, "XLB": -0.2},
+    "lng":          {"XLE": +0.9, "XLU": -0.4},
+    "natural_gas":  {"XLE": +0.8, "XLU": -0.3},
+    "coal":         {"XLE": +0.6},
+    "iron_ore":     {"XLB": +0.8, "XLI": +0.3},
+    "copper":       {"XLB": +1.0, "XLK": -0.3, "XLI": -0.2},
+    "lithium":      {"XLK": +0.7, "XLY": +0.5, "XLB": +0.6},
+    "cobalt":       {"XLK": +0.6, "XLY": +0.4},
+    "nickel":       {"XLB": +0.9, "XLY": +0.3},
+    "rare_earth":   {"XLK": +1.0, "XLI": +0.5},
+    "aluminum":     {"XLB": +0.7, "XLI": -0.2},
+    "platinum":     {"XLB": +0.5},
+    "wheat":        {"XLP": -0.5, "XLY": -0.3},
+    "soybeans":     {"XLP": -0.4},
+    "gold":         {"XLF": -0.3},
+    "uranium":      {"XLU": +0.6},
+}
+
+# Phase T クラスター伝播（taxonomy_node の related_commodities 連鎖）
+# 資源コード → 連鎖的に影響を受ける技術ノードIDリスト
+# geo_signal.py がこのマップを参照してスコア伝播を実施する
+GEO_TAXONOMY_PROPAGATION: dict = {
+    "lithium":    ["ev_battery", "semiconductor_logic", "automotive"],
+    "cobalt":     ["ev_battery", "aerospace"],
+    "rare_earth": ["semiconductor_design", "wind_energy", "ev_motor"],
+    "copper":     ["ev_battery", "semiconductor_equipment", "connector"],
+    "nickel":     ["ev_battery", "stainless_steel"],
+    "crude_oil":  ["petrochemical", "synthetic_fiber", "plastic"],
+}
+
+# geo_signal の有効フラグ
+# 初回運用時は False で起動し、BQ に country_risk_daily / company_country_exposure
+# のデータが蓄積されてから True に切り替える。
+# True にすると base_agent.py と us_stock_screener.py が geo_impact_bonus を計算する。
+ENABLE_GEO_SIGNAL = False
+
+# geo_signal の signal_aggregator での重み（DEFAULT_WEIGHTS に追加）
+# signal_aggregator.py の DEFAULT_WEIGHTS 合計=1.00 を維持するため
+# 既存ウェイトを按分削減して追加する（Step 16 で実装）
+GEO_SIGNAL_WEIGHT = 0.04   # 4%（pearl_signal の 5% から 1% 移譲相当）
+
+# signal_aggregator.DEFAULT_WEIGHTS の geo_signal 追加後の重みバランス確認メモ:
+#   既存合計 = 1.00（Step 3 時点）
+#   geo_signal 追加 = +0.04
+#   pearl_signal 削減 = -0.01（5% → 4%）
+#   sector_score 削減 = -0.01（26% → 25%）
+#   macro_signals 削減= -0.01（15% → 14%）
+#   us_lead_signal 削減= -0.01（5% → 4%）
+#   → 調整後合計 = 1.00
+# 上記の重みバランスは signal_aggregator.py の DEFAULT_WEIGHTS で実装する（Step 16）。
+
+# geo_signal の analytics.company_scores への書き込み有効フラグ
+# True にすると run_all_tasks() 後に geo_impact_bonus を BQ に書き込む
+ENABLE_GEO_SCORE_PERSIST = False   # 初期は False（BQ 書き込みコスト削減）
+
+# ── Wave 6 - G-N: ALL_DIRS への Wave 6 フォルダ追加 ──────────────
+_WAVE6_DIRS = [
+    CACHE_DIR / "geopolitics",        # country_risk_updater キャッシュ
+    INSIGHT_DIR / "geopolitics",      # 地政学レポート保存先
+    INSIGHT_DIR / "geo_exposure",     # 権益マッピング結果
+]
+for _d in _WAVE6_DIRS:
+    if _d not in ALL_DIRS:
+        ALL_DIRS.append(_d)
+
+# ==============================================================
+# BLOCK 36: Wave 6 - U-4: 機関投資家 13F 監視 追加設定
+# ==============================================================
+# 【既存定数との関係】
+#   以下の定数は BLOCK 35 で定義済みのため、ここでは定義しない:
+#     INSTITUTION_TIER_MAP         (機関名→Tier辞書)
+#     SCORE_MAX_INSTITUTION_ADJ    (最大加算量 15pt)
+#     INSTITUTION_HISTORY_TTL_DAYS (キャッシュTTL 180日)
+#     INSTITUTION_MIN_NEW_POSITION_USD (大手アラート閾値)
+# ★ 2026-06-10 SSOT修正: 本ブロックにあった以下8定数の再定義を削除
+#   （BLOCK 35 と同値の完全重複だったため。BLOCK 35 が正）:
+#     ENABLE_INSTITUTIONAL_13F / EDGAR_SUBMISSIONS_URL / EDGAR_ARCHIVES_URL
+#     INSTITUTIONAL_BONUS_MAX / INSTITUTIONAL_BONUS_MIN
+#     INSTITUTIONAL_CACHE_PATH / INSTITUTIONAL_QUARTER_MONTHS
+#     INSTITUTIONAL_QUARTER_DAY_FROM
+
+# ==============================================================
+# BLOCK 37: Wave 6 - I-1/I-3/I-4: オルタナティブデータ監視設定
+# ★ 2026-06-10 SSOT修正: 旧表記「BLOCK 26」は議員取引監視設定
+#   （BLOCK 26）と番号衝突していたため BLOCK 37 に改番。
+# ==============================================================
+# 【I-1: 求人票モニター（job_posting_monitor.py）】
+#   求人サイトの技術キーワード変化から「人材投資シグナル」を生成する。
+#   $hiring\_score = base\_score + surge\_bonus$ (急増時)
+#
+# 【I-3: 役員転職トラッカー（executive_transition_tracker.py）】
+#   EDINET 有報の役員略歴YoY差分から「経営方針転換シグナル」を生成する。
+#   $exec\_score = new\_hire\_count \times EXECUTIVE\_NEW\_HIRE\_BONUS$
+#
+# 【I-4: 施設着工モニター（facility_expansion_monitor.py）】
+#   自治体・経産省の建設許可情報から「設備投資シグナル」を生成する。
+#   $facility\_score = project\_count \times FACILITY\_EXPANSION\_BONUS$
+
+# ── I-1: 求人票モニター設定 ─────────────────────────────────
+ENABLE_JOB_POSTING_MONITOR: bool = True
+JOB_POSTING_CACHE_TTL_DAYS: int  = 30     # hiring_signal_cache.json の TTL
+JOB_POSTING_CACHE_PATH: str      = "hiring_signal_cache.json"  # CACHE_DIR 配下
+
+# 技術キーワード定義（カテゴリ別）
+# キーワードが求人票に含まれる数を集計し、前月比で急増を検知する
+JOB_TECH_KEYWORDS: dict = {
+    "ai_ml": [
+        "機械学習", "深層学習", "LLM", "生成AI", "MLエンジニア",
+        "Machine Learning", "Deep Learning", "AI Engineer", "Data Scientist",
+        "強化学習", "コンピュータビジョン", "自然言語処理",
+    ],
+    "semiconductor": [
+        "半導体", "VLSI", "FPGA", "ASIC", "RTL", "EDA",
+        "プロセス開発", "前工程", "後工程", "パッケージング",
+    ],
+    "ev_battery": [
+        "EV", "電気自動車", "リチウムイオン", "全固体電池",
+        "BMS", "バッテリーマネジメント", "モーター制御",
+    ],
+    "biotech": [
+        "バイオ", "創薬", "ゲノム", "mRNA", "細胞治療",
+        "バイオインフォマティクス", "臨床試験",
+    ],
+    "dx_cloud": [
+        "DX", "クラウドネイティブ", "Kubernetes", "DevOps",
+        "SRE", "インフラ", "マイクロサービス",
+    ],
+}
+
+# 急増判定閾値（前月比でこの倍率以上の求人数増加を「急増」と判定）
+JOB_SURGE_THRESHOLD_RATIO: float = 1.5    # 1.5倍以上で急増
+
+# 急増時の sector_boost 加算ポイント
+JOB_SURGE_SCORE_BONUS: float     = 5.0
+
+# キーワードカテゴリ → 対応 JP業種コード（JAPAN_SECTORS のキー）
+JOB_SURGE_SECTOR_MAP: dict = {
+    "ai_ml":        ["1016", "1025", "1033"],   # 電気機器・情報通信・サービス
+    "semiconductor": ["1016", "1018"],           # 電気機器・精密機器
+    "ev_battery":   ["1017", "1016"],            # 輸送機器・電気機器
+    "biotech":      ["1008"],                    # 医薬品
+    "dx_cloud":     ["1025", "1033"],            # 情報通信・サービス
+}
+
+# ── I-3: 役員転職トラッカー設定 ─────────────────────────────
+ENABLE_EXECUTIVE_TRANSITION: bool = True
+EXECUTIVE_CACHE_TTL_DAYS: int     = 90     # executive_transition_cache.json の TTL
+EXECUTIVE_CACHE_PATH: str         = "executive_transition_cache.json"  # CACHE_DIR 配下
+
+# 外部人材登用スキルキーワード定義
+# 役員略歴にこのキーワードが含まれる場合、スキルカテゴリを付与する
+EXECUTIVE_SKILL_KEYWORDS: dict = {
+    "dx_transformation": [
+        "CTO", "CDO", "最高デジタル責任者", "デジタル変革",
+        "情報システム", "IT戦略", "DX推進",
+    ],
+    "global_expansion": [
+        "グローバル", "海外事業", "国際", "Global",
+        "海外赴任経験", "外資系出身",
+    ],
+    "financial_discipline": [
+        "CFO", "最高財務責任者", "IR", "資本政策",
+        "M&A", "投資銀行", "アナリスト出身",
+    ],
+    "turnaround": [
+        "再建", "リストラクチャリング", "事業再生",
+        "コスト削減", "構造改革",
+    ],
+}
+
+# 外部人材登用1件あたりの sector_boost 加算ポイント
+EXECUTIVE_NEW_HIRE_BONUS: float     = 4.0
+
+# この人数以上の役員交代で「経営方針転換シグナル」とみなす閾値
+EXECUTIVE_TRANSITION_THRESHOLD: int = 2
+
+# ── I-4: 施設着工モニター設定 ───────────────────────────────
+ENABLE_FACILITY_EXPANSION: bool   = True
+FACILITY_CACHE_TTL_DAYS: int      = 180    # facility_project_cache.json の TTL
+FACILITY_CACHE_PATH: str          = "facility_project_cache.json"  # CACHE_DIR 配下
+
+# 対象とする最小施設面積（㎡）。これ未満の着工は小規模とみなし除外する
+FACILITY_MIN_AREA_SQM: float      = 10000.0
+
+# 施設種別キーワード → 対応 JP業種コード
+# facility_expansion_monitor.py が着工情報のテキストをこのキーワードで分類する
+FACILITY_SECTOR_MAP: dict = {
+    "工場":          ["1015", "1016", "1017"],   # 機械・電気機器・輸送機器
+    "物流":          ["1024", "1021"],           # 倉庫・陸運
+    "データセンター": ["1025", "1016"],           # 情報通信・電気機器
+    "研究所":        ["1007", "1008", "1016"],   # 化学・医薬品・電気機器
+    "半導体":        ["1016", "1018"],           # 電気機器・精密機器
+}
+
+# 大規模着工1件あたりの sector_boost 加算ポイント
+FACILITY_EXPANSION_BONUS: float   = 6.0
+
+# 着工シグナルの有効期間（日）。この期間を超えたシグナルは自動失効
+FACILITY_EXPANSION_TTL_DAYS: int  = 90
+
+# ── Wave 6 - I系: ALL_DIRS への追加 ─────────────────────────
+_WAVE6_I_DIRS = [
+    CACHE_DIR / "hiring",         # job_posting_monitor キャッシュ
+    CACHE_DIR / "executive",      # executive_transition_tracker キャッシュ
+    CACHE_DIR / "facility",       # facility_expansion_monitor キャッシュ
+    INSIGHT_DIR / "hiring",       # 求人票シグナルレポート保存先
+    INSIGHT_DIR / "executive",    # 役員転職レポート保存先
+    INSIGHT_DIR / "facility",     # 施設着工レポート保存先
+]
+for _d in _WAVE6_I_DIRS:
+    if _d not in ALL_DIRS:
+        ALL_DIRS.append(_d)
+
+# ==============================================================
+# BLOCK 27: Wave 6 - 第4セッション
+#           緊急縮退モード（Emergency Contraction）設定
+#           C / Policy Ph5 / E5 — rule_optimizer.py 連携
+# ==============================================================
+# 【設計方針】
+#   ・緊急縮退フラグが立つと「全カテゴリのシグナル感度を一律に減算」する。
+#   ・防御セクター（ディフェンシブ株）は縮退時でも相対スコアを維持する。
+#   ・フラグ判定はマクロ閾値の複合条件で行い、False Positive を防ぐ。
+#   ・この定数群は rule_optimizer.py / signal_aggregator.py のみが参照する。
+# ==============================================================
+
+# ── 27-A: 緊急縮退トリガー閾値 ───────────────────────────────
+# rule_optimizer.py の evaluate_contraction_flag() が参照する。
+# 条件を複数定義し、有効条件数が CONTRACTION_TRIGGER_COUNT 以上で発動する。
+
+# VIX（恐怖指数）の緊急縮退トリガー値。この値以上で1条件成立。
+CONTRACTION_VIX_THRESHOLD: float = 30.0
+
+# 10年米国債利回り（%）の急騰トリガー。前週比でこの値(%)以上上昇で1条件成立。
+CONTRACTION_US10Y_RISE_PCT: float = 0.30
+
+# 市場幅スコア（breadth_score_jp / 0〜100）の下限。この値以下で1条件成立。
+CONTRACTION_BREADTH_SCORE_MIN: float = 35.0
+
+# PCR（プット/コール比）の上限。この値以上で1条件成立。
+CONTRACTION_PCR_THRESHOLD: float = 1.40
+
+# geo_risk（地政学リスクスコア）の上限。この値以上で1条件成立。
+# risk_score は 0〜100（高いほどリスク大）。
+CONTRACTION_GEO_RISK_SCORE: float = 70.0
+
+# シグナルスコアの急落幅（前週比）。上位業種の平均が週次でこの値以上下落で1条件成立。
+CONTRACTION_SCORE_DROP_THRESHOLD: float = 12.0
+
+# 上記条件のうち何個以上成立したら縮退フラグを発動するか。
+# Warning: 2条件以上 / Emergency: 4条件以上
+CONTRACTION_WARNING_TRIGGER_COUNT: int  = 2
+CONTRACTION_EMERGENCY_TRIGGER_COUNT: int = 4
+
+# ── 27-B: 縮退モード別・スコア減算係数 ──────────────────────
+# signal_aggregator.py の各カテゴリ重み付きスコアに乗算する係数。
+# Normal=1.0（無補正）/ Warning=0.85 / Emergency=0.65。
+# 防御セクターにはこの係数を適用しない（相対維持）。
+
+CONTRACTION_MODE_COEFFICIENTS: dict = {
+    "Normal":    1.00,   # 通常時: 補正なし
+    "Warning":   0.85,   # 警戒時: シグナル感度を15%抑制
+    "Emergency": 0.65,   # 緊急時: シグナル感度を35%抑制
+}
+
+# ── 27-C: カテゴリ別の縮退感度係数（全カテゴリに均一適用が基本） ──
+# 特定カテゴリのシグナルを縮退時により強く・弱く減算したい場合に個別定義する。
+# 値が 1.0 → モード係数をそのまま適用。1.0 より大 → より強く抑制。
+# 例: etf_heat（テーマ株）は緊急時により強く抑制する。
+CONTRACTION_CATEGORY_SENSITIVITY: dict = {
+    "sector_score":         1.00,
+    "macro_signals":        1.00,
+    "technical_score":      1.00,
+    "market_breadth":       1.00,
+    "options_sentiment":    1.00,
+    "anomaly_season":       1.00,
+    "us_lead_signal":       1.00,
+    "etf_heat":             1.20,   # テーマETF: 緊急時により強く抑制
+    "yield_curve":          1.00,
+    "pearl_signal":         1.00,
+    "independence_signal":  1.00,
+    "politician_signal":    1.00,
+    "institutional_signal": 1.00,
+    "geo_signal":           0.90,   # 地政学: 緊急時は情報価値が高い→やや緩く
+    "cluster_phase_bonus":  1.10,
+    "hiring_signal":        1.00,
+    "exec_transition":      1.00,
+    "facility_signal":      1.00,
+}
+
+# ── 27-D: 防御セクター（ディフェンシブ）定義 ─────────────────
+# リスクオフ局面でスコアを相対的に維持・保護する業種コード。
+# JP33業種コード（JAPAN_SECTORS の key と対応）で定義する。
+
+DEFENSIVE_SECTOR_CODES_JP: list = [
+    "1007",  # 化学（医薬品原料）
+    "1008",  # 医薬品
+    "1026",  # 電力・ガス
+    "1022",  # 陸運
+    "1023",  # 海運（生活必需品輸送）
+    "1024",  # 倉庫・運輸関連
+    "1009",  # ゴム製品（タイヤ等・インフラ系）
+    "1028",  # 小売業（食品スーパー系）
+    "1029",  # 銀行業（メガバンク限定: 安定配当）
+]
+
+# 米国GICSセクター（us_stock_screener.py 参照用）
+DEFENSIVE_GICS_SECTORS_US: list = [
+    "Consumer Staples",      # 生活必需品
+    "Health Care",           # ヘルスケア
+    "Utilities",             # 公益事業
+    "Communication Services",# 通信（防衛的性質）
+]
+
+# 防御セクター判定用キーワード（sector_name_ja / gics_sector の文字列マッチ）
+DEFENSIVE_SECTOR_KEYWORDS: list = [
+    "医薬品", "電力", "ガス", "食料", "食品", "生活",
+    "公益", "通信", "インフラ", "保険", "Healthcare",
+    "Utilities", "Staples", "Pharma",
+]
+
+# ── 27-E: 防御セクター保護ロジック設定 ───────────────────────
+# 緊急縮退時、防御セクターのスコアに適用する「保護乗数」。
+# 1.0 → 縮退係数を無効化（スコアを元のまま維持）。
+# 1.0 より大 → 相対的に上昇（防御株の相対優位を表現）。
+DEFENSIVE_PROTECTION_MULTIPLIER: float = 1.00   # 縮退しない（中立維持）
+
+# Warning時に防御セクターへ加算する相対ボーナスポイント（0〜10）。
+DEFENSIVE_RELATIVE_BONUS_WARNING: float   = 3.0
+
+# Emergency時に防御セクターへ加算する相対ボーナスポイント（0〜15）。
+DEFENSIVE_RELATIVE_BONUS_EMERGENCY: float = 7.0
+
+# ── 27-F: 縮退モード判定結果の格納キー（results dict内） ──────
+# rule_optimizer.run_rule_optimizer() の出力が results[このキー] に格納される。
+CONTRACTION_RESULT_KEY: str = "rule_optimizer"
+
+# ── 27-G: 縮退状態の履歴保存パス ─────────────────────────────
+# rule_optimizer.py が縮退状態の時系列をここに追記する（JSON Lines形式）。
+CONTRACTION_HISTORY_PATH: str = "contraction_history.jsonl"  # CACHE_DIR配下
+
+# ── Wave 6 - 第4セッション: ALL_DIRS への追加 ─────────────────
+_WAVE6_C_DIRS = [
+    CACHE_DIR / "contraction",   # 縮退履歴・縮退フラグキャッシュ保存先
+]
+for _d in _WAVE6_C_DIRS:
+    if _d not in ALL_DIRS:
+        ALL_DIRS.append(_d)
+
+# ==============================================================
+# BLOCK Wave7: Wave 7 - 第1セッション 全定数
+# （データ収集・高度アルファ計算統合層）
+# ==============================================================
+
+# ── Wave7-A: 標準化動向トラッカー（industry_standard_tracker.py）─
+
+# standardization_cache.json の TTL（日）
+STANDARDIZATION_CACHE_TTL_DAYS: int = 180
+
+# 標準化トレンド判定の閾値（contribution 総数）
+STANDARDIZATION_TREND_THRESHOLDS: dict = {
+    "rising":   200,   # 200件以上 → rising
+    "stable":    50,   # 50〜200件 → stable
+    "declining":  0,   # 50件未満  → declining
+}
+
+# 追跡対象の標準化機関・リリース・トピック設定
+# industry_standard_tracker.py の _DEFAULT_STANDARDS_CONFIG を上書きする場合に使用
+# None の場合はモジュール側のデフォルト定数が使われる
+STANDARDS_TRACKING_CONFIG: dict | None = None  # 本番時は辞書を設定
+
+# ── Wave7-B: 学術カンファレンス追跡（academic_conf_tracker.py）──
+
+# academic_conf_cache.json の TTL（日）
+ACADEMIC_CONF_CACHE_TTL_DAYS: int = 180
+
+# 追跡対象カンファレンス設定
+# None の場合はモジュール側のデフォルト定数が使われる
+ACADEMIC_CONF_CONFIG: dict | None = None  # 本番時は辞書を設定
+
+# ── Wave7-C: 中期経営計画トラッカー（midterm_plan_tracker.py）──
+
+# midterm_plan_cache.json の TTL（日）
+MIDTERM_TRACKER_TTL_DAYS: int = 90
+
+# ★ 2026-06-10 SSOT修正: MIDTERM_ACHIEVEMENT_HIGH / MIDTERM_ACHIEVEMENT_RISK
+#   は BLOCK I-5 で定義済み（同値 0.90 / 0.70）のため、ここでの再定義を削除。
+
+# 中計目標定義（ticker → plan_def 辞書）
+# None の場合はモジュール側の _DEFAULT_MIDTERM_PLANS が使われる
+MIDTERM_PLAN_TARGETS: dict | None = None  # 本番時は実際の中計目標を設定
+
+# ── Wave7-D: 規模別シグナル減衰管理（size_decay_manager.py）────
+
+# size_decay_state.json / nano_evaluation_queue.json の TTL（日）
+SIZE_DECAY_TTL_DAYS: int = 7
+
+# Tier 別減衰定数 λ（$decay = e^{-\\lambda t}$）
+SIZE_DECAY_LAMBDAS: dict = {
+    "Large": 0.15,
+    "Mid":   0.10,
+    "Small": 0.07,
+    "Micro": 0.05,
+    "Nano":  0.03,
+}
+
+# ★ 2026-06-10 SSOT修正: NANO_EVALUATION_MAX_PER_DAY は BLOCK 25
+#   （Size Ph1）で定義済み（同値 5）のため、ここでの再定義を削除。
+
+# ── Wave7-E: 規模帯横断シグナル（cross_size_signal.py）──────────
+
+# cross_size_signal_cache.json の TTL（日）
+CROSS_SIZE_SIGNAL_TTL_DAYS: int = 3
+
+# ── Wave7-F: 市場独立性スコア（independence_score_calculator.py）
+
+# independence_scores.json の TTL（日）
+INDEPENDENCE_SCORE_TTL_DAYS: int = 30
+
+# 1回の実行で処理する最大銘柄数
+INDEPENDENCE_MAX_TICKERS_PER_RUN: int = 200
+
+# ローリング回帰ウィンドウ（日数）
+INDEPENDENCE_ROLLING_WINDOW_DAYS: int = 60
+
+# 独立性スコアのティア閾値
+INDEPENDENCE_TIER_THRESHOLDS: dict = {
+    "HIGH": 65.0,
+    "MID":  40.0,
+}
+
+# ── Wave7-G: 潜伏銘柄管理（latent_pearl_manager.py）────────────
+
+# latent_pearl_cache.json の TTL（日）
+LATENT_PEARL_TTL_DAYS: int = 30
+
+# 潜伏Pearl → 通常Pearl への昇格閾値
+LATENT_PEARL_PROMOTION_THRESHOLD: float = 70.0
+
+# 潜伏Pearlスコア計算の重み（合計 1.0）
+LATENT_PEARL_SCORE_WEIGHTS: dict = {
+    "independence": 0.35,
+    "cross_signal": 0.30,
+    "catalyst":     0.20,
+    "midterm":      0.15,
+}
+
+# ── Wave7-H: Pearl Score D3統合定数（pearl_score_calculator.py）
+
+# D3 への EDINET セグメント文脈ボーナス上限
+D3_EDINET_SEGMENT_BONUS_MAX: float = 15.0
+
+# D3 への中計スコア連携ボーナス上限
+D3_MIDTERM_BONUS_MAX: float = 10.0
+
+# D3 へのカタリストフラグ連携ボーナス上限
+D3_CATALYST_BONUS_MAX: float = 8.0
+
+# 潜伏Pearl昇格銘柄への pearl_score 上乗せ上限
+LATENT_PEARL_PROMOTION_BONUS_MAX: float = 8.0
+
+# ── Wave7-I: ALL_DIRS への Wave 7 キャッシュディレクトリ追加 ───
+
+_WAVE7_DIRS = [
+    CACHE_DIR,   # standardization_cache / academic_conf_cache /
+                 # midterm_plan_cache / size_decay_state /
+                 # nano_evaluation_queue / cross_size_signal_cache /
+                 # independence_scores / latent_pearl_cache
+                 # はすべて CACHE_DIR 直下に配置するため追加不要
+                 # （CACHE_DIR は既に ALL_DIRS に含まれている）
+]
+# CACHE_DIR が既に ALL_DIRS に含まれていることを確認して追加
+for _d in _WAVE7_DIRS:
+    if _d not in ALL_DIRS:
+        ALL_DIRS.append(_d)
+
+# ── Wave7-J: WEEKLY_MODULES / DAILY_MODULES への登録定義 ────────
+# 実際の登録は stock_analyzer_main.py の Wave 7 第3セッションで行う。
+# ここでは実行順序の仕様を定義する。
+
+# DAILY_MODULES 実行順（size_decay → cross_size → independence → latent_pearl）
+WAVE7_DAILY_MODULE_ORDER: list = [
+    "size_decay_manager",
+    "cross_size_signal",
+    "independence_score_calculator",
+    "latent_pearl_manager",
+]
+
+# WEEKLY_MODULES 実行順（標準化 → 学術 → 中計）
+WAVE7_WEEKLY_MODULE_ORDER: list = [
+    "industry_standard_tracker",
+    "academic_conf_tracker",
+    "midterm_plan_tracker",
+]
+
+# ── Wave7-K: Feature Flag（全Wave 7モジュールのON/OFF制御）─────
+
+# 標準化トラッカー有効フラグ（デフォルトOFF: 本番確認後ONに変更）
+ENABLE_STANDARDIZATION_TRACKER: bool = False
+
+# 学術カンファレンス追跡有効フラグ
+ENABLE_ACADEMIC_CONF_TRACKER: bool = False
+
+# 中計トラッカー有効フラグ
+ENABLE_MIDTERM_PLAN_TRACKER: bool = False
+
+# 規模別減衰管理有効フラグ
+ENABLE_SIZE_DECAY_MANAGER: bool = False
+
+# 規模帯横断シグナル有効フラグ
+ENABLE_CROSS_SIZE_SIGNAL: bool = False
+
+# 市場独立性スコア有効フラグ
+ENABLE_INDEPENDENCE_SCORE: bool = False
+
+# 潜伏銘柄管理有効フラグ
+ENABLE_LATENT_PEARL_MANAGER: bool = False
+
+# D3 EDINET セグメント統合有効フラグ
+ENABLE_D3_EDINET_SEGMENT: bool = False
+
+# D3 中計連携有効フラグ
+ENABLE_D3_MIDTERM_INTEGRATION: bool = False
+
+# D3 カタリスト連携有効フラグ
+ENABLE_D3_CATALYST_INTEGRATION: bool = False
+
+# 潜伏Pearl昇格ボーナス有効フラグ
+ENABLE_LATENT_PEARL_BONUS: bool = False
+# ==============================================================
+# BLOCK 38: 観測性 — モジュール実行台帳設定（Wave OBS-1）
+# ==============================================================
+# module_ledger.py が参照する。日次の全モジュール成否を台帳化し、
+# 連続失敗・配線漏れ（記録なし）を可視化する。
+# 背景: 2026-06 の全数バグ掃討で発見された「サイレント失敗」の再発防止。
+
+ENABLE_MODULE_LEDGER: bool = True
+LEDGER_CONSEC_FAIL_DAYS: int = 3    # この日数以上の連続失敗で Gmail アラート
+LEDGER_HISTORY_DAYS: int = 14       # 連続失敗・最終成功日の遡及日数
+
+# ==============================================================
+# BLOCK 39: 投資部（マルチエージェント審議）連携設定（Wave DEPT-1）
+# ==============================================================
+# agent_packet_exporter.py が参照する。SPEC_investment_dept.md 参照。
+# vault パスはローカル実行専用（GitHub Actions では使用しない）。
+
+ENABLE_INVESTMENT_DEPT: bool = True
+INVESTMENT_DEPT_VAULT_DIR: str = os.getenv(
+    "INVESTMENT_DEPT_VAULT_DIR",
+    "/Users/kentaryobe/Library/Mobile Documents/iCloud~md~obsidian/"
+    "Documents/Vault2_ClaudeCode/CEO室/departments/B-investment",
+)
+
+# ── BLOCK 38b: パイプライン実行フラグの正式定義（Wave PIPE-1）─────
+# ★ 2026-06-12 SSOT修正: 以下5フラグは stock_analyzer_main / 各モジュールが
+#   getattr デフォルト True で参照していたが config に定義が無かった
+#   （pipeline_registry_gen.py --audit で検出）。現状動作を維持して明文化。
+ENABLE_DEEP_DIVE_TRIGGER: bool = True      # 深掘りトリガー [S3-4]
+ENABLE_TECHNOLOGY_MAPPER: bool = True      # 技術マッピング [Wave6-B T-1]
+ENABLE_CLUSTER_ENGINE: bool = True         # クラスターエンジン [Wave6-B T-2]
+ENABLE_EMERGING_DETECTOR: bool = True      # 萌芽テーマ検知 [Wave6-B T-3]
+ENABLE_CLUSTER_GRAPH_EXPORT: bool = True   # クラスター結果出力 [Wave6-B T-4]
+
+# ── BLOCK 39b: オントロジー層 設定（Wave ONT-1 本番配線・2026-06-12）──
+# ontology_exporter.py が参照。週次（WEEKLY_MODULES "ontology_export"）で
+# エンティティグラフを BQ `ontology` データセットへ追記する。
+# BQ認証なし環境では JSONL ローカル出力に自動フォールバック。
+# 初回のみ ontology_bq_schema.py を Colab 等で手動実行しておくこと。
+ENABLE_ONTOLOGY_EXPORT: bool = True
+
+# ==============================================================
+# BLOCK 40: イベントホライズン（事前アラート）設定（Wave EVT-1）
+# ==============================================================
+# event_horizon_scanner.py / catalyst_calendar.py が参照。
+# ★ 従来 catalyst_calendar.py 内のデフォルト値を getattr で参照していた
+#   6つの日程表を SSOT としてここに正式定義（値は同一・挙動変更なし）。
+#   日程改定時はここだけを編集する。
+
+FED_FOMC_DATES: list = [
+    "2026-01-29", "2026-03-19", "2026-05-07",
+    "2026-06-18", "2026-07-30", "2026-09-17",
+    "2026-10-29", "2026-12-17",
+]
+BOJ_MEETING_DATES: list = [
+    "2026-01-24", "2026-03-19", "2026-04-30",
+    "2026-06-17", "2026-07-31", "2026-09-19",
+    "2026-10-30", "2026-12-19",
+]
+US_CPI_DATES: list = [
+    "2026-01-15", "2026-02-12", "2026-03-12",
+    "2026-04-10", "2026-05-13", "2026-06-11",
+    "2026-07-15", "2026-08-13", "2026-09-11",
+    "2026-10-15", "2026-11-12", "2026-12-11",
+]
+US_GDP_DATES: list = [
+    "2026-01-29", "2026-04-29", "2026-07-30", "2026-10-29",
+]
+BOJ_TANKAN_DATES: list = [
+    "2026-04-02", "2026-07-02", "2026-10-01", "2027-01-05",
+]
+PMI_DATES: list = [
+    "2026-01-05", "2026-02-02", "2026-03-02",
+    "2026-04-01", "2026-05-04", "2026-06-01",
+    "2026-07-01", "2026-08-03", "2026-09-01",
+    "2026-10-01", "2026-11-02", "2026-12-01",
+]
+# 米雇用統計（原則第1金曜）
+US_NFP_DATES: list = [
+    "2026-01-09", "2026-02-06", "2026-03-06",
+    "2026-04-03", "2026-05-01", "2026-06-05",
+    "2026-07-02", "2026-08-07", "2026-09-04",
+    "2026-10-02", "2026-11-06", "2026-12-04",
+]
+
+ENABLE_EVENT_HORIZON: bool = True
+EVENT_HORIZON_ALERT_DAYS: int = 5      # この日数前からアラート開始（毎日カウントダウン）
+EVENT_HORIZON_EARNINGS_TTL_DAYS: int = 3   # 決算日キャッシュTTL（yfinance呼び出し抑制）
+
+# ==============================================================
+# BLOCK 41: オプション戦略アドバイザー設定（Wave OPT-1）
+# ==============================================================
+# options_strategy_advisor.py が参照。
+# ★ 投資部ガードレール準拠: 提案は defined-risk（買い）または
+#   カバード戦略（covered call / cash-secured put）のみ。
+#   裸売り・ショートは提案禁止（B-investment 鉄則8と同期）。
+
+ENABLE_OPTIONS_ADVISOR: bool = True
+OPTIONS_INDEX_ETFS: list = ["SPY", "QQQ"]   # 常時監視する指数ETF
+OPTIONS_MAX_UNIVERSE: int = 10              # yfinanceチェーン取得の上限銘柄数
+OPTIONS_IV_RICH_RATIO: float = 1.3          # IV/HV がこれ以上 → プレミアム売り環境
+OPTIONS_IV_CHEAP_RATIO: float = 0.8         # IV/HV がこれ以下 → プレミアム買い環境
+OPTIONS_HV_WINDOW_DAYS: int = 20            # ヒストリカル・ボラティリティ算出窓
+OPTIONS_MIN_SCORE_FOR_CSP: float = 70.0     # cash-secured put 提案の最低composite

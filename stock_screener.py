@@ -299,7 +299,6 @@ def _fetch_ticker_data(ticker: str) -> Optional[dict]:
     """
     try:
         import yfinance as yf  # type: ignore
-        import numpy as np  # type: ignore
 
         t    = yf.Ticker(ticker)
         info = t.info
@@ -791,6 +790,157 @@ def _apply_filters(data: dict, cfg) -> tuple:
 
     return (len(fails) == 0), detail
 
+# ==============================================================
+# BLOCK 2.3: Wave 2 FE関数（FE-1 / FE-2）
+# ==============================================================
+
+def _calc_risk_adjusted_score(
+    ticker:          str,
+    composite_score: float,
+    data:            dict,
+    cfg=None,
+) -> float:
+    """
+    FE-1: ATR基準リスク調整スコアを算出する。
+
+    yfinance の hist データが利用不可の場合は beta をボラティリティ代理変数として使用。
+    risk\\_adjusted\\_score = composite \\div PENALTY\\_HIGH\\_VOL (高ボラ時)
+    risk\\_adjusted\\_score = composite \\Times PENALTY\\_LOW\\_VOL (低ボラ/低流動性時)
+
+    Args:
+        ticker:          銘柄コード（ログ用）
+        composite_score: 元のcomposite_score
+        data:            _fetch_ticker_data() 返り値辞書
+        cfg:             config モジュール（None 可）
+
+    Returns:
+        float: risk_adjusted_score (0.0〜100.0)
+        ※ 失敗時は composite_score をそのまま返す
+    """
+    try:
+        penalty_high = float(getattr(cfg, "RISK_ADJ_PENALTY_HIGH_VOL", 1.20))
+        penalty_low  = float(getattr(cfg, "RISK_ADJ_PENALTY_LOW_VOL",  0.85))
+
+        beta = data.get("beta")
+        if beta is None:
+            # beta 不明 → 調整なし
+            return round(float(composite_score), 1)
+
+        b = float(beta)
+        # 異常値除去
+        if not (-2.0 <= b <= 5.0):
+            return round(float(composite_score), 1)
+
+        if b > 1.5:
+            # 高ボラティリティ銘柄: リスク割引
+            adjusted = composite_score / penalty_high
+        elif 0.0 < b < 0.5:
+            # 低ボラティリティ銘柄: 流動性リスクを考慮した軽微な割引
+            adjusted = composite_score * penalty_low
+        else:
+            # 通常範囲: 調整なし
+            adjusted = composite_score
+
+        return round(min(100.0, max(0.0, adjusted)), 1)
+
+    except Exception:
+        return round(float(composite_score), 1)
+
+
+def _calc_revision_score(
+    ticker: str,
+    data:   dict,
+    cfg=None,
+) -> float:
+    """
+    FE-2: アナリスト修正スコアを算出する（JP版・上限+3pt）。
+
+    直近30日のupgrade/downgrade集計が理想だが、
+    yfinance の info から取得できる rec_mean を主要代理変数として使用する。
+    revision\\_score \\in [-0.5, 0.5]（quality\\_score加算前のスコア）
+    加算値 = revision\\_score \times 6.0（JPは上限+3pt / 下限-3pt）
+
+    Returns:
+        float: quality_score への加算点（-3.0〜+3.0）
+    """
+    try:
+        window = int(getattr(cfg, "ANALYST_REVISION_WINDOW_DAYS", 30))
+        # ── rec_mean（アナリスト推奨平均）を revision proxy として使用 ──
+        # yfinance: 1.0=Strong Buy, 2.0=Buy, 3.0=Hold, 4.0=Sell, 5.0=Strong Sell
+        rec_mean = data.get("rec_mean")
+        if rec_mean is None:
+            return 0.0
+
+        r = float(rec_mean)
+        if r <= 1.5:
+            raw = 0.50   # Strong Buy
+        elif r <= 2.0:
+            raw = 0.30   # Buy
+        elif r <= 2.5:
+            raw = 0.10   # 弱いBuy
+        elif r <= 3.0:
+            raw = 0.00   # Hold
+        elif r <= 3.5:
+            raw = -0.20  # 弱いSell
+        else:
+            raw = -0.50  # Sell / Strong Sell
+
+        # JP: 上限 +3pt / 下限 -3pt
+        jp_max = float(getattr(cfg, "PEAD_TRIGGER_MIN_REVISION", 0.3)) * 10.0
+        jp_max = min(jp_max, 3.0)
+        return round(min(jp_max, max(-jp_max, raw * 6.0)), 2)
+
+    except Exception:
+        return 0.0
+
+
+def _check_pead_trigger(
+    ticker:         str,
+    revision_score: float,
+    cfg=None,
+) -> bool:
+    """
+    FE-2: PEAD（Post-Earnings Announcement Drift）トリガー判定。
+
+    revision_score が PEAD_TRIGGER_MIN_REVISION 以上の場合に True を返す。
+    alert_notifier.py のトリガー⑳で参照される。
+
+    Returns:
+        bool: True → PEAD シグナル発動
+    """
+    try:
+        min_rev = float(getattr(cfg, "PEAD_TRIGGER_MIN_REVISION", 0.3))
+        return float(revision_score) >= min_rev
+    except Exception:
+        return False
+
+# ==============================================================
+# BLOCK 2.8: Wave 3 FE-7 カタリストボーナス算出
+# ==============================================================
+
+def _calc_catalyst_bonus(
+    ticker:      str,
+    sector_code: str,
+    cat_data:    dict,
+    cfg=None,
+) -> float:
+    """
+    FE-7: カタリストカレンダーからボーナス（最大 +5pt）を算出する。
+
+    cat_data は _screen_sector() のループ外で一括ロードした
+    catalyst_calendar.json の内容を渡す。
+
+    Returns:
+        float: 0.0〜5.0
+    """
+    try:
+        if not cat_data:
+            return 0.0
+        from catalyst_calendar import calc_catalyst_bonus as _cb
+        return _cb(ticker, sector_code, cat_data, cfg)
+    except Exception:
+        return 0.0
+
 def _calc_scores(
     data:                dict,
     sector_score:        float,
@@ -834,6 +984,17 @@ def _calc_scores(
         pbr_score = 50
 
     value_score = round((per_score * 0.6 + pbr_score * 0.4), 1)
+    # ── [Wave 2 - BM Ph2] 業態別 value_score 正規化 ──────────────
+    try:
+        from business_model_normalizer import (
+            detect_bm_norm_type as _det_bm,
+            normalize_value_score_by_bm as _norm_vs,
+        )
+        _sector_code = str(data.get("sector_code", ""))
+        _bm_norm_type = _det_bm(_sector_code, market="JP")
+        value_score = _norm_vs(value_score, _bm_norm_type, data)
+    except Exception:
+        _bm_norm_type = "NORM_STANDARD"
     inv_bonus = 0.0   # if roe ブロック外で初期化（ROEなし銘柄でも参照できるよう）
     # [I-1] EPS加速度スコア計算
     # earnings_growth（直近年率）と earnings_qgrowth（直近四半期）の差から加速度を算出
@@ -879,37 +1040,182 @@ def _calc_scores(
         # 業種平均より2pt以上低い = 相対的に利益品質が高い
         relative_bonus = 5.0
 
+    # ── [Wave 2 - BM Ph2] bm_bonus 算出 ─────────────────────────
+    _bm_bonus = 0.0
+    try:
+        from business_model_normalizer import calc_bm_bonus as _calc_bm_bonus
+        _bm_bonus = _calc_bm_bonus(
+            ticker=str(data.get("symbol", data.get("ticker", ""))),
+            data=data,
+            sector_code=str(data.get("sector_code", "")),
+            market="JP",
+        )
+    except Exception:
+        _bm_bonus = 0.0
+
+    # ── [Wave 2 - FE-2] revision_score 算出 ──────────────────────
+    _revision_score = 0.0
+    try:
+        _revision_score = _calc_revision_score(
+            ticker=str(data.get("symbol", data.get("ticker", ""))),
+            data=data,
+            cfg=None,
+        )
+    except Exception:
+        _revision_score = 0.0
+
     quality_score = round(
         max(0, min(100,
             quality_base + acr_bonus + relative_bonus
             + surprise_bonus + inv_bonus + acc_bonus
             + bq_bonus  + ceo_bonus          # ★ P-2追加
+            + _bm_bonus + _revision_score    # ★ Wave 2追加
         )),
         1,
     )
 
-    # 総合スコア
-    composite = round(
-        sector_score * 0.40
-        + value_score  * 0.30
-        + quality_score * 0.30,
-        1,
-    )
+# ── [Pearl Ph1] 光る原石スコアを計算し quality_score に加算 ──
+    pearl_score = 0.0
+    pearl_bonus = 0.0
+    pearl_tier  = None
+    try:
+        from pearl_score_calculator import calc_pearl_score as _calc_pearl
+        import config as _cfg_pearl
+        if getattr(_cfg_pearl, "ENABLE_PEARL_SCORE", True):
+            _ticker = data.get("symbol", data.get("ticker", ""))
+            # EPS加速度を data に補完（pearl D1 計算用）
+            # ── Wave 7: D3統合用フィールドを data に補完 ────────
+            # pearl_score_calculator.py の _calc_d3_earnings_quality() が
+            # edinet_segment_text / catalyst_score / midterm_overall_score /
+            # midterm_trajectory を参照する。
+            try:
+                import json as _j7
+                from pathlib import Path as _p7
+                _cache_dir_ps = _p7(
+                    getattr(__import__("config"), "CACHE_DIR", "stock_data/cache")
+                )
+                _ticker_ps = data.get("symbol", data.get("ticker", ""))
+                _code_ps   = str(_ticker_ps).split(".")[0]
+
+                # (a) EDINET ローテーションキャッシュからセグメントテキストを取得
+                if "edinet_segment_text" not in data:
+                    _rot_p = _cache_dir_ps / "edinet_rotation_cache.json"
+                    if _rot_p.exists():
+                        _rot = _j7.loads(_rot_p.read_text(encoding="utf-8"))
+                        _seg_texts = _rot.get("companies", {}).get(
+                            _code_ps, {}
+                        ).get("texts", [])
+                        data["edinet_segment_text"] = (
+                            " ".join(str(t) for t in _seg_texts)
+                            if isinstance(_seg_texts, list)
+                            else str(_seg_texts)
+                        )
+
+                # (b) text_signal_cache からカタリストスコアを取得
+                if "catalyst_score" not in data:
+                    _ts_p = _cache_dir_ps / "text_signal_cache.json"
+                    if _ts_p.exists():
+                        _ts = _j7.loads(_ts_p.read_text(encoding="utf-8"))
+                        _cat_key = f"{_code_ps}_catalyst"
+                        _cat_e   = _ts.get(_cat_key, {})
+                        data["catalyst_score"] = float(
+                            _cat_e.get("catalyst_score", 0.0)
+                        )
+
+                # (c) midterm_plan_cache からスコア・軌道を取得
+                if "midterm_overall_score" not in data:
+                    _mt_p = _cache_dir_ps / "midterm_plan_cache.json"
+                    if _mt_p.exists():
+                        _mt = _j7.loads(_mt_p.read_text(encoding="utf-8"))
+                        _mt_e = _mt.get("plans", {}).get(_ticker_ps, {})
+                        data["midterm_overall_score"] = float(
+                            _mt_e.get("overall_score", 50.0)
+                        )
+                        data["midterm_trajectory"] = _mt_e.get(
+                            "trajectory", "on_track"
+                        )
+            except Exception:
+                pass
+            if eg_annual is not None and eg_quarter is not None:
+                data["earnings_acceleration"] = round(
+                    float(eg_quarter) * 4 - float(eg_annual), 3
+                )
+            _pr = _calc_pearl(data, _cfg_pearl, market="JP", ticker=_ticker)
+            pearl_score   = _pr.get("pearl_score", 0.0)
+            pearl_bonus   = _pr.get("pearl_bonus", 0.0)
+            pearl_tier    = _pr.get("pearl_tier")
+            # quality_score に pearl_bonus を加算（上限100pt）
+            quality_score = round(min(100.0, quality_score + pearl_bonus), 1)
+    except Exception:
+        pass
+
+    # ── [Wave 2 - Size Ph2] size_tier取得 + tier別composite算出 ──
+    _size_tier = "Mid"   # デフォルト
+    _size_weights = {"sector_score": 0.40, "value_score": 0.30, "quality_score": 0.30}
+    try:
+        from size_decay_manager import resolve_size_tier as _res_tier
+        from size_decay_manager import calc_tier_composite_score as _tier_comp
+        _ticker_key = str(data.get("symbol", data.get("ticker", "")))
+        _mcap_b     = data.get("market_cap_b")
+        _mcap_raw   = data.get("market_cap")
+        _size_tier  = _res_tier(
+            ticker        = _ticker_key,
+            market_cap_raw= _mcap_raw,
+            market_cap_b  = _mcap_b,
+            market        = "JP",
+        )
+        composite, _size_weights = _tier_comp(
+            sector_score, value_score, quality_score, _size_tier
+        )
+    except Exception:
+        # フォールバック: 固定ウェイト（既存ロジックと同じ）
+        composite = round(
+            sector_score  * 0.40
+            + value_score  * 0.30
+            + quality_score * 0.30,
+            1,
+        )
+
+    # ── [Wave 2 - FE-1] risk_adjusted_score 算出 ─────────────────
+    _risk_adj_score = composite   # デフォルト: composite と同値
+    try:
+        _risk_adj_score = _calc_risk_adjusted_score(
+            ticker=str(data.get("symbol", data.get("ticker", ""))),
+            composite_score=composite,
+            data=data,
+        )
+    except Exception:
+        _risk_adj_score = composite
 
     return {
-        "sector_score":    round(sector_score, 1),
-        "value_score":     value_score,
-        "quality_score":   quality_score,
-        "composite_score": composite,
-        "accrual_ratio":   edinet_accrual,
-        "accrual_tier":    acr_tier,
-        "accrual_bonus":   round(acr_bonus + relative_bonus, 1),
-        "surprise_bonus":  surprise_bonus,
-        "acc_bonus":       round(acc_bonus, 1),   # ★ I-1追加（EPS加速度）
+        "sector_score":       round(sector_score, 1),
+        "value_score":        value_score,
+        "quality_score":      quality_score,
+        "composite_score":    composite,
+        "accrual_ratio":      edinet_accrual,
+        "accrual_tier":       acr_tier,
+        "accrual_bonus":      round(acr_bonus + relative_bonus, 1),
+        "surprise_bonus":     surprise_bonus,
+        "acc_bonus":          round(acc_bonus, 1),
         "earnings_acceleration": round(eg_quarter * 4 - eg_annual, 3)
                                  if (eg_annual is not None and eg_quarter is not None)
-                                 else None,       # ★ I-1追加（生値保存）
-        "bq_bonus":              round(bq_bonus, 1),   # ★ P-2追加
+                                 else None,
+        "bq_bonus":           round(bq_bonus, 1),
+        "pearl_score":        round(pearl_score, 1),
+        "pearl_bonus":        round(pearl_bonus, 1),
+        "pearl_tier":         pearl_tier,
+        # ── Wave 2 追加フィールド ──────────────────────────────
+        "size_tier":          _size_tier,              # Wave 2 - Size Ph2
+        # ── Wave 7 追加フィールド ──────────────────────────────
+        "edinet_segment_text":  data.get("edinet_segment_text", ""),
+        "catalyst_score":       float(data.get("catalyst_score", 0.0)),
+        "midterm_overall_score": float(data.get("midterm_overall_score", 0.0)),
+        "midterm_trajectory":   data.get("midterm_trajectory", "on_track"),
+        "size_weights":       _size_weights,           # Wave 2 - Size Ph2
+        "bm_bonus":           round(_bm_bonus, 2),    # Wave 2 - BM Ph2
+        "bm_norm_type":       _bm_norm_type,           # Wave 2 - BM Ph2
+        "revision_score":     round(_revision_score, 2), # Wave 2 - FE-2
+        "risk_adjusted_score": _risk_adj_score,        # Wave 2 - FE-1
     }
 
 # ==============================================================
@@ -1140,14 +1446,17 @@ def _screen_sector(sector_code: str, sector_name: str,
     sector_vol_mean = sum(vols) / len(vols) if vols else None
 
     # 2. 決算サプライズ用モジュールの動的読み込み（ループ外で1回のみ）
-    es_module = None
-    if surprise_cache:
-        try:
-            import sys as _sys, importlib as _imp
-            _sys.path.insert(0, str(Path(__file__).parent))
-            es_module = _imp.import_module("earnings_surprise")
-        except Exception:
-            pass
+    # [P-2][I-3] ループ初回の未束縛エラー防止（各ループ内で再計算される）
+    bq_bonus  = 0.0
+    bq_detail = {}
+    ceo_bonus = 0.0
+    # [Wave 3 - FE-7] カタリストカレンダーをループ外で一括読み込み
+    _cat_data_jp: dict = {}
+    try:
+        from catalyst_calendar import load_catalyst_calendar as _load_cat
+        _cat_data_jp = _load_cat(cfg) or {}
+    except Exception:
+        pass
 
     # 3. メインループ：フィルタリングとスコアリング
     for ticker, data in raw_data_list:
@@ -1169,7 +1478,6 @@ def _screen_sector(sector_code: str, sector_name: str,
         # B. 各種ボーナスの集計
         total_bonus = 0.0
         cr_label = ""
-        inv_bonus = 0.0
         
         # 決算サプライズボーナス
         es_bonus = 0.0
@@ -1198,39 +1506,6 @@ def _screen_sector(sector_code: str, sector_name: str,
             try:
                 _sfl_mod = _imp.import_module("screener_feedback_loop")  # type: ignore
                 eq_bonus = _sfl_mod.get_edinet_bonus(ticker, edinet_quality_cache)
-            except Exception:
-                pass
-        # [5-2] comps相対バリューボーナス（value_scoreのブレンド）
-        if not _mid_light and comps_cache and ticker in comps_cache:
-            try:
-                _ca_mod = _imp.import_module("comps_analyzer")  # type: ignore
-                cb = _ca_mod.get_comps_bonus(ticker, comps_cache)
-                if cb != 0:
-                    old_vs = scores.get("value_score", 50) or 50  # type: ignore
-                    new_vs = round(old_vs * 0.7 + comps_cache[ticker].get("comps_score", 50) * 0.3, 1)  # type: ignore
-                    scores["value_score"] = new_vs  # type: ignore
-                    scores["comps_bonus"] = cb  # type: ignore
-                    scores["composite_score"] = round(  # type: ignore
-                        scores.get("sector_score", 50)    * 0.35  # type: ignore
-                        + new_vs                          * 0.25  # type: ignore
-                        + scores.get("quality_score", 50) * 0.20  # type: ignore
-                        + scores.get("technical_score", 50) * 0.20, 1)  # type: ignore
-            except Exception:
-                pass
-        # [6-3] DCFボーナス（value_scoreに直接加算）
-        if not _mid_light and dcf_cache and ticker in dcf_cache:
-            try:
-                _dcf_mod = _imp.import_module("dcf_valuation")  # type: ignore
-                db = _dcf_mod.get_dcf_bonus(ticker, dcf_cache)
-                if db != 0:
-                    scores["dcf_bonus"]   = db  # type: ignore
-                    scores["value_score"] = round(  # type: ignore
-                        max(0, min(100, scores.get("value_score", 50) + db)), 1)  # type: ignore
-                    scores["composite_score"] = round(  # type: ignore
-                        scores.get("sector_score", 50)    * 0.35  # type: ignore
-                        + scores["value_score"]           * 0.25  # type: ignore
-                        + scores.get("quality_score", 50) * 0.20  # type: ignore
-                        + scores.get("technical_score",50) * 0.20, 1)  # type: ignore
             except Exception:
                 pass
 
@@ -1263,6 +1538,41 @@ def _screen_sector(sector_code: str, sector_name: str,
             bq_bonus            = bq_bonus,    # ★ P-2追加  # type: ignore
             ceo_bonus           = ceo_bonus,     # ★ I-3追加  # type: ignore
         )
+        # [5-2] comps相対バリューボーナス（value_scoreのブレンド）
+        if not _mid_light and comps_cache and ticker in comps_cache:
+            try:
+                import sys as _sys, importlib as _imp
+                _sys.path.insert(0, str(Path(__file__).parent))
+                _ca_mod = _imp.import_module("comps_analyzer")  # type: ignore
+                cb = _ca_mod.get_comps_bonus(ticker, comps_cache)
+                if cb != 0:
+                    old_vs = scores.get("value_score", 50) or 50
+                    new_vs = round(old_vs * 0.7 + comps_cache[ticker].get("comps_score", 50) * 0.3, 1)
+                    scores["value_score"] = new_vs
+                    scores["comps_bonus"] = cb
+                    scores["composite_score"] = round(
+                        scores.get("sector_score", 50)    * 0.35
+                        + new_vs                          * 0.25
+                        + scores.get("quality_score", 50) * 0.20
+                        + scores.get("technical_score", 50) * 0.20, 1)
+            except Exception:
+                pass
+        # [6-3] DCFボーナス（value_scoreに直接加算）
+        if not _mid_light and dcf_cache and ticker in dcf_cache:
+            try:
+                _dcf_mod = _imp.import_module("dcf_valuation")  # type: ignore
+                db = _dcf_mod.get_dcf_bonus(ticker, dcf_cache)
+                if db != 0:
+                    scores["dcf_bonus"]   = db
+                    scores["value_score"] = round(
+                        max(0, min(100, scores.get("value_score", 50) + db)), 1)
+                    scores["composite_score"] = round(
+                        scores.get("sector_score", 50)    * 0.35
+                        + scores["value_score"]           * 0.25
+                        + scores.get("quality_score", 50) * 0.20
+                        + scores.get("technical_score", 50) * 0.20, 1)
+            except Exception:
+                pass
         # [M-3] アクティビスト候補スコア計算
         activist_score, activist_flags = _calc_activist_score(data)
 
@@ -1332,6 +1642,20 @@ def _screen_sector(sector_code: str, sector_name: str,
             except Exception:
                 pass
 
+        # ── [Wave 3 - FE-7] Catalyst Bonus 計算 ─────────────────
+        _catalyst_bonus = 0.0
+        try:
+            _catalyst_bonus = _calc_catalyst_bonus(
+                ticker, sector_code, _cat_data_jp, cfg
+            )
+            # composite_score に catalyst_bonus を加算（上限100pt）
+            if _catalyst_bonus > 0 and "composite_score" in scores:
+                scores["composite_score"] = round(
+                    min(100.0, scores["composite_score"] + _catalyst_bonus), 1
+                )
+        except Exception:
+            pass
+
         candidate = {
             "ticker":         ticker,
             "name":           data["name"],
@@ -1350,6 +1674,13 @@ def _screen_sector(sector_code: str, sector_name: str,
             "surprise_bonus": es_bonus,
             "discovery_score": 0.0,
             "discovery_flags": [],
+            # ── Wave 2 追加フィールド ─────────────────────────
+            "size_tier":          scores.get("size_tier", "Mid"),
+            "risk_adjusted_score": scores.get("risk_adjusted_score",
+                                              scores.get("composite_score", 0.0)),
+            "revision_score":     scores.get("revision_score", 0.0),
+            "bm_bonus":           scores.get("bm_bonus", 0.0),
+            "bm_norm_type":       scores.get("bm_norm_type", "NORM_STANDARD"),
             "credit_flag":    cr_label,
             "inventory_turnover": data.get("inventory_turnover"),
             "inv_bonus":      scores.get("inv_bonus", 0.0), # scoresから取得するか、別途計算するか仕様に合わせて調整
@@ -1359,6 +1690,10 @@ def _screen_sector(sector_code: str, sector_name: str,
             "current_price": data.get("current_price"),
             "comps_bonus": scores.get("comps_bonus", 0.0),
             "dcf_bonus": scores.get("dcf_bonus", 0.0),
+            # ── Wave 3 追加フィールド ──────────────────────────────
+            "catalyst_bonus":     _catalyst_bonus,    # Wave 3 - FE-7
+            "independence_score": 0.0,                # Wave 3 - Independence Ph1（後段で更新）
+            "is_latent_pearl":    False,              # Wave 3 - Independence Ph1（後段で更新）
             "acc_bonus": scores.get("acc_bonus", 0.0),   # ★ I-1追加
             "earnings_acceleration": scores.get("earnings_acceleration"),  # ★ I-1追加
             # [I-2] 保守度スコアと複合フラグ
@@ -1416,11 +1751,132 @@ def _screen_sector(sector_code: str, sector_name: str,
         if all_scores_ref is not None:
             all_scores_ref.append(scores["composite_score"])
 
+    # ── [Wave 3 - Independence Ph1] Independence Score バッチ計算 ──
+    try:
+        # Wave 7: independence_scores.json のキャッシュを優先参照し、
+        # キャッシュ未存在の銘柄のみ calc_independence_score_for_ticker() で計算
+        from independence_score_calculator import (
+            calc_independence_score_for_ticker as _calc_ind,
+            get_independence_score             as _get_ind_cached,
+            get_catalyst_flags                 as _get_cat_flags,
+            get_combined_score                 as _get_comb,
+        )
+        for _c in candidates:
+            if not _c.get("pass_filters"):
+                continue
+            _t    = _c.get("ticker", "")
+            _code = str(_t).split(".")[0]
+
+            # ① キャッシュ優先
+            _cached_ind = _get_ind_cached(_t)
+            if _cached_ind is not None:
+                _c["independence_score"] = float(_cached_ind)
+                _c["combined_score"]     = float(_get_comb(_t) or 0.0)
+                _c["catalyst_flags"]     = _get_cat_flags(_t) or []
+            else:
+                # ② キャッシュなし → 個別計算（上限20銘柄）
+                _ind_result = _calc_ind(_t, market="JP")
+                _c["independence_score"] = float(
+                    _ind_result.get("independence_score", 0.0)
+                )
+                _c["combined_score"]  = float(
+                    _ind_result.get("combined_score", 0.0)
+                )
+                _c["catalyst_flags"]  = _ind_result.get("catalyst_flags", [])
+
+            # ③ latent_pearl_cache から潜伏Pearlスコアを補完
+            _lp_score = 0.0
+            try:
+                # Wave 7: run_latent_pearl_manager をキャッシュ優先で呼び出す
+                # （force_refresh=False でキャッシュ TTL 内なら再計算しない）
+                from latent_pearl_manager import (
+                    run_latent_pearl_manager as _run_lpm_w7,
+                    get_promoted_tickers     as _get_promoted,
+                )
+                # キャッシュが存在しない場合のみ実行
+                _promoted = _get_promoted()
+                if not _promoted:
+                    _run_lpm_w7(cfg=cfg, force_refresh=False)
+            except Exception:
+                    pass
+            _c["latent_pearl_score"] = _lp_score
+
+            # ④ is_latent_pearl 判定（Wave 7版: latent_pearl_cache 優先）
+            _c["is_latent_pearl"] = _lp_score >= 30.0
+
+            # ⑤ composite_score への加算
+            # latent_pearl_score が高いほど大きいボーナス（最大 +5pt）
+            if _c["is_latent_pearl"] and _c.get("pass_filters"):
+                _lp_bonus = round(min(5.0, _lp_score / 20.0), 1)
+                _c["composite_score"] = round(
+                    min(100.0, _c.get("composite_score", 0.0) + _lp_bonus), 1
+                )
+                _c["latent_pearl_bonus"] = _lp_bonus
+            else:
+                _c["latent_pearl_bonus"] = 0.0
+
+    except Exception as _inde:
+        pass   # Independence Score 失敗でもスクリーニングを継続
+
+    # ── [Wave 3 - Independence Ph1] Latent Pearl Manager 更新 ────
+    try:
+        from independence_score_calculator import get_latent_pearl_candidates as _glc
+        from latent_pearl_manager import run_latent_pearl_manager as _run_lpm
+        _latent_cands = _glc(
+            {c.get("ticker", ""): {
+                "independence_score": c.get("independence_score", 0.0),
+                "phase": "LATENT_PEARL" if c.get("is_latent_pearl") else "UNKNOWN",
+                "beta_sector": 1.0,
+                "epsilon_mean": 0.0,
+                "sector_code": sector_code,
+             }
+             for c in candidates if c.get("independence_score", 0) >= 70
+            }
+        )
+        if _latent_cands:
+            _run_lpm(_latent_cands, cfg=cfg)
+    except Exception:
+        pass
+
     # ログ出力
     passed_list = [c for c in candidates if c["pass_filters"]]
     print(f"      → 通過: {len(passed_list)}/{len(candidates)}銘柄"
           + (f" | EDINET accrual: {sum(1 for t,_ in raw_data_list if t in accruals)}銘柄"
              if accruals else ""))
+
+    # ── [Wave 3 - Independence Ph1] Promoted Ticker を先頭挿入 ──
+    try:
+        # Wave 7: get_latent_pearls_list() から昇格対象を取得して先頭に挿入
+        from latent_pearl_manager import (
+            get_latent_pearls_list as _get_lpl,
+            get_promoted_tickers   as _get_prom,
+        )
+        _promoted_tickers = set(_get_prom())
+        _latent_top = [
+            e for e in _get_lpl(min_score=70.0)
+            if e.get("ticker") in _promoted_tickers
+        ]
+        # 既存 candidates に含まれていない昇格銘柄を先頭に挿入
+        _existing_tickers = {c.get("ticker", "") for c in candidates}
+        for _lpe in _latent_top:
+            _lp_ticker = _lpe.get("ticker", "")
+            if _lp_ticker and _lp_ticker not in _existing_tickers:
+                candidates.insert(0, {
+                    "ticker":             _lp_ticker,
+                    "pass_filters":       True,
+                    "promoted_by_latent": True,
+                    "latent_pearl_score": _lpe.get("latent_pearl_score", 0.0),
+                    "independence_score": _lpe.get("independence_score", 0.0),
+                    "catalyst_flags":     _lpe.get("catalyst_flags", []),
+                    "composite_score":    round(
+                        min(100.0, 50.0 + _lpe.get("latent_pearl_score", 0.0) * 0.3), 1
+                    ),
+                    "sector_code":        sector_code,
+                    "size_tier":          "Micro",  # 潜伏銘柄はデフォルトMicro
+                })
+                _existing_tickers.add(_lp_ticker)
+    except Exception:
+        pass   # 挿入失敗でも既存 candidates をそのまま返す
 
     return candidates
 
@@ -1673,6 +2129,10 @@ def run_stock_screener(cfg, sector_results: dict,
         edinet_accruals = _load_edinet_accruals(cfg)
     except Exception as e:
         print(f"  ⚠️  EDINET accrual ロード失敗（スキップ）: {e}")
+    # [問題D] 全銘柄リストを sector_results から構築
+    from sector_tickers import JP_SECTOR_TICKERS as _jst_d
+    all_tickers: list = [t for tlist in _jst_d.values() for t in tlist]
+    dynamic_ticker_meta: dict = {}
     # ── [問題D] 動的追加銘柄をユニバースに追加 ────────────────
     dynamic_tickers = getattr(cfg, "DYNAMIC_SCREENER_TICKERS", [])
     dynamic_meta    = getattr(cfg, "DYNAMIC_SCREENER_META", {})
@@ -1736,11 +2196,13 @@ def run_stock_screener(cfg, sector_results: dict,
             comps_cache    = comps_cache,
             dcf_cache      = dcf_cache,
         )
-    # ── [問題D] 動的追加銘柄は discovery_score を付与 ────────
+        # ── [問題D] 動的追加銘柄は discovery_score を付与 ────────
         _dyn_meta = getattr(cfg, "DYNAMIC_SCREENER_META", {})
-        if ticker in _dyn_meta:  # type: ignore
-            candidate["discovery_score"]  = _dyn_meta[ticker].get("discovery_score", 100)  # type: ignore
-            candidate["dynamic_source"]   = _dyn_meta[ticker].get("source", "")  # type: ignore
+        for candidate in candidates:
+            _t = candidate.get("ticker", "")
+            if _t in _dyn_meta:
+                candidate["discovery_score"] = _dyn_meta[_t].get("discovery_score", 100)
+                candidate["dynamic_source"]  = _dyn_meta[_t].get("source", "")
         all_candidates.extend(candidates)
     # ── [問題D] 動的追加銘柄のスクリーニング ─────────────────────
     _dyn_tickers = getattr(cfg, "DYNAMIC_SCREENER_TICKERS", [])

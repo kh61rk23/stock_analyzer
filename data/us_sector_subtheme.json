@@ -1,0 +1,227 @@
+{
+  "version": "1.0",
+  "description": "US株11セクター × サブテーマ定義（Wave 2 - R-1）",
+  "generated": "2026-05-24",
+  "attributes": {
+    "supply_chain_position": "upstream | midstream | downstream | service | financial",
+    "business_cycle_sensitivity": "cyclical | defensive | growth | financial",
+    "export_dependency": "high | medium | low",
+    "digital_transformation_stage": "leader | follower | laggard",
+    "esg_priority": "environmental | social | governance | balanced",
+    "rate_sensitivity": "positive | negative | neutral（金利上昇に対する感応度）",
+    "bm_type": "BM-US-FIN（銀行・金融）| BM-US-UTIL（公益）| null"
+  },
+  "sectors": {
+    "US_10": {
+      "name_en": "Energy",
+      "name_ja": "エネルギー",
+      "supply_chain_position": "upstream",
+      "business_cycle_sensitivity": "cyclical",
+      "export_dependency": "high",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "environmental",
+      "rate_sensitivity": "neutral",
+      "bm_type": null,
+      "subthemes": [
+        "oil_price_cycle",
+        "lng_export_demand",
+        "energy_transition",
+        "carbon_capture",
+        "permian_shale_efficiency",
+        "geopolitical_supply_risk"
+      ]
+    },
+    "US_15": {
+      "name_en": "Materials",
+      "name_ja": "素材",
+      "supply_chain_position": "upstream",
+      "business_cycle_sensitivity": "cyclical",
+      "export_dependency": "high",
+      "digital_transformation_stage": "laggard",
+      "esg_priority": "environmental",
+      "rate_sensitivity": "negative",
+      "bm_type": null,
+      "subthemes": [
+        "copper_ev_demand",
+        "lithium_battery_materials",
+        "rare_earth_supply_chain",
+        "green_steel",
+        "china_demand_exposure",
+        "infrastructure_bill_tailwind"
+      ]
+    },
+    "US_20": {
+      "name_en": "Industrials",
+      "name_ja": "資本財・サービス",
+      "supply_chain_position": "downstream",
+      "business_cycle_sensitivity": "cyclical",
+      "export_dependency": "high",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "balanced",
+      "rate_sensitivity": "negative",
+      "bm_type": null,
+      "subthemes": [
+        "reshoring_capex",
+        "defense_spending",
+        "ai_factory_automation",
+        "aerospace_cycle",
+        "freight_logistics",
+        "infrastructure_spending"
+      ]
+    },
+    "US_25": {
+      "name_en": "Consumer Discretionary",
+      "name_ja": "一般消費財・サービス",
+      "supply_chain_position": "downstream",
+      "business_cycle_sensitivity": "cyclical",
+      "export_dependency": "medium",
+      "digital_transformation_stage": "leader",
+      "esg_priority": "social",
+      "rate_sensitivity": "negative",
+      "bm_type": null,
+      "subthemes": [
+        "ev_adoption",
+        "ecommerce_penetration",
+        "travel_revenge_spending",
+        "luxury_aspirational",
+        "consumer_credit_pressure",
+        "streaming_monetization"
+      ]
+    },
+    "US_30": {
+      "name_en": "Consumer Staples",
+      "name_ja": "生活必需品",
+      "supply_chain_position": "downstream",
+      "business_cycle_sensitivity": "defensive",
+      "export_dependency": "medium",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "social",
+      "rate_sensitivity": "neutral",
+      "bm_type": null,
+      "subthemes": [
+        "pricing_power",
+        "private_label_competition",
+        "emerging_market_exposure",
+        "organic_wellness_trend",
+        "supply_chain_normalization"
+      ]
+    },
+    "US_35": {
+      "name_en": "Health Care",
+      "name_ja": "ヘルスケア",
+      "supply_chain_position": "downstream",
+      "business_cycle_sensitivity": "defensive",
+      "export_dependency": "medium",
+      "digital_transformation_stage": "leader",
+      "esg_priority": "social",
+      "rate_sensitivity": "neutral",
+      "bm_type": null,
+      "subthemes": [
+        "glp1_obesity_drugs",
+        "ai_drug_discovery",
+        "gene_therapy",
+        "biosimilar_pressure",
+        "medicare_negotiation_risk",
+        "aging_demographics",
+        "digital_health"
+      ]
+    },
+    "US_40": {
+      "name_en": "Financials",
+      "name_ja": "金融",
+      "supply_chain_position": "financial",
+      "business_cycle_sensitivity": "financial",
+      "export_dependency": "medium",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "governance",
+      "rate_sensitivity": "positive",
+      "bm_type": "BM-US-FIN",
+      "subthemes": [
+        "net_interest_margin_expansion",
+        "credit_cycle_risk",
+        "fintech_disruption",
+        "capital_market_activity",
+        "regional_bank_consolidation",
+        "wealth_management_growth",
+        "deregulation_tailwind"
+      ]
+    },
+    "US_45": {
+      "name_en": "Information Technology",
+      "name_ja": "情報技術",
+      "supply_chain_position": "service",
+      "business_cycle_sensitivity": "growth",
+      "export_dependency": "high",
+      "digital_transformation_stage": "leader",
+      "esg_priority": "governance",
+      "rate_sensitivity": "negative",
+      "bm_type": null,
+      "subthemes": [
+        "generative_ai_infrastructure",
+        "cloud_migration",
+        "semiconductor_ai_chips",
+        "cybersecurity",
+        "saas_enterprise_software",
+        "data_center_build_out",
+        "china_export_control_risk"
+      ]
+    },
+    "US_50": {
+      "name_en": "Communication Services",
+      "name_ja": "コミュニケーション・サービス",
+      "supply_chain_position": "service",
+      "business_cycle_sensitivity": "growth",
+      "export_dependency": "medium",
+      "digital_transformation_stage": "leader",
+      "esg_priority": "governance",
+      "rate_sensitivity": "negative",
+      "bm_type": null,
+      "subthemes": [
+        "ai_advertising_platform",
+        "streaming_content_war",
+        "5g_monetization",
+        "social_media_regulation",
+        "gaming_metaverse",
+        "search_ai_disruption"
+      ]
+    },
+    "US_55": {
+      "name_en": "Utilities",
+      "name_ja": "公益事業",
+      "supply_chain_position": "service",
+      "business_cycle_sensitivity": "defensive",
+      "export_dependency": "low",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "environmental",
+      "rate_sensitivity": "negative",
+      "bm_type": "BM-US-UTIL",
+      "subthemes": [
+        "renewable_energy_capex",
+        "ai_datacenter_power_demand",
+        "nuclear_renaissance",
+        "grid_modernization",
+        "bond_proxy_rate_risk",
+        "rate_base_growth"
+      ]
+    },
+    "US_60": {
+      "name_en": "Real Estate",
+      "name_ja": "不動産",
+      "supply_chain_position": "service",
+      "business_cycle_sensitivity": "cyclical",
+      "export_dependency": "low",
+      "digital_transformation_stage": "follower",
+      "esg_priority": "environmental",
+      "rate_sensitivity": "negative",
+      "bm_type": null,
+      "subthemes": [
+        "data_center_reit",
+        "industrial_logistics_reit",
+        "office_vacancy_risk",
+        "residential_housing_shortage",
+        "mortgage_rate_sensitivity",
+        "zeb_green_building"
+      ]
+    }
+  }
+}

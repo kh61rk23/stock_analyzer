@@ -507,6 +507,50 @@ def run_anomaly_season(cfg, sector_results: Optional[dict] = None) -> dict:
                   f"% p={current_stats.get('p_value','N/A')} adj={adj:+.1f}pt")
         time.sleep(FETCH_DELAY)
 
+# ── [Wave 3 - FE-5] PEAD Adjustment 計算 ──────────────────────
+    # pead_monitor が検出した PEAD 候補セクターに追加補正を加える。
+    # 正 PEAD（上昇ドリフト）が季節アノマリーと同方向なら効果を強化。
+    # 陰性 PEAD（下落ドリフト）は季節の上昇シグナルを弱める。
+    pead_adjustments: dict = {}
+    try:
+        from pead_monitor import load_pead_candidates as _load_pead
+        _pead_cache = _load_pead(cfg)
+
+        # セクター別 PEAD スコアを集計（最大スコアを採用）
+        _pead_by_sector: dict[str, dict] = {}
+        for _ticker, _entry in _pead_cache.items():
+            _sc  = str(_entry.get("sector_code", ""))
+            _ps  = float(_entry.get("pead_score", 0.0))
+            _dir = str(_entry.get("direction", "positive"))
+            if _sc and _ps > 0:
+                if _sc not in _pead_by_sector or _ps > _pead_by_sector[_sc]["score"]:
+                    _pead_by_sector[_sc] = {"score": _ps, "direction": _dir}
+
+        # PEAD スコアを季節補正に加味（最大 ±2.0pt）
+        for _sc, _pead_info in _pead_by_sector.items():
+            _ps  = _pead_info["score"]
+            _dir = _pead_info["direction"]
+            if _ps < 2.0:          # スコアが低すぎる場合はスキップ
+                continue
+            # PEAD adj: 正方向は +pt、陰性は -pt（季節補正量の方向に揃える）
+            _sign = 1.0 if _dir == "positive" else -1.0
+            _pead_adj = round(min(2.0, _ps * 0.2) * _sign, 1)
+            pead_adjustments[_sc] = _pead_adj
+
+        if pead_adjustments:
+            _n_pead = len(pead_adjustments)
+            print(f"    📈 PEAD補正: {_n_pead}業種")
+    except Exception as _pe:
+        pass   # PEAD module 未実行時はスキップ
+
+    # 季節アノマリー + PEAD 補正を合算（combined_adjustments）
+    combined_adjustments: dict = dict(adjustments)
+    for _sc, _padj in pead_adjustments.items():
+        _existing = combined_adjustments.get(_sc, 0.0)
+        combined_adjustments[_sc] = round(
+            max(-MAX_ADJUSTMENT, min(MAX_ADJUSTMENT, _existing + _padj)), 1
+        )
+
     # ── 市場全体アノマリー ──────────────────────────────────
     market_anomaly = {}
     for mkt_name, mkt_ticker in MARKET_TICKERS.items():
@@ -525,12 +569,14 @@ def run_anomaly_season(cfg, sector_results: Optional[dict] = None) -> dict:
     print(f"    ✅ アノマリー分析完了: {len(anomalies)}業種 / 有意補正{n_sig}業種")
 
     result = {
-        "current_month":  current_month,
-        "anomalies":      anomalies,
-        "market_anomaly": market_anomaly,
-        "adjustments":    adjustments,
-        "lookback_years": LOOKBACK_YEARS,
-        "timestamp":      datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "current_month":       current_month,
+        "anomalies":           anomalies,
+        "market_anomaly":      market_anomaly,
+        "adjustments":         adjustments,           # 季節アノマリー単体
+        "pead_adjustments":    pead_adjustments,      # Wave 3 - FE-5 PEAD補正単体
+        "combined_adjustments": combined_adjustments, # Wave 3: 季節+PEAD合算
+        "lookback_years":      LOOKBACK_YEARS,
+        "timestamp":           datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
     result["calendar_md"] = format_anomaly_calendar(result, sector_names)
 

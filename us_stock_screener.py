@@ -40,7 +40,6 @@
 
 import json
 import time
-import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -163,16 +162,13 @@ def load_universe(cfg) -> list:
         list of dict:
           {"ticker": str, "category": str, "business_model": str}
     """
-    universe_dir = Path(getattr(cfg, "DRIVE_BASE", "")) / \
-                   getattr(cfg, "US_CUSTOM_UNIVERSE_DIR", "data/custom_universe")
+    _udir_cfg = getattr(cfg, "US_CUSTOM_UNIVERSE_DIR", "data/custom_universe")
 
-    # フォールバック候補
+    # フォールバック候補（優先順）
     candidates = [
-        universe_dir,
-        Path(__file__).parent / getattr(cfg, "US_CUSTOM_UNIVERSE_DIR",
-                                        "data/custom_universe"),
-        Path("/content") / getattr(cfg, "US_CUSTOM_UNIVERSE_DIR",
-                                   "data/custom_universe"),
+        Path(__file__).parent / _udir_cfg,              # リポジトリ直下/data/custom_universe ← 正解
+        Path(getattr(cfg, "DRIVE_BASE", "")) / _udir_cfg,  # stock_data/data/custom_universe
+        Path("/content") / _udir_cfg,                   # Colab環境
     ]
 
     found_dir = None
@@ -182,7 +178,7 @@ def load_universe(cfg) -> list:
             break
 
     if not found_dir:
-        print(f"  ⚠️  custom_universe ディレクトリが見つかりません")
+        print("  ⚠️  custom_universe ディレクトリが見つかりません")
         print(f"     検索パス: {[str(c) for c in candidates]}")
         return []
 
@@ -303,6 +299,22 @@ def _fetch_one(entry: dict, max_retries: int = 3) -> Optional[dict]:
                     and total_assets and total_assets > 0:
                 accrual_ratio = (net_income - op_cf) / total_assets
 
+            # ── [Phase US-1] XBRL財務データで補完 ──────────────────
+            _xbrl_accel = None
+            _xbrl_fcf   = None
+            try:
+                import sys as _sys, importlib as _imp
+                _sys.path.insert(0, str(Path(__file__).parent))
+                _ufr      = _imp.import_module("us_fundamental_rotator")
+                xbrl_data = _ufr.lookup_us_fundamentals_by_path(
+                    Path(__file__).parent / "stock_data" / "data", ticker
+                )
+                if xbrl_data:
+                    _xbrl_accel = xbrl_data.get("eps_accel_score_xbrl")
+                    _xbrl_fcf   = xbrl_data.get("latest_fcf")
+            except Exception:
+                pass
+
             return {
                 "ticker":           ticker,
                 "name":             (info.get("shortName")
@@ -354,6 +366,10 @@ def _fetch_one(entry: dict, max_retries: int = 3) -> Optional[dict]:
                 # テクニカル
                 "week52_change":    week52_chg,
                 "beta":             beta,
+
+                # [Phase US-1] XBRL財務補完（取得失敗時はNone）
+                "eps_accel_score_xbrl": _xbrl_accel,
+                "latest_fcf_xbrl":      _xbrl_fcf,
             }
 
         except Exception as e:
@@ -409,6 +425,23 @@ def _fetch_batch(entries: list, max_workers: int = 5,
 
     return results
 
+def _calc_catalyst_bonus_us(
+    ticker:   str,
+    gics:     str,
+    cat_data: dict,
+    cfg=None,
+) -> float:
+    """
+    FE-7: US株版カタリストボーナス（最大 +5pt）。
+    GICS セクターコード（"US_45" 等）を sector_code として渡す。
+    """
+    try:
+        if not cat_data:
+            return 0.0
+        from catalyst_calendar import calc_catalyst_bonus as _cb
+        return _cb(ticker, gics, cat_data, cfg)
+    except Exception:
+        return 0.0
 
 # ==============================================================
 # BLOCK 5: スクリーニングフィルター
@@ -476,6 +509,99 @@ def _apply_filter(c: dict) -> tuple:
 
     return len(fails) == 0, fails
 
+# ==============================================================
+# BLOCK 4.5: Wave 2 FE関数（FE-1 / FE-2 US版）
+# ==============================================================
+
+def _calc_risk_adjusted_score_us(
+    ticker:          str,
+    composite_score: float,
+    c:               dict,
+    cfg=None,
+) -> float:
+    """
+    FE-1: US株版 ATR基準リスク調整スコア。
+    beta をボラティリティ代理変数として使用する（JP版と同一ロジック）。
+
+    Returns:
+        float: risk_adjusted_score (0.0〜100.0)
+    """
+    try:
+        penalty_high = float(getattr(cfg, "RISK_ADJ_PENALTY_HIGH_VOL", 1.20))
+        penalty_low  = float(getattr(cfg, "RISK_ADJ_PENALTY_LOW_VOL",  0.85))
+
+        beta = c.get("beta")
+        if beta is None:
+            return round(float(composite_score), 1)
+
+        b = float(beta)
+        if not (-2.0 <= b <= 5.0):
+            return round(float(composite_score), 1)
+
+        if b > 1.5:
+            adjusted = composite_score / penalty_high
+        elif 0.0 < b < 0.5:
+            adjusted = composite_score * penalty_low
+        else:
+            adjusted = composite_score
+
+        return round(min(100.0, max(0.0, adjusted)), 1)
+
+    except Exception:
+        return round(float(composite_score), 1)
+
+
+def _calc_revision_score_us(
+    ticker: str,
+    c:      dict,
+    cfg=None,
+) -> float:
+    """
+    FE-2: US株版アナリスト修正スコア（上限+5pt）。
+
+    JP版と同一の rec_mean ロジックだが、
+    US市場はアナリスト影響力が高いため上限を+5ptに拡張。
+
+    Returns:
+        float: quality_score への加算点（-5.0〜+5.0）
+    """
+    try:
+        rec = c.get("rec_mean")
+        if rec is None:
+            return 0.0
+
+        r = float(rec)
+        if r <= 1.5:
+            raw = 0.50
+        elif r <= 2.0:
+            raw = 0.30
+        elif r <= 2.5:
+            raw = 0.10
+        elif r <= 3.0:
+            raw = 0.00
+        elif r <= 3.5:
+            raw = -0.20
+        else:
+            raw = -0.50
+
+        # US: 上限 +5pt / 下限 -5pt（JP の +3pt より大きい）
+        return round(min(5.0, max(-5.0, raw * 10.0)), 2)
+
+    except Exception:
+        return 0.0
+
+
+def _check_pead_trigger_us(
+    ticker:         str,
+    revision_score: float,
+    cfg=None,
+) -> bool:
+    """FE-2: US株版 PEAD トリガー判定。"""
+    try:
+        min_rev = float(getattr(cfg, "PEAD_TRIGGER_MIN_REVISION", 0.3))
+        return float(revision_score) >= min_rev
+    except Exception:
+        return False
 
 # ==============================================================
 # BLOCK 6: 複合スコア計算（US株版）
@@ -578,6 +704,141 @@ def _calc_score(c: dict) -> float:
 
     return round(min(max(score, 0), 100), 1)
 
+# ==============================================================
+# BLOCK 5.5: GICSマクロ感応度補正（Wave 1 - U-1）
+# ==============================================================
+
+# yfinance sector 文字列 → US セクターETFシンボル変換マップ
+_GICS_ETF_MAP: dict = {
+    "Technology":             "XLK",
+    "Consumer Cyclical":      "XLY",
+    "Consumer Defensive":     "XLP",
+    "Financial Services":     "XLF",
+    "Healthcare":             "XLV",
+    "Energy":                 "XLE",
+    "Basic Materials":        "XLB",
+    "Industrials":            "XLI",
+    "Communication Services": "XLC",
+    "Utilities":              "XLU",
+    "Real Estate":            "XLRE",
+    # yfinance 表記ゆれ対応
+    "Financial":              "XLF",
+    "Health Care":            "XLV",
+    "Consumer Staples":       "XLP",
+    "Information Technology": "XLK",
+}
+
+
+def _get_active_macro_factors(results: dict) -> set:
+    """
+    results["bond_commodity"] から現在アクティブなマクロファクターを判定する。
+
+    発動閾値:
+      interest_rate_rise  : US10Y 1M変化 >= +0.10%pt（+10bps）
+      interest_rate_fall  : US10Y 1M変化 <= -0.10%pt
+      oil_price_rise      : WTI/Brent 1Mリターン >= +5.0%
+      recession_risk      : recession_score >= 45 OR スプレッド < -0.20%
+
+    Returns:
+        set[str]: アクティブファクターのセット
+    """
+    active: set = set()
+    try:
+        bc = results.get("bond_commodity", {})
+        if not bc:
+            return active
+
+        # ── 金利方向（US10Y 1M変化、単位: %pt）─────────────────
+        yields_data = bc.get("yields", {})
+        us10y_chg   = float(
+            yields_data.get("us10y", {}).get("change_1m", 0) or 0
+        )
+        if us10y_chg >= 0.10:
+            active.add("interest_rate_rise")
+        elif us10y_chg <= -0.10:
+            active.add("interest_rate_fall")
+
+        # ── 原油価格方向（1Mリターン %）──────────────────────────
+        com_data = bc.get("commodity_data", bc.get("commodities", {}))
+        oil_ret  = float(
+            com_data.get("wti",  {}).get("ret_1m", 0)
+            or com_data.get("oil",  {}).get("ret_1m", 0)
+            or com_data.get("brent", {}).get("ret_1m", 0)
+            or 0
+        )
+        if oil_ret >= 5.0:
+            active.add("oil_price_rise")
+
+        # ── リセッションリスク────────────────────────────────────
+        recession_sc = int(bc.get("recession_score", 0) or 0)
+        curve        = bc.get("curve_analysis", {})
+        spread_2y10y = curve.get("spread_2y10y")
+        inverted     = curve.get("is_inverted_2y10y", False)
+        if (recession_sc >= 45
+                or inverted
+                or (spread_2y10y is not None
+                    and float(spread_2y10y) < -0.20)):
+            active.add("recession_risk")
+
+    except Exception:
+        pass
+    return active
+
+
+def _apply_gics_macro_correction(
+    score:          float,
+    c:              dict,
+    cfg,
+    active_factors: set,
+) -> float:
+    """
+    US_SECTOR_RULES に基づきGICSセクター別マクロ感応度補正を適用する（U-1）。
+
+    補正量の上限クリップ: ±10pt（単一銘柄への過補正防止）
+    最終スコア: 0〜100 にクリップ
+
+    Args:
+        score:          現在の composite_score
+        c:              銘柄データ辞書（"sector" or "category" キーを参照）
+        cfg:            config モジュール
+        active_factors: _get_active_macro_factors() の返り値
+
+    Returns:
+        float: 補正後スコア
+    """
+    try:
+        if not active_factors:
+            return score
+
+        # yfinance sector 名 → ETFシンボル変換
+        sector_name = str(c.get("sector", c.get("category", "")) or "")
+        etf_sym     = _GICS_ETF_MAP.get(sector_name, "")
+        if not etf_sym:
+            return score
+
+        rules       = getattr(cfg, "US_SECTOR_RULES", {})
+        sector_rule = rules.get(etf_sym, {})
+        sensitivities = sector_rule.get("macro_sensitivity", {})
+        if not sensitivities:
+            return score
+
+        total_delta = 0.0
+        for factor in active_factors:
+            rule = sensitivities.get(factor)
+            if rule:
+                total_delta += float(rule.get("score_delta", 0))
+
+        # ±10pt クリップ（1銘柄への過補正を防止）
+        total_delta = max(-10.0, min(10.0, total_delta))
+        if total_delta == 0.0:
+            return score
+
+        corrected = round(max(0.0, min(100.0, score + total_delta)), 1)
+        c["gics_macro_delta"] = round(total_delta, 1)   # デバッグ用に記録
+        return corrected
+
+    except Exception:
+        return score
 
 # ==============================================================
 # BLOCK 7: レポート生成
@@ -591,7 +852,7 @@ def _build_report(passed: list, screened: int, cfg) -> str:
                    reverse=True)[:top_n]
 
     lines = [
-        f"# 🇺🇸 米国株スクリーニングレポート",
+        "# 🇺🇸 米国株スクリーニングレポート",
         f"**{today}** | スクリーニング: {screened:,}社 → 通過: {len(passed)}社",
         "",
         "---",
@@ -609,6 +870,14 @@ def _build_report(passed: list, screened: int, cfg) -> str:
     def _f(v, digits=1):
         if v is None: return "N/A"
         return f"{v:.{digits}f}"
+
+    # [Wave 3 - FE-7] カタリストカレンダーをループ外で一括読み込み
+    _cat_data_us: dict = {}
+    try:
+        from catalyst_calendar import load_catalyst_calendar as _load_cat_us
+        _cat_data_us = _load_cat_us(cfg) or {}
+    except Exception:
+        pass
 
     for c in top:
         acr   = c.get("accrual_ratio")
@@ -647,32 +916,19 @@ def _build_report(passed: list, screened: int, cfg) -> str:
 # ==============================================================
 
 def _load_daily_cache(cache_path: Path) -> dict:
-    """当日の取得済み結果を読み込む（なければ空dict）"""
+    """当日の取得済み結果を読み込む（なければ空dict）。当日分のみ有効。"""
     today = datetime.now().strftime("%Y-%m-%d")
     if not cache_path.exists():
         return {}
     try:
-        data = json.loads(cache_path.read_text(encoding="utf-8"))
-        # ── [Phase US-1] XBRL財務データで補完 ──────────────────
-        try:
-            import sys as _sys, importlib as _imp
-            _sys.path.insert(0, str(Path(__file__).parent))
-            _ufr = _imp.import_module("us_fundamental_rotator")
-            xbrl_data = _ufr.lookup_us_fundamentals(cfg, ticker)
-            if xbrl_data:
-                # EPS加速度スコア（XBRL版）で上書き（精度が高い）
-                xbrl_acc = xbrl_data.get("eps_accel_score_xbrl")
-                if xbrl_acc is not None:
-                    data["acc_bonus_xbrl"] = xbrl_acc
-                    # yfinance の acc_bonus より XBRL を優先
-                    data["acc_bonus"] = xbrl_acc
-                # FCF を補完（yfinance が None の場合のみ）
-                if data.get("free_cashflow") is None and xbrl_data.get("latest_fcf"):
-                    data["free_cashflow"] = xbrl_data["latest_fcf"]
-                data["xbrl_enriched"] = True
-        except Exception:
-            pass   # XBRL 補完失敗は screener を止めない
-        return data
+        raw  = json.loads(cache_path.read_text(encoding="utf-8"))
+        # 日付チェック：当日のキャッシュのみ使用
+        if raw.get("date") != today:
+            return {}
+        return raw.get("results", {})
+    except Exception:
+        return {}
+
 
 def _save_daily_cache(cache_path: Path, results_dict: dict):
     """当日の取得済み結果を保存する"""
@@ -758,7 +1014,18 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
 
     # ── フィルター適用 ─────────────────────────────────────────
     print("  🔍 フィルター適用中...")
+    # ── [U-1] GICS マクロ感応度補正用ファクター取得 ────────────────
+    _active_mac = _get_active_macro_factors(results if results else {})
+    if _active_mac:
+        print(f"    📡 [U-1] GICSマクロ補正: {_active_mac}")
     passed = []
+    # ── [Wave 3 - FE-7] カタリストカレンダーをループ外で一括読み込み ──
+    _cat_data_us: dict = {}
+    try:
+        from catalyst_calendar import load_catalyst_calendar as _load_cat_us
+        _cat_data_us = _load_cat_us(cfg) or {}
+    except Exception:
+        pass
     for c in all_candidates:
         if not c.get("fetch_ok"):
             continue
@@ -767,7 +1034,428 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
         c["fail_reasons"] = fails
         if ok:
             c["composite_score"] = _calc_score(c)
+            # ── [U-1] GICSマクロ感応度補正 ──────────────────────
+            if _active_mac:
+                c["composite_score"] = _apply_gics_macro_correction(
+                    c["composite_score"], c, cfg, _active_mac
+                )
+
+            # ── [Wave 3 - U-3] Form 4 インサイダーボーナス ───────
+            try:
+                from us_insider_form4_scraper import calc_insider_bonus as _ins_b
+                _ins_bonus = _ins_b(c.get("ticker", ""), cfg=cfg)
+                if _ins_bonus != 0.0:
+                    c["insider_bonus"]   = _ins_bonus
+                    c["composite_score"] = round(
+                        min(100.0, max(0.0,
+                            c["composite_score"] + _ins_bonus)), 1
+                    )
+            except Exception:
+                c.setdefault("insider_bonus", 0.0)
+
+            # ── [Wave 3 - BM Ph3] BM-06 SaaS 正規化 ─────────────
+            try:
+                from business_model_normalizer import (
+                    detect_bm_norm_type    as _det_bm_us,
+                    calc_bm_bonus          as _calc_bm_us,
+                    NORM_SAAS,
+                )
+                _gics = str(c.get("gics_sector", c.get("sector", "")))
+                _bm_us = _det_bm_us(sector_code=_gics, market="US")
+                if _bm_us == NORM_SAAS:
+                    _bm_bonus_us = _calc_bm_us(
+                        ticker      = c.get("ticker", ""),
+                        data        = c,
+                        sector_code = _gics,
+                        market      = "US",
+                    )
+                    if _bm_bonus_us != 0.0:
+                        c["bm_bonus_us"]     = _bm_bonus_us
+                        c["composite_score"] = round(
+                            min(100.0, max(0.0,
+                                c["composite_score"] + _bm_bonus_us)), 1
+                        )
+            except Exception:
+                c.setdefault("bm_bonus_us", 0.0)
+
+            # ── [Wave 3 - FE-7] Catalyst Bonus ───────────────────
+            try:
+                _gics_for_cat = str(c.get("gics_sector", ""))
+                _cat_b_us = _calc_catalyst_bonus_us(
+                    c.get("ticker", ""), _gics_for_cat, _cat_data_us, cfg
+                )
+                if _cat_b_us > 0:
+                    c["catalyst_bonus"]  = _cat_b_us
+                    c["composite_score"] = round(
+                        min(100.0, c["composite_score"] + _cat_b_us), 1
+                    )
+            except Exception:
+                c.setdefault("catalyst_bonus", 0.0)
+            # ── [Wave 2 - Size Ph2] size_tier取得 + composite調整 ─
+            try:
+                from size_decay_manager import (
+                    resolve_size_tier as _res_tier_us,
+                    get_sector_score_weight_multiplier as _sec_mul,
+                )
+                _st = _res_tier_us(
+                    ticker        = c.get("ticker", ""),
+                    market_cap_raw= c.get("market_cap"),
+                    market        = "US",
+                )
+                c["size_tier"] = _st
+                # Micro/Nano はセクター依存度を低減（composite に乗数補正）
+                _mul = _sec_mul(_st)
+                if _mul < 1.0:
+                    # sector相当分（推定35%）にのみ乗数を適用
+                    _sector_portion = c["composite_score"] * 0.35
+                    _other_portion  = c["composite_score"] * 0.65
+                    c["composite_score"] = round(
+                        min(100.0, _sector_portion * _mul + _other_portion), 1
+                    )
+            except Exception:
+                c.setdefault("size_tier", "Mid")
+            # ── [Pearl Ph1] 光る原石スコアを追加 ───────────────
+            try:
+                from pearl_score_calculator import calc_pearl_score as _cpearl
+                if getattr(cfg, "ENABLE_PEARL_SCORE", True):
+                    _pr = _cpearl(
+                        c, cfg, market="US",
+                        ticker=c.get("ticker", ""),
+                    )
+                    c["pearl_score"] = _pr.get("pearl_score", 0.0)
+                    c["pearl_bonus"] = _pr.get("pearl_bonus", 0.0)
+                    c["pearl_tier"]  = _pr.get("pearl_tier")
+                    # pearl_bonus を composite_score に加算（上限100pt）
+                    c["composite_score"] = round(
+                        min(100.0, c["composite_score"] + c["pearl_bonus"]),
+                        1,
+                    )
+                else:
+                    c["pearl_score"] = 0.0
+                    c["pearl_bonus"] = 0.0
+                    c["pearl_tier"]  = None
+            except Exception:
+                c.setdefault("pearl_score", 0.0)
+                c.setdefault("pearl_bonus", 0.0)
+                c.setdefault("pearl_tier",  None)
+            # ── [Wave 6 - U-4] institutional_bonus（13F機関投資家）──
+            # institutional_signal_scorer の scored リストから
+            # 当該ティッカーの adj_pt を取得し composite_score に加算する。
+            # results["institutional_scorer"] 未格納時・モジュール未実行時は
+            # 0.0 のままスキップし、composite_score に一切影響を与えない。
+            # ★ try/except 厳重保護: 外部依存なし・dict参照のみだが
+            #   KeyError/TypeError を完全に封じてシステム全停止を防ぐ
+            try:
+                if getattr(cfg, "ENABLE_INSTITUTIONAL_13F", True):
+                    _inst_scorer = (results or {}).get(
+                        "institutional_scorer", {}
+                    )
+                    if _inst_scorer:
+                        _inst_scored = _inst_scorer.get("scored", [])
+                        _ticker_now  = c.get("ticker", "")
+                        # scored リストから当該ティッカーの adj_pt を取得
+                        _inst_adj = next(
+                            (
+                                float(s.get("adj_pt", 0.0))
+                                for s in _inst_scored
+                                if s.get("ticker") == _ticker_now
+                            ),
+                            0.0,
+                        )
+                        # adj_pt を INSTITUTIONAL_BONUS_MAX/MIN でクリップ
+                        _bonus_max = float(
+                            getattr(cfg, "INSTITUTIONAL_BONUS_MAX", 8.0)
+                        )
+                        _bonus_min = float(
+                            getattr(cfg, "INSTITUTIONAL_BONUS_MIN", -5.0)
+                        )
+                        _inst_bonus = round(
+                            max(_bonus_min, min(_bonus_max, _inst_adj)), 2
+                        )
+                        if _inst_bonus != 0.0:
+                            c["institutional_bonus"] = _inst_bonus
+                            c["composite_score"]     = round(
+                                min(100.0, max(0.0,
+                                    c["composite_score"] + _inst_bonus)),
+                                1,
+                            )
+                            # L3 Override 発動中の銘柄にフラグを付与
+                            _l3_tickers = _inst_scorer.get(
+                                "override_tickers", []
+                            )
+                            if _ticker_now in _l3_tickers:
+                                c["l3_override"]     = True
+                                c["l3_institution"]  = next(
+                                    (
+                                        s.get("institution", "")
+                                        for s in _inst_scored
+                                        if s.get("ticker") == _ticker_now
+                                    ),
+                                    "",
+                                )
+                        else:
+                            c.setdefault("institutional_bonus", 0.0)
+                    else:
+                        c.setdefault("institutional_bonus", 0.0)
+                else:
+                    c.setdefault("institutional_bonus", 0.0)
+            except Exception:
+                c.setdefault("institutional_bonus", 0.0)
+            # ── [Wave 7] cross_size_signal US固有ロジック ─────────
+            # cross_size_signal.py の "jp_us_cross" シグナルのうち
+            # 当該ティッカーが target_tickers に含まれる場合、
+            # composite_score にシグナル強度に応じたボーナスを加算する。
+            # Feature Flag: ENABLE_CROSS_SIZE_SIGNAL
+            try:
+                if getattr(cfg, "ENABLE_CROSS_SIZE_SIGNAL", False):
+                    from cross_size_signal import get_signals_for_ticker as _get_sigs_us
+                    import config as _cfg_css_us
+                    _sigs_us = _get_sigs_us(
+                        ticker = c.get("ticker", ""),
+                        cfg    = _cfg_css_us,
+                    )
+                    _css_bonus_us = 0.0
+                    for _sig in _sigs_us:
+                        # jp_us_cross のうち bullish シグナルのみ採用
+                        if (
+                            _sig.get("signal_type") == "jp_us_cross"
+                            and _sig.get("direction") == "bullish"
+                        ):
+                            # $bonus = strength \\times confidence \\times 0.5$
+                            _css_bonus_us += round(
+                                float(_sig.get("strength", 0.0))
+                                * float(_sig.get("confidence", 0.0))
+                                * 0.5,
+                                2,
+                            )
+                        # upward_spillover も対象（US Large→US Mid/Small 伝播）
+                        elif (
+                            _sig.get("signal_type") == "upward_spillover"
+                            and _sig.get("direction") == "bullish"
+                            and c.get("size_tier", "Mid") in ("Small", "Micro")
+                        ):
+                            _css_bonus_us += round(
+                                float(_sig.get("strength", 0.0))
+                                * float(_sig.get("confidence", 0.0))
+                                * 0.3,
+                                2,
+                            )
+                    # ボーナスを上限 5.0pt でクリップして加算
+                    _css_bonus_us = round(min(5.0, max(0.0, _css_bonus_us)), 2)
+                    if _css_bonus_us > 0:
+                        c["cross_size_bonus"]  = _css_bonus_us
+                        c["composite_score"]   = round(
+                            min(100.0, c["composite_score"] + _css_bonus_us), 1
+                        )
+                else:
+                    c.setdefault("cross_size_bonus", 0.0)
+            except Exception:
+                c.setdefault("cross_size_bonus", 0.0)
+
+            # ── [Wave 7] independence_score + latent_pearl ────────
+            # independence_scores.json のキャッシュを参照し、
+            # 市場独立性スコアを付与する。latent_pearl_score が
+            # 閾値以上の銘柄は composite_score にボーナスを加算する。
+            try:
+                if getattr(cfg, "ENABLE_INDEPENDENCE_SCORE", False):
+                    from independence_score_calculator import (
+                        get_independence_score as _get_ind_us,
+                        get_combined_score     as _get_comb_us,
+                    )
+                    _ind_us   = _get_ind_us(c.get("ticker", ""))
+                    _comb_us  = _get_comb_us(c.get("ticker", ""))
+                    c["independence_score"] = float(_ind_us or 0.0)
+                    c["combined_score"]     = float(_comb_us or 0.0)
+                else:
+                    c.setdefault("independence_score", 0.0)
+                    c.setdefault("combined_score",     0.0)
+            except Exception:
+                c.setdefault("independence_score", 0.0)
+                c.setdefault("combined_score",     0.0)
+
+            try:
+                if getattr(cfg, "ENABLE_LATENT_PEARL_MANAGER", False):
+                    from latent_pearl_manager import (
+                        get_latent_pearl_score as _get_lps_us,
+                        is_latent_pearl        as _is_lp_us,
+                    )
+                    import config as _cfg_lp_us
+                    _lp_score_us = float(
+                        _get_lps_us(c.get("ticker", ""), _cfg_lp_us) or 0.0
+                    )
+                    _is_lp_us_flag = _is_lp_us(
+                        c.get("ticker", ""), _cfg_lp_us, min_score=30.0
+                    )
+                    c["latent_pearl_score"] = _lp_score_us
+                    c["is_latent_pearl"]    = _is_lp_us_flag
+                    # $bonus = \\min(5.0, latent\\_pearl\\_score / 20)$
+                    if _is_lp_us_flag:
+                        _lp_bonus_us = round(min(5.0, _lp_score_us / 20.0), 1)
+                        c["latent_pearl_bonus"] = _lp_bonus_us
+                        c["composite_score"]    = round(
+                            min(100.0, c["composite_score"] + _lp_bonus_us), 1
+                        )
+                    else:
+                        c.setdefault("latent_pearl_bonus", 0.0)
+                else:
+                    c.setdefault("latent_pearl_score",  0.0)
+                    c.setdefault("is_latent_pearl",     False)
+                    c.setdefault("latent_pearl_bonus",  0.0)
+            except Exception:
+                c.setdefault("latent_pearl_score",  0.0)
+                c.setdefault("is_latent_pearl",     False)
+                c.setdefault("latent_pearl_bonus",  0.0)
+
+            # ── [Wave 7] taxonomy×size 交差評価ボーナス（US版）───
+            # size_tier_master.json の taxonomy_size_correction を参照し、
+            # US銘柄の composite_score に交差評価補正を直接加算する。
+            # $tax\\_boost = \\min(3.0, (correction - 1.0) \\times 10)$
+            try:
+                if getattr(cfg, "ENABLE_SIZE_DECAY_MANAGER", False):
+                    from size_tier_classifier import get_taxonomy_size_correction as _get_tsc
+                    import config as _cfg_tsc
+                    _tsc = float(
+                        _get_tsc(c.get("ticker", ""), _cfg_tsc) or 1.0
+                    )
+                    c["taxonomy_size_correction"] = _tsc
+                    _tsc_boost = round(min(3.0, max(-3.0, (_tsc - 1.0) * 10.0)), 2)
+                    if abs(_tsc_boost) >= 0.1:
+                        c["taxonomy_size_bonus"] = _tsc_boost
+                        c["composite_score"]     = round(
+                            min(100.0, max(0.0, c["composite_score"] + _tsc_boost)), 1
+                        )
+                    else:
+                        c.setdefault("taxonomy_size_bonus", 0.0)
+                else:
+                    c.setdefault("taxonomy_size_correction", 1.0)
+                    c.setdefault("taxonomy_size_bonus",      0.0)
+            except Exception:
+                c.setdefault("taxonomy_size_correction", 1.0)
+                c.setdefault("taxonomy_size_bonus",      0.0)
+            # ── [Wave 6 - 第4セッション] 縮退補正（US株） ────────
+            # rule_optimizer.evaluate_contraction_flag() の判定結果を参照し、
+            # 非防御セクターは composite_score を縮退係数で補正する。
+            # 防御セクター（Consumer Staples / Health Care 等）は相対ボーナスを加算。
+            # ★ try/except 厳重保護: 縮退ロジック未実行時も composite_score に影響なし
+            try:
+                _contraction_us = (results or {}).get(
+                    "rule_optimizer", {}
+                ).get("contraction_flag", {})
+                _mode_us = _contraction_us.get("mode", "Normal")
+                if _mode_us != "Normal":
+                    import sys as _sys_cu, importlib as _imp_cu
+                    from pathlib import Path as _pl_cu
+                    _sys_cu.path.insert(0, str(_pl_cu(__file__).parent))
+                    _ro_cu  = _imp_cu.import_module("rule_optimizer")
+                    _cfg_cu = _imp_cu.import_module("config")
+                    _gics_us = str(c.get("gics_sector", c.get("sector", "")))
+                    # US銘柄の防御セクター判定（GICSセクター名で判定）
+                    _is_def_us = _ro_cu.is_defensive_sector(
+                        sector_code = _gics_us,
+                        sector_name = _gics_us,
+                        market      = "US",
+                        cfg         = _cfg_cu,
+                    )
+                    _coeff_us = float(_contraction_us.get("coefficient", 1.00))
+                    if _is_def_us:
+                        # 防御セクター: 相対ボーナス加算
+                        _bonus_map_us = {
+                            "Warning":   float(getattr(_cfg_cu, "DEFENSIVE_RELATIVE_BONUS_WARNING",   3.0)),
+                            "Emergency": float(getattr(_cfg_cu, "DEFENSIVE_RELATIVE_BONUS_EMERGENCY", 7.0)),
+                        }
+                        _bonus_us = _bonus_map_us.get(_mode_us, 0.0)
+                        c["composite_score"] = round(
+                            min(100.0, c["composite_score"] + _bonus_us), 1
+                        )
+                        c["contraction_defensive"] = True
+                        c["contraction_bonus"]     = _bonus_us
+                    else:
+                        # 非防御セクター: 中心50点からの縮退
+                        # $adjusted = 50 + (score - 50) \times coeff$
+                        _adj_us = round(
+                            max(0.0, min(100.0,
+                                50.0 + (c["composite_score"] - 50.0) * _coeff_us
+                            )), 1
+                        )
+                        c["contraction_adjusted"]  = True
+                        c["pre_contraction_score"] = c["composite_score"]
+                        c["composite_score"]       = _adj_us
+                    c["contraction_mode"] = _mode_us
+            except Exception:
+                c.setdefault("contraction_mode", "Normal")
+            # ── [Wave 6 - G-C] SEC Geographic Extractor 接続 ──────
+            # sec_geographic_extractor.get_us_geo_exposure() で
+            # geopolitics.company_country_exposure から権益エクスポージャーを取得し
+            # geo_impact_bonus の事前データとして c に格納する。
+            # ★ try/except 厳重保護: BQ接続失敗・モジュール未配置時も
+            #   composite_score に影響を与えずシステム全停止を防ぐ
+            try:
+                if getattr(cfg, "ENABLE_GEO_SIGNAL", False):
+                    import sys as _sys_geo, importlib as _imp_geo
+                    from pathlib import Path as _pl_geo
+                    _sys_geo.path.insert(
+                        0, str(_pl_geo.Path(__file__).parent)
+                    )
+                    _sge = _imp_geo.import_module(
+                        "sec_geographic_extractor"
+                    )
+                    _geo_exp = _sge.get_us_geo_exposure(
+                        ticker     = c.get("ticker", ""),
+                        cfg        = cfg,
+                        project_id = getattr(
+                            cfg, "GEO_BQ_PROJECT_ID",
+                            "stock-analyzer-edinet"
+                        ),
+                    )
+                    # exposure リストを候補データに格納
+                    # （geo_impact_bonus 計算は geo_signal.py で行う）
+                    c["geo_exposures"] = _geo_exp
+                else:
+                    c.setdefault("geo_exposures", [])
+            except ModuleNotFoundError:
+                c.setdefault("geo_exposures", [])
+            except Exception:
+                c.setdefault("geo_exposures", [])
+            # ── [Wave 2 - FE-1] risk_adjusted_score ─────────────
+            try:
+                c["risk_adjusted_score"] = _calc_risk_adjusted_score_us(
+                    ticker=c.get("ticker", ""),
+                    composite_score=c["composite_score"],
+                    c=c,
+                    cfg=cfg,
+                )
+            except Exception:
+                c["risk_adjusted_score"] = c.get("composite_score", 0.0)
+
+            # ── [Wave 2 - FE-2] revision_score + PEAD判定 ────────
+            try:
+                _rev = _calc_revision_score_us(c.get("ticker", ""), c, cfg)
+                c["revision_score"] = _rev
+                c["pead_trigger"]   = _check_pead_trigger_us(
+                    c.get("ticker", ""), _rev, cfg
+                )
+                # composite_score に revision_score を加算（上限100pt）
+                c["composite_score"] = round(
+                    min(100.0, c["composite_score"] + _rev), 1
+                )
+            except Exception:
+                c.setdefault("revision_score", 0.0)
+                c.setdefault("pead_trigger",   False)
+            # ──────────────────────────────────────────────────────
+            # ★ passed.append(c) は全スコア加算完了後に実行する
+            # （Wave 7ボーナス・縮退補正・FE-1・FE-2適用済みスコアを反映）
             passed.append(c)
+    # ── Wave 7 デフォルトフィールド補完 ────────────────────────── 
+    # 上記 try ブロックが全てスキップされた銘柄にデフォルト値を設定する
+    for _c_def in passed:
+        _c_def.setdefault("cross_size_bonus",         0.0)
+        _c_def.setdefault("independence_score",        0.0)
+        _c_def.setdefault("combined_score",            0.0)
+        _c_def.setdefault("latent_pearl_score",        0.0)
+        _c_def.setdefault("is_latent_pearl",           False)
+        _c_def.setdefault("latent_pearl_bonus",        0.0)
+        _c_def.setdefault("taxonomy_size_correction",  1.0)
+        _c_def.setdefault("taxonomy_size_bonus",       0.0)
 
     passed_sorted = sorted(passed,
                            key=lambda x: x.get("composite_score", 0),
@@ -795,24 +1483,54 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
         report_path = None
 
     elapsed = time.time() - start_time
-    print(f"\n  🏁 米国株スクリーニング完了")
+    _c_mode_log = (results or {}).get("rule_optimizer", {}).get(
+        "contraction_flag", {}
+    ).get("mode", "Normal")
+    _c_icon_log = {"Normal": "✅", "Warning": "⚠️", "Emergency": "🚨"}.get(
+        _c_mode_log, "✅"
+    )
+    print("\n  🏁 米国株スクリーニング完了")
     print(f"     スクリーニング: {len(all_candidates):,}社")
     print(f"     通過: {len(passed_sorted)}社")
     print(f"     所要時間: {elapsed/60:.1f}分")
+    print(f"     {_c_icon_log} 縮退モード: {_c_mode_log}")
     print(f"     TOP3: "
           + " / ".join(c["ticker"] for c in top_picks[:3]))
 
+    # 縮退モードのサマリーを集計
+    _contraction_mode_summary = "Normal"
+    _contraction_defensive_count = 0
+    _contraction_adjusted_count  = 0
+    try:
+        _contraction_mode_summary = (
+            (results or {}).get("rule_optimizer", {})
+            .get("contraction_flag", {})
+            .get("mode", "Normal")
+        )
+        _contraction_defensive_count = sum(
+            1 for c in passed_sorted if c.get("contraction_defensive")
+        )
+        _contraction_adjusted_count = sum(
+            1 for c in passed_sorted if c.get("contraction_adjusted")
+        )
+    except Exception:
+        pass
+
     return {
-        "candidates":     all_candidates,
-        "passed":         passed_sorted,
-        "pass_count":     len(passed_sorted),
-        "screened_count": len(all_candidates),
-        "top_picks":      top_picks,
-        "by_category":    by_category,
-        "report_path":    str(report_path) if report_path else "",
-        "elapsed_min":    round(elapsed / 60, 1),
-        "timestamp":      datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "skipped":        False,
+        "candidates":                all_candidates,
+        "passed":                    passed_sorted,
+        "pass_count":                len(passed_sorted),
+        "screened_count":            len(all_candidates),
+        "top_picks":                 top_picks,
+        "by_category":               by_category,
+        "report_path":               str(report_path) if report_path else "",
+        "elapsed_min":               round(elapsed / 60, 1),
+        "timestamp":                 datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "skipped":                   False,
+        # Wave 6 - 第4セッション: 縮退情報
+        "contraction_mode":          _contraction_mode_summary,
+        "contraction_defensive_count": _contraction_defensive_count,
+        "contraction_adjusted_count":  _contraction_adjusted_count,
     }
 
 
@@ -821,7 +1539,7 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
 # ==============================================================
 
 if __name__ == "__main__":
-    import importlib.util, sys
+    import importlib.util
 
     for p in ["/content/config.py", str(Path(__file__).parent / "config.py")]:
         if Path(p).exists():
