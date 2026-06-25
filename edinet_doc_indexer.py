@@ -11,7 +11,7 @@ import requests
 import time
 from datetime import date, timedelta, timezone, datetime
 from edinet_bq_client import EDINETBQClient
-from google.api_core.exceptions import GoogleAPICallError  # 403 Forbidden 等を包含
+from google.api_core.exceptions import GoogleAPICallError, Forbidden  # Forbidden=403
 from google.auth.exceptions import GoogleAuthError          # 認証情報不正・欠落
 
 
@@ -20,6 +20,11 @@ from google.auth.exceptions import GoogleAuthError          # 認証情報不正
 # ============================================================
 EDINET_BASE      = "https://disclosure.edinet-api.go.jp/api/v2"
 TARGET_DOC_TYPES = {"120", "140"}   # 120=有報, 140=四半期報告書
+# doc_index.doc_type は日本語ラベルで格納する。
+# 消費側 edinet_bq_client.get_unfetched_docs が
+#   doc_type IN ('有価証券報告書', '四半期報告書')
+# でフィルタするため、数字コードのままだと永久にヒットしない。
+DOC_TYPE_LABELS  = {"120": "有価証券報告書", "140": "四半期報告書"}
 REQUEST_INTERVAL = 1.5              # EDINET API レート制限対策（秒）
 REQUEST_TIMEOUT  = 30               # タイムアウト（秒）
 
@@ -75,8 +80,16 @@ def _to_date_or_none(value: str | None) -> str | None:
 # 変換・登録
 # ============================================================
 
-def _build_rows(results: list[dict], submit_date: str) -> list[dict]:
-    """API レスポンスの生データを BigQuery 挿入用の辞書リストに変換する"""
+def _build_rows(results: list[dict], disclosure_date: str) -> list[dict]:
+    """API レスポンスの生データを BigQuery 挿入用の辞書リストに変換する。
+
+    ★ カラム名は doc_index の正本スキーマに厳密に一致させる
+      （SPEC_db_schema.md 1-1 / edinet_bq_schema.py TABLE_DEFINITIONS["edinet"]["doc_index"]）。
+      旧コードは securities_code / doc_type_code / submit_date / xbrl_flag /
+      html_flag / period_start / period_end / created_at という存在しない列名で
+      組んでおり、INSERT も get_fetched_submit_dates の SELECT も
+      "Unrecognized name" で失敗していた（producer/consumer 不整合）。
+    """
     now  = datetime.now(timezone.utc).isoformat()
     rows = []
 
@@ -91,19 +104,19 @@ def _build_rows(results: list[dict], submit_date: str) -> list[dict]:
 
         rows.append({
             "doc_id":          r.get("docID", ""),
+            "company_code":    _parse_securities_code(r.get("secCode")),
             "edinet_code":     r.get("edinetCode", ""),
             "company_name":    r.get("filerName", ""),
-            "securities_code": _parse_securities_code(r.get("secCode")),
-            "doc_type_code":   doc_type,
-            "period_start":    _to_date_or_none(r.get("periodStart")),
-            "period_end":      _to_date_or_none(r.get("periodEnd")),
-            "submit_date":     submit_date,
-            "xbrl_flag":       r.get("xbrlFlag") == "1",
-            "html_flag":       r.get("htmlFlag") == "1",
-            "ifrs_flag":       ifrs_flag,
+            "doc_type":        DOC_TYPE_LABELS.get(doc_type, doc_type),
+            "fiscal_year_end": _to_date_or_none(r.get("periodEnd")),
+            "disclosure_date": disclosure_date,
+            "xbrl_available":  r.get("xbrlFlag") == "1",
+            "html_available":  r.get("htmlFlag") == "1",
             "fetched_flag":    False,
-            "created_at":      now,
+            "ifrs_flag":       ifrs_flag,
             "updated_at":      now,
+            # fetched_at は実際に XBRL を取得した時刻。インデックス時点では
+            # 未取得なので設定しない（NULL のまま）。
         })
 
     return rows
@@ -134,13 +147,18 @@ def run_doc_indexer(days_back: int = 1):
         fetched_dates = set(client.get_fetched_submit_dates(days=max(days_back + 1, 10)))
     except (GoogleAPICallError, GoogleAuthError) as e:
         _first = (str(e).splitlines() or [""])[0][:200]
-        print("[doc_indexer] ⚠️ BigQuery 利用不可のため doc_index 更新をスキップします"
+        print("[doc_indexer] ⚠️ BigQuery 処理に失敗したため doc_index 更新をスキップします"
               "（後続の本体アナライザーは継続実行）。")
         print(f"[doc_indexer]   理由: {type(e).__name__}: {_first}")
-        print("[doc_indexer]   ※ '403 ... bigquery.jobs.create' の場合は GCP IAM の問題です。"
-              " サービスアカウント（BQ_CREDENTIALS）に roles/bigquery.jobUser"
-              "（または roles/bigquery.user）を BQ_PROJECT_ID のプロジェクトへ付与してください。"
-              " コード側では解決できません。")
+        if isinstance(e, (Forbidden, GoogleAuthError)):
+            # 認証・権限（IAM）の問題 → GCP 側の設定が必要
+            print("[doc_indexer]   ※ 認証/権限エラーです。サービスアカウント（BQ_CREDENTIALS）に"
+                  " roles/bigquery.jobUser（または bigquery.user）を BQ_PROJECT_ID の"
+                  " プロジェクトへ付与してください。コード側では解決できません。")
+        else:
+            # BadRequest 等 → クエリ/スキーマ不整合などコード側の問題の可能性
+            print("[doc_indexer]   ※ 認証以外のBQエラーです（スキーマ不整合・SQL誤り等の可能性）。"
+                  " doc_index の列名と SQL/挿入キーの一致を SPEC_db_schema.md と照合してください。")
         return
 
     today           = date.today()
