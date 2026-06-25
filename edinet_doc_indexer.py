@@ -11,6 +11,8 @@ import requests
 import time
 from datetime import date, timedelta, timezone, datetime
 from edinet_bq_client import EDINETBQClient
+from google.api_core.exceptions import GoogleAPICallError  # 403 Forbidden 等を包含
+from google.auth.exceptions import GoogleAuthError          # 認証情報不正・欠落
 
 
 # ============================================================
@@ -120,8 +122,27 @@ def run_doc_indexer(days_back: int = 1):
             通常稼働: 1（当日分のみ）
             初回セットアップ: 90（過去3ヶ月分をまとめて取得）
     """
-    client          = EDINETBQClient()
-    fetched_dates   = set(client.get_fetched_submit_dates(days=max(days_back + 1, 10)))
+    # ── BigQuery 接続（権限不足・認証なしは「致命」ではなく「スキップ」扱い）──
+    #   本ステップは daily_run.yml の 3-B にあり、後続の本体アナライザー（step 5）
+    #   より前に走る。ここで例外を送出して exit 1 になると、ワークフロー全体が
+    #   中断し、当日の解析が一切実行されない（実害: 2026-06-24 の本番実行が
+    #   doc_indexer の BQ 403 でここ止まり＝2分43秒で全体停止）。
+    #   補助的な EDINET インデックス更新の失敗で日次解析を止めないため、
+    #   ONT-1 と同じ graceful degradation 方針で「警告して return」する。
+    try:
+        client        = EDINETBQClient()
+        fetched_dates = set(client.get_fetched_submit_dates(days=max(days_back + 1, 10)))
+    except (GoogleAPICallError, GoogleAuthError) as e:
+        _first = (str(e).splitlines() or [""])[0][:200]
+        print("[doc_indexer] ⚠️ BigQuery 利用不可のため doc_index 更新をスキップします"
+              "（後続の本体アナライザーは継続実行）。")
+        print(f"[doc_indexer]   理由: {type(e).__name__}: {_first}")
+        print("[doc_indexer]   ※ '403 ... bigquery.jobs.create' の場合は GCP IAM の問題です。"
+              " サービスアカウント（BQ_CREDENTIALS）に roles/bigquery.jobUser"
+              "（または roles/bigquery.user）を BQ_PROJECT_ID のプロジェクトへ付与してください。"
+              " コード側では解決できません。")
+        return
+
     today           = date.today()
     total_inserted  = 0
 
@@ -140,7 +161,13 @@ def run_doc_indexer(days_back: int = 1):
         if not rows:
             print(f"[doc_indexer] {target}: 対象書類なし（または API エラー）")
         else:
-            ok = client.insert_rows("doc_index", rows)
+            try:
+                ok = client.insert_rows("doc_index", rows)
+            except (GoogleAPICallError, GoogleAuthError) as e:
+                _first = (str(e).splitlines() or [""])[0][:120]
+                print(f"[doc_indexer] {target}: BQ 書き込み不可のためスキップ "
+                      f"({type(e).__name__}: {_first})")
+                continue
             status = "OK" if ok else "ERROR"
             print(f"[doc_indexer] {target}: {len(rows)} 件登録 ({status})")
             if ok:
