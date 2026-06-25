@@ -172,13 +172,15 @@ class EDINETBQClient:
 
     def get_fetched_submit_dates(self, days: int = 7) -> list[str]:
         """
-        過去 N 日間で doc_index に登録済みの submit_date を返す。
+        過去 N 日間で doc_index に登録済みの開示日(disclosure_date)を返す。
         doc_indexer の重複取得防止に使用。
+        ※ 正本スキーマの列名は disclosure_date（旧コードの submit_date は存在せず
+          "Unrecognized name: submit_date" で常時失敗していた）。
         """
         sql = f"""
-        SELECT DISTINCT FORMAT_DATE('%Y-%m-%d', submit_date) AS d
+        SELECT DISTINCT FORMAT_DATE('%Y-%m-%d', disclosure_date) AS d
         FROM `{self.dataset}.doc_index`
-        WHERE submit_date >= DATE_SUB(CURRENT_DATE(), INTERVAL {days} DAY)
+        WHERE disclosure_date >= DATE_SUB(CURRENT_DATE(), INTERVAL {days} DAY)
         """
         df = self.query_to_df(sql)
         return df["d"].tolist() if not df.empty else []
