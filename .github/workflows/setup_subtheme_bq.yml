@@ -1,0 +1,56 @@
+# ==============================================================
+# .github/workflows/setup_subtheme_bq.yml
+# Phase 4: BigQuery の subtheme 系テーブル整備（手動・1回実行用）
+# ==============================================================
+# 【目的】
+#   edinet.ticker_subtheme_mapping / edinet.sub_theme_master を作成し、
+#   初期データ（sub_theme_master = JSON / ticker = 業種代表銘柄）を投入する。
+#   これらが未作成で get_tickers_for_sector が 404 → セクター銘柄解決が
+#   常時失敗していた問題への一回限りのセットアップ。
+#
+# 【実行方法】
+#   GitHub の Actions タブ → 「🧩 Setup subtheme BQ tables」→ Run workflow
+#
+# 【冪等性】 CREATE TABLE IF NOT EXISTS + upsert のため再実行しても安全。
+#
+# 【必要 Secrets】 BQ_PROJECT_ID / BQ_CREDENTIALS（daily_run.yml と同じもの）
+# ==============================================================
+
+name: 🧩 Setup subtheme BQ tables
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  setup-subtheme-bq:
+    name: 🧩 ticker_subtheme_mapping / sub_theme_master 整備
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TZ: Asia/Tokyo
+      BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # setup スクリプトは BQ 接続のみで完結するため、重い requirements.txt は
+      # 入れず必要最小限の依存だけインストールする（高速化）。
+      - name: 📦 Install minimal deps
+        run: |
+          pip install --upgrade pip
+          pip install google-cloud-bigquery google-auth db-dtypes pandas pyarrow
+
+      - name: 🧩 Run setup_subtheme_bq.py
+        env:
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+          BQ_PROJECT_ID:  ${{ secrets.BQ_PROJECT_ID }}
+        run: |
+          python -u setup_subtheme_bq.py
