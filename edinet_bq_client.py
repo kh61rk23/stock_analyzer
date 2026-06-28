@@ -230,12 +230,17 @@ class EDINETBQClient:
         code = str(sector_code).replace("'", "''")
         lim = max(1, min(int(limit), 20))
 
-        # Wave 6 R-2: テーブルが存在する環境のみ有効
+        # Wave 6 R-2: テーブルが存在する環境のみ有効。
+        # ★ "SECTOR_<code>" は sub_theme_master 同期時に入る業種レベルの
+        #   プレースホルダー（実銘柄ではない）。これを実ティッカーとして
+        #   返すと yfinance 等が解決不能になり、かつ Tier2/3 フォールバックを
+        #   塞いでしまうため SQL とループの両方で除外する。
         sql = f"""
         SELECT DISTINCT ticker
         FROM `{self.dataset}.ticker_subtheme_mapping`
         WHERE sector_code = '{code}'
           AND ticker IS NOT NULL
+          AND ticker NOT LIKE 'SECTOR\\_%'
         LIMIT {lim}
         """
         try:
@@ -244,7 +249,7 @@ class EDINETBQClient:
                 out = []
                 for raw in df["ticker"].tolist():
                     t = str(raw).strip()
-                    if not t:
+                    if not t or t.upper().startswith("SECTOR_"):
                         continue
                     out.append(t if t.endswith(".T") else f"{t}.T")
                 if out:

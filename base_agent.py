@@ -1211,7 +1211,7 @@ def resolve_sector_tickers(sector_code: str, cfg, limit: int = 5) -> list[str]:
     業種別 ticker 解決（3段フォールバック）:
       1. BQ ticker_subtheme_mapping
       2. edinet_rotation meta.json（sector_code 付き）
-      3. config.SECTOR_TARGET_TICKERS
+      3. config.SECTOR_REPRESENTATIVE_TICKERS
     """
     sector_code = str(sector_code)
     limit = max(1, min(int(limit), 10))
@@ -1247,7 +1247,10 @@ def resolve_sector_tickers(sector_code: str, cfg, limit: int = 5) -> list[str]:
         print(f"    ⚠️  tickers[{sector_code}] meta失敗: {str(e)[:60]}")
 
     # 3) config 固定リスト（移行期フォールバック）
-    fallback = getattr(cfg, "SECTOR_TARGET_TICKERS", {}) or {}
+    #   ★ 旧コードは存在しないキー SECTOR_TARGET_TICKERS を参照しており、
+    #     Tier3 が常に空＝全業種「解決不可」だった（producer/consumer 不整合）。
+    #     正本は SECTOR_REPRESENTATIVE_TICKERS（config.py）。
+    fallback = getattr(cfg, "SECTOR_REPRESENTATIVE_TICKERS", {}) or {}
     static = [_normalize_ticker(t) for t in fallback.get(sector_code, [])]
     static = [t for t in static if t]
     if static:
