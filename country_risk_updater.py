@@ -100,6 +100,13 @@ _FETCH_TIMEOUT = 20
 _MAX_RETRIES = 3
 _RETRY_WAIT  = 5   # 秒
 
+# GDELT レート制限対策（2026-06-25 本番で全59国が 429 になり、各国3回リトライで
+# 約31分浪費した実害への対策）
+#   - 1回の実行で GDELT を引く最大国数（優先国から）。cfg.COUNTRY_RISK_GDELT_MAX で上書き可。
+#   - 連続失敗がこの数に達したら以降の GDELT 取得は打ち切る（サーキットブレーカー）。
+_GDELT_MAX_COUNTRIES     = 30
+_GDELT_CIRCUIT_THRESHOLD = 5
+
 # 外務省危険レベルのテキストパターン（RSS title から抽出）
 _MOFA_LEVEL_PATTERNS = [
     (4, r"危険情報.*?レベル\s*4|退避してください"),
@@ -643,8 +650,7 @@ def _build_risk_merge_query(
     return f"""
 MERGE `{project_id}.geopolitics.country_risk_daily` AS T
 USING (
-  SELECT * FROM UNNEST([
-    STRUCT
+  SELECT * FROM UNNEST(ARRAY<STRUCT<
       country_code STRING,
       risk_date DATE,
       gdelt_instability FLOAT64,
@@ -652,7 +658,7 @@ USING (
       state_dept_level INT64,
       composite_risk_score FLOAT64,
       updated_at TIMESTAMP
-    >
+    >>[
 {values_sql}
   ])
 ) AS S
@@ -775,23 +781,42 @@ def run_country_risk_update(
     if skip_gdelt:
         print("   ⏩ GDELT: スキップ（skip_gdelt=True）")
     else:
-        # GDELT は高リスク国（外務省/国務省でLv2以上）を優先して取得
-        # API負荷軽減のため全件ではなく優先30件 + ランダム補充とする
+        # GDELT は高リスク国（外務省/国務省でLv2以上）を優先して取得。
+        # API負荷・レート制限(429)対策として、取得は上限件数までに絞り、
+        # 連続失敗が閾値に達したら以降は打ち切る（旧コードは全59件を無条件で
+        # 順次取得し、全件429時に各国3回リトライで約31分浪費していた）。
         priority_codes = list(set(
             list(mofa_levels.keys()) + list(state_levels.keys())
         ))
         remaining = [c for c in all_codes if c not in priority_codes]
 
-        # 全コードを処理（優先→残り の順）
+        # 優先→残り の順に並べ、上限件数まで取得（残りは RSS のみで評価）
         ordered_codes = priority_codes + remaining
-        print(f"   📡 GDELT 取得中（{len(ordered_codes)} 件・順次取得）...")
+        _gdelt_limit  = int(getattr(cfg, "COUNTRY_RISK_GDELT_MAX",
+                                    _GDELT_MAX_COUNTRIES)) if cfg else _GDELT_MAX_COUNTRIES
+        ordered_codes = ordered_codes[:max(0, _gdelt_limit)]
+        print(f"   📡 GDELT 取得中（{len(ordered_codes)} 件・順次取得 / 上限{_gdelt_limit}）...")
 
+        _consec_fail  = 0
+        _circuit_open = False
         for i, code in enumerate(ordered_codes):
             if code not in GDELT_COUNTRY_QUERY_MAP:
                 gdelt_scores[code] = -1.0
                 continue
+            if _circuit_open:
+                gdelt_scores[code] = -1.0
+                continue
             score = _fetch_gdelt_instability(code, days_back=3)
             gdelt_scores[code] = score
+            # 連続失敗の監視（-1.0 = 取得失敗）。レート制限なら早期に打ち切る。
+            if score < 0:
+                _consec_fail += 1
+                if _consec_fail >= _GDELT_CIRCUIT_THRESHOLD:
+                    _circuit_open = True
+                    print(f"   ⏹️  GDELT: 連続{_consec_fail}件失敗（レート制限の可能性）"
+                          f"→ 残りはスキップ（RSSのみで評価）")
+            else:
+                _consec_fail = 0
             # API負荷軽減のため1件ごとに0.5秒待機
             time.sleep(0.5)
             if (i + 1) % 10 == 0:

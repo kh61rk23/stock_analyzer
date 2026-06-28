@@ -508,7 +508,12 @@ def build_report(stat_results, sector_signals):
         name  = SECTOR_NAMES.get(code, code)
         score = data["score"]
         icon  = "📈" if score > 0 else ("📉" if score < 0 else "➡️")
-        lines.append(f"### {icon} {name}（スコア: {score:+d}）")
+        # score は impact.get("score", 0) の累積で float になり得るため、
+        # 整数書式 :+d は使えない（"Unknown format code 'd' for object of type
+        # 'float'" でレポート生成ごと例外＝gov pipeline 全体が False を返し、
+        # 下流 B-2 が results["gov"] の bool で連鎖クラッシュしていた）。
+        # :+.0f なら int/float どちらでも符号付き整数表示になる。
+        lines.append(f"### {icon} {name}（スコア: {score:+.0f}）")
         for tw in data.get("tailwinds", []):
             lines.append(f"- 追い風: {tw}")
         for hw in data.get("headwinds", []):

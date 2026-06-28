@@ -143,7 +143,35 @@ TABLE_DEFINITIONS = {
             risk_deterioration_flag BOOL,      -- リスク悪化フラグ
             risk_category_scores JSON,         -- カテゴリ別リスク詳細
             updated_at TIMESTAMP              -- レコード最終更新日時
-        ) PARTITION BY fiscal_year_end"""
+        ) PARTITION BY fiscal_year_end""",
+
+        # ── Wave 6 - R-2: 業種サブテーマ・銘柄マッピング（2026-06-26 追加）──
+        #   この2テーブル欠落で get_tickers_for_sector / get_sub_theme_master が
+        #   404 になり、セクター銘柄解決が常時失敗していた。
+        "sub_theme_master": """(
+            sector_code STRING NOT NULL,              -- 業種コード (JP: "1016" / US: "US_45")
+            market STRING,                            -- "JP" | "US"
+            name_ja STRING,                           -- 業種名
+            supply_chain_position STRING,             -- upstream / midstream / downstream
+            business_cycle_sensitivity STRING,        -- 景気感応度
+            export_dependency STRING,                 -- 輸出依存度
+            digital_transformation_stage STRING,      -- DX進度
+            esg_priority STRING,                      -- ESG優先度
+            bm_type STRING,                           -- ビジネスモデル類型 (nullable)
+            subthemes JSON,                           -- サブテーマ配列
+            version STRING,                           -- JSONバージョン
+            updated_at TIMESTAMP                      -- レコード最終更新日時
+        )""",
+
+        "ticker_subtheme_mapping": """(
+            ticker STRING NOT NULL,                   -- ティッカー (JP: "6758.T" / US: "AAPL")
+            sector_code STRING,                       -- 業種コード
+            market STRING,                            -- "JP" | "US"
+            subtheme STRING,                          -- 個別サブテーマ
+            relevance FLOAT64,                        -- 関連度 (0.0〜1.0)
+            source STRING,                            -- "json_sync" | "manual" | "auto_derived"
+            updated_at TIMESTAMP                      -- レコード最終更新日時
+        )"""
     },
 
     "taxonomy": {

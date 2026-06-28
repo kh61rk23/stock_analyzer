@@ -402,6 +402,8 @@ def _fetch_rss_items(feeds: list[dict], max_feeds: int, timeout: int = 10) -> li
         print("    ⚠️  [policy_radar] feedparser 未インストール → RSS スキップ")
         return items
 
+    import urllib.request
+
     fetched = 0
     for feed_info in feeds[:max_feeds]:
         if feed_info.get("scrape"):
@@ -410,7 +412,16 @@ def _fetch_rss_items(feeds: list[dict], max_feeds: int, timeout: int = 10) -> li
         if not url:
             continue
         try:
-            parsed = feedparser.parse(url)
+            # ★ feedparser.parse(url) は timeout を一切適用せず、応答停止サーバで
+            #   無限ハングする（実害: 2026-06-25 本番が官庁RSSで約2h23mハングし、
+            #   180分ジョブtimeoutで全体強制終了＝当日解析が未完）。
+            #   必ず urllib で timeout 付き取得し、取得済みバイト列を渡す
+            #   （_fetch_kokkai_items / _fetch_pdf と同じ流儀）。
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "stock_analyzer/1.0 (policy_radar)"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read()
+            parsed = feedparser.parse(raw)
             for entry in parsed.entries[:15]:   # 1フィードあたり最大15件
                 title   = getattr(entry, "title",   "") or ""
                 summary = getattr(entry, "summary", "") or ""

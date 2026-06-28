@@ -1120,19 +1120,19 @@ def run_gov_pipeline():
         msg = "gov_data_pipeline.py が見つかりません"
         print(f"  ❌ {msg}")
         logger.add("gov_pipeline", "error", msg)
-        return False
+        return {}   # ★ False→{} : 下流（B-2 等）が results["gov"].get() するため
 
     try:
         result = mod.main(cfg=cfg)
         fetched = result.get("stats_fetched", 0) if isinstance(result, dict) else 0
         total   = result.get("stats_total",   0) if isinstance(result, dict) else 0
         logger.add("gov_pipeline", "success", f"政府統計取得完了: {fetched}/{total}")
-        return result if isinstance(result, dict) else True
+        return result if isinstance(result, dict) else {}
     except Exception as e:
         msg = str(e)[:120]
         print(f"  ❌ 実行エラー: {msg}")
         logger.add("gov_pipeline", "error", msg)
-        return False
+        return {}   # ★ False→{} : arxiv と同じ契約に統一（results["gov"] は常に dict）
 
 
 def run_arxiv_monitor():
@@ -1384,9 +1384,11 @@ def run_all_tasks(mode: str = "all") -> dict:
             try:
                 _gov_rules   = getattr(cfg, "GOV_RULES", {})
                 _gov_signals = []
-                _gov_result  = results.get("gov", {})
+                # ★ `or {}`: gov pipeline が失敗時に非dict（旧実装の False 等）を
+                #   返しても落ちないようにする（224/349 行と同じ防御に統一）。
+                _gov_result  = results.get("gov", {}) or {}
                 # gov_data_pipeline は stats/{id} の形式で値を返す
-                _gov_stats   = _gov_result.get("stats", {})
+                _gov_stats   = _gov_result.get("stats", {}) if isinstance(_gov_result, dict) else {}
 
                 for rule_id, rule in _gov_rules.items():
                     trigger    = rule.get("trigger", {})
@@ -1824,35 +1826,43 @@ def run_all_tasks(mode: str = "all") -> dict:
 
                     # ── [R-1] 横断産業シグナル補正 ─────────────────
                     _cs_signals = results.get("cross_sector_signals", [])
+                    # ★ 旧コードは for ループ本体が _tw/_hw/_cross_cap の代入だけで、
+                    #   _cross_total 集計と if code in _tw / elif code in _hw が
+                    #   ループ外にデデントしていた。このため
+                    #   (1) cross_sector_signals が空だとループが回らず _tw が未定義 →
+                    #       "cannot access local variable '_tw'"（全業種でセクター補正失敗）
+                    #   (2) 値があっても最後の1シグナルしか評価されない
+                    #   の二重バグだった。直下の R-2 ブロックと同じく、集計と判定を
+                    #   ループ内に入れて1シグナルずつ評価する。
                     for _cs in _cs_signals:
                         _tw = _cs.get("signal", {}).get("tailwind", [])
                         _hw = _cs.get("signal", {}).get("headwind", [])
                         _cross_cap = getattr(cfg, "SCORE_MAX_CROSS_ADJ", 10.0)
-                    _cross_total = sum(                          # 累積補正量を集計
-                        x["delta"] for x in
-                        res.get("cross_sector_adjustments", [])
-                    )
-                    if code in _tw:
-                        _raw_adj = 5.0
-                        # 累積上限チェック: 残余余地だけ適用
-                        _headroom = _cross_cap - _cross_total
-                        _adj = max(0.0, min(_raw_adj, _headroom))
-                        if _adj > 0:
-                            res["composite_score"] = round(
-                                max(-30, min(100,
-                                    res.get("composite_score", 0) + _adj)), 1)
-                            res.setdefault("cross_sector_adjustments", []).append(
-                                {"rule": _cs["rule_id"], "delta": +_adj})
-                    elif code in _hw:
-                        _raw_adj = -5.0
-                        _headroom = -_cross_cap - _cross_total  # 負方向の余地
-                        _adj = min(0.0, max(_raw_adj, _headroom))
-                        if _adj < 0:
-                            res["composite_score"] = round(
-                                max(-30, min(100,
-                                    res.get("composite_score", 0) + _adj)), 1)
-                            res.setdefault("cross_sector_adjustments", []).append(
-                                {"rule": _cs["rule_id"], "delta": _adj})
+                        _cross_total = sum(                          # 累積補正量を集計
+                            x["delta"] for x in
+                            res.get("cross_sector_adjustments", [])
+                        )
+                        if code in _tw:
+                            _raw_adj = 5.0
+                            # 累積上限チェック: 残余余地だけ適用
+                            _headroom = _cross_cap - _cross_total
+                            _adj = max(0.0, min(_raw_adj, _headroom))
+                            if _adj > 0:
+                                res["composite_score"] = round(
+                                    max(-30, min(100,
+                                        res.get("composite_score", 0) + _adj)), 1)
+                                res.setdefault("cross_sector_adjustments", []).append(
+                                    {"rule": _cs["rule_id"], "delta": +_adj})
+                        elif code in _hw:
+                            _raw_adj = -5.0
+                            _headroom = -_cross_cap - _cross_total  # 負方向の余地
+                            _adj = min(0.0, max(_raw_adj, _headroom))
+                            if _adj < 0:
+                                res["composite_score"] = round(
+                                    max(-30, min(100,
+                                        res.get("composite_score", 0) + _adj)), 1)
+                                res.setdefault("cross_sector_adjustments", []).append(
+                                    {"rule": _cs["rule_id"], "delta": _adj})
                     # ── [R-2] 先行指標シグナル補正 ─────────────────
                     _lead_signals = results.get("leading_indicator_signals", [])
                     _lead_cross_cap = getattr(cfg, "SCORE_MAX_CROSS_ADJ", 10.0)
@@ -2452,7 +2462,11 @@ def run_all_tasks(mode: str = "all") -> dict:
                     cap_config_key = "SCORE_MAX_MACRO_ADJ",
                     label          = "market_breadth",
                 )
-                sector_results[_code]["breadth_adjustment"] = _delta
+                # （_apply_capped_adjustment が各業種へ breadth_adjustment を
+                #   設定済み。旧コードにあった
+                #   sector_results[_code]["breadth_adjustment"] = _delta は
+                #   別ループの stale な _code/_delta を1業種へ誤書きする冗長行
+                #   だったため削除。）
                 if mb_adj:
                     results["sectors"] = sector_results
 
@@ -2482,9 +2496,14 @@ def run_all_tasks(mode: str = "all") -> dict:
                 results["anomaly_season"] = as_result
 
                 # composite_score に季節補正を適用
+                # ★ 旧コードは市場幅の mb_adj を流用していた（コピペ誤り）。
+                #   market_breadth スキップ時は mb_adj 未定義で UnboundLocalError、
+                #   実行時は市場幅補正を season_adjustment として二重適用していた。
+                #   正しくは anomaly_season 自身の adjustments を使う。
+                _season_adj = as_result.get("adjustments", {})
                 _apply_capped_adjustment(
                     sector_results,
-                    {k: v for k, v in mb_adj.items() if v != 0},
+                    {k: v for k, v in _season_adj.items() if v != 0},
                     adj_key        = "season_adjustment",
                     cap_config_key = "SCORE_MAX_MACRO_ADJ",
                     label          = "ANOMALY_SEASON",
@@ -2518,9 +2537,13 @@ def run_all_tasks(mode: str = "all") -> dict:
                 results["options_monitor"] = om_result
 
                 # composite_score にオプション補正を適用
+                # ★ 旧コードは市場幅の mb_adj を流用（コピペ誤り）。正しくは
+                #   options_monitor 自身の adjustments を使う（mb_adj 未定義時の
+                #   UnboundLocalError と市場幅補正の二重適用を解消）。
+                _options_adj = om_result.get("adjustments", {})
                 _apply_capped_adjustment(
                     sector_results,
-                    {k: v for k, v in mb_adj.items() if v != 0},
+                    {k: v for k, v in _options_adj.items() if v != 0},
                     adj_key        = "options_adjustment",
                     cap_config_key = "SCORE_MAX_MACRO_ADJ",
                     label          = "OPTIONS_MONITOR",
@@ -2611,16 +2634,20 @@ def run_all_tasks(mode: str = "all") -> dict:
                 logger.add("multi_currency", "success",
                            f"{n_sig}シグナル / {n_adj}業種補正")
                 # 多通貨補正を sector_results に反映
+                # ★ 旧コードは市場幅の mb_adj を流用（コピペ誤り）。直下で既に
+                #   mc_adj（多通貨自身の補正）を算出済みなのでそれを使う。
                 mc_adj = mc_result.get("macro_adjustment", {})
                 _sr    = results.get("sectors", {})
                 _apply_capped_adjustment(
                     sector_results,
-                    {k: v for k, v in mb_adj.items() if v != 0},
+                    {k: v for k, v in mc_adj.items() if v != 0},
                     adj_key        = "currency_adjustment",
                     cap_config_key = "SCORE_MAX_CROSS_ADJ",
                     label          = "MULTI_CURRENCY",
                 )
-                _sr[_code]["currency_adjustment"] = _delta
+                # （同上: _apply_capped_adjustment が currency_adjustment を設定済み。
+                #   _sr[_code]["currency_adjustment"] = _delta は stale 変数による
+                #   誤書き冗長行のため削除。）
                 if mc_adj:
                     results["sectors"] = _sr
             else:

@@ -79,6 +79,15 @@ def apply_env_overrides(cfg):
     cfg.SECTOR_DIR  = base / "insights" / "sectors"
     cfg.MACRO_DIR   = base / "insights" / "macro"
     cfg.LOG_DIR     = base / "logs"
+    # ★ DRIVE_BASE 由来で取りこぼしていたパスもここで揃える。
+    #   特に CACHE_DIR は score_prior / policy_radar 等 10+ モジュールが参照し、
+    #   取りこぼすと Colab パス /content に書こうとして Permission denied になる
+    #   （2026-06-25 本番で score_prior が全業種無効化した実害）。
+    #   config.py も STOCK_ANALYZER_BASE を見るようにしたが、env 未設定で
+    #   base が __file__/stock_data に決まるローカル実行でも整合させるため明示する。
+    cfg.CACHE_DIR             = base / "cache"
+    cfg.SUBTHEME_JSON_PATH_JP = base / "data" / "jp_sector_subtheme.json"
+    cfg.SUBTHEME_JSON_PATH_US = base / "data" / "us_sector_subtheme.json"
 
     if overridden:
         print(f"  KEY 環境変数を適用: {', '.join(overridden)}")
