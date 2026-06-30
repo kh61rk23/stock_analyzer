@@ -190,16 +190,19 @@ class EDINETBQClient:
         証券コードで最新期の財務データを取得する。
         base_agent.py（E2 統合時）から呼び出す想定。
         """
+        # ★ financials 正本スキーマの列は company_code / fiscal_year_end。
+        #   旧コードは securities_code / period_end を参照し
+        #   "Unrecognized name: securities_code" で常時 400 だった。
         sql = f"""
         SELECT *
         FROM (
             SELECT *,
                    ROW_NUMBER() OVER (
-                       PARTITION BY securities_code
-                       ORDER BY period_end DESC
+                       PARTITION BY company_code
+                       ORDER BY fiscal_year_end DESC
                    ) AS rn
             FROM `{self.dataset}.financials`
-            WHERE securities_code = '{securities_code}'
+            WHERE company_code = '{securities_code}'
         )
         WHERE rn = 1
         """
@@ -240,7 +243,7 @@ class EDINETBQClient:
         FROM `{self.dataset}.ticker_subtheme_mapping`
         WHERE sector_code = '{code}'
           AND ticker IS NOT NULL
-          AND ticker NOT LIKE 'SECTOR\\_%'
+          AND NOT STARTS_WITH(ticker, 'SECTOR_')
         LIMIT {lim}
         """
         try:
@@ -276,26 +279,31 @@ class EDINETBQClient:
         if not codes:
             return pd.DataFrame()
         in_clause = ", ".join(codes)
+        # ★ 正本スキーマの列名へ是正（旧: securities_code/period_end/num_employees/
+        #   avg_salary/total_director_remuneration/max_director_remuneration は
+        #   いずれも存在せず 400 になっていた）。出力キーは従来名のままにするため
+        #   AS で別名を付け、消費側（base_agent 等）を変更不要にする。
+        #   併せて、組み立て済みなのに未使用だった対象銘柄フィルタ(in_clause)を適用。
         sql = f"""
         WITH latest AS (
             SELECT *,
                    ROW_NUMBER() OVER (
-                       PARTITION BY securities_code
-                       ORDER BY period_end DESC
+                       PARTITION BY company_code
+                       ORDER BY fiscal_year_end DESC
                    ) AS rn
             FROM `{self.dataset}.financials`
-            WHERE securities_code IS NOT NULL
+            WHERE company_code IN ({in_clause})
               AND net_sales IS NOT NULL
         )
         SELECT
-            securities_code,
-            period_end,
+            company_code         AS securities_code,
+            fiscal_year_end      AS period_end,
             net_sales,
             operating_income,
-            num_employees,
-            avg_salary,
-            total_director_remuneration,
-            max_director_remuneration,
+            employee_count       AS num_employees,
+            avg_annual_salary    AS avg_salary,
+            total_director_comp  AS total_director_remuneration,
+            max_single_comp      AS max_director_remuneration,
             operating_cf,
             free_cf,
             capex
@@ -309,16 +317,18 @@ class EDINETBQClient:
         1銘柄の最新期財務データを dict で返す。
         base_agent.py の個別銘柄スコアリングで使用する。
         """
+        # ★ 正本列名 company_code / fiscal_year_end へ是正（旧 securities_code /
+        #   period_end は存在せず 400 エラーだった）。
         sql = f"""
         SELECT *
         FROM (
             SELECT *,
                    ROW_NUMBER() OVER (
-                       PARTITION BY securities_code
-                       ORDER BY period_end DESC
+                       PARTITION BY company_code
+                       ORDER BY fiscal_year_end DESC
                    ) AS rn
             FROM `{self.dataset}.financials`
-            WHERE securities_code = '{securities_code}'
+            WHERE company_code = '{securities_code}'
         )
         WHERE rn = 1
         """
@@ -736,10 +746,14 @@ class EDINETBQClient:
                     dt_stg  = str(row.get("digital_transformation_stage", "")).replace("'", "''")
                     esg_pri = str(row.get("esg_priority", "")).replace("'", "''")
                     bm_type_val = row.get("bm_type")
+                    # ★ bm_type が None のとき素の NULL を書くと BQ は USING 句で
+                    #   INT64 NULL と推論し「INT64 cannot be assigned to bm_type
+                    #   (STRING)」で全行失敗する。明示的に STRING 型の NULL を渡す。
+                    #   値ありの場合は文字列化して引用（JSON 側が int でも STRING 化）。
                     bm_str  = (
                         f"'{str(bm_type_val).replace(chr(39), chr(39)*2)}'"
                         if bm_type_val is not None
-                        else "NULL"
+                        else "CAST(NULL AS STRING)"
                     )
 
                     # subthemes は list → JSON 文字列に変換してエスケープ
@@ -766,7 +780,7 @@ class EDINETBQClient:
                             '{dt_stg}'   AS digital_transformation_stage,
                             '{esg_pri}'  AS esg_priority,
                             {bm_str}     AS bm_type,
-                            '{subthemes_json}' AS subthemes,
+                            PARSE_JSON('{subthemes_json}') AS subthemes,
                             '{ver}'      AS version,
                             TIMESTAMP('{now_ts}') AS updated_at
                     ) AS S
@@ -926,7 +940,10 @@ class EDINETBQClient:
         try:
             now_ts = self.now_iso()
             # streaming insert（insert_rows_json）でバルク書込
-            table_ref = f"{self.project}.{self.dataset}.ticker_subtheme_mapping"
+            # ★ self.dataset は既に "project.dataset" 形式なので、さらに
+            #   self.project を前置すると "proj.proj.dataset.table" の4階層になり
+            #   404（テーブル不在）になっていた。dataset.table の3階層にする。
+            table_ref = f"{self.dataset}.ticker_subtheme_mapping"
 
             # updated_at を全行に付加
             enriched = []

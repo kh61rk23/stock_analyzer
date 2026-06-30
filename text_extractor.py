@@ -174,6 +174,13 @@ def _extract_from_bq(cfg, securities_code: str) -> Optional[dict]:
     try:
         from edinet_bq_client import EDINETBQClient
         bq   = EDINETBQClient()
+        # get_xbrl_text_sections は EDINET 生テキスト（element_name/text_value）の
+        # BQ 格納を前提とした将来機能。現状その格納テーブル/メソッドは未実装の
+        # ため、未提供時は静かに None を返し EDINET API ルートへフォールバックする。
+        # （旧コードは未実装メソッドを直接呼び、23銘柄ぶん AttributeError を
+        #   毎回ログに吐いていた / CLAUDE.md パターン②「幻のAPI」。）
+        if not hasattr(bq, "get_xbrl_text_sections"):
+            return None
         rows = bq.get_xbrl_text_sections(securities_code)
         if not rows:
             return None

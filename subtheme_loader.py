@@ -427,10 +427,16 @@ def sync_json_to_bq(
                 "master_count":    sync_result.get("master_count",    0),
                 "mapping_count":   sync_result.get("mapping_count",   0),
             })
+            # ★ 旧コードは投入試行件数だけを見て、実書込が0件でも "✅同期完了" と
+            #   表示していた（master/mapping_success=False でも緑表示）。
+            #   実際の成否を反映する。
+            _ok   = out["master_success"] and out["mapping_success"]
+            _icon = "✅" if _ok else "⚠️"
             print(
-                f"  [subtheme_loader] ✅ {market} BQ同期完了: "
-                f"master={out['master_count']}件 / "
-                f"mapping={out['mapping_count']}件"
+                f"  [subtheme_loader] {_icon} {market} BQ同期"
+                f"{'完了' if _ok else '一部失敗'}: "
+                f"master={out['master_count']}件(success={out['master_success']}) / "
+                f"mapping={out['mapping_count']}件(success={out['mapping_success']})"
             )
         except Exception as _sync_e:
             out["error"] = str(_sync_e)[:120]

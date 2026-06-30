@@ -2129,8 +2129,12 @@ def run_stock_screener(cfg, sector_results: dict,
         edinet_accruals = _load_edinet_accruals(cfg)
     except Exception as e:
         print(f"  ⚠️  EDINET accrual ロード失敗（スキップ）: {e}")
-    # [問題D] 全銘柄リストを sector_results から構築
-    from sector_tickers import JP_SECTOR_TICKERS as _jst_d
+    # [問題D] 全銘柄リストを業種代表銘柄から構築
+    # ★ 旧コードは存在しない sector_tickers モジュールを import しており
+    #   （幻のモジュール / CLAUDE.md パターン②）、ModuleNotFoundError で
+    #   スクリーニングが常時全滅していた。業種代表銘柄の正本は
+    #   config.SECTOR_REPRESENTATIVE_TICKERS（{sector_code: [tickers]}）。
+    _jst_d = getattr(cfg, "SECTOR_REPRESENTATIVE_TICKERS", {}) or {}
     all_tickers: list = [t for tlist in _jst_d.values() for t in tlist]
     dynamic_ticker_meta: dict = {}
     # ── [問題D] 動的追加銘柄をユニバースに追加 ────────────────

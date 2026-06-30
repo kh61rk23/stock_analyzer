@@ -144,6 +144,14 @@ def main() -> int:
     if not _create_tables(bq):
         print("  ❌ テーブル作成に失敗したため中断します。")
         return 1
+    # policy_support は専用の ensure メソッド（DDL内蔵）を持つが、これまで
+    # どこからも呼ばれず未作成で get_policy_support_adoptions が 404 だった。
+    # ここで冪等に作成する。
+    try:
+        ok_ps = bq.ensure_policy_support_table()
+        print(f"  {'✅' if ok_ps else '❌'} テーブル確認/作成: {bq.dataset}.policy_support")
+    except Exception as e:
+        print(f"  ❌ policy_support 作成失敗: {str(e)[:160]}")
 
     # ② sub_theme_master 同期（JSON → BQ）
     print("\n[2/3] sub_theme_master 同期（JP/US JSON → BQ）")

@@ -3334,10 +3334,14 @@ def run_all_tasks(mode: str = "all") -> dict:
 # ── [Wave0 Policy Ph1] 議員取引監視（週2回: 火・金）──────────
     if getattr(cfg, "ENABLE_POLITICIAN_MONITOR", True):
        _run_days = getattr(cfg, "POLITICIAN_RUN_WEEKDAYS", (1, 4))
-       if _dt.now().weekday() in _run_days:
+       # ★ ここで _dt を使うと、関数内の別ブロック（L1547 付近）で
+       #   `from datetime import date as _dt` に束縛された date 型を参照し、
+       #   date には .now() が無いため AttributeError → run_all_tasks 末尾で
+       #   exit 1（28分走った後にジョブ全体が赤）になっていた。
+       #   モジュールレベルの datetime（L35 import 済み）を使う。
+       if datetime.now().weekday() in _run_days:
         try:
-            from datetime import datetime as _dt
-            _today_dow = _dt.now().weekday()   # 0=月 1=火 ... 4=金
+            _today_dow = datetime.now().weekday()   # 0=月 1=火 ... 4=金
             if _today_dow in (1, 4):           # 火曜=1 / 金曜=4
                 _pm = _load_local_module(
                     "politician_monitor",
