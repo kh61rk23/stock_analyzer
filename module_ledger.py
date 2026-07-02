@@ -99,8 +99,30 @@ def build_daily_ledger(cfg, logs: list, date_str: str = None) -> dict:
     # DAILY_MODULES に登録されているのに当日記録が無いモジュール
     # （ENABLE=False の意図的スキップはログに "skipped" が残る想定のため、
     #   ここに出るものは「配線漏れ or ログ未配線」の疑い）
+    #
+    # ★ DAILY_MODULES は _in_mode() 用の mode-key（例 "gov" / "sector" / "tdnet"）
+    #   だが、各モジュールが logger.add() で記録するキーは実装名（"gov_pipeline" /
+    #   "sector_agent" / "tdnet_monitor" 等）で、両者が食い違うため、実際は実行・記録
+    #   されているモジュールまで「記録なし」に誤検出されていた（gov/sector/tdnet/
+    #   imf/anomaly 等）。mode-key の接頭辞派生（mode-key + "_..."）で記録されて
+    #   いれば「記録済み」とみなす。ただし記録キー自体が別の登録 mode-key（例
+    #   "policy_radar"）の場合は、その別モジュールの記録なので接頭辞一致から除外する
+    #   （"policy" を "policy_radar" の記録で誤って満たさないため）。
     registered = list(getattr(cfg, "DAILY_MODULES", []) or [])
-    unrecorded = [m for m in registered if m not in modules]
+    registered_set = set(registered)
+
+    def _is_recorded(mode_key: str) -> bool:
+        if mode_key in modules:
+            return True
+        prefix = mode_key + "_"
+        for rec in modules:
+            if rec in registered_set:
+                continue  # 別の登録モジュールの記録は流用しない
+            if rec.startswith(prefix):
+                return True
+        return False
+
+    unrecorded = [m for m in registered if not _is_recorded(m)]
 
     return {
         "date":       date_str,

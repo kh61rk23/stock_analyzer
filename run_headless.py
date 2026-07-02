@@ -234,15 +234,13 @@ def main():
     print(f"\n  RUN run_all_tasks(mode='{args.mode}') 開始...")
     try:
         results   = main_mod.run_all_tasks(mode=args.mode)
-        try:
-            import anomaly_season
-            import options_monitor
-            if isinstance(results, dict):
-                # モジュールを実行し、結果を dict に格納する
-                results["anomaly_season"] = anomaly_season.run_analysis(cfg_mod) # type: ignore
-                results["options_monitor"] = options_monitor.run_analysis(cfg_mod) # type: ignore
-        except Exception as e:
-            print(f"  WARNING 分析モジュールの追加実行に失敗しました: {e}")
+        # 注: anomaly_season / options_monitor は run_all_tasks 内でスケジュール
+        #   （anomaly_season=週次 / options_monitor=日次）に従って
+        #   run_anomaly_season() / run_options_monitor() で実行され results に格納済み。
+        #   以前ここにあった「追加実行」ブロックは、存在しない run_analysis() を呼んで
+        #   毎回 AttributeError（"module 'anomaly_season' has no attribute
+        #   'run_analysis'"）を出すだけの壊れた二重実行だったため削除した。
+        #   （幻のAPI / CLAUDE.md パターン②。正しい実行は run_all_tasks が担う。）
         n_sectors = len(results.get("sectors", {})) if isinstance(results, dict) else 0
         n_alerts  = (results.get("alerts", {}).get("alerts_sent", 0)
                      if isinstance(results, dict) else 0)

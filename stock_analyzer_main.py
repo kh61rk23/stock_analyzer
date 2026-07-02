@@ -1532,6 +1532,13 @@ def run_all_tasks(mode: str = "all") -> dict:
         results["macro_delta_alerts"] = [
             s for s in signals if s.get("delta_alert")
         ]
+        # ★ 実行台帳へ記録（旧コードは macro 分析を実行するのに logger.add を
+        #   一切呼ばず、module_ledger 上「記録なし（配線漏れ疑い）」になっていた）。
+        #   DAILY_MODULES の mode-key "macro" と一致させる。
+        logger.add(
+            "macro", "success",
+            f"マクロ{len(signals)}シグナル / 急変{len(results['macro_delta_alerts'])}件"
+        )
         if results["macro_delta_alerts"]:
             print(f"    ⚡ [GAP-7] マクロ急変検出: "
                   f"{len(results['macro_delta_alerts'])}件")
@@ -4858,7 +4865,15 @@ def run_all_tasks(mode: str = "all") -> dict:
     # ── [5人統合エンジン] total_signal_score 算出 ───────────
     if _in_mode("signal_aggregator"):
         try:
-            _sagg = _load_local_module("signal_aggregator", ...)
+            # ★ 旧コードは docstring の例をそのままコピペし
+            #   _load_local_module("signal_aggregator", ...) と第2引数に
+            #   リテラル ... を渡していたため、drive_path 欠落の TypeError で
+            #   total_signal_score（統合シグナルスコア）が毎回未算出だった。
+            _sagg = _load_local_module(
+                "signal_aggregator",
+                "/content/signal_aggregator.py",
+                cfg.DRIVE_BASE / "signal_aggregator.py",
+            )
             if _sagg and hasattr(_sagg, "calc_total_signal_score"):
                 tss = _sagg.calc_total_signal_score(results, cfg)
                 results["total_signal_score"] = tss
