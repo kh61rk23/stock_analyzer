@@ -1,0 +1,66 @@
+# ==============================================================
+# .github/workflows/setup_us_bq.yml
+# Wave 6 (U-4 / I-1 / I-3 / I-4): BigQuery `us` データセット整備（手動・1回実行用）
+# ==============================================================
+# 【目的】
+#   us_bq_schema.py を実行し、BigQuery の `us` データセットと
+#   institutional_positions / job_signal_cache / executive_transitions /
+#   facility_signals の4テーブルを作成する。
+#   これらが未作成のため institutional_13f_monitor.py 等の BQ 書込が
+#   宛先データセット不在で失敗していた問題への一回限りのセットアップ。
+#
+# 【setup_subtheme_bq.yml との違い】
+#   setup_subtheme_bq.yml は edinet データセット（sub_theme_master /
+#   ticker_subtheme_mapping / policy_support）専用のセットアップであり、
+#   us データセットのスキーマ生成は担当していない。
+#   本ワークフローは setup_subtheme_bq.yml と同じ構造（checkout → python
+#   セットアップ → 最小依存インストール → スクリプト実行）を踏襲しつつ、
+#   対象データセット・実行スクリプトのみ us_bq_schema.py に差し替えた
+#   独立ワークフローとして新設する。
+#
+# 【実行方法】
+#   GitHub の Actions タブ → 「🧩 Setup US BQ tables」→ Run workflow
+#
+# 【冪等性】 CREATE SCHEMA/TABLE IF NOT EXISTS のため再実行しても安全。
+#
+# 【必要 Secrets】 BQ_PROJECT_ID / BQ_CREDENTIALS（daily_run.yml と同じもの）
+# ==============================================================
+
+name: 🧩 Setup US BQ tables
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  setup-us-bq:
+    name: 🧩 us データセット（institutional_positions 等4テーブル）整備
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TZ: Asia/Tokyo
+      BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # setup スクリプトは BQ 接続のみで完結するため、重い requirements.txt は
+      # 入れず必要最小限の依存だけインストールする（高速化）。
+      - name: 📦 Install minimal deps
+        run: |
+          pip install --upgrade pip
+          pip install google-cloud-bigquery google-auth db-dtypes pandas pyarrow
+
+      - name: 🧩 Run us_bq_schema.py
+        env:
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+          BQ_PROJECT_ID:  ${{ secrets.BQ_PROJECT_ID }}
+        run: |
+          python -u us_bq_schema.py
