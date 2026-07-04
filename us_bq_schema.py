@@ -120,7 +120,15 @@ def create_all() -> None:
     cli = bqc.EDINETBQClient()
     project = cli.project
     for ddl in DDL:
-        sql = ddl.format(project=project)
+        # NOTE(2026-07-04): 以前は ddl.format(project=project) だったが、
+        # job_signal_cache / executive_transitions の OPTIONS(description=...) に
+        # 記述例として含まれる素の中括弧（例: '{sector_code: boost_pt}'）まで
+        # str.format() のプレースホルダとして解釈され KeyError('sector_code') で
+        # 落ちていた（GitHub Actions実行ログで確認・institutional_positionsまでは
+        # 作成成功していたため IAM/BUG-06 は無関係と判明）。
+        # DDL中の置換対象は "{project}" のみのため、format()ではなくreplace()に
+        # 変更し、コメント中の任意の中括弧の影響を受けないようにする。
+        sql = ddl.replace("{project}", project)
         cli.client.query(sql).result()
         first = sql.strip().splitlines()[0].strip()
         print(f"  ✅ {first[:70]}")
