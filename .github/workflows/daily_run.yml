@@ -93,7 +93,7 @@ jobs:
 
       # ── 2. Python セットアップ ────────────────────────────
       - name: 🐍 Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: "pip"
@@ -409,6 +409,15 @@ jobs:
             git add stock_data/cache/independence_scores.json || true
             git add stock_data/cache/latent_pearl_cache.json || true
             git add stock_data/cache/pearl_backtest_log.json || true
+            # ── Wave R0〜R5: 状態ファイル永続化（2026-07-12追加）──────
+            # これらは日次で蓄積・更新される「状態」。永続化しないと毎朝リセットされ
+            # 蓄積(ML特徴量/S2口座/DD peak/hotnessベースライン/繰越キュー)が始まらない。
+            git add stock_data/data/edinet_retry_queue.json || true
+            git add stock_data/data/exit_engine_baseline.json || true
+            git add stock_data/data/dd_state.json || true
+            git add stock_data/paper/ || true
+            git add stock_data/cache/taxonomy/ || true
+            git add stock_data/data/ml_dataset/ || true
             git diff --cached --quiet || git commit -m "auto: daily update $(date '+%Y-%m-%d')"
             git pull --rebase origin main || true
             git push || true
@@ -421,7 +430,7 @@ jobs:
       # ── 6. 結果を Artifacts として保存（7日間保持）──────
       - name: 📁 Upload results
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v4
         with:
           name: analyzer-results-${{ github.run_number }}
           path: |
