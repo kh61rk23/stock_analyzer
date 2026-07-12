@@ -659,6 +659,34 @@ def run_facility_expansion_monitor(cfg, results: dict) -> dict:
     }
     _save_cache(cfg, new_cache)
 
+    # ── BQ格納（Wave R0-2 / SPEC_db_schema.md §6-4）─────────────
+    if bool(getattr(cfg, "ENABLE_US_BQ_EXPORT", True)):
+        try:
+            from edinet_bq_client import insert_rows
+            _today = datetime.now().strftime("%Y-%m-%d")
+            _rows = []
+            for _sp in (signal_projects or []):
+                if not isinstance(_sp, dict):
+                    continue
+                _rows.append({
+                    "signal_date":     _today,
+                    "project_name":    _sp.get("project_name") or _sp.get("name"),
+                    "project_type":    _sp.get("project_type") or _sp.get("type"),
+                    "company_name":    _sp.get("company_name") or _sp.get("company"),
+                    "prefecture":      _sp.get("prefecture"),
+                    "area_sqm":        float(_sp["area_sqm"]) if _sp.get("area_sqm") else None,
+                    "matched_sectors": json.dumps(_sp.get("matched_sectors", []), ensure_ascii=False),
+                    "sector_boost_pt": float(_sp.get("sector_boost_pt", 0) or 0),
+                    "source":          _sp.get("source"),
+                    "announce_date":   _sp.get("announce_date") or None,
+                    "expires_at":      _sp.get("expires_at") or None,
+                    "updated_at":      datetime.now().isoformat(),
+                })
+            if _rows and insert_rows(rows=_rows, table_ref="us.facility_signals"):
+                print(f"    ☁️  [facility] BQ格納 {len(_rows)}行 (us.facility_signals)")
+        except Exception as _bqe:
+            print(f"    ⚠️  [facility] BQ格納スキップ: {str(_bqe)[:60]}")
+
     elapsed = (datetime.now() - t0).seconds
     print(
         f"\n  ✅ [facility] 完了 ({elapsed}秒): "

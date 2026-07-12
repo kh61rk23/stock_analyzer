@@ -244,6 +244,10 @@ def fetch_estat_data_by_id(stats_data_id, app_id, limit=24):
     try:
         resp   = requests.get(ESTAT_DATA_URL, params=params, timeout=30)
         if resp.status_code != 200:
+            # BUG-02 診断強化（2026-07-05）: 失敗の握り潰しをやめ、
+            # HTTPステータスとIDを必ずログに残す（実行台帳/Actionsログで追跡可能に）
+            print(f"    ⚠️  [gov_data] e-Stat HTTP {resp.status_code}: "
+                  f"statsDataId={stats_data_id}")
             return None, False
         raw    = resp.json()
         status = (raw.get("GET_STATS_DATA", {})
@@ -252,6 +256,9 @@ def fetch_estat_data_by_id(stats_data_id, app_id, limit=24):
             msg = (raw.get("GET_STATS_DATA", {})
                       .get("RESULT", {}).get("ERROR_MSG", ""))
             is_invalid = "存在しません" in msg or "IDを確認" in msg
+            # BUG-02 診断強化: APIレベルのエラー内容を可視化
+            print(f"    ⚠️  [gov_data] e-Stat STATUS={status} "
+                  f"statsDataId={stats_data_id}: {msg[:80]}")
             return None, is_invalid
 
         values = (raw["GET_STATS_DATA"]["STATISTICAL_DATA"]
