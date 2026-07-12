@@ -1650,6 +1650,54 @@ def extract_alerts(cfg, results: dict) -> list:
     except Exception:
         pass
 
+    # ── ㉔ 出口戦略アラート（Wave R0-6 / E1・R0-7 / E11統合ブリーフ） ──
+    # 既存Gmail 1通への統合方針（D-06）: 新規メールは増やさず本関数に集約。
+    try:
+        _ex = results.get("exit_alerts", {}) or {}
+        _ex_alerts = _ex.get("alerts", [])
+        if _ex_alerts:
+            _fires = [a for a in _ex_alerts if a.get("level") == "fire"]
+            _nears = [a for a in _ex_alerts if a.get("level") != "fire"]
+            _lines = []
+            for a in _fires:
+                _lines.append(f"  🔔 [発火] {a.get('ticker','')} "
+                              f"{a.get('rule_id','')}: {a.get('detail','')[:90]}")
+            for a in _nears[:10]:
+                _lines.append(f"  👀 [接近] {a.get('ticker','')} "
+                              f"{a.get('rule_id','')}: {a.get('detail','')[:80]}")
+            _tickets = _ex.get("tickets", [])
+            if _tickets:
+                _lines.append(f"  🎫 注文票 {len(_tickets)}件 発行済み"
+                              f"（発注は手動 / stock_data/orders/order_tickets.jsonl）")
+            alerts.append({
+                "trigger":  "exit_rule_engine",
+                "title":    f"🚪 出口戦略: 発火{len(_fires)}件 / 接近{len(_nears)}件",
+                "body":     "\n".join(_lines),
+                "severity": "high" if _fires else "medium",
+                "channel":  "gmail",
+            })
+    except Exception:
+        pass
+
+    # ── ㉕ データ鮮度SLA違反（Wave R0-1 / E7'） ──────────────────
+    try:
+        _sla = results.get("data_sla_report", {}) or {}
+        _violations = _sla.get("violations", [])
+        if _violations:
+            _lines = [f"  ⏰ [{v.get('kind','')}] {v.get('status','')} "
+                      f"経過{v.get('age_days','?')}日 (SLA {v.get('limit_days','?')}日): "
+                      f"{str(v.get('path',''))[-50:]}"
+                      for v in _violations[:8]]
+            alerts.append({
+                "trigger":  "data_sla_violation",
+                "title":    f"⏰ データ鮮度SLA違反 {len(_violations)}件",
+                "body":     "\n".join(_lines),
+                "severity": "medium",
+                "channel":  "gmail",
+            })
+    except Exception:
+        pass
+
     return alerts
 
 

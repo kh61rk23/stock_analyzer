@@ -1,5 +1,8 @@
 # ==============================================================
-# agent_packet_exporter.py  v1.0  (Wave DEPT-1)
+# agent_packet_exporter.py  v2.0  (Wave DEPT-1 → R3-1 v2化)
+# v2（2026-07-10）: ⑪ontologyイベント時系列（signal_event直近30日）＋
+#   ⑫E8バリュエーションレンジ（DCF3シナリオ/comps相対/scenario損益・last_updated付）を追加。
+#   既存の best-effort/データなし表示パターンを踏襲（後方互換・欠損で壊れない）。
 # 投資部審議パケット生成 — stock_analyzer → Obsidian vault
 # ==============================================================
 # 【役割】
@@ -30,7 +33,6 @@ import argparse
 import csv
 import importlib.util
 import json
-import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -371,6 +373,113 @@ def collect_existing_notes(cfg, ticker: str) -> list[str]:
 # BLOCK 2: パケット組み立て・出力
 # ==============================================================
 
+def collect_ontology_events(cfg, ticker: str, days: int = 30) -> list[str]:
+    """
+    [Wave R3-1 exporter v2] ontology.signal_event から直近N日の
+    イベント時系列を取得する（SPEC_investment_dept §5の残タスク）。
+    BQ未接続・空時は「データなし」表示で壊れない。
+    """
+    from datetime import timedelta
+    since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    out = _sec_header(f"⑪ イベント時系列（ontology・直近{days}日）", "BQ signal_event")
+    try:
+        from edinet_bq_client import EDINETBQClient
+        bq = EDINETBQClient()
+        project = getattr(cfg, "BQ_PROJECT_ID", "stock-analyzer-edinet")
+        code = _code_of(ticker).replace("'", "")
+        sql = f"""
+        SELECT fired_at, signal_category, direction, signal_value,
+               source_module, detail
+        FROM `{project}.ontology.signal_event`
+        WHERE fired_at >= '{since}'
+          AND (ticker = '{ticker}' OR ticker = '{code}')
+        ORDER BY fired_at DESC
+        LIMIT 40
+        """
+        df = bq.query_to_df(sql)
+        if df is None or len(df) == 0:
+            return out + _no_data("ontologyイベント", Path(f"BQ:{project}.ontology.signal_event"))
+        out.append("| 発火日 | カテゴリ | 方向 | 値 | 出所 |")
+        out.append("|---|---|---|---|---|")
+        for _, r in df.iterrows():
+            arrow = {"bullish": "🟢↑", "bearish": "🔴↓"}.get(
+                str(r.get("direction", "")), "⚪")
+            val = r.get("signal_value")
+            out.append(f"| {r['fired_at']} | {r.get('signal_category','')} | "
+                       f"{arrow} | {round(float(val),2) if val==val else '-'} | "
+                       f"{r.get('source_module','')} |")
+        return out
+    except Exception as e:
+        return out + [f"- ⚠️ ontology取得不可（{str(e)[:60]}）: **データなし**",
+                      "  - BQ未接続時はこの軸の時系列論証は使えない"]
+
+
+def _valuation_line(label: str, cache_path: Path, ticker: str,
+                    fmt) -> list[str]:
+    """valuation系キャッシュ1本を読み、last_updated付きで整形。欠損はデータなし。"""
+    data = _load_json(cache_path)
+    entry = (data or {}).get(ticker) or (data or {}).get(_code_of(ticker))
+    if not entry:
+        return [f"- **{label}**: データなし（`{cache_path.name}`）"]
+    body = fmt(entry)
+    if body is None:
+        return [f"- **{label}**: データなし（項目欠損・`{cache_path.name}`）"]
+    return [f"- **{label}** *(last_updated: {_mtime_str(cache_path)})*: {body}"]
+
+
+def collect_valuation(cfg, ticker: str) -> list[str]:
+    """
+    [Wave R3-1 / E8] ⑫バリュエーションレンジ。
+    ①DCF3シナリオ（弱気/基本/強気＝感応度の min/base/max）
+    ②comps相対位置（業種内PER/PBRランク）
+    ③scenario_analyzer のシナリオ別想定損益。
+    各項目 last_updated 付き・欠損は「データなし」（デビル検証用）。
+    """
+    data_dir = Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
+    out = _sec_header("⑫ バリュエーションレンジ（E8）", "各キャッシュのmtime参照")
+
+    def _dcf(e):
+        lo, base, hi = e.get("min_price"), e.get("base_price"), e.get("max_price")
+        if base is None and isinstance(e.get("matrix"), dict):
+            return None
+        if lo is None or hi is None:
+            return None
+        return (f"弱気 ¥{lo:,.0f} / 基本 ¥{base:,.0f} / 強気 ¥{hi:,.0f}"
+                if base is not None else f"レンジ ¥{lo:,.0f}〜¥{hi:,.0f}")
+
+    def _comps(e):
+        per = e.get("per_rank"); pbr = e.get("pbr_rank")
+        sc = e.get("comps_score"); n = e.get("n_peers", 0)
+        if sc is None:
+            return None
+        return (f"割安スコア {sc:.0f}/100・業種内PERランク "
+                f"{per:.0f}%ile / PBRランク {pbr:.0f}%ile（peers={n}・低いほど割安）"
+                if per is not None else f"割安スコア {sc:.0f}/100（peers={n}）")
+
+    out += _valuation_line("DCF感応度（弱気/基本/強気）",
+                           data_dir / "dcf_valuation_cache.json", ticker, _dcf)
+    out += _valuation_line("comps相対（業種内パーセンタイル）",
+                           data_dir / "comps_analyzer_cache.json", ticker, _comps)
+
+    # ③ scenario別損益（ポートフォリオ単位のため保有銘柄のみ・無ければデータなし）
+    sc_cache = _load_json(data_dir / "scenario_analysis_cache.json")
+    entry = (sc_cache or {}).get(ticker) or (sc_cache or {}).get(_code_of(ticker))
+    pnl = (entry or {}).get("scenario_pnl") if isinstance(entry, dict) else None
+    if pnl:
+        parts = []
+        for sc_name in ("bear_case", "base_case", "bull_case"):
+            p = pnl.get(sc_name)
+            if isinstance(p, dict) and p.get("pnl_pct") is not None:
+                parts.append(f"{sc_name}: {p['pnl_pct']:+.1f}%")
+        out.append(f"- **シナリオ別想定損益**: {' / '.join(parts)}"
+                   if parts else "- **シナリオ別想定損益**: データなし（項目欠損）")
+    else:
+        out.append("- **シナリオ別想定損益**: データなし"
+                   "（scenario_analysisはポートフォリオ単位・保有銘柄のみ算出）")
+    out.append("  - ※バリュエーションは前提依存。last_updated が古い項目はデビルが信頼度を下げる")
+    return out
+
+
 def build_packet(cfg, ticker: str) -> str:
     now = datetime.now()
     case_id = f"{now.strftime('%Y-%m-%d')}_{ticker.replace('.', '')}"
@@ -412,6 +521,8 @@ def build_packet(cfg, ticker: str) -> str:
     lines += collect_midterm(cfg, ticker)
     lines += collect_risk_signals(cfg, ticker, sector_code)
     lines += collect_alt_policy(cfg, ticker, sector_code)
+    lines += collect_ontology_events(cfg, ticker)      # Wave R3-1 v2: ⑪イベント時系列
+    lines += collect_valuation(cfg, ticker)            # Wave R3-1 E8: ⑫バリュエーション
     lines += collect_freshness(cfg)
     lines += collect_holdings(cfg, ticker)
     lines += collect_existing_notes(cfg, ticker)

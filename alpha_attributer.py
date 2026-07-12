@@ -225,6 +225,56 @@ def record_signal_state(cfg, results: dict) -> None:
     save_signal_history(cfg, history)
 
 
+def record_category_panel(cfg, results: dict) -> int:
+    """
+    [Wave R1-4 / E4] 22カテゴリ×業種の当日スコアパネルを日次で蓄積する。
+
+    signal_aggregator の sector_signals[code]["components"]（カテゴリ別スコア）を
+    DATA_DIR/category_panel.jsonl に1日1行で追記する。
+    signal_culling_report.py（月次）がこのパネルと20日先リターンを突合して
+    カテゴリ別ICを算出する（判定の正本は要件定義書 §R1-4）。
+
+    Returns: 記録した業種数（0 = データなし/同日記録済み）
+    """
+    sa = results.get("signal_aggregator") or {}
+    sector_signals = sa.get("sector_signals") or {}
+    if not sector_signals:
+        return 0
+
+    today = date.today().strftime("%Y-%m-%d")
+    p = _data_dir(cfg) / "category_panel.jsonl"
+
+    lines = []
+    if p.exists():
+        try:
+            lines = [l for l in p.read_text(encoding="utf-8").splitlines()
+                     if l.strip()]
+        except Exception:
+            lines = []
+        for l in lines[-3:]:                       # 同日再実行の冪等ガード
+            try:
+                if json.loads(l).get("date") == today:
+                    return 0
+            except Exception:
+                continue
+
+    sectors = {}
+    for code, rec in sector_signals.items():
+        comps = (rec or {}).get("components") or {}
+        clean = {cat: round(float(v), 2) for cat, v in comps.items()
+                 if v is not None}
+        if clean:
+            sectors[code] = clean
+    if not sectors:
+        return 0
+
+    lines.append(json.dumps({"date": today, "sectors": sectors},
+                            ensure_ascii=False))
+    lines = lines[-400:]                            # 約1.5年分を保持
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return len(sectors)
+
+
 # ==============================================================
 # BLOCK 3: 情報係数（IC）計算
 # ==============================================================
@@ -579,9 +629,16 @@ def run_alpha_attributer(cfg, results: dict | None = None) -> dict:
         try:
             record_signal_state(cfg, results)
             recorded = True
-            print(f"    ✅ シグナル状態を記録")
+            print("    ✅ シグナル状態を記録")
         except Exception as e:
             print(f"    ⚠️  シグナル記録エラー: {e}")
+        # [Wave R1-4 / E4] カテゴリ別スコアパネルの日次蓄積
+        try:
+            n_panel = record_category_panel(cfg, results)
+            if n_panel:
+                print(f"    ✅ カテゴリパネル記録: {n_panel}業種")
+        except Exception as e:
+            print(f"    ⚠️  カテゴリパネル記録エラー: {e}")
 
     # ── Step 2: 月末のみ IC 計算 ─────────────────────────────
     calculated = False
