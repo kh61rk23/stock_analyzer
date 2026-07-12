@@ -52,24 +52,29 @@ def _build_taxonomy_rows(
 ) -> list[dict]:
     """
     cluster_phase_cache と cluster_master から
-    taxonomy.company_taxonomy_map テーブルへの MERGE 用行を構築する。
+    taxonomy.company_taxonomy_map テーブルへの書込行を構築する。
 
-    テーブルスキーマ（SPEC_db_schema.md taxonomy.company_taxonomy_map）:
-      company_code    STRING    業種コード（sector_code として流用）
-      market          STRING    "JP" | "US"
-      node_id         STRING    技術ノードID
-      score           FLOAT64   relevance_score（tech_scores から取得）
-      confidence_type STRING    "cluster_derived"（固定）
-      taxonomy_share  FLOAT64   クラスター内での相対シェア（node avg_score / 合計）
-      as_of_date      DATE      計算日
-      updated_at      TIMESTAMP 更新日時
+    ★ 2026-07-10（Wave R2-2）実スキーマ是正:
+      旧実装は company_code/market/score/taxonomy_share/as_of_date 列で書き込んでいたが、
+      実テーブル（ground truth: bq_all_schemas_20260704.json）の列は
+      map_id/company_id/node_id/relevance_score/confidence/revenue_share_est/
+      confidence_type/evidence_source/rationale/valid_from/auto_derived/verified_flag/updated_at。
+      列名不一致で insert_rows_json が常に失敗＝「producer配線済みだが実質空」
+      （HANDOFF_2026-06-30 §4-8）の根本原因だったため、実スキーマに合わせた。
+
+    行の規約（叩き台=draft層）:
+      company_id      "sector:{market}:{sector_code}"（業種レベルの擬似企業ID。
+                      T-2Aの企業レベル行=実企業コードと区別する）
+      confidence      0.3 固定（cluster_derived層の確度。edinet層=0.7・人間確定=1.0）
+      confidence_type "cluster_derived"
+      auto_derived    True / verified_flag False（人間レビュー前）
 
     Args:
         cluster_phase:  technology_cluster_engine の返り値
         cluster_master: technology_mapper の返り値
 
     Returns:
-        [{"company_code": str, "market": str, "node_id": str, ...}, ...]
+        [{"map_id": str, "company_id": str, "node_id": str, ...}, ...]
     """
     rows         = []
     as_of_date   = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -126,17 +131,21 @@ def _build_taxonomy_rows(
                     node_avg.get(node_id, 0.0) / total_score, 4
                 )
 
+                company_id = f"sector:{market}:{sector_code}"
                 rows.append({
-                    "company_code":    str(sector_code),
-                    "market":          market,
-                    "node_id":         node_id,
-                    "score":           round(float(score), 4),
-                    "confidence_type": "cluster_derived",
-                    "taxonomy_share":  taxonomy_share,
-                    "cluster_id":      cluster_id,
-                    "phase":           phase,
-                    "as_of_date":      as_of_date,
-                    "updated_at":      updated_at,
+                    "map_id":            f"{company_id}:{node_id}:{as_of_date}",
+                    "company_id":        company_id,
+                    "node_id":           node_id,
+                    "relevance_score":   round(float(score), 4),
+                    "confidence":        0.3,
+                    "revenue_share_est": taxonomy_share,
+                    "confidence_type":   "cluster_derived",
+                    "evidence_source":   "cluster_graph_exporter",
+                    "rationale":         f"cluster={cluster_id} phase={phase}",
+                    "valid_from":        as_of_date,
+                    "auto_derived":      True,
+                    "verified_flag":     False,
+                    "updated_at":        updated_at,
                 })
 
     return rows

@@ -1472,6 +1472,8 @@ DAILY_MODULES = [
     "policy_radar",     # ★ 政策レーダー追加
     "policy_signal_applier",       # Wave 3 - Policy Ph2（17.8番・日次）
     "pead_monitor",                # Wave 3 - FE-5（screener直後・日次）
+    "ml_meta",                     # Wave R5-1 - S7 ML特徴量スナップショット（日次蓄積）
+    "score_calculator",            # Wave R5-2 Phase A - E10 JP/US共通スコア
 ]
 
 # ── ウィークリーサイクル（月曜朝に追加実行）───────────────────
@@ -2070,14 +2072,30 @@ SP500_TICKERS: list = []   # ★ 実値は run_us_fundamental_rotator() 内で�
 # ==============================================================
 # ★ 2026-06-10 バグ修正: us_macro_pipeline.py がリポジトリに存在しない
 #   （未実装）にもかかわらずフラグが True で、毎日サイレントスキップ
-#   されていた。実装完了までは False とし、状態を明示する。
-#   実装後は run_us_macro_pipeline(cfg, results) を定義して True に戻すこと。
-ENABLE_US_MACRO: bool = False
+#   されていた。→ 2026-07-10（Wave US-2）us_macro_pipeline.py を実装し有効化。
+ENABLE_US_MACRO: bool = True
 
 # FRED APIキーは既存の POLICY_FRED_API_KEY を共用（再設定不要）
 
 # composite_us_macro_score の sector スコアへの反映上限（pt）
 US_MACRO_MAX_SECTOR_ADJ: float = 5.0
+
+# ── US-2: FRED拡張マクロ系列（先行指標） ─────────────────────
+# us_macro_pipeline.py が参照。各系列を fetch_fred_data で取得。
+# キーは内部名、値は (FRED系列ID, 表示名, 単位)。
+US_MACRO_FRED_SERIES: dict = {
+    "unrate":     ("UNRATE",        "失業率", "%"),
+    "cpi":        ("CPIAUCSL",      "CPI(総合)", "index"),      # 前年比を算出
+    "hy_spread":  ("BAMLH0A0HYM2",  "HYスプレッド", "%"),
+    "icsa":       ("ICSA",          "失業保険新規申請", "件"),
+    "permit":     ("PERMIT",        "住宅着工許可", "千戸"),
+    "t10y2y":     ("T10Y2Y",        "10Y-2Yスプレッド", "%"),
+    "indpro":     ("INDPRO",        "鉱工業生産", "index"),
+}
+# 先行シグナル判定閾値
+US_MACRO_HY_SPREAD_ALERT: float = 5.0    # HYスプレッド>=5% → リスクオフ先行
+US_MACRO_T10Y2Y_INVERT: float = 0.0      # 10Y-2Y<0 → 逆イールド（景気後退先行）
+US_MACRO_ICSA_SPIKE_PCT: float = 15.0    # ICSA前月比+15%超 → 雇用悪化先行
 
 # Treasury API から国債残高を取得するか（APIキー不要）
 ENABLE_TREASURY_DATA: bool = True
@@ -4251,3 +4269,208 @@ OPTIONS_IV_RICH_RATIO: float = 1.3          # IV/HV がこれ以上 → プレ�
 OPTIONS_IV_CHEAP_RATIO: float = 0.8         # IV/HV がこれ以下 → プレミアム買い環境
 OPTIONS_HV_WINDOW_DAYS: int = 20            # ヒストリカル・ボラティリティ算出窓
 OPTIONS_MIN_SCORE_FOR_CSP: float = 70.0     # cash-secured put 提案の最低composite
+
+# ==============================================================
+# BLOCK 44: 出口戦略エンジン設定（Wave R0-6 / E1）
+# ==============================================================
+# exit_rule_engine.py が参照。投資哲学.md の売却ルールのコード化。
+# 設計正本: 統合ファイルなど/05_提案_2026-07-05/要件定義書_統合改修_20260705.md §R0-6
+# ★ 発注は常に健太が手動（D-01）。本エンジンは注文票生成まで。
+
+ENABLE_EXIT_ENGINE: bool = True
+EXIT_ONKABU_FIRE_PCT: float = 200.0   # R-A: 恩株化発火（+200%=3倍）
+EXIT_ONKABU_NEAR_PCT: float = 180.0   # R-A: 接近通知
+EXIT_SHORT_FIRE_PCT:  float = 20.0    # R-S: 短期(<6ヶ月)利確発火
+EXIT_SHORT_NEAR_PCT:  float = 15.0    # R-S: 接近通知
+EXIT_MID_FIRE_PCT:    float = 100.0   # R-M: 中期(1-2年)2倍発火
+EXIT_MID_NEAR_PCT:    float = 90.0    # R-M: 接近通知
+EXIT_RULE40_TH:       float = 40.0    # R-40: Rule of 40 閾値（SaaS）
+EXIT_RULE40_NEAR_TH:  float = 45.0    # R-40: 接近通知
+EXIT_PBR_FIRE:        float = 1.2     # R-PBR: 段階利確開始
+EXIT_PBR_FULL:        float = 1.5     # R-PBR: 全売却推奨
+EXIT_PBR_NEAR:        float = 1.1     # R-PBR: 接近通知
+EXIT_STORY_DROP_FIRE_PCT: float = 40.0  # R-STORY: composite低下率発火
+EXIT_STORY_DROP_NEAR_PCT: float = 30.0  # R-STORY: 接近通知
+
+# ==============================================================
+# BLOCK 53: データ信頼性・鮮度SLA設定（Wave R0-1 / E7'）
+# ==============================================================
+# data_reliability.py が参照。D-05: J-Quants不使用・全て無料
+# （yfinanceリトライ → Stooqフォールバック → キャッシュ）。
+
+ENABLE_DATA_SLA: bool = True
+# Wave R0-2: usデータセットへのBQ格納（job/executive/facility の3モジュール）
+ENABLE_US_BQ_EXPORT: bool = True
+# D-09（2026-07-05決定）: Notion連携は廃止（Obsidian一本化）。
+# notion_obsidian_writer.py の Notion API 呼び出しのみ停止（Obsidian出力は継続）。
+ENABLE_NOTION_API: bool = False
+STOOQ_ENABLED: bool = True
+DATA_RETRY_SCHEDULE: list = [2, 4, 8]        # リトライ間隔（秒・指数バックオフ）
+EDINET_RETRY_DAILY_LIMIT: int = 10           # 繰越キューの1日処理上限（予算80コール/日を保護）
+DATA_SLA_DAYS: dict = {                      # 種別ごとの鮮度SLA（日）
+    "price": 2,
+    "financials": 100,
+    "news": 3,
+}
+
+# ==============================================================
+# BLOCK 42: 統合バックテスト基盤設定（Wave R1-1 / S1）
+# ==============================================================
+# backtest/ パッケージが参照。設計正本: 要件定義書_統合改修_20260705.md §R1-1。
+# 共通スキーマ②「仮想約定」: 約定価格 = 翌営業日始値 × (1±slippage)。
+
+BT_SLIPPAGE_BPS_JP: int = 20         # 日本株スリッページ（bps）
+BT_SLIPPAGE_BPS_US: int = 10         # 米国株スリッページ（bps）
+BT_TAX_RATE: float = 0.20315         # 特定口座の譲渡益課税率（NISAは0）
+BT_COMMISSION_BPS: int = 0           # 手数料（大手ネット証券の国内現物無料化を既定）
+BT_WF_SPLITS: int = 4                # walk-forward 分割数（expanding window）
+BT_BOOTSTRAP_N: int = 500            # circular block bootstrap の反復回数 B
+BT_BOOTSTRAP_BLOCK: int = 20         # ブロック長（営業日）
+BT_P_THRESHOLD: float = 0.10         # p>=0.10 →『統計的裏付けなし』朱記
+BT_SHORT_STOCK_LOAN_RATE: float = 0.011   # 貸株料 年1.1%（日割り）
+BT_SHORT_NEGATIVE_RATE: float = 0.04      # 逆日歩 保守的に年4%固定
+BT_BENCHMARK_TICKER: str = "1306.T"       # 受入テスト用ベンチマーク（TOPIX ETF）
+
+# ==============================================================
+# BLOCK 43: ペーパートレード仮想口座設定（Wave R1-2 / S2）
+# ==============================================================
+# paper/paper_broker.py が参照。全イベントは events.jsonl に追記し
+# 口座はイベントから再構築可能（イベントソーシング）。
+
+ENABLE_PAPER_TRADING: bool = True
+PAPER_INITIAL_CAPITAL: int = 2_000_000    # 戦略別の初期仮想資金（円）
+PAPER_STRATEGIES: list = ["screener_topN", "ignition", "pead"]
+# S6(commodity)はR4-2実装後に、S4(options)はIBKRペーパー利用のため対象外
+PAPER_LEDGER_PATH: str = "stock_data/paper"   # accounts.json / events.jsonl の置き場
+
+# ==============================================================
+# BLOCK 48: ポジションサイジングv2設定（Wave R1-5 / E5）
+# ==============================================================
+# position_sizer.py の calc_position_size_v2 が参照。
+# D-15（2026-07-05確定）: σターゲット=15%。
+
+VOL_TARGET_ANNUAL: float = 0.15      # ポートフォリオ年率ボラ上限（D-15）
+CONVICTION_MULT: dict = {1: 0.5, 2: 0.75, 3: 1.0, 4: 1.25, 5: 1.5}
+CORR_PENALTY_TH: float = 0.6         # 平均60日相関がこれを超えたらペナルティ
+CORR_PENALTY_MULT: float = 0.7       # 相関ペナルティ係数
+MAX_SINGLE_POS_PCT: float = 10.0     # 1銘柄上限（総資産比%）
+CASINO_SINGLE_POS_PCT: float = 25.0  # カジノ枠戦略の1銘柄上限（カジノ枠比%）
+CASINO_BUDGET_PCT: float = 15.0      # カジノ枠 = min(総資産×15%, 200万)（D-13）
+CASINO_BUDGET_CAP_YEN: int = 2_000_000
+
+# ==============================================================
+# BLOCK 55: taxonomy信号設定（Wave R2-5,R2-6 / T-4,T-5）
+# ==============================================================
+# taxonomy_hotness.py（node_hotness算出）と signal_aggregator.py
+# （カテゴリV）が参照。設計正本: HANDOFF_2026-06-30 §4-3。
+# ※ BLOCK 54 は S12信用ユニット用に予約済みのため 55 を使用。
+
+ENABLE_TAXONOMY_SIGNAL: bool = True
+TAXONOMY_HOTNESS_BASELINE_DAYS: int = 20   # 加熱判定のベースライン日数
+TAXONOMY_LEADING_ONLY_TH: float = 65.0     # 「先行だけ点灯」の先行閾値
+TAXONOMY_MARKET_DEFAULT: str = "JP"        # T-3 get_company_taxonomy_scores の既定market
+
+# ==============================================================
+# BLOCK 49: ドローダウン制御設定（Wave R3-3 / E9）
+# ==============================================================
+# dd_controller.py が参照。D-16=c（より許容）で2026-07-05確定。
+# 設計正本: 要件定義書_統合改修_20260705.md §R3-3。売却強制なし（推奨のみ・D-01）。
+
+ENABLE_DD_CONTROL: bool = True
+DD_CAUTION: float = 0.15        # NORMAL→CAUTION 発火（dd>=15%）
+DD_DEFENSE: float = 0.25        # CAUTION→DEFENSE 発火（dd>=25%）
+DD_CAUTION_EXIT: float = 0.10   # CAUTION→NORMAL 復帰（dd<10%・ヒステリシス）
+DD_DEFENSE_EXIT: float = 0.20   # DEFENSE→CAUTION 復帰（dd<20%・ヒステリシス）
+
+# ==============================================================
+# BLOCK 52: 税・NISA最適化設定（Wave R3-5 / S10）
+# ==============================================================
+# tax_optimizer.py が参照。税務の最終判断は健太（レポートに明記）。
+# 設計正本: 要件定義書_統合改修_20260705.md §R3-5。
+
+ENABLE_TAX_OPTIMIZER: bool = True
+TAX_RATE_NISA: float = 0.20315        # 特定口座の譲渡益課税率（NISAは非課税=0）
+OLD_NISA_EXPIRY_YEAR: int = 2040      # 旧NISA非課税期限（この年まで）
+NISA_GROWTH_ANNUAL_LIMIT: int = 2_400_000   # 新NISA 成長投資枠 年間上限
+NISA_GROWTH_TOTAL_LIMIT: int = 12_000_000   # 新NISA 成長投資枠 生涯上限
+NISA_LONG_HOLD_MONTHS: int = 12       # NISA推奨の想定保有下限（>1年）
+
+# ==============================================================
+# BLOCK 45: イベントドリブン短期戦略設定（Wave R4-1 / S5）
+# ==============================================================
+# event_strategy_runner.py が参照。プレイブックはYAML（playbooks/）で外部化。
+# 設計正本: 要件定義書_統合改修_20260705.md §R4-1。発注は健太手動（D-01）。
+
+ENABLE_EVENT_STRATEGY: bool = True
+PLAYBOOK_DIR: str = "playbooks"
+PROMOTION_MIN_TRADES: int = 30      # 実弾昇格M2: 取引数下限
+PROMOTION_MIN_PF: float = 1.3       # 実弾昇格M2: ProfitFactor下限
+PROMOTION_MAX_P: float = 0.10       # 実弾昇格M2: bootstrap p上限
+
+# ==============================================================
+# BLOCK 46: コモディティ/マクロ・ローテーション設定（Wave R4-2 / S6）
+# ==============================================================
+# commodity_rotation.py が参照（月初実行）。東証ETF・無料データで完結。
+# 設計正本: 要件定義書_統合改修_20260705.md §R4-2。配分≤総資産10%。
+
+ENABLE_COMMODITY_ROTATION: bool = True
+CMD_MAX_ALLOC_PCT: float = 10.0    # コモディティ配分の総資産比上限
+CMD_MOM_LOOKBACK: tuple = (252, 21)  # 12-1モメンタム（約12ヶ月, 直近1ヶ月）
+# ユニバース: {ticker: カテゴリ}（実装時に上場状況を再確認・差し替え可）
+CMD_ETF_UNIVERSE: dict = {
+    "1326.T": "gold",       # SPDRゴールド・シェア
+    "1540.T": "gold",       # 純金上場信託
+    "1671.T": "energy",     # WTI原油price連動
+    "1684.T": "broad",      # 総合コモディティ（穀物含む想定・要確認）
+    "1687.T": "grains",     # 穀物系（上場状況を実装時に再確認）
+}
+# economic_cycle 4象限 → 許可カテゴリ（他象限=現金・エントリーなし）
+# A:成長↑インフレ↑ / B:成長↑インフレ↓ / C:成長↓インフレ↑ / D:成長↓インフレ↓
+CMD_REGIME_ALLOW: dict = {
+    "A": ["energy", "grains", "broad"],   # インフレ↑成長↑: エネルギー・穀物
+    "C": ["gold", "broad"],               # インフレ↑成長↓: 金・総合
+    "B": [],                              # 株式優位→コモディティは現金
+    "D": [],                              # デフレ→現金
+}
+
+# ==============================================================
+# BLOCK 50: マルチ戦略資金配分メタ設定（Wave R4-4 / S11）
+# ==============================================================
+# allocation_meta.py が参照（月次）。分数ケリー×リスクパリティ。
+# 設計正本: 要件定義書_統合改修_20260705.md §R4-4。健太承認後にconfig反映。
+
+ENABLE_ALLOCATION_META: bool = True
+KELLY_FRACTION: float = 0.25       # 分数ケリー（フルケリーの1/4）
+ALLOC_MIN_HISTORY_M: int = 3       # 配分計算に必要な最小月数
+CULL_PF_TH: float = 1.0            # 淘汰: 直近6ヶ月PFがこれ未満
+CULL_MONTHS: int = 6               # 淘汰判定の観測月数
+CULL_P_TH: float = 0.5             # 淘汰: bootstrap p がこれ超
+
+# ==============================================================
+# BLOCK 51: MLメタモデル設定（Wave R5-1 / S7）
+# ==============================================================
+# ml/ が参照。LightGBM回帰・Purged Walk-Forward CV。
+# 設計正本: 要件定義書_統合改修_20260705.md §R5-1。フラグ変更は健太承認。
+
+# ※ 既存 BLOCK RESEARCH-4（旧XGBoost ML_CORRECTION_*）とは別系統のため ML_META_* で命名。
+ML_META_TARGET_HORIZON_D: int = 20   # 目的変数の先読み営業日数
+ML_META_EMBARGO_D: int = 20          # Purged CV の embargo（リーク防止・最重要）
+ML_META_PROMOTE_IC: float = 0.02     # 昇格: OOS rank IC 下限
+ML_META_PROMOTE_T: float = 2.0       # 昇格: t統計量 下限
+ML_META_ENABLED: bool = False        # 補正テーブルの日次適用（昇格＋健太承認後にTrue）
+ML_META_MAX_PT: float = 10.0         # composite への補正上限（±pt）
+ML_META_N_DECILES: int = 10          # 予測を十分位に量子化（→補正テーブルのキー）
+ML_META_CV_FOLDS: int = 5            # Purged Walk-Forward CV のフォールド数
+# 特徴量スナップショット（日次追記）／学習後の補正テーブル（Colabからエクスポート）の置き場。
+ML_META_DATASET_PATH: str = str(DATA_DIR / "ml_dataset" / "features.jsonl")
+ML_META_CORRECTION_PATH: str = str(DATA_DIR / "ml_dataset" / "correction_table.json")
+ML_META_DATASET_MAX_DAYS: int = 500  # features.jsonl の保持日数（古い日付から間引き）
+ENABLE_ML_META_DATASET: bool = True  # 特徴量スナップショット蓄積（学習用・補正はしない）
+
+# ==============================================================
+# BLOCK 56: JP/US共通スコア設定（Wave R5-2 Phase A / E10）
+# ==============================================================
+# score_calculator.py が参照。SPEC_core §8-2 の統合方針の第一段階。
+# Phase A対象 = 保有銘柄 ＋ us_screener 上位N のみ（要件定義書 §R5-2）。
+ENABLE_SCORE_CALCULATOR: bool = True
+UNIFIED_SCORE_US_TOP_N: int = 50     # us_screener からの対象上位件数
