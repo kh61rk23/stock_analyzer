@@ -10,6 +10,7 @@ feedparser>=6.0.11
 
 # データ処理
 pandas>=2.0.0
+PyYAML>=6.0        # R4-1 event_strategy_runner の playbooks/*.yaml 読込（transformers経由の間接依存に頼らず明示）
 numpy>=1.26.0
 scipy>=1.11.0
 openpyxl>=3.1.0

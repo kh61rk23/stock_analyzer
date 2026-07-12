@@ -4183,10 +4183,12 @@ LEDGER_HISTORY_DAYS: int = 14       # 連続失敗・最終成功日の遡及日
 # vault パスはローカル実行専用（GitHub Actions では使用しない）。
 
 ENABLE_INVESTMENT_DEPT: bool = True
+# V-01=a決定（2026-07-12）: 実働正本はローカル側 Vault2_ClaudeCode_Local。
+# 旧iCloud側 Vault2_ClaudeCode は2026-06-12凍結（凍結READMEを設置済み・書込禁止）。
 INVESTMENT_DEPT_VAULT_DIR: str = os.getenv(
     "INVESTMENT_DEPT_VAULT_DIR",
-    "/Users/kentaryobe/Library/Mobile Documents/iCloud~md~obsidian/"
-    "Documents/Vault2_ClaudeCode/CEO室/departments/B-investment",
+    "/Users/kentaryobe/Documents/Obsidian_Local/Vault2_ClaudeCode_Local/"
+    "CEO室/departments/B-investment",
 )
 
 # ── BLOCK 38b: パイプライン実行フラグの正式定義（Wave PIPE-1）─────
