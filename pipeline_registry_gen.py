@@ -164,7 +164,12 @@ def audit() -> int:
     _spec0.loader.exec_module(_cfg0)
     for s in new["stages"]:
         for m in s["modules"]:
-            if not (REPO / f"{m}.py").exists():
+            # Wave R1: backtest/ paper/ 等のサブディレクトリ配置を許可
+            # （要件定義書_統合改修_20260705.md 共通規約8）
+            _found = (REPO / f"{m}.py").exists() or bool(
+                [p for p in REPO.glob(f"*/{m}.py")
+                 if p.parent.name not in ("tests", "__pycache__")])
+            if not _found:
                 # 全ENABLEフラグが False のステージは意図的無効化 → 警告止まり
                 disabled = (s["enable_flags"] and all(
                     getattr(_cfg0, f, True) is False

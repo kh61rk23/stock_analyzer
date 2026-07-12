@@ -56,7 +56,7 @@
 from __future__ import annotations
 
 import csv
-import json
+import math
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -436,6 +436,184 @@ def calc_position_size(
 
 
 # ==============================================================
+# BLOCK 2b: ポジションサイジング v2（Wave R1-5 / E5）
+# ==============================================================
+# 設計正本: 要件定義書_統合改修_20260705.md §R1-5（確定アルゴリズム・変更禁止）
+#   1) 基礎サイズ（v1と同じ）: risk_amount = 総資産×1% ; qty = risk / (2×ATR14)
+#   2) conviction係数: × CONVICTION_MULT[conviction]（無審議銘柄は3扱い）
+#   3) 相関ペナルティ: 既存ポートフォリオとの平均60日相関 ρ̄>0.6 → ×0.7
+#   4) ポートフォリオボラ制約: σ_p=sqrt(wᵀΣw) > VOL_TARGET_ANNUAL(0.15=D-15)
+#      なら超過分だけ比例縮小
+#   5) 上限: 1銘柄 ≤ 総資産×10% / カジノ枠戦略 ≤ カジノ枠×25%
+# 出力は「推奨qty＋各ステップの調整内訳」（健太が調整根拠を追えること）。
+# 境界: 相関行列が特異/データ欠損時はステップ3,4をスキップし警告。
+# v1（calc_position_size）は残置・既存呼び出しに影響なし。
+# ==============================================================
+
+_TRADING_DAYS_V2 = 252
+
+
+def _corr60(a: list, b: list) -> Optional[float]:
+    """直近60日リターンのピアソン相関。データ不足/分散ゼロは None。"""
+    n = min(len(a), len(b), 60)
+    if n < 20:
+        return None
+    x, y = a[-n:], b[-n:]
+    mx, my = sum(x) / n, sum(y) / n
+    vx = sum((v - mx) ** 2 for v in x)
+    vy = sum((v - my) ** 2 for v in y)
+    if vx <= 0 or vy <= 0:
+        return None
+    cov = sum((p - mx) * (q - my) for p, q in zip(x, y))
+    return cov / (vx * vy) ** 0.5
+
+
+def _portfolio_vol_annual(weights: list, returns: list) -> Optional[float]:
+    """
+    σ_p = sqrt(wᵀΣw)（Σ=直近60日の日次共分散を年率化）。
+    returns: 各資産の日次リターン列（長さはmin60に揃える）。
+    """
+    n_assets = len(weights)
+    if n_assets == 0 or n_assets != len(returns):
+        return None
+    n = min([len(r) for r in returns] + [60])
+    if n < 20:
+        return None
+    series = [r[-n:] for r in returns]
+    means = [sum(s) / n for s in series]
+    var_p = 0.0
+    for i in range(n_assets):
+        for j in range(n_assets):
+            cov_ij = sum((series[i][k] - means[i]) * (series[j][k] - means[j])
+                         for k in range(n)) / (n - 1)
+            var_p += weights[i] * weights[j] * cov_ij
+    if var_p < 0:
+        return None
+    return math.sqrt(var_p * _TRADING_DAYS_V2)
+
+
+def calc_position_size_v2(
+    total_assets:      float,
+    price:             float,
+    atr14:             float,
+    conviction:        Optional[int] = None,     # B部門conviction(1-5)。Noneは3扱い
+    candidate_returns: Optional[list] = None,    # 候補銘柄の日次リターン列（60日）
+    portfolio_returns: Optional[dict] = None,    # {ticker: 日次リターン列}
+    portfolio_weights: Optional[dict] = None,    # {ticker: 総資産比weight}
+    is_casino:         bool = False,
+    lot_size:          int = LOT_SIZE_JP,
+    cfg=None,
+) -> dict:
+    """
+    確定5ステップのサイジング。Returns:
+      {"qty", "position_value", "position_pct", "steps": [...], "warnings": [...]}
+    steps の各要素: {"step", "label", "qty", "note"}（注文票reason欄に転記可能）
+    """
+    conv_mult_table = getattr(cfg, "CONVICTION_MULT",
+                              {1: 0.5, 2: 0.75, 3: 1.0, 4: 1.25, 5: 1.5})
+    corr_th = getattr(cfg, "CORR_PENALTY_TH", 0.6)
+    corr_mult = getattr(cfg, "CORR_PENALTY_MULT", 0.7)
+    vol_target = getattr(cfg, "VOL_TARGET_ANNUAL", 0.15)
+    max_single_pct = getattr(cfg, "MAX_SINGLE_POS_PCT", 10.0) / 100.0
+    casino_single_pct = getattr(cfg, "CASINO_SINGLE_POS_PCT", 25.0) / 100.0
+    casino_pct = getattr(cfg, "CASINO_BUDGET_PCT", 15.0) / 100.0
+    casino_cap = getattr(cfg, "CASINO_BUDGET_CAP_YEN", 2_000_000)
+
+    steps, warnings = [], []
+    if price <= 0 or atr14 <= 0 or total_assets <= 0:
+        return {"error": "入力不正（price/atr14/total_assets は正の値）",
+                "qty": 0, "steps": [], "warnings": []}
+
+    # ── 1) 基礎サイズ ──
+    risk_amount = total_assets * 0.01
+    qty = risk_amount / (2.0 * atr14)
+    steps.append({"step": 1, "label": "基礎サイズ(リスク1%/2ATR)",
+                  "qty": round(qty, 1),
+                  "note": f"risk={risk_amount:,.0f} ATR14={atr14:.1f}"})
+
+    # ── 2) conviction係数 ──
+    level = conviction if conviction in conv_mult_table else 3
+    mult = conv_mult_table[level]
+    qty *= mult
+    steps.append({"step": 2, "label": f"conviction={level} (×{mult})",
+                  "qty": round(qty, 1),
+                  "note": "無審議銘柄は3扱い" if conviction is None else ""})
+
+    # ── 3) 相関ペナルティ ──
+    rho_values = []
+    if candidate_returns and portfolio_returns:
+        for t, rets in portfolio_returns.items():
+            c = _corr60(candidate_returns, rets)
+            if c is not None:
+                rho_values.append(c)
+    if rho_values:
+        rho_bar = sum(rho_values) / len(rho_values)
+        if rho_bar > corr_th:
+            qty *= corr_mult
+            steps.append({"step": 3, "label": f"相関ペナルティ(ρ̄={rho_bar:.2f}>"
+                          f"{corr_th} ×{corr_mult})", "qty": round(qty, 1),
+                          "note": f"対象{len(rho_values)}銘柄"})
+        else:
+            steps.append({"step": 3, "label": f"相関ペナルティなし(ρ̄={rho_bar:.2f})",
+                          "qty": round(qty, 1), "note": ""})
+    else:
+        warnings.append("step3スキップ: 相関データ不足（60日リターン未取得）")
+        steps.append({"step": 3, "label": "相関ペナルティ: スキップ",
+                      "qty": round(qty, 1), "note": "データ欠損"})
+
+    # ── 4) ポートフォリオボラ制約 ──
+    vol_checked = False
+    if candidate_returns and portfolio_returns and portfolio_weights:
+        tickers = [t for t in portfolio_returns if t in portfolio_weights]
+        cand_w = qty * price / total_assets
+        weights = [portfolio_weights[t] for t in tickers] + [cand_w]
+        rets = [portfolio_returns[t] for t in tickers] + [candidate_returns]
+        sigma_p = _portfolio_vol_annual(weights, rets)
+        if sigma_p is not None:
+            vol_checked = True
+            if sigma_p > vol_target and sigma_p > 0:
+                scale = vol_target / sigma_p
+                qty *= scale
+                steps.append({"step": 4,
+                              "label": f"ボラ制約(σ_p={sigma_p:.1%}>"
+                              f"{vol_target:.0%} ×{scale:.2f})",
+                              "qty": round(qty, 1), "note": "超過分を比例縮小"})
+            else:
+                steps.append({"step": 4, "label": f"ボラ制約OK(σ_p={sigma_p:.1%})",
+                              "qty": round(qty, 1), "note": ""})
+    if not vol_checked:
+        warnings.append("step4スキップ: 共分散計算不能（データ欠損/特異）")
+        steps.append({"step": 4, "label": "ボラ制約: スキップ",
+                      "qty": round(qty, 1), "note": "データ欠損"})
+
+    # ── 5) 上限 ──
+    cap_value = total_assets * max_single_pct
+    cap_label = f"1銘柄≤総資産{max_single_pct:.0%}"
+    if is_casino:
+        casino_budget = min(total_assets * casino_pct, casino_cap)
+        cap_value = min(cap_value, casino_budget * casino_single_pct)
+        cap_label = f"カジノ枠×{casino_single_pct:.0%}(枠={casino_budget:,.0f})"
+    if qty * price > cap_value:
+        qty = cap_value / price
+        steps.append({"step": 5, "label": f"上限クランプ({cap_label})",
+                      "qty": round(qty, 1), "note": ""})
+    else:
+        steps.append({"step": 5, "label": f"上限OK({cap_label})",
+                      "qty": round(qty, 1), "note": ""})
+
+    # 単元株に切り捨て
+    final_qty = int(qty / lot_size) * lot_size if lot_size > 1 else int(qty)
+    value = final_qty * price
+    return {
+        "qty": final_qty,
+        "position_value": round(value, 0),
+        "position_pct": round(value / total_assets * 100, 2),
+        "steps": steps,
+        "warnings": warnings,
+    }
+
+
+# ==============================================================
 # BLOCK 3: ポートフォリオ読み込み
 # ==============================================================
 
@@ -504,13 +682,8 @@ def format_position_report(result: dict) -> str:
         if pos.get("error"):
             continue
         price  = pos.get("current_price", 0)
-        atr    = pos.get("atr14", 0)
-        stop   = pos.get("stop_loss_price", 0)
         shares = pos.get("suggested_shares", 0)
         val    = pos.get("position_value", 0)
-        risk_a = pos.get("risk_amount", 0)
-        atr_p  = pos.get("atr_pct", 0)
-        stop_p = pos.get("stop_loss_pct", 0)
         cap    = "⚠️" if pos.get("capped") else ""
 
         cv_level = pos.get("conviction_level", "-")

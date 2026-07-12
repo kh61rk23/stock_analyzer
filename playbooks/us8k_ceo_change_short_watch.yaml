@@ -1,0 +1,18 @@
+# イベントドリブン・プレイブック（Wave R4-1 / S5）
+# 監視のみ（エントリーなし）: side=WATCH。CEO交代の株価反応を記録し、
+# 将来のショート戦略の判断材料を蓄積する（実弾なし・注文票も出さない）。
+id: us8k_ceo_change_short_watch
+event_source: us_8k_monitor
+description: 米国8-K CEO交代の監視のみ。エントリー・注文票なし（観察データ蓄積）。
+entry:
+  side: WATCH
+  conditions:
+    - {field: event_type, op: "==", value: ceo_change}
+  timing: none
+  max_concurrent: 0
+  size_pct_of_casino: 0
+exit:
+  hold_days_max: 0
+  take_profit_pct: 0
+  stop_loss_pct: 0
+status: paper
