@@ -1,0 +1,51 @@
+{
+  "_meta": {
+    "batch": 5,
+    "domains": ["bio_medical"],
+    "taxonomy_version": "v1.0",
+    "generated_by": "claude (T-1 AI叩き台・第2次拡張)",
+    "generated_at": "2026-07-08",
+    "status": "APPROVED_承認済み",
+    "approved_by": "健太（2026-07-10 チャット指示による承認）",
+    "approved_at": "2026-07-10",
+    "review": "承認済み。全ノードに verified_flag=true / is_active=true 付与済み",
+    "naming_rule": "lowercase snake_case。HANDOFF_2026-06-30 §4-4 準拠",
+    "anchors_included": [],
+    "note": "bio_medicalドメインには既存コードアンカーなし（新規領域）。HANDOFF §4-5 の10ドメインの最後の未定義分",
+    "schema_ref": "SPEC_db_schema.md §2-1 taxonomy.taxonomy_node"
+  },
+  "nodes": [
+    {"node_id": "bio_medical", "parent_id": null, "node_name_ja": "バイオ/メディカル", "node_name_en": "Bio & Medical", "node_level": 1, "node_type": "domain", "supply_chain_pos": null, "related_commodities": [], "related_countries": ["US", "JP", "EU", "CH"], "description": "創薬モダリティ・医療機器・診断・デジタルヘルスを包含する最上位ドメイン", "verified_flag": true, "is_active": true},
+
+    {"node_id": "drug_modality", "parent_id": "bio_medical", "node_name_ja": "創薬モダリティ", "node_name_en": "Drug Modality", "node_level": 2, "node_type": "category", "supply_chain_pos": "upstream", "related_commodities": [], "related_countries": ["US", "JP", "CH"], "description": "医薬品の分子種別（低分子から細胞・遺伝子まで）", "verified_flag": true, "is_active": true},
+    {"node_id": "antibody_drug", "parent_id": "drug_modality", "node_name_ja": "抗体医薬", "node_name_en": "Antibody Drug", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "upstream", "related_commodities": [], "related_countries": ["US", "JP", "CH"], "description": "モノクローナル抗体・二重特異性抗体", "verified_flag": true, "is_active": true},
+    {"node_id": "adc", "parent_id": "drug_modality", "node_name_ja": "抗体薬物複合体(ADC)", "node_name_en": "Antibody-Drug Conjugate", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "upstream", "related_commodities": [], "related_countries": ["JP", "US"], "description": "抗体にペイロードを結合させたがん治療薬（日本勢が世界先行）", "verified_flag": true, "is_active": true},
+    {"node_id": "nucleic_acid_drug", "parent_id": "drug_modality", "node_name_ja": "核酸医薬", "node_name_en": "Nucleic Acid Drug", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "upstream", "related_commodities": [], "related_countries": ["US", "JP"], "description": "siRNA・アンチセンス等の核酸医薬", "verified_flag": true, "is_active": true},
+    {"node_id": "mrna_therapeutics", "parent_id": "drug_modality", "node_name_ja": "mRNA医薬", "node_name_en": "mRNA Therapeutics", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "upstream", "related_commodities": [], "related_countries": ["US", "DE", "JP"], "description": "mRNAワクチン・治療薬・LNP送達技術", "verified_flag": true, "is_active": true},
+    {"node_id": "cell_therapy", "parent_id": "drug_modality", "node_name_ja": "細胞治療・再生医療", "node_name_en": "Cell Therapy & Regenerative Medicine", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "upstream", "related_commodities": [], "related_countries": ["US", "JP"], "description": "CAR-T・iPS細胞由来治療（日本はiPSで先行）", "verified_flag": true, "is_active": true},
+    {"node_id": "gene_therapy", "parent_id": "drug_modality", "node_name_ja": "遺伝子治療", "node_name_en": "Gene Therapy", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "upstream", "related_commodities": [], "related_countries": ["US", "EU"], "description": "AAVベクター・in vivo遺伝子治療", "verified_flag": true, "is_active": true},
+    {"node_id": "peptide_drug", "parent_id": "drug_modality", "node_name_ja": "ペプチド・中分子医薬", "node_name_en": "Peptide & Mid-size Drug", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "upstream", "related_commodities": [], "related_countries": ["JP", "US"], "description": "特殊環状ペプチド等の中分子創薬（日本発プラットフォーム）", "verified_flag": true, "is_active": true},
+    {"node_id": "obesity_metabolic_drug", "parent_id": "drug_modality", "node_name_ja": "肥満・代謝疾患薬", "node_name_en": "Obesity & Metabolic Drug", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "upstream", "related_commodities": [], "related_countries": ["DK", "US", "JP"], "description": "GLP-1等の肥満・糖尿病治療薬（世界的メガテーマ）", "verified_flag": true, "is_active": true},
+
+    {"node_id": "drug_discovery_platform", "parent_id": "bio_medical", "node_name_ja": "創薬プラットフォーム", "node_name_en": "Drug Discovery Platform", "node_level": 2, "node_type": "category", "supply_chain_pos": "upstream", "related_commodities": [], "related_countries": ["US", "JP"], "description": "創薬支援技術・受託サービス", "verified_flag": true, "is_active": true},
+    {"node_id": "ai_drug_discovery", "parent_id": "drug_discovery_platform", "node_name_ja": "AI創薬", "node_name_en": "AI Drug Discovery", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "upstream", "related_commodities": [], "related_countries": ["US", "JP", "UK"], "description": "タンパク質構造予測・分子設計AI（ai_softwareとの交差テーマ）", "verified_flag": true, "is_active": true},
+    {"node_id": "genome_editing", "parent_id": "drug_discovery_platform", "node_name_ja": "ゲノム編集", "node_name_en": "Genome Editing", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "upstream", "related_commodities": [], "related_countries": ["US", "JP"], "description": "CRISPR等のゲノム編集技術・治療応用", "verified_flag": true, "is_active": true},
+    {"node_id": "cdmo_cro", "parent_id": "drug_discovery_platform", "node_name_ja": "CDMO/CRO", "node_name_en": "CDMO & CRO", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "midstream", "related_commodities": [], "related_countries": ["JP", "US", "KR"], "description": "医薬品受託製造・受託研究（バイオ医薬の製造キャパ需要）", "verified_flag": true, "is_active": true},
+
+    {"node_id": "medical_device", "parent_id": "bio_medical", "node_name_ja": "医療機器", "node_name_en": "Medical Device", "node_level": 2, "node_type": "category", "supply_chain_pos": "midstream", "related_commodities": [], "related_countries": ["US", "JP", "DE"], "description": "治療・手術・画像診断用の医療機器", "verified_flag": true, "is_active": true},
+    {"node_id": "surgical_robot", "parent_id": "medical_device", "node_name_ja": "手術支援ロボット", "node_name_en": "Surgical Robot", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "midstream", "related_commodities": [], "related_countries": ["US", "JP"], "description": "内視鏡手術支援ロボット（robotics_automationとの交差テーマ）", "verified_flag": true, "is_active": true},
+    {"node_id": "endoscope", "parent_id": "medical_device", "node_name_ja": "内視鏡", "node_name_en": "Endoscope", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "midstream", "related_commodities": [], "related_countries": ["JP"], "description": "消化器内視鏡・AI診断支援（日本が世界シェア圧倒的）", "verified_flag": true, "is_active": true},
+    {"node_id": "catheter_device", "parent_id": "medical_device", "node_name_ja": "カテーテル・低侵襲デバイス", "node_name_en": "Catheter & Minimally Invasive Device", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "midstream", "related_commodities": [], "related_countries": ["US", "JP"], "description": "循環器カテーテル・ステント・構造的心疾患デバイス", "verified_flag": true, "is_active": true},
+    {"node_id": "imaging_diagnostic_device", "parent_id": "medical_device", "node_name_ja": "画像診断装置", "node_name_en": "Diagnostic Imaging Device", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "midstream", "related_commodities": [], "related_countries": ["JP", "US", "DE"], "description": "CT/MRI/超音波・AI画像診断", "verified_flag": true, "is_active": true},
+
+    {"node_id": "diagnostics", "parent_id": "bio_medical", "node_name_ja": "診断・検査", "node_name_en": "Diagnostics", "node_level": 2, "node_type": "category", "supply_chain_pos": "midstream", "related_commodities": [], "related_countries": ["US", "JP", "CH"], "description": "体外診断・ゲノム検査・早期発見技術", "verified_flag": true, "is_active": true},
+    {"node_id": "genome_sequencing", "parent_id": "diagnostics", "node_name_ja": "ゲノムシーケンス", "node_name_en": "Genome Sequencing", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "upstream", "related_commodities": [], "related_countries": ["US", "JP", "CN"], "description": "次世代シーケンサー・ゲノム解析サービス", "verified_flag": true, "is_active": true},
+    {"node_id": "liquid_biopsy", "parent_id": "diagnostics", "node_name_ja": "リキッドバイオプシー", "node_name_en": "Liquid Biopsy", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "midstream", "related_commodities": [], "related_countries": ["US", "JP"], "description": "血液による低侵襲がん早期検出", "verified_flag": true, "is_active": true},
+    {"node_id": "point_of_care_testing", "parent_id": "diagnostics", "node_name_ja": "POCT・迅速検査", "node_name_en": "Point-of-Care Testing", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "midstream", "related_commodities": [], "related_countries": ["JP", "US"], "description": "その場で結果が出る迅速診断・検査試薬", "verified_flag": true, "is_active": true},
+
+    {"node_id": "digital_health", "parent_id": "bio_medical", "node_name_ja": "デジタルヘルス", "node_name_en": "Digital Health", "node_level": 2, "node_type": "category", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["US", "JP"], "description": "治療用アプリ・医療データ・遠隔医療", "verified_flag": true, "is_active": true},
+    {"node_id": "digital_therapeutics", "parent_id": "digital_health", "node_name_ja": "治療用アプリ(DTx)", "node_name_en": "Digital Therapeutics", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["US", "JP"], "description": "保険適用される治療用ソフトウェア", "verified_flag": true, "is_active": true},
+    {"node_id": "medical_data_platform", "parent_id": "digital_health", "node_name_ja": "医療データプラットフォーム", "node_name_en": "Medical Data Platform", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP", "US"], "description": "電子カルテ・RWD・医療ビッグデータ解析", "verified_flag": true, "is_active": true},
+    {"node_id": "telemedicine", "parent_id": "digital_health", "node_name_ja": "遠隔医療", "node_name_en": "Telemedicine", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["US", "JP"], "description": "オンライン診療・服薬指導プラットフォーム", "verified_flag": true, "is_active": true}
+  ]
+}

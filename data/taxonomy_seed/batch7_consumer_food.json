@@ -1,0 +1,38 @@
+{
+  "_meta": {
+    "batch": 7,
+    "domains": ["consumer_retail", "food_agri"],
+    "taxonomy_version": "v1.0",
+    "generated_by": "claude (T-1 AI叩き台・第3次拡張=業態・全産業統合)",
+    "generated_at": "2026-07-10",
+    "status": "APPROVED_承認済み",
+    "approved_by": "健太（2026-07-10 チャット指示による承認）",
+    "approved_at": "2026-07-10",
+    "review": "承認済み。全ノードに verified_flag=true / is_active=true 付与済み",
+    "naming_rule": "lowercase snake_case。HANDOFF_2026-06-30 §4-4 準拠",
+    "anchors_included": [],
+    "schema_ref": "SPEC_db_schema.md §2-1 taxonomy.taxonomy_node"
+  },
+  "nodes": [
+    {"node_id": "consumer_retail", "parent_id": null, "node_name_ja": "消費/小売", "node_name_en": "Consumer & Retail", "node_level": 1, "node_type": "domain", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP", "US", "CN"], "description": "小売業態・消費財を包含する最上位ドメイン（業態別の値動き特性=ディフェンシブ/景気敏感の分離が目的）", "verified_flag": true, "is_active": true},
+    {"node_id": "convenience_store", "parent_id": "consumer_retail", "node_name_ja": "コンビニエンスストア", "node_name_en": "Convenience Store", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP", "SEA"], "description": "CVSチェーン（フランチャイズ業態・ディフェンシブ）", "verified_flag": true, "is_active": true},
+    {"node_id": "drugstore", "parent_id": "consumer_retail", "node_name_ja": "ドラッグストア", "node_name_en": "Drugstore", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP"], "description": "ドラッグストア・調剤併設（インバウンド需要と再編のテーマ）", "verified_flag": true, "is_active": true},
+    {"node_id": "ec_platform", "parent_id": "consumer_retail", "node_name_ja": "ECプラットフォーム", "node_name_en": "E-Commerce Platform", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP", "US", "CN"], "description": "EC市場運営・自社EC・ライブコマース（logistics/last_mileと交差）", "verified_flag": true, "is_active": true},
+    {"node_id": "specialty_retail", "parent_id": "consumer_retail", "node_name_ja": "専門店", "node_name_en": "Specialty Retail", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP"], "description": "家電量販・ホームセンター・眼鏡等のカテゴリキラー業態", "verified_flag": true, "is_active": true},
+    {"node_id": "apparel_spa", "parent_id": "consumer_retail", "node_name_ja": "アパレルSPA", "node_name_en": "Apparel SPA", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": ["cotton"], "related_countries": ["JP", "CN", "SEA"], "description": "製造小売型アパレル（垂直統合業態・為替と原材料感応）", "verified_flag": true, "is_active": true},
+    {"node_id": "cosmetics_personal_care", "parent_id": "consumer_retail", "node_name_ja": "化粧品・パーソナルケア", "node_name_en": "Cosmetics & Personal Care", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP", "CN", "KR"], "description": "化粧品・トイレタリー（インバウンド/中国消費の感応度が高い）", "verified_flag": true, "is_active": true},
+    {"node_id": "discount_store", "parent_id": "consumer_retail", "node_name_ja": "ディスカウント業態", "node_name_en": "Discount Store", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP", "US"], "description": "総合ディスカウント・100円ショップ・オフプライス（インフレ下で相対優位）", "verified_flag": true, "is_active": true},
+    {"node_id": "department_store", "parent_id": "consumer_retail", "node_name_ja": "百貨店", "node_name_en": "Department Store", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP"], "description": "百貨店（インバウンド免税と富裕層消費の代理指標）", "verified_flag": true, "is_active": true},
+    {"node_id": "household_durables", "parent_id": "consumer_retail", "node_name_ja": "家具・生活用品", "node_name_en": "Household Durables", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": ["lumber"], "related_countries": ["JP", "SEA"], "description": "家具・インテリア・生活雑貨の製造小売", "verified_flag": true, "is_active": true},
+    {"node_id": "pet_economy", "parent_id": "consumer_retail", "node_name_ja": "ペット関連", "node_name_en": "Pet Economy", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP", "US"], "description": "ペットフード・用品・保険・医療（少子化と逆相関の構造成長）", "verified_flag": true, "is_active": true},
+
+    {"node_id": "food_agri", "parent_id": null, "node_name_ja": "食品/アグリ", "node_name_en": "Food & Agriculture", "node_level": 1, "node_type": "domain", "supply_chain_pos": null, "related_commodities": ["wheat", "corn", "soybean", "sugar"], "related_countries": ["JP", "US", "BR"], "description": "食品製造・外食・農業技術を包含する最上位ドメイン（穀物市況との連動分析が目的）", "verified_flag": true, "is_active": true},
+    {"node_id": "food_manufacturer", "parent_id": "food_agri", "node_name_ja": "食品メーカー", "node_name_en": "Food Manufacturer", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "midstream", "related_commodities": ["wheat", "sugar", "palm_oil"], "related_countries": ["JP"], "description": "加工食品・調味料・製粉製油（原材料市況→価格転嫁ラグの分析対象）", "verified_flag": true, "is_active": true},
+    {"node_id": "beverage_alcohol", "parent_id": "food_agri", "node_name_ja": "飲料・酒類", "node_name_en": "Beverage & Alcohol", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "midstream", "related_commodities": ["coffee", "barley", "aluminum"], "related_countries": ["JP", "US", "EU"], "description": "清涼飲料・ビール・ウイスキー（海外展開とプレミアム化）", "verified_flag": true, "is_active": true},
+    {"node_id": "food_service", "parent_id": "food_agri", "node_name_ja": "外食", "node_name_en": "Food Service", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": ["beef", "rice"], "related_countries": ["JP", "SEA"], "description": "外食チェーン（フランチャイズ/直営・人件費と食材市況の感応）", "verified_flag": true, "is_active": true},
+    {"node_id": "agritech", "parent_id": "food_agri", "node_name_ja": "アグリテック", "node_name_en": "AgriTech", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "upstream", "related_commodities": ["fertilizer"], "related_countries": ["JP", "US", "NL"], "description": "スマート農業・植物工場・農機自動化・種苗（先行シグナル向き）", "verified_flag": true, "is_active": true},
+    {"node_id": "alternative_protein", "parent_id": "food_agri", "node_name_ja": "代替タンパク・フードテック", "node_name_en": "Alternative Protein & FoodTech", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "upstream", "related_commodities": ["soybean"], "related_countries": ["US", "JP", "SG"], "description": "植物肉・培養肉・昆虫食・精密発酵（長期先行テーマ）", "verified_flag": true, "is_active": true},
+    {"node_id": "seafood_livestock", "parent_id": "food_agri", "node_name_ja": "水産・畜産", "node_name_en": "Seafood & Livestock", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "upstream", "related_commodities": ["fishmeal", "corn"], "related_countries": ["JP", "NO", "CL"], "description": "水産（陸上養殖含む）・畜産・飼料（魚価/飼料市況連動）", "verified_flag": true, "is_active": true},
+    {"node_id": "food_wholesale", "parent_id": "food_agri", "node_name_ja": "食品卸", "node_name_en": "Food Wholesale", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "midstream", "related_commodities": [], "related_countries": ["JP"], "description": "食品卸・給食・業務用流通（薄利多売・寡占化業態）", "verified_flag": true, "is_active": true}
+  ]
+}

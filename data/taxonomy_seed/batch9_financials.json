@@ -1,0 +1,38 @@
+{
+  "_meta": {
+    "batch": 9,
+    "domains": ["financials"],
+    "taxonomy_version": "v1.0",
+    "generated_by": "claude (T-1 AI叩き台・第3次拡張=業態・全産業統合)",
+    "generated_at": "2026-07-10",
+    "status": "APPROVED_承認済み",
+    "approved_by": "健太（2026-07-10 チャット指示による承認）",
+    "approved_at": "2026-07-10",
+    "review": "承認済み。全ノードに verified_flag=true / is_active=true 付与済み",
+    "naming_rule": "lowercase snake_case。HANDOFF_2026-06-30 §4-4 準拠",
+    "anchors_included": [],
+    "note": "既存 fintech_platform(batch4) はテック業態。本batchの financials は伝統金融の業態別（金利/信用サイクル感応の分離が目的）。banking_system(batch4) との重複を避け、ここは事業体の業態を定義",
+    "schema_ref": "SPEC_db_schema.md §2-1 taxonomy.taxonomy_node"
+  },
+  "nodes": [
+    {"node_id": "financials", "parent_id": null, "node_name_ja": "金融", "node_name_en": "Financials", "node_level": 1, "node_type": "domain", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP", "US"], "description": "銀行・証券・保険・ノンバンク・運用を包含する最上位ドメイン（金利/信用サイクルで値動きが分岐する業態群）", "verified_flag": true, "is_active": true},
+
+    {"node_id": "banking", "parent_id": "financials", "node_name_ja": "銀行", "node_name_en": "Banking", "node_level": 2, "node_type": "category", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP", "US"], "description": "預貸・金利収益の業態群（金利上昇局面で利ざや改善）", "verified_flag": true, "is_active": true},
+    {"node_id": "megabank", "parent_id": "banking", "node_name_ja": "メガバンク", "node_name_en": "Megabank", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP"], "description": "総合金融グループ（国際業務・政策保有株・自社株買いのテーマ）", "verified_flag": true, "is_active": true},
+    {"node_id": "regional_bank", "parent_id": "banking", "node_name_ja": "地方銀行", "node_name_en": "Regional Bank", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP"], "description": "地銀（再編・PBR改善要請・金利感応が最も高い業態）", "verified_flag": true, "is_active": true},
+    {"node_id": "trust_bank", "parent_id": "banking", "node_name_ja": "信託銀行", "node_name_en": "Trust Bank", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP"], "description": "信託・資産管理・年金運用（フィー収益の比率が高い）", "verified_flag": true, "is_active": true},
+
+    {"node_id": "securities_brokerage", "parent_id": "financials", "node_name_ja": "証券", "node_name_en": "Securities & Brokerage", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP", "US"], "description": "証券会社・投資銀行（市場出来高・新NISA資金流入に感応）", "verified_flag": true, "is_active": true},
+    {"node_id": "asset_management", "parent_id": "financials", "node_name_ja": "資産運用", "node_name_en": "Asset Management", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP", "US"], "description": "運用会社・投信・オルタナ運用（AUM連動フィー業態）", "verified_flag": true, "is_active": true},
+
+    {"node_id": "insurance", "parent_id": "financials", "node_name_ja": "保険", "node_name_en": "Insurance", "node_level": 2, "node_type": "category", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP", "US"], "description": "生保・損保（金利=運用利回りと自然災害=保険金の二面感応）", "verified_flag": true, "is_active": true},
+    {"node_id": "life_insurance", "parent_id": "insurance", "node_name_ja": "生命保険", "node_name_en": "Life Insurance", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP"], "description": "生保（金利上昇=逆ざや解消・EV評価のテーマ）", "verified_flag": true, "is_active": true},
+    {"node_id": "property_casualty_insurance", "parent_id": "insurance", "node_name_ja": "損害保険", "node_name_en": "Property & Casualty Insurance", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP"], "description": "損保（政策保有株削減・料率改定・自然災害リスク）", "verified_flag": true, "is_active": true},
+
+    {"node_id": "nonbank_finance", "parent_id": "financials", "node_name_ja": "ノンバンク", "node_name_en": "Non-Bank Finance", "node_level": 2, "node_type": "category", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP", "US"], "description": "リース・消費者金融・クレジット（信用サイクル感応）", "verified_flag": true, "is_active": true},
+    {"node_id": "leasing", "parent_id": "nonbank_finance", "node_name_ja": "総合リース", "node_name_en": "Leasing", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP"], "description": "総合リース・事業投資（航空機・再エネ資産等の実物投資も）", "verified_flag": true, "is_active": true},
+    {"node_id": "consumer_credit", "parent_id": "nonbank_finance", "node_name_ja": "消費者金融・信販", "node_name_en": "Consumer Credit", "node_level": 3, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP"], "description": "クレジットカード・消費者ローン・BNPL（金利と与信費用）", "verified_flag": true, "is_active": true},
+
+    {"node_id": "exchange_market_infra", "parent_id": "financials", "node_name_ja": "取引所・市場インフラ", "node_name_en": "Exchange & Market Infrastructure", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP", "US"], "description": "証券取引所・清算機関・市場データ（出来高連動の高収益業態）", "verified_flag": true, "is_active": true}
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "_meta": {
+    "batch": 11,
+    "domains": ["healthcare_services", "public_social_infra", "auto_oem"],
+    "taxonomy_version": "v1.0",
+    "generated_by": "claude (T-1 AI叩き台・第3次拡張=業態・全産業統合)",
+    "generated_at": "2026-07-10",
+    "status": "APPROVED_承認済み",
+    "approved_by": "健太（2026-07-10 チャット指示による承認）",
+    "approved_at": "2026-07-10",
+    "review": "承認済み。全ノードに verified_flag=true / is_active=true 付与済み",
+    "naming_rule": "lowercase snake_case。HANDOFF_2026-06-30 §4-4 準拠",
+    "anchors_included": [],
+    "note": "batch5 bio_medical は創薬/医療機器の技術。本batchの healthcare_services は医療提供・介護・調剤の業態（診療報酬/制度感応）。auto_oem は完成車（mobility_ev部品と対の最終製品業態）。全産業カバレッジのクロージング",
+    "schema_ref": "SPEC_db_schema.md §2-1 taxonomy.taxonomy_node"
+  },
+  "nodes": [
+    {"node_id": "healthcare_services", "parent_id": null, "node_name_ja": "ヘルスケアサービス", "node_name_en": "Healthcare Services", "node_level": 1, "node_type": "domain", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP", "US"], "description": "医療提供・調剤・介護・医薬品卸を包含する最上位ドメイン（診療報酬・薬価改定=制度リスクの業態群）", "verified_flag": true, "is_active": true},
+    {"node_id": "pharmacy_dispensing", "parent_id": "healthcare_services", "node_name_ja": "調剤薬局", "node_name_en": "Dispensing Pharmacy", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP"], "description": "調剤チェーン・在宅調剤（調剤報酬改定・後発品政策感応）", "verified_flag": true, "is_active": true},
+    {"node_id": "pharma_wholesale", "parent_id": "healthcare_services", "node_name_ja": "医薬品卸", "node_name_en": "Pharmaceutical Wholesale", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "midstream", "related_commodities": [], "related_countries": ["JP"], "description": "医薬品卸（薄利・寡占・仕切価改定。cold_chainと交差）", "verified_flag": true, "is_active": true},
+    {"node_id": "nursing_care", "parent_id": "healthcare_services", "node_name_ja": "介護・高齢者サービス", "node_name_en": "Nursing Care", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP"], "description": "介護施設・在宅介護・介護DX（介護報酬・人手不足の構造成長）", "verified_flag": true, "is_active": true},
+    {"node_id": "hospital_clinic_operator", "parent_id": "healthcare_services", "node_name_ja": "医療機関運営・受託", "node_name_en": "Hospital & Clinic Operator", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP", "US"], "description": "健診・クリニック運営・検査受託・医療事務受託", "verified_flag": true, "is_active": true},
+    {"node_id": "generic_drug", "parent_id": "healthcare_services", "node_name_ja": "後発医薬品", "node_name_en": "Generic Drug", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "midstream", "related_commodities": [], "related_countries": ["JP", "IN"], "description": "ジェネリック製造（供給問題・薬価・再編テーマ）", "verified_flag": true, "is_active": true},
+
+    {"node_id": "public_social_infra", "parent_id": null, "node_name_ja": "公益・社会インフラ", "node_name_en": "Public & Social Infrastructure", "node_level": 1, "node_type": "domain", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP"], "description": "水道・環境・廃棄物・通信キャリアを包含する最上位ドメイン（規制産業・ディフェンシブ）", "verified_flag": true, "is_active": true},
+    {"node_id": "water_utility", "parent_id": "public_social_infra", "node_name_ja": "水道・水処理", "node_name_en": "Water Utility & Treatment", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP"], "description": "上下水道・水処理膜・海水淡水化（インフラ老朽化・水ビジネス）", "verified_flag": true, "is_active": true},
+    {"node_id": "waste_recycling", "parent_id": "public_social_infra", "node_name_ja": "廃棄物・環境サービス", "node_name_en": "Waste & Environmental Services", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP"], "description": "産業廃棄物・リサイクル・環境浄化（サーキュラーエコノミー）", "verified_flag": true, "is_active": true},
+    {"node_id": "telecom_carrier", "parent_id": "public_social_infra", "node_name_ja": "通信キャリア", "node_name_en": "Telecom Carrier", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP"], "description": "移動体/固定通信事業者（高配当ディフェンシブ・非通信事業拡大。communicationsの設備側と対）", "verified_flag": true, "is_active": true},
+    {"node_id": "broadcasting", "parent_id": "public_social_infra", "node_name_ja": "放送", "node_name_en": "Broadcasting", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP"], "description": "地上波・BS・CATV（不動産含み資産・配信移行のテーマ）", "verified_flag": true, "is_active": true},
+
+    {"node_id": "auto_oem", "parent_id": null, "node_name_ja": "自動車・完成車", "node_name_en": "Automobile OEM", "node_level": 1, "node_type": "domain", "supply_chain_pos": "downstream", "related_commodities": ["steel", "aluminum"], "related_countries": ["JP", "US", "DE"], "description": "完成車・二輪・部品Tier1を包含する最上位ドメイン（為替感応の最大業態・mobility_evの部品群と対をなす最終製品）", "verified_flag": true, "is_active": true},
+    {"node_id": "passenger_vehicle_oem", "parent_id": "auto_oem", "node_name_ja": "乗用車メーカー", "node_name_en": "Passenger Vehicle OEM", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": ["steel"], "related_countries": ["JP", "US", "DE"], "description": "乗用車完成車（為替・北米/中国販売・EV転換速度がドライバー）", "verified_flag": true, "is_active": true},
+    {"node_id": "motorcycle_oem", "parent_id": "auto_oem", "node_name_ja": "二輪車メーカー", "node_name_en": "Motorcycle OEM", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": [], "related_countries": ["JP", "IN", "SEA"], "description": "二輪（新興国需要・電動化。日本勢が世界寡占）", "verified_flag": true, "is_active": true},
+    {"node_id": "auto_parts_tier1", "parent_id": "auto_oem", "node_name_ja": "自動車部品(Tier1)", "node_name_en": "Auto Parts Tier1", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "midstream", "related_commodities": ["steel", "aluminum"], "related_countries": ["JP", "DE"], "description": "総合部品サプライヤー（内燃機関依存度とEV/SDVシフトの明暗）", "verified_flag": true, "is_active": true},
+    {"node_id": "commercial_vehicle", "parent_id": "auto_oem", "node_name_ja": "商用車・トラックメーカー", "node_name_en": "Commercial Vehicle", "node_level": 2, "node_type": "leaf", "supply_chain_pos": "downstream", "related_commodities": ["steel"], "related_countries": ["JP", "DE"], "description": "大型トラック・バス（物流需要・水素/EV商用化・再編）", "verified_flag": true, "is_active": true}
+  ]
+}
