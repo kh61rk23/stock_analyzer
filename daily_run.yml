@@ -1,0 +1,451 @@
+# ==============================================================
+# .github/workflows/daily_run.yml  (5-C)
+# GitHub Actions 自律実行ワークフロー
+# ==============================================================
+# 【スケジュール】
+#   デイリー : 毎日 06:00 JST (= UTC 21:00 前日)  cron "0 21 * * *"
+#   ウィークリー: 毎週月曜 06:00 JST に自動切替
+#       └ デイリー cron は毎日 UTC 21:00 に発火する。日曜 UTC 21:00 = 月曜 06:00 JST
+#         であり、その回を "Set execution mode" が UTC 日曜(=月曜 JST)と判定して
+#         weekly モードへ自動昇格する。専用 cron は不要（重複起動を避けるため）。
+#
+# 【手動実行】
+#   GitHub の Actions タブ → "Run workflow" でも実行可能
+#   mode を daily / weekly / all から選択できる
+#
+# 【必要な GitHub Secrets 設定箇所】
+#   リポジトリ Settings > Secrets and variables > Actions > New repository secret
+#   ─────────────────────────────────────────────────────
+#   ALERT_GMAIL_FROM      送信元 Gmail アドレス
+#   ALERT_GMAIL_PASSWORD  Gmail App Password（16桁）
+#   ALERT_GMAIL_TO        送信先アドレス（同じアドレスでも可）
+#   ALERT_LINE_TOKEN      LINE Messaging API チャネルアクセストークン（任意）
+#   ALERT_LINE_USER_ID    通知先 LINE ユーザーID（任意）
+#   EDINET_API_KEY        EDINET API キー（任意）
+#   POLICY_FRED_API_KEY   FRED API キー（任意）
+#   BQ_PROJECT_ID         BigQuery プロジェクト ID
+#   BQ_CREDENTIALS        BigQuery サービスアカウント JSON（文字列）
+#   ANTHROPIC_API_KEY     Claude API キー（任意）
+#   GOOGLE_CSE_API_KEY    Google Custom Search API キー（任意）
+#   GOOGLE_CSE_ID         Google CSE ID（任意）
+#   GDRIVE_DASHBOARD_FILE_ID  ダッシュボード CSV の GDrive ファイル ID
+#   GOOGLE_OAUTH_*        Google Drive OAuth 認証（3種）
+#   GOOGLE_DRIVE_FOLDER_ID    GDrive バックアップ先フォルダ ID
+#   ESTAT_API_KEY         e-Stat API キー（任意）
+#   EDINETDB_API_KEY      EdinetDB API キー（任意）
+#   DEEPL_API_KEY         DeepL API キー（任意）
+#   SEC_USER_AGENT        SEC EDGAR User-Agent（例: MyApp/1.0 your@email.com）
+#                         ※ institutional_13f_monitor.py が参照（任意・未設定時はデフォルト値使用）
+# ==============================================================
+
+name: 📊 Stock Analyzer 自律実行
+
+on:
+  # ── デイリー: 毎日 06:00 JST ──────────────────────────────
+  #   日本は DST がないため UTC+9 固定。UTC 21:00 = 翌日 JST 06:00。
+  #   月曜 JST（= 日曜 UTC）の回は "Set execution mode" が weekly に昇格する。
+  schedule:
+    - cron: "0 21 * * *"      # UTC 21:00 = JST 06:00（毎日）
+
+  # ── 手動実行 ──────────────────────────────────────────────
+  # 実行モードは四種類ある。
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "実行モード"
+        required: true
+        default: "daily"
+        type: choice
+        options:
+          - daily
+          - weekly
+          - all
+          - single 
+      module:             # ← 以下全行を追加
+        description: "単体テスト対象モジュール（mode=single の時のみ有効）"
+        required: false
+        default: ""
+        type: string
+
+# 同時実行を防止（前回が終わっていない場合はキャンセル）
+concurrency:
+  group: stock-analyzer
+  cancel-in-progress: false
+  
+permissions:
+  contents: write   # git push を許可
+
+jobs:
+  run-analyzer:
+    name: 📈 アナライザー実行
+    runs-on: ubuntu-latest
+    timeout-minutes: 180   # タイムアウト 180分
+    env:
+      TZ: Asia/Tokyo
+      BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+    # BQ_CREDENTIALSは各stepで個別指定（JSONをそのままenvに渡すため）
+    steps:
+      # ── 1. リポジトリのチェックアウト ─────────────────────
+      - name: 📥 Checkout
+        uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}   # 書き込み用トークン
+
+      # ── 2. Python セットアップ ────────────────────────────
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      # ── 3. 依存パッケージインストール ─────────────────────
+      - name: 📦 Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── 3-A. 実行モード決定 ───────────────────────────────
+      #   手動実行       → inputs.mode を使用（daily / weekly / all / single）
+      #   スケジュール実行 → UTC 日曜（= 月曜 JST）なら weekly、それ以外は daily
+      #   ※ 後続の週次専用ステップ（13F・text_extractor）がこの出力を参照するため、
+      #     それらより前に実行する必要がある。
+      - name: 🎯 Set execution mode
+        id: set-mode
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            MODE="${{ github.event.inputs.mode }}"
+          elif [ "$(date -u +%u)" = "7" ]; then
+            # 日曜 UTC = 月曜 JST → weekly
+            MODE="weekly"
+          else
+            MODE="daily"
+          fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "▶ 実行モード: $MODE"
+
+      # ── 3-B. EDINET インデックス更新 (追加箇所) ──────────────
+      - name: Run EDINET doc indexer
+        env:
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+        run: |
+          python edinet_doc_indexer.py
+      # ── 3-B3. Wave 6 - U-4: 機関投資家 13F 監視（四半期提出期間のみ）──
+      - name: 🏦 Run institutional 13F monitor (quarterly filing period only)
+        if: steps.set-mode.outputs.mode == 'weekly'
+        env:
+          BQ_CREDENTIALS:  ${{ secrets.BQ_CREDENTIALS }}
+          BQ_PROJECT_ID:   ${{ secrets.BQ_PROJECT_ID }}
+          SEC_USER_AGENT:  ${{ secrets.SEC_USER_AGENT }}
+        run: |
+          python - <<'EOF'
+          import importlib.util, sys, pathlib, os
+
+          cfg_path = pathlib.Path("config.py")
+          spec = importlib.util.spec_from_file_location("config", cfg_path)
+          cfg  = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(cfg)
+
+          # SEC User-Agent を環境変数から上書き（設定済みの場合）
+          _ua = os.environ.get("SEC_USER_AGENT", "")
+          if _ua:
+              cfg.SEC_USER_AGENT = _ua
+
+          # 四半期提出期間外はスキップ（institutional_13f_monitor 内部でも判定するが
+          # CI コスト削減のため yml 側でも事前に判定する）
+          from datetime import datetime
+          _now = datetime.now()
+          _qm  = getattr(cfg, "INSTITUTIONAL_QUARTER_MONTHS",   (1, 4, 7, 10))
+          _qd  = getattr(cfg, "INSTITUTIONAL_QUARTER_DAY_FROM",  15)
+          if _now.month not in _qm or _now.day < _qd:
+              print(f"⏩ 13F: 提出期間外（{_now.month}月{_now.day}日）→ スキップ")
+              sys.exit(0)
+
+          sys.path.insert(0, str(pathlib.Path(".")))
+          from institutional_13f_monitor import run_institutional_13f_monitor
+          result = run_institutional_13f_monitor(cfg, {})
+          if result.get("skipped"):
+              print("⏩ 13F モニター: スキップ")
+          else:
+              print(
+                  f"✅ 13F 完了: 変化{len(result.get('all_changes', []))}件 / "
+                  f"BQ格納{result.get('bq_rows', 0)}件"
+              )
+          EOF
+      # ── 3-B2. Wave 5 - E4: テキストシグナル抽出（週次のみ・50社上限）──
+      # 追加不要（3-B3との共存は if 条件が同一のため問題なし。並列ではなく直列実行のため順序に依存性なし）
+      - name: 📝 Run text extractor (weekly, first-run limit 50)
+        if: steps.set-mode.outputs.mode == 'weekly'
+        env:
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+          BQ_PROJECT_ID:  ${{ secrets.BQ_PROJECT_ID }}
+          EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
+          EDINETDB_API_KEY: ${{ secrets.EDINETDB_API_KEY }}
+          STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
+        run: |
+          python - <<'EOF'
+          import importlib.util, sys, pathlib
+
+          # config ロード
+          cfg_path = pathlib.Path("config.py")
+          if not cfg_path.exists():
+              print("ERROR: config.py not found"); sys.exit(1)
+          spec = importlib.util.spec_from_file_location("config", cfg_path)
+          cfg  = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(cfg)
+
+          # 初回実行ガードレール: 最大50社
+          import os
+          cfg.ENABLE_TEXT_SIGNAL           = True
+          cfg.TEXT_SIGNAL_FIRST_RUN_LIMIT  = int(os.environ.get("TEXT_SIGNAL_LIMIT", "50"))
+
+          # text_extractor バッチ実行
+          sys.path.insert(0, str(pathlib.Path(__file__).parent if hasattr(__file__, '__file__') else pathlib.Path(".")))
+          from text_extractor import batch_extract_sections
+
+          # 対象銘柄リストを config.SECTORS から収集
+          codes = []
+          for sec in getattr(cfg, "SECTORS", {}).values():
+              for ticker in sec.get("tickers", []):
+                  codes.append(str(ticker))
+
+          if not codes:
+              print("⚠️  対象銘柄リストが空のためスキップ")
+              sys.exit(0)
+
+          sections_map = batch_extract_sections(cfg, codes)
+          print(f"✅ text_extractor 完了: {len(sections_map)}社")
+
+          # text_signal バッチ計算
+          from finbert_analyzer import analyze_sections
+          from text_signal import batch_calc_text_risk_bonus
+
+          analysis_map = {}
+          for code, sec_dict in sections_map.items():
+              try:
+                  result = analyze_sections(sec_dict, nlp=None, cfg=cfg)
+                  if result:
+                      analysis_map[code] = result
+              except Exception as e:
+                  print(f"  ⚠️  analyze_sections失敗 ({code}): {e}")
+
+          bonus_map = batch_calc_text_risk_bonus(
+              cfg              = cfg,
+              analysis_results = analysis_map,
+              prev_results     = None,
+              sections_by_code = sections_map,
+          )
+          nonzero = sum(1 for v in bonus_map.values() if v != 0.0)
+          print(f"✅ text_signal 完了: {nonzero}/{len(bonus_map)}社でリスク検出")
+          EOF
+      # ── 3-C. EDINET インデックス追加更新 (追加箇所) ──────────────      
+      - name: Run EDINET direct fetcher (optional bootstrap)
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'all'
+        env:
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+          BQ_PROJECT_ID:  ${{ secrets.BQ_PROJECT_ID }}
+        run: |
+          python edinet_direct_fetcher.py --limit 33
+      # ── 5. アナライザー実行 ───────────────────────────────
+      # github actionsのAPIキーやファイルパスをそれぞれ定義している。
+      # シングルモードの時は指定モジュールを実行。そうでないときはrun_headless.pyから参照する。
+      - name: 🚀 Run analyzer
+        env:
+          STOCK_ANALYZER_MODE:  ${{ steps.set-mode.outputs.mode }}
+          STOCK_ANALYZER_BASE:  ${{ github.workspace }}/stock_data
+          BQ_CREDENTIALS:       ${{ secrets.BQ_CREDENTIALS }}
+          BQ_PROJECT_ID:        ${{ secrets.BQ_PROJECT_ID }}
+          ALERT_GMAIL_FROM:     ${{ secrets.ALERT_GMAIL_FROM }}
+          ALERT_GMAIL_PASSWORD: ${{ secrets.ALERT_GMAIL_PASSWORD }}
+          ALERT_GMAIL_TO:       ${{ secrets.ALERT_GMAIL_TO }}
+          ALERT_LINE_TOKEN:     ${{ secrets.ALERT_LINE_TOKEN }}
+          ALERT_LINE_USER_ID:   ${{ secrets.ALERT_LINE_USER_ID }}
+          EDINET_API_KEY:       ${{ secrets.EDINET_API_KEY }}
+          POLICY_FRED_API_KEY:  ${{ secrets.POLICY_FRED_API_KEY }}
+          ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_CSE_API_KEY:   ${{ secrets.GOOGLE_CSE_API_KEY }}
+          GOOGLE_CSE_ID:        ${{ secrets.GOOGLE_CSE_ID }}
+          GDRIVE_DASHBOARD_FILE_ID:   ${{ secrets.GDRIVE_DASHBOARD_FILE_ID }}
+          GOOGLE_OAUTH_CLIENT_ID:     ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          GOOGLE_DRIVE_FOLDER_ID:     ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+          ESTAT_API_KEY:              ${{ secrets.ESTAT_API_KEY }}
+          EDINETDB_API_KEY:           ${{ secrets.EDINETDB_API_KEY }}
+          DEEPL_API_KEY:              ${{ secrets.DEEPL_API_KEY }}
+          NOTION_API_KEY:             ${{ secrets.NOTION_API_KEY }}  # 2026-06-10 ハードコード廃止に伴い追加
+          CONGRESS_API_KEY:           ${{ secrets.CONGRESS_API_KEY }}  # 2026-06-10 congress_monitor配線復元に伴い追加
+          SINGLE_MODULE:              ${{ github.event.inputs.module }}
+        run: |
+          if [ "${{ github.event.inputs.mode }}" = "single" ]; then
+            SINGLE_MODULE="${{ github.event.inputs.module }}" \
+              python -u run_headless.py --mode all 2>&1
+          else
+            python -u run_headless.py --mode ${{ steps.set-mode.outputs.mode }} 2>&1
+          fi
+      # ── 5-B. ダッシュボードCSVと.iqyをリポジトリにコミット ───────
+      - name: 📊 Commit dashboard files
+        if: always()
+        run: |
+          CSV="stock_data/data/dashboard/dashboard_latest.csv"
+          IQY="stock_data/data/dashboard/dashboard.iqy"
+
+          if [ -f "$CSV" ]; then
+            GDRIVE_FILE_ID="${{ secrets.GDRIVE_DASHBOARD_FILE_ID }}"
+            RAW_URL="https://drive.google.com/uc?export=download&id=${GDRIVE_FILE_ID}"
+            printf 'WEB\n1\n%s\n\nSelection=EntireDocument\nFormatting=None\nPreFormattedTextToColumns=True\nConsecutiveDelimitersAsOne=True\nSingleBlockTextImport=False\nDisableDateRecognition=False\nDisableRedirections=False\n' "${RAW_URL}" > "$IQY"
+
+            git config user.name  "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add stock_data/data/dashboard/ || true
+            git add stock_data/data/score_history.json || true
+            git add stock_data/data/screener_history.json || true
+            git add stock_data/data/performance_history.json || true
+            git add stock_data/data/fed_calendar_cache.json || true
+            git add stock_data/data/edinet_db/ || true
+            git add stock_data/data/edinet_cache/ || true
+            git add stock_data/data/biz_summary_cache/ || true
+            git add stock_data/data/imf_cache.json || true
+            git add stock_data/insights/ideas/evaluations.json || true
+            git add stock_data/logs/ || true
+            git add stock_data/data/earnings_surprise_cache.json || true
+            git add stock_data/data/multi_currency_cache.json || true
+            git add stock_data/data/portfolio_holdings.csv || true
+            git add stock_data/data/dashboard/correlation_heatmap.csv || true
+            git add stock_data/data/dashboard/correlation_high_pairs.csv || true
+            git add stock_data/data/correlation_latest.json || true
+            git add stock_data/data/dashboard/position_sizing_*.csv || true
+            git add stock_data/data/credit_data_cache.json || true
+            git add stock_data/data/market_breadth_cache.json || true
+            git add stock_data/data/technical_scorer_cache.json || true
+            git add stock_data/data/insider_monitor_cache.json || true
+            git add stock_data/data/dividend_calendar_cache.json || true
+            git add stock_data/data/anomaly_season_cache.json || true
+            git add stock_data/data/options_monitor_cache.json || true
+            git add stock_data/data/support_resistance_cache.json || true
+            git add stock_data/data/volume_profile_cache.json || true
+            git add stock_data/data/rule_weights.json || true
+            git add stock_data/data/jp_us_bridge_cache.json || true
+            git add stock_data/data/edinet_quality_cache.json || true
+            git add stock_data/data/backtest_results.json || true
+            git add stock_data/data/comps_analyzer_cache.json || true
+            git add stock_data/insights/screener/detail_latest/ || true
+            git add stock_data/data/performance_log.json || true
+            git add stock_data/data/screener_sector_heatmap_cache.json || true
+            git add "stock_data/insights/screener/backtest_*.md" || true
+            git add stock_data/data/portfolio_optimizer_cache.json || true
+            git add "stock_data/insights/screener/dcf_*.md" || true
+            git add stock_data/data/cycle_phase_history.json || true
+            git add stock_data/data/rule_weights.json || true
+            git add stock_data/data/cross_sector_signal_history.json || true # R-1 履歴保存実装後に有効化
+            git add stock_data/data/us_fundamentals_db/ || true
+            git add stock_data/data/us_cik_mapping.json || true
+            git add stock_data/data/tdnet_notified.json || true
+            git add stock_data/data/investment_journal.json || true
+            git add stock_data/data/score_drift_log.json || true
+            git add stock_data/data/shareholder_history.json || true
+            git add stock_data/data/score_drift_log.json || true
+            git add stock_data/data/ceo_scores.json || true
+            git add stock_data/data/macro_snapshot_prev.json || true
+            git add stock_data/data/signal_history.json || true
+            git add stock_data/data/alpha_attribution.json || true
+            git add stock_data/data/midterm_plans.json || true
+            git add stock_data/data/ic_tracker.json || true
+            git add stock_data/data/longterm_scenario_latest.json || true
+            git add stock_data/data/regime_state.json || true
+            git add stock_data/data/hmm_model_state.json || true
+            git add stock_data/data/trends_cache.json || true
+            git add stock_data/data/ml_feature_importance.json || true
+            git add stock_data/data/ml_corrections_latest.json || true
+            git add stock_data/data/sentiment_cache.json || true
+            git add stock_data/data/policy_radar_cache.json || true
+            git add stock_data/data/us_fundamentals_meta.json || true
+            git add stock_data/data/us_cik_map.json || true
+            git add stock_data/data/us_macro_cache.json || true
+            git add stock_data/data/us_8k_cache.json || true
+            git add stock_data/data/cross_sector_signal_history.json || true
+            git add stock_data/data/us_sector_mapping.json || true
+            git add stock_data/data/crowding_history.json || true
+            git add stock_data/data/jp_us_sector_corr_cache.json || true
+            git add stock_data/data/sector_rotation_cache.json || true
+            git add stock_data/data/citation_cache.json || true
+            git add stock_data/data/pearl_candidates.json || true
+            git add stock_data/data/pearl_history.json || true
+            git add stock_data/data/direction_momentum.json || true
+            git add stock_data/data/smart_money_trail.json || true
+            git add stock_data/data/size_tier_master.json || true
+            git add stock_data/data/edinet.policy_support || true
+            git add stock_data/cache/politician_history.json || true
+            git add stock_data/cache/event_cache.json || true
+            git add stock_data/cache/pead_candidates.json || true
+            git add stock_data/cache/latent_pearl_cache.json || true
+            git add stock_data/cache/deep_dive_history.json || true
+            git add stock_data/cache/nedo_cache.json || true
+            git add stock_data/cache/policy_medium_cache.json || true
+            git add stock_data/cache/congress/ || true
+            git add stock_data/cache/institutional/ || true
+            git add stock_data/cache/hiring/ || true
+            git add stock_data/cache/executive/ || true
+            git add stock_data/cache/facility/ || true
+            git add stock_data/cache/segment/ || true
+            git add stock_data/data/dcf_valuation_cache.json || true
+            # ── Wave 2 - Size Ph2 キャッシュ ──────────────────────────
+            git add stock_data/cache/size_decay_state.json || true
+            git add stock_data/cache/nano_evaluation_queue.json || true
+            git add stock_data/cache/size_composite_scores.json || true
+            # ── Wave 2 - FE-4 Ignition Detector キャッシュ ────────────
+            git add stock_data/cache/ignition_alerts.json || true
+            git add stock_data/cache/ignition_history.json || true
+            # ── Wave 5 - E4 テキストシグナルキャッシュ ────────────
+            git add stock_data/cache/text_signal_cache.json || true
+            git add stock_data/cache/text_extractor/ || true
+            # ── Wave 5 - Idea3-P3 policy_radar 文意判定キャッシュ ──
+            git add stock_data/cache/policy_radar_cache.json || true
+            # ── Wave 7: 新規キャッシュファイル ────────────────────
+            git add stock_data/cache/standardization_cache.json || true
+            git add stock_data/cache/academic_conf_cache.json || true
+            git add stock_data/cache/midterm_plan_cache.json || true
+            git add stock_data/cache/size_decay_state.json || true
+            git add stock_data/cache/nano_evaluation_queue.json || true
+            git add stock_data/cache/cross_size_signal_cache.json || true
+            git add stock_data/cache/independence_scores.json || true
+            git add stock_data/cache/latent_pearl_cache.json || true
+            git add stock_data/cache/pearl_backtest_log.json || true
+            # ── Wave R0〜R5: 状態ファイル永続化（2026-07-12追加）──────
+            # これらは日次で蓄積・更新される「状態」。永続化しないと毎朝リセットされ
+            # 蓄積(ML特徴量/S2口座/DD peak/hotnessベースライン/繰越キュー)が始まらない。
+            git add stock_data/data/edinet_retry_queue.json || true
+            git add stock_data/data/exit_engine_baseline.json || true
+            git add stock_data/data/dd_state.json || true
+            git add stock_data/paper/ || true
+            git add stock_data/cache/taxonomy/ || true
+            git add stock_data/data/ml_dataset/ || true
+            git diff --cached --quiet || git commit -m "auto: daily update $(date '+%Y-%m-%d')"
+            git pull --rebase origin main || true
+            git push || true
+            echo "✅ dashboard_latest.csv + dashboard.iqy をコミットしました"
+            echo "   URL: ${RAW_URL}"
+          else
+            echo "⏩ dashboard_latest.csv が存在しないためスキップ"
+          fi
+
+      # ── 6. 結果を Artifacts として保存（7日間保持）──────
+      - name: 📁 Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: analyzer-results-${{ github.run_number }}
+          path: |
+            stock_data/insights/
+            stock_data/logs/
+          retention-days: 7
+
+      # ── 7. 失敗時のサマリー出力 ───────────────────────────
+      - name: 📋 Output summary
+        if: always()
+        run: |
+          echo "## 📊 Stock Analyzer 実行結果" >> $GITHUB_STEP_SUMMARY
+          echo "- **モード**: ${{ steps.set-mode.outputs.mode }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **実行日時**: $(date -u '+%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
+          if [ -d "stock_data/insights" ]; then
+            FILE_COUNT=$(find stock_data/insights -name "*.md" | wc -l)
+            echo "- **生成レポート数**: ${FILE_COUNT} ファイル" >> $GITHUB_STEP_SUMMARY
+          fi
