@@ -122,11 +122,58 @@ class EDINETBQClient:
         as_of_date: str = None
     ) -> list[dict]:
         """
+        企業（または業種）の taxonomy ノード関与度を返す。
+        [Wave R2-4 / T-3] 2026-07-10 空スタブを実装。
+
+        優先順位（同一node_idに複数層がある場合）:
+          verified_flag=TRUE > confidence_type='edinet'（T-2A・企業レベル）
+          > 'cluster_derived'（T-2C・業種レベル叩き台）
+        企業コードで見つからない場合は sector擬似企業ID
+        （"sector:{market}:{code}"・T-2Cの規約）でフォールバック検索する。
+
         Returns: [
-            {"node_id": "sensor", "score": 0.6,
-            "confidence_type": "estimated", "taxonomy_share": 0.3},
-        ]
+            {"node_id": "semiconductor_logic", "score": 0.6,
+             "confidence_type": "edinet", "taxonomy_share": 0.3},
+        ]（失敗・データなしは []）
         """
+        try:
+            code = str(company_code).replace("'", "")
+            mkt = str(market).replace("'", "")
+            date_cond = ""
+            if as_of_date:
+                date_cond = f"AND valid_from <= '{str(as_of_date)[:10]}'"
+            sql = f"""
+            SELECT node_id,
+                   relevance_score       AS score,
+                   confidence_type,
+                   revenue_share_est     AS taxonomy_share
+            FROM `{self.project}.taxonomy.company_taxonomy_map`
+            WHERE company_id IN ('{code}', 'sector:{mkt}:{code}')
+              {date_cond}
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY node_id
+                ORDER BY
+                  CASE WHEN verified_flag THEN 0
+                       WHEN confidence_type = 'edinet' THEN 1
+                       ELSE 2 END,
+                  updated_at DESC
+            ) = 1
+            ORDER BY score DESC
+            """
+            df = self.query_to_df(sql)
+            return [
+                {"node_id": str(r["node_id"]),
+                 "score": float(r["score"]) if r["score"] == r["score"] else 0.0,
+                 "confidence_type": str(r["confidence_type"]),
+                 "taxonomy_share": (float(r["taxonomy_share"])
+                                    if r["taxonomy_share"] == r["taxonomy_share"]
+                                    else 0.0)}
+                for _, r in df.iterrows()
+            ]
+        except Exception as e:
+            print(f"[BQClient] get_company_taxonomy_scores失敗 "
+                  f"({company_code}): {str(e)[:80]}")
+            return []
 
     def get_segment_finance(
         self,
