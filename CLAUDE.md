@@ -1,8 +1,10 @@
 # stock_analyzer — AIエージェント保守手順書（AGENT-1）
 
 このリポジトリで Claude Code 等のAIエージェントが作業する際の標準手順。
-設計の正本は `../統合ファイルなど/01_最新版ロードマップ・必要書類/`
+設計の正本は `../統合ファイルなど/02_ファイル構成/`
 （SPEC_core.md / SPEC_db_schema.md / SPEC_investment_dept.md / MODULE_INDEX.md）。
+進捗管理・引き継ぎ資料は `../統合ファイルなど/01_最新版ロードマップ・必要書類/`
+（CHANGELOG.md / TODO_LIST.md / SESSION_PACKET.md 等）。
 
 ## 絶対禁止
 
