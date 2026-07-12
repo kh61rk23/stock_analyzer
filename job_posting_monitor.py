@@ -531,6 +531,30 @@ def run_job_posting_monitor(cfg, results: dict) -> dict:
     }
     _save_cache(cfg, new_cache)
 
+    # ── BQ格納（Wave R0-2 / SPEC_db_schema.md §6-2）─────────────
+    # ローカルキャッシュが正本・BQ失敗でも処理は継続（try/except）。
+    if bool(getattr(cfg, "ENABLE_US_BQ_EXPORT", True)):
+        try:
+            from edinet_bq_client import insert_rows
+            _today = datetime.now().strftime("%Y-%m-%d")
+            _rows = []
+            for _cat, _cnt in (curr_counts or {}).items():
+                _prev = prev_counts.get(_cat) if isinstance(prev_counts, dict) else None
+                _rows.append({
+                    "signal_date":       _today,
+                    "category":          str(_cat),
+                    "keyword_count":     int(_cnt or 0),
+                    "prev_count":        int(_prev or 0),
+                    "surge_detected":    _cat in (surge_cats or []),
+                    "surge_ratio":       (float(_cnt) / float(_prev)) if _prev else None,
+                    "sector_boost_json": json.dumps(sector_boosts or {}, ensure_ascii=False),
+                    "updated_at":        datetime.now().isoformat(),
+                })
+            if _rows and insert_rows(rows=_rows, table_ref="us.job_signal_cache"):
+                print(f"    ☁️  [job_posting] BQ格納 {len(_rows)}行 (us.job_signal_cache)")
+        except Exception as _bqe:
+            print(f"    ⚠️  [job_posting] BQ格納スキップ: {str(_bqe)[:60]}")
+
     elapsed = (datetime.now() - t0).seconds
     print(
         f"\n  ✅ [job_posting] 完了 ({elapsed}秒): "
