@@ -3854,6 +3854,115 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ 異常検知: スキップ（ENABLE_ANOMALY_DETECTOR=False）")
         
+    # ── 出口戦略エンジン（Wave R0-6 / E1）──────────────────────
+    # 投資哲学の売却ルールを日次評価 → 接近/発火アラート＋注文票生成。
+    # 発注は健太が手動（D-01）。アラート通知より前に実行し
+    # results["exit_alerts"] を alert_notifier のブリーフに載せる。
+    if getattr(cfg, "ENABLE_EXIT_ENGINE", False):
+        try:
+            _ex = _load_local_module(
+                "exit_rule_engine",
+                "/content/exit_rule_engine.py",
+                cfg.DRIVE_BASE / "exit_rule_engine.py",
+            )
+            if _ex:
+                ex_result = _ex.run_exit_rule_engine(cfg, results)
+                results["exit_alerts"] = ex_result
+                _fires = [a for a in ex_result.get("alerts", [])
+                          if a.get("level") == "fire"]
+                logger.add("exit_rule_engine", "success",
+                           f"監視:{ex_result.get('checked',0)}銘柄 "
+                           f"発火:{len(_fires)}件 "
+                           f"注文票:{len(ex_result.get('tickets',[]))}件")
+            else:
+                print("  ⚠️  exit_rule_engine.py が見つかりません")
+                logger.add("exit_rule_engine", "warn", "exit_rule_engine.py not found")
+        except Exception as e:
+            logger.add("exit_rule_engine", "error", str(e)[:100])
+            print(f"  ⚠️  出口戦略エンジンエラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ 出口戦略エンジン: スキップ（ENABLE_EXIT_ENGINE=False）")
+
+    # ── データ鮮度SLA検査（Wave R0-1 / E7'）────────────────────
+    if getattr(cfg, "ENABLE_DATA_SLA", False):
+        try:
+            _dr = _load_local_module(
+                "data_reliability",
+                "/content/data_reliability.py",
+                cfg.DRIVE_BASE / "data_reliability.py",
+            )
+            if _dr:
+                sla_report = _dr.run_data_sla_check(cfg, results)
+                results["data_sla_report"] = sla_report
+                _vc = sla_report.get("violation_count", 0)
+                logger.add("data_sla_check",
+                           "success" if _vc == 0 else "warn",
+                           f"SLA違反:{_vc}件 / 検査:{sla_report.get('checked',0)}対象")
+            else:
+                print("  ⚠️  data_reliability.py が見つかりません")
+                logger.add("data_sla_check", "warn", "data_reliability.py not found")
+        except Exception as e:
+            logger.add("data_sla_check", "error", str(e)[:100])
+            print(f"  ⚠️  SLA検査エラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ 鮮度SLA検査: スキップ（ENABLE_DATA_SLA=False）")
+
+    # ── ドローダウン制御（Wave R3-3 / E9）──────────────────────
+    # ポートフォリオ投資部分のDDでNORMAL/CAUTION/DEFENSEを遷移。
+    # 売却強制なし（推奨のみ=D-01）。results["dd_state"]をブリーフ⑤へ。
+    if getattr(cfg, "ENABLE_DD_CONTROL", False):
+        try:
+            _dd = _load_local_module(
+                "dd_controller",
+                "/content/dd_controller.py",
+                cfg.DRIVE_BASE / "dd_controller.py",
+            )
+            if _dd:
+                dd_result = _dd.run_dd_controller(cfg, results)
+                results["dd_state"] = dd_result
+                if not dd_result.get("skipped"):
+                    logger.add("dd_controller", "success",
+                               f"{dd_result.get('state','?')} "
+                               f"dd={dd_result.get('dd',0):.1%} "
+                               f"{'★遷移' if dd_result.get('transitioned') else ''}")
+            else:
+                print("  ⚠️  dd_controller.py が見つかりません")
+                logger.add("dd_controller", "warn", "dd_controller.py not found")
+        except Exception as e:
+            logger.add("dd_controller", "error", str(e)[:100])
+            print(f"  ⚠️  DD制御エラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ DD制御: スキップ（ENABLE_DD_CONTROL=False）")
+
+    # ── ペーパートレード仮想口座（Wave R1-2 / S2）───────────────
+    # 前日注文を当日始値で仮想約定 → equity更新 → 翌日注文生成。
+    # 実発注は存在しない（D-01）。results["paper_summary"] を
+    # alert_notifier のブリーフ⑥に載せるため通知より前に実行。
+    if getattr(cfg, "ENABLE_PAPER_TRADING", False):
+        try:
+            _pb = _load_local_module(
+                "paper_broker",
+                "/content/paper/paper_broker.py",
+                cfg.DRIVE_BASE / "paper" / "paper_broker.py",
+            )
+            if _pb:
+                pb_result = _pb.run_paper_trading(cfg, results)
+                results["paper_summary"] = pb_result
+                _pb_accounts = [v for v in pb_result.values()
+                                if isinstance(v, dict)]
+                logger.add("paper_broker", "success",
+                           f"戦略:{len(_pb_accounts)}口座 "
+                           f"約定:{sum(v.get('fills', 0) for v in _pb_accounts)}件 "
+                           f"新規注文:{sum(v.get('new_orders', 0) for v in _pb_accounts)}件")
+            else:
+                print("  ⚠️  paper/paper_broker.py が見つかりません")
+                logger.add("paper_broker", "warn", "paper_broker.py not found")
+        except Exception as e:
+            logger.add("paper_broker", "error", str(e)[:100])
+            print(f"  ⚠️  ペーパートレードエラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ ペーパートレード: スキップ（ENABLE_PAPER_TRADING=False）")
+
     # ── アラート通知（5-B 追加）────────────────────────────────
     if getattr(cfg, "ENABLE_ALERT", False):
         try:
@@ -4836,6 +4945,34 @@ def run_all_tasks(mode: str = "all") -> dict:
     results.setdefault("wave7_trackers", {})
     results["_cfg"] = cfg  # Wave 7 抽出関数内での cfg 参照用
 
+    # ── taxonomy node_hotness（Wave R2-5 / T-4）──────────────────
+    # arxiv=先行 / news+policy=準先行を分離合成した技術テーマ加熱度。
+    # signal_aggregator のカテゴリV（T-5）が sector_scores を消費するため
+    # アグリゲーターの直前で実行する。
+    if getattr(cfg, "ENABLE_TAXONOMY_SIGNAL", False):
+        try:
+            _th = _load_local_module(
+                "taxonomy_hotness",
+                "/content/taxonomy_hotness.py",
+                cfg.DRIVE_BASE / "taxonomy_hotness.py",
+            )
+            if _th:
+                th_result = _th.run_taxonomy_hotness(cfg, results)
+                results["taxonomy_signal"] = th_result
+                if not th_result.get("skipped"):
+                    logger.add("taxonomy_hotness", "success",
+                               f"ノード:{th_result.get('nodes', 0)} "
+                               f"業種:{len(th_result.get('sector_scores', {}))} "
+                               f"先行のみ:{len(th_result.get('leading_only', []))}件")
+            else:
+                print("  ⚠️  taxonomy_hotness.py が見つかりません")
+                logger.add("taxonomy_hotness", "warn", "taxonomy_hotness.py not found")
+        except Exception as e:
+            logger.add("taxonomy_hotness", "error", str(e)[:100])
+            print(f"  ⚠️  taxonomy_hotnessエラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ taxonomy_hotness: スキップ（ENABLE_TAXONOMY_SIGNAL=False）")
+
     # ── [4-9] 統合シグナルアグリゲーター ─────────────────────────
     if getattr(cfg, "ENABLE_SIGNAL_AGGREGATOR", True) and _in_mode("signal_aggregator"):
         try:
@@ -4883,6 +5020,77 @@ def run_all_tasks(mode: str = "all") -> dict:
                       f"| 推奨: {tss['recommended_action']}")
         except Exception as e:
             print(f"  ⚠️  統合スコア算出エラー: {e}")
+    # ── [Wave R5-2 Phase A / E10] JP/US共通composite（unified_scores） ──
+    # 保有銘柄＋us_screener上位50へ共通形式のスコアを付与（SPEC_core §8-2）。
+    # 既存スコアの adapter 写像のみ（再計算しない・Phase B/Cで本体移植）。
+    if getattr(cfg, "ENABLE_SCORE_CALCULATOR", True) and _in_mode("score_calculator"):
+        try:
+            _scu = _load_local_module(
+                "score_calculator",
+                "/content/score_calculator.py",
+                cfg.DRIVE_BASE / "score_calculator.py",
+            )
+            if _scu:
+                _us_result = _scu.run_score_calculator(cfg, results)
+                results["unified_scores"] = _us_result
+                if _us_result.get("skipped"):
+                    logger.add("score_calculator", "warn", "対象ユニバースなし（skip）")
+                else:
+                    logger.add("score_calculator", "success",
+                               f"共通スコア{_us_result['covered']}銘柄 "
+                               f"/ 未算出{len(_us_result.get('missing', []))}銘柄")
+            else:
+                print("  ⚠️  score_calculator.py が見つかりません")
+        except Exception as e:
+            logger.add("score_calculator", "error", str(e)[:100])
+            print(f"  ⚠️  共通スコア計算エラー: {str(e)[:80]}")
+    # ── [Wave R5-1 / S7] MLメタモデル: 特徴量スナップショット蓄積 ──
+    # signal_aggregator の23カテゴリ components を日次で features.jsonl へ追記。
+    # 学習は Colab（ml/train_meta.ipynb・週次手動）。ここは蓄積のみで軽量。
+    if getattr(cfg, "ENABLE_ML_META_DATASET", True) and _in_mode("ml_meta"):
+        try:
+            _mlds = _load_local_module(
+                "dataset_builder",
+                "/content/ml/dataset_builder.py",
+                cfg.DRIVE_BASE / "ml" / "dataset_builder.py",
+            )
+            if _mlds:
+                _snap = _mlds.snapshot(cfg, results)
+                results["ml_meta_dataset"] = _snap
+                if not _snap.get("skipped"):
+                    logger.add("ml_meta_dataset", "success",
+                               f"{_snap['rows']}行追記（累計{_snap.get('total_rows', 0)}行）")
+                else:
+                    logger.add("ml_meta_dataset", "warn", "特徴量行なし（skip）")
+            else:
+                print("  ⚠️  ml/dataset_builder.py が見つかりません")
+        except Exception as e:
+            logger.add("ml_meta_dataset", "error", str(e)[:100])
+            print(f"  ⚠️  ML特徴量スナップショットエラー: {str(e)[:80]}")
+    # ── [Wave R5-1 / S7] MLメタモデル: 補正テーブル適用 ──────────
+    # ML_META_ENABLED=True（昇格基準クリア＋健太承認）の場合のみ。
+    # 昇格基準（IC>=0.02・t>=2.0）はテーブル読込時にも再検証される。
+    if getattr(cfg, "ML_META_ENABLED", False) and _in_mode("ml_meta"):
+        try:
+            _mlca = _load_local_module(
+                "corrector_applier",
+                "/content/ml/corrector_applier.py",
+                cfg.DRIVE_BASE / "ml" / "corrector_applier.py",
+            )
+            if _mlca:
+                _corr = _mlca.run_ml_meta_corrector(cfg, results)
+                results["ml_meta_correction"] = _corr
+                if _corr.get("skipped"):
+                    logger.add("ml_meta_correction", "warn", _corr.get("reason", ""))
+                else:
+                    logger.add("ml_meta_correction", "success",
+                               f"{_corr['applied']}銘柄補正 "
+                               f"(IC={_corr.get('table_ic')})")
+            else:
+                print("  ⚠️  ml/corrector_applier.py が見つかりません")
+        except Exception as e:
+            logger.add("ml_meta_correction", "error", str(e)[:100])
+            print(f"  ⚠️  ML補正適用エラー: {str(e)[:80]}")
     # ── [4-10] 推論エンジン ───────────────────────────────────────
     if getattr(cfg, "ENABLE_INFERENCE_ENGINE", True) and _in_mode("inference"):
         try:

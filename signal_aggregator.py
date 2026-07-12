@@ -49,7 +49,7 @@ from typing import Optional
 
 # ── デフォルト重み（rule_optimizer が上書き可能） ─────────────
 DEFAULT_WEIGHTS = {
-    "sector_score":        0.23,   # A: composite_score ※0.28→0.26→0.23（Wave 7調整）
+    "sector_score":        0.21,   # A: composite_score ※0.28→0.26→0.23→0.21（Wave R2-6: Vへ0.02移譲。決定4=33業種は粗フィルタ化への段階移行）
     "macro_signals":       0.13,   # B: MACRO_RULES シグナル ※0.17→0.15→0.13（Wave 7調整）
     "technical_score":     0.15,   # C: テクニカル
     "market_breadth":      0.10,   # D: 市場幅
@@ -71,9 +71,10 @@ DEFAULT_WEIGHTS = {
     "academic_signal":        0.01,  # S: 学術カンファレンスシグナル（Wave 7）
     "midterm_signal":         0.01,  # T: 中計達成率シグナル（Wave 7）
     "taxonomy_size_bonus":    0.01,  # U: taxonomy×size交差評価ボーナス（Wave 7）
+    "taxonomy_signal":        0.02,  # V: taxonomy主スコア＝node_hotness（Wave R2-6/T-5・初期重み=他21カテゴリ平均(約0.045)の50%≒0.02。E4のIC判定で昇降格）
 }
 # 重み合計検証:
-# 0.23+0.13+0.15+0.10+0.08+0.03+0.03+0.01+0.01+0.04+0.04+0.02+0.01+0.04+0.01+0.01+0.01+0.01+0.01+0.01+0.01+0.01 = 1.00
+# 0.21+0.13+0.15+0.10+0.08+0.03+0.03+0.01+0.01+0.04+0.04+0.02+0.01+0.04+0.01+0.01+0.01+0.01+0.01+0.01+0.01+0.01+0.02 = 1.00
 
 # ── 重み合計バリデーション（合計 ≠ 1.00 なら起動時に警告） ──────
 _WEIGHT_SUM = round(sum(DEFAULT_WEIGHTS.values()), 10)
@@ -703,6 +704,27 @@ def _extract_taxonomy_size_bonus(results: dict, code: str) -> float | None:
         return None
 
 
+def _extract_taxonomy_signal(results: dict, code: str) -> float | None:
+    """
+    V: taxonomy主スコア（Wave R2-6 / T-5）を抽出する。
+
+    taxonomy_hotness.py（T-4）が算出した node_hotness を業種→ノード橋渡し
+    （size_tier_classifier._SECTOR_TO_TAXONOMY）で業種スコア化した
+    results["taxonomy_signal"]["sector_scores"] を読む。
+    決定4（HANDOFF_2026-06-30 §4-2）: 技術ツリーを主スコアへ段階移行し
+    33業種は粗フィルタ化する — その第一歩としてカテゴリVを新設。
+
+    Returns:
+        float 0.0〜100.0 または None（taxonomy未算出・対象外業種）
+    """
+    try:
+        scores = (results.get("taxonomy_signal") or {}).get("sector_scores") or {}
+        v = scores.get(str(code))
+        return round(float(v), 1) if v is not None else None
+    except Exception:
+        return None
+
+
 def _get_tickers_for_sector(results: dict, sector_code: str) -> list:
     """
     指定業種コードに属するティッカーリストを screener 結果から取得する。
@@ -918,6 +940,7 @@ def calc_signal_score(
         "academic_signal":        lambda: _extract_academic_signal(results, code),          # S: 学術（Wave 7）
         "midterm_signal":         lambda: _extract_midterm_signal(results, code),           # T: 中計（Wave 7）
         "taxonomy_size_bonus":    lambda: _extract_taxonomy_size_bonus(results, code),      # U: taxonomy×size（Wave 7）
+        "taxonomy_signal":        lambda: _extract_taxonomy_signal(results, code),          # V: taxonomy主スコア（Wave R2-6/T-5）
     }
 
     components    = {}
@@ -962,6 +985,7 @@ def calc_signal_score(
                 "academic_signal",                   # Wave 7 S
                 "midterm_signal",                    # Wave 7 T
                 "taxonomy_size_bonus",               # Wave 7 U
+                "taxonomy_signal",                   # Wave R2-6 V
             ):
                 label_map = {
                     "sector_score":        f"セクタースコア高({score:.0f})",
@@ -977,6 +1001,7 @@ def calc_signal_score(
                     "academic_signal":        f"学術発表強気({score:.0f})",
                     "midterm_signal":         f"中計達成追い風({score:.0f})",
                     "taxonomy_size_bonus":    f"規模×業種補正({score:.0f})",
+                    "taxonomy_signal":        f"技術テーマ加熱({score:.0f})",
                 }
                 reason = label_map.get(cat)
                 if reason:
