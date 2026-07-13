@@ -18,7 +18,9 @@ from google.auth.exceptions import GoogleAuthError          # 認証情報不正
 # ============================================================
 # 定数
 # ============================================================
-EDINET_BASE      = "https://disclosure.edinet-api.go.jp/api/v2"
+# 2026-07-12是正: disclosure.edinet-api.go.jp は実在しないホスト（DNS解決不能で
+# 常時0件＝サイレント失敗していた）。edinet_client.py と同じ正ホストに統一。
+EDINET_BASE      = "https://disclosure.edinet-fsa.go.jp/api/v2"
 TARGET_DOC_TYPES = {"120", "140"}   # 120=有報, 140=四半期報告書
 # doc_index.doc_type は日本語ラベルで格納する。
 # 消費側 edinet_bq_client.get_unfetched_docs が

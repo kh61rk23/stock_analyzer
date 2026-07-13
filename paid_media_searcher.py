@@ -100,6 +100,10 @@ PAID_MEDIA_SOURCES = [
 # BLOCK 1: Google CSE 検索
 # ==============================================================
 
+# 403/429 の累計検出数（この実行内）。上限到達で以降のCSE呼出を打ち切る。
+_CSE_DEAD_COUNT = 0
+_CSE_DEAD_LIMIT = 3
+
 def _search_gcse(api_key: str, cse_id: str, site: str,
                  query: str, num: int = 10,
                  date_restrict: str = "d2",
@@ -116,6 +120,12 @@ def _search_gcse(api_key: str, cse_id: str, site: str,
     except ImportError:
         return []
 
+    # ★ 2026-07-12: 403/429 はキー無効・quota枯渇で同一実行内では回復しない。
+    #   3回検出したら以降のCSE呼び出しを打ち切る（本番で12回連続403の実害）。
+    global _CSE_DEAD_COUNT
+    if _CSE_DEAD_COUNT >= _CSE_DEAD_LIMIT:
+        return []
+
     params = {
         "key":         api_key,
         "cx":          cse_id,
@@ -126,8 +136,11 @@ def _search_gcse(api_key: str, cse_id: str, site: str,
     }
     try:
         resp = requests.get(GCSE_ENDPOINT, params=params, timeout=timeout)
-        if resp.status_code == 429:
-            print(f"    ⚠️  CSE レート制限（429）: {site}")
+        if resp.status_code in (403, 429):
+            _CSE_DEAD_COUNT += 1
+            print(f"    ⚠️  CSE HTTP {resp.status_code}: {site}"
+                  + ("（quota/キー要点検 → 以降スキップ）"
+                     if _CSE_DEAD_COUNT >= _CSE_DEAD_LIMIT else ""))
             return []
         if resp.status_code != 200:
             print(f"    ⚠️  CSE HTTP {resp.status_code}: {site}")

@@ -104,8 +104,12 @@ _RETRY_WAIT  = 5   # 秒
 # 約31分浪費した実害への対策）
 #   - 1回の実行で GDELT を引く最大国数（優先国から）。cfg.COUNTRY_RISK_GDELT_MAX で上書き可。
 #   - 連続失敗がこの数に達したら以降の GDELT 取得は打ち切る（サーキットブレーカー）。
-_GDELT_MAX_COUNTRIES     = 30
-_GDELT_CIRCUIT_THRESHOLD = 5
+# 2026-07-12調整: 本番ログで30国中大半が429（GitHub共有IPはGDELTに強く制限され、
+# 各国リトライ3回×待機で計25分浪費）。①上限30→15 ②累計失敗でも回路を開く
+# ③429はリトライしない（_fetch_url側）の3点で「無駄な25分」を数分に短縮。
+_GDELT_MAX_COUNTRIES     = 15
+_GDELT_CIRCUIT_THRESHOLD = 5      # 連続失敗の閾値（従来どおり）
+_GDELT_TOTAL_FAIL_LIMIT  = 8      # 累計失敗の閾値（成功が挟まっても打ち切る）
 
 # 外務省危険レベルのテキストパターン（RSS title から抽出）
 _MOFA_LEVEL_PATTERNS = [
@@ -337,6 +341,12 @@ def _fetch_url(url: str, timeout: int = _FETCH_TIMEOUT) -> str | None:
                 except UnicodeDecodeError:
                     return raw.decode("latin-1", errors="replace")
         except (HTTPError, URLError) as e:
+            # ★ 2026-07-12: 429（レート制限）は待っても同一実行内では回復しない
+            #   （GitHub共有IP起因）ためリトライせず即諦める。1国あたり最大
+            #   ~75秒→~30秒に短縮し、サーキットブレーカーへ早く到達させる。
+            if isinstance(e, HTTPError) and e.code == 429:
+                print(f"    ⚠️  fetch失敗 ({url[:60]}...): HTTP 429（リトライなし）")
+                return None
             if attempt < _MAX_RETRIES:
                 time.sleep(_RETRY_WAIT * attempt)
             else:
@@ -798,6 +808,7 @@ def run_country_risk_update(
         print(f"   📡 GDELT 取得中（{len(ordered_codes)} 件・順次取得 / 上限{_gdelt_limit}）...")
 
         _consec_fail  = 0
+        _total_fail   = 0
         _circuit_open = False
         for i, code in enumerate(ordered_codes):
             if code not in GDELT_COUNTRY_QUERY_MAP:
@@ -808,13 +819,17 @@ def run_country_risk_update(
                 continue
             score = _fetch_gdelt_instability(code, days_back=3)
             gdelt_scores[code] = score
-            # 連続失敗の監視（-1.0 = 取得失敗）。レート制限なら早期に打ち切る。
+            # 失敗の監視（-1.0 = 取得失敗）。レート制限なら早期に打ち切る。
+            # ★ 2026-07-12: 成功が間に挟まると連続カウンタがリセットされ、429の
+            #   波状失敗でも回路が開かず25分浪費した実害 → 累計カウンタを併設。
             if score < 0:
                 _consec_fail += 1
-                if _consec_fail >= _GDELT_CIRCUIT_THRESHOLD:
+                _total_fail  += 1
+                if (_consec_fail >= _GDELT_CIRCUIT_THRESHOLD
+                        or _total_fail >= _GDELT_TOTAL_FAIL_LIMIT):
                     _circuit_open = True
-                    print(f"   ⏹️  GDELT: 連続{_consec_fail}件失敗（レート制限の可能性）"
-                          f"→ 残りはスキップ（RSSのみで評価）")
+                    print(f"   ⏹️  GDELT: 失敗 連続{_consec_fail}/累計{_total_fail}件"
+                          f"（レート制限の可能性）→ 残りはスキップ（RSSのみで評価）")
             else:
                 _consec_fail = 0
             # API負荷軽減のため1件ごとに0.5秒待機

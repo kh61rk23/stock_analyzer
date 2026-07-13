@@ -273,13 +273,37 @@ def fetch_estat_data_by_id(stats_data_id, app_id, limit=24):
             if not value_str or value_str in ["-", "***", "…", "x", "X", ""]:
                 continue
             try:
+                # ★ 2026-07-12: カテゴリ属性（@cat01/@area/@tab等）を保持。
+                #   e-Stat応答は複数カテゴリの行が混在するため、時系列比較は
+                #   同一カテゴリ内で行う必要がある（下の系列選択で使用）。
+                cat_key = tuple(sorted(
+                    (k, val) for k, val in v.items()
+                    if k.startswith("@") and k not in ("@time", "@unit")
+                ))
                 records.append({
                     "time":      _parse_time_code(time_code),
                     "value":     float(value_str.replace(",", "")),
                     "time_code": time_code,
+                    "_cat":      cat_key,
                 })
             except (ValueError, TypeError):
                 continue
+
+        if not records:
+            return None, False
+
+        # ★ 2026-07-12 カテゴリ混在の是正（建設着工「前年比-83.5%」等の異常値と
+        #   貿易統計「変化率計算不可」の根本原因）: 異種カテゴリの値を1本の時系列と
+        #   して前年比計算していた。最新時点を含むカテゴリ系列のうち最も行数の多い
+        #   1系列だけを採用する（「総数・計」に相当する系列が最長になるのが通例）。
+        by_cat = {}
+        for r in records:
+            by_cat.setdefault(r["_cat"], []).append(r)
+        latest_code = max(r["time_code"] for r in records)
+        candidates = {k: rs for k, rs in by_cat.items()
+                      if any(r["time_code"] == latest_code for r in rs)} or by_cat
+        best = max(candidates.values(), key=len)
+        records = [{k: v2 for k, v2 in r.items() if k != "_cat"} for r in best]
 
         records.sort(key=lambda x: x.get("time_code", ""), reverse=True)
         return records[:limit] if records else None, False
@@ -442,11 +466,27 @@ def calculate_changes(records):
 def judge_sector_impact(stat_def, changes):
     if not changes:
         return {"signal": "neutral", "score": 0, "reason": "データ取得失敗"}
+    # ★ 2026-07-12 鮮度ガード: フェイルオーバーを尽くしても最新が2年以上前なら
+    #   シグナル化しない。毎月勤労統計(2009年)・労働力調査(2005年)の前年比が
+    #   MACRO_RULESへ流入していた実害の遮断（e-Statの旧固定表を掴んだケース）。
+    latest_time = str(changes.get("latest_time", ""))
+    try:
+        _yr = int(latest_time[:4])
+    except (ValueError, TypeError):
+        _yr = 0
+    if _yr and (datetime.now().year - _yr) >= 2:
+        return {"signal": "neutral", "score": 0,
+                "reason": f"データ陳腐化（最新{latest_time}）のため無効・要ID更新"}
     direction = stat_def.get("direction", "higher_is_good")
     change    = changes.get("yoy_change") if changes.get("yoy_change") is not None \
                 else changes.get("mom_change")
     if change is None:
         return {"signal": "neutral", "score": 0, "reason": "変化率計算不可"}
+    # ★ 2026-07-12 異常値クランプ: マクロ統計の前年比が±50%を超えることは
+    #   通常なく、カテゴリ混在・単位揺れ等のデータ品質問題を示す → 無効化。
+    if abs(change) > 50:
+        return {"signal": "neutral", "score": 0,
+                "reason": f"変化率異常（{change:+.1f}%・データ品質疑い）のため無効"}
     th = 0.5
     if direction == "higher_is_good":
         if change >= th:

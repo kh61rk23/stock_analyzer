@@ -29,7 +29,8 @@ from config import (
 # ============================================================
 # 定数
 # ============================================================
-EDINET_BASE   = "https://disclosure.edinet-api.go.jp/api/v2"
+# 2026-07-12是正: 実在しないホスト disclosure.edinet-api.go.jp → 正ホストへ統一
+EDINET_BASE   = "https://disclosure.edinet-fsa.go.jp/api/v2"
 XBRL_TYPE     = 5   # type=5: XBRL ZIP
 HTML_TYPE     = 1   # type=1: HTML（E4 テキスト分析用。E1 では未使用）
 

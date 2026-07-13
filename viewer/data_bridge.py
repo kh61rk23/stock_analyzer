@@ -25,6 +25,13 @@ import streamlit as st
 import yfinance as yf
 from google.oauth2.service_account import Credentials
 
+# ★ 2026-07-12: 日次バッチ（GitHub Actions・streamlitランタイム無し）から本モジュールが
+#   importされると @st.cache_data 呼出のたびに「No runtime found」WARNINGが大量出力される。
+#   streamlit自身のimportでloggerが再構成されるため、import後にここで抑制する
+#   （main側の事前設定では効かなかった実害あり）。UI実行時の動作には影響しない。
+import logging as _logging
+_logging.getLogger("streamlit.runtime.caching.cache_data_api").setLevel(_logging.ERROR)
+
 # 純計算ロジックを import（循環なし）
 from finance_logic import (
     _safe_float, _safe_int, _latest,

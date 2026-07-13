@@ -1406,7 +1406,9 @@ SUMMARY_MAX_TICKERS: int = 10         # 要約する最大銘柄数（コスト�
 # Step C': テーマETFトラッキング設定
 ENABLE_ETF_TRACKER: bool = True     # テーマETFトラッキングの有効化
 # Step D: Excel ダッシュボード CSV エクスポート
-ENABLE_EXCEL_EXPORT: bool = True  # CSV エクスポートの有効化
+# 2026-07-12 BUG-03（.iqy数値列が文字列化）対応: 健太決定「Excel出力機能は使わない」
+# → ダッシュボードCSV/.iqy の生成を停止。git永続化はdaily_run.ymlでCSV非依存に是正済み。
+ENABLE_EXCEL_EXPORT: bool = False  # Excel/CSVダッシュボード出力（廃止・2026-07-12）
 ETF_TOP_N: int = 3                  # アラートに表示するトップテーマ数
 ETF_THEME_IDS = None                # None=全テーマ / 例: ["quantum","ai_infra"]
 

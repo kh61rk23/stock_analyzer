@@ -67,7 +67,13 @@ def _get_gdp_growth(results: dict, cfg) -> tuple[Optional[float], str]:
         if imf_cache_path.exists():
             imf_data = json.loads(imf_cache_path.read_text(encoding="utf-8"))
             # NGDP_RPCH = Real GDP growth rate (percent change)
-            jpn = imf_data.get("JPN", {}).get("NGDP_RPCH", {})
+            # ★ 2026-07-12是正: imf_pipeline._save_imf_cache の実構造は
+            #   {"indicators": {indicator: {country: {year: val}}}} なのに
+            #   {country: {indicator: ...}} を読んでいて常時失敗→GDP N/A だった
+            #   （producer/consumerキー不整合）。実構造を優先し旧想定は後段に残す。
+            _ind = imf_data.get("indicators", {}) or {}
+            jpn = ((_ind.get("NGDP_RPCH", {}) or {}).get("JPN", {})
+                   or imf_data.get("JPN", {}).get("NGDP_RPCH", {}))
             if jpn:
                 # 最新年のデータを取得
                 years = sorted(jpn.keys(), reverse=True)
@@ -142,6 +148,18 @@ def _get_cpi_change(results: dict, cfg) -> tuple[Optional[float], str]:
     try:
         gov = results.get("gov", {})
         if isinstance(gov, dict):
+            # ★ 2026-07-12是正: gov v9.0 の実構造は
+            #   {"stat_results": [{"stat": {"id": "cpi", ...}, "changes": {...}}, ...]}
+            #   なのに gov["cpi"] を読んでいて常時失敗→CPI N/A だった。
+            for _sr in gov.get("stat_results", []) or []:
+                if ((_sr.get("stat", {}) or {}).get("id") == "cpi"):
+                    _ch = _sr.get("changes", {}) or {}
+                    _change = (_ch.get("yoy_change")
+                               if _ch.get("yoy_change") is not None
+                               else _ch.get("mom_change"))
+                    if _change is not None:
+                        return float(_change), "gov_pipeline"
+            # 旧想定の構造（フォールバックとして残置）
             cpi_data = gov.get("cpi", {})
             if isinstance(cpi_data, dict):
                 # change_pct または前期比を探す
