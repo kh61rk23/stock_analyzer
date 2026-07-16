@@ -12,6 +12,11 @@
 #   例: python3 dead_ticker_pruner.py --report
 #       python3 dead_ticker_pruner.py --apply
 #
+# 【v1.3 / 2026-07-16】第1パスをバッチ取得化（yf.download・100銘柄/リクエスト）
+#   v1.2の個別取得は1460リクエストとなりYahoo側のIPレート制限を自ら誘発していた
+#   （v1.2 apply実行時に642件が再検証でも偽デッドのままガード発動＝実測）。
+#   バッチ化でリクエスト数を約1/100に削減し、レート制限の発生自体を抑える。
+#   第2パス（候補の個別再検証）は従来どおり。
 # 【v1.2 / 2026-07-16】2パス方式（デッド候補の再検証）を標準化
 #   v1.1でも防げない失敗モードが実測で判明: yfinanceは取得失敗時に例外ではなく
 #   「空DataFrame＋possibly delistedログ」を返すため unknown に落ちず dead に
@@ -58,6 +63,32 @@ def _collect_tickers(payload) -> list:
     return []
 
 
+def _batch_liveness(tickers: list) -> dict:
+    """
+    v1.3: 複数銘柄を1リクエストでまとめて判定する第1パス。
+    Returns: {ticker: "alive" | "dead" | "unknown"}
+    バッチ全体が取得失敗（例外）した場合は全員 unknown（deadにしない）。
+    """
+    out = {}
+    try:
+        import yfinance as yf
+        chunk = list(tickers)
+        df = yf.download(chunk, period="1mo", group_by="ticker",
+                         progress=False, threads=False)
+        if df is None or df.empty:
+            return {t2: "unknown" for t2 in chunk}
+        for t2 in chunk:
+            try:
+                sub = df[t2] if len(chunk) > 1 else df
+                col = sub["Close"] if "Close" in sub else None
+                out[t2] = "alive" if (col is not None and col.dropna().shape[0] > 0) else "dead"
+            except Exception:
+                out[t2] = "dead"   # バッチ応答に列が無い＝データなし（候補→第2パスで再検証）
+        return out
+    except Exception:
+        return {t2: "unknown" for t2 in tickers}
+
+
 def _check_liveness(ticker: str) -> str:
     """
     3値判定: "alive" / "dead"（正常応答かつ履歴空）/ "unknown"（例外=判定不能）。
@@ -102,13 +133,15 @@ def main(apply: bool = False) -> int:
             continue
         tickers = _collect_tickers(payload)
         dead, unknown = [], []
-        for t in tickers:
-            state = _check_liveness(t)
-            if state == "dead":
-                dead.append(t)
-            elif state == "unknown":
-                unknown.append(t)
-            time.sleep(WAIT_SEC)
+        # v1.3: 100銘柄ずつバッチ判定（レート制限の自己誘発を防ぐ）
+        for i in range(0, len(tickers), 100):
+            states = _batch_liveness(tickers[i:i + 100])
+            for t, state in states.items():
+                if state == "dead":
+                    dead.append(t)
+                elif state == "unknown":
+                    unknown.append(t)
+            time.sleep(2.0)
         total_checked += len(tickers)
         total_dead += len(dead)
         total_unknown += len(unknown)

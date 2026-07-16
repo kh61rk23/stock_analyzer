@@ -1446,6 +1446,7 @@ NEWS_ALERT_MAX_ARTICLES: int = 5  # Gmailアラートに含める記事数
 # ── デイリーサイクル（毎朝自動実行）──────────────────────────
 # 実行対象モジュールキー（ENABLE_* フラグが True の場合のみ実際に動く）
 DAILY_MODULES = [
+    "key_health",    # APIキー生存判定（Issue J-2・最序盤で実行）
     "gov",           # 政府データパイプライン
     "macro",         # マクロ指標取得
     "sector",        # セクターエージェント
@@ -4483,3 +4484,14 @@ ENABLE_ML_META_DATASET: bool = True  # 特徴量スナップショット蓄積�
 # Phase A対象 = 保有銘柄 ＋ us_screener 上位N のみ（要件定義書 §R5-2）。
 ENABLE_SCORE_CALCULATOR: bool = True
 UNIFIED_SCORE_US_TOP_N: int = 50     # us_screener からの対象上位件数
+
+# ==============================================================
+# BLOCK 57: APIキー生存判定設定（Issue J-2 / api_key_health）
+# ==============================================================
+# api_key_health.py が参照。各APIキーの生存/失効を実行ログ冒頭で
+# 1行サマリ＋詳細表として一望できるようにする。
+# ENABLE_KEY_HEALTH=False で本ステージ全体をスキップ。
+# KEY_HEALTH_CSE_ENABLED は Google CSE の日次 quota を消費するため既定 False
+# （True にした時のみ CSE を num=1 で1件だけ実クエリして判定する）。
+ENABLE_KEY_HEALTH: bool = True
+KEY_HEALTH_CSE_ENABLED: bool = False

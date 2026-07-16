@@ -1355,6 +1355,26 @@ def run_all_tasks(mode: str = "all") -> dict:
     except Exception:
         results["emergency_override"] = False
 
+    # ── [Issue J-2] APIキー生存判定（最序盤・マクロ層の前）─────────
+    # 各APIキーの生存/失効を実行ログ冒頭で 1行サマリ＋詳細表として一望する。
+    if getattr(cfg, "ENABLE_KEY_HEALTH", True) and _in_mode("key_health"):
+        try:
+            _kh = _load_local_module(
+                "api_key_health",
+                "/content/api_key_health.py",
+                cfg.DRIVE_BASE / "api_key_health.py",
+            )
+            if _kh:
+                kh_result = _kh.run_key_health(cfg)
+                results["api_key_health"] = kh_result
+                logger.add(
+                    "api_key_health",
+                    kh_result.get("ledger_status", "success"),
+                    kh_result.get("summary", ""),
+                )
+        except Exception as _khe:
+            print(f"  ⚠️  APIキー生存判定エラー（スキップ）: {_khe}")
+
    # ── [④] キャッシュ鮮度管理 ──────────────────────────────────
     if getattr(cfg, "ENABLE_CACHE_FRESHNESS", True):
         try:

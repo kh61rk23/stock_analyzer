@@ -32,6 +32,7 @@ SCHEMA: dict[str, list[str]] = {
     "alpha_attribution": ["stock_analyzer_main"],
     "anomaly": ["stock_analyzer_main"],
     "anomaly_season": ["run_headless", "stock_analyzer_main"],
+    "api_key_health": ["stock_analyzer_main"],
     "arxiv": ["stock_analyzer_main"],
     "backtest": ["stock_analyzer_main"],
     "biz_summaries": ["stock_analyzer_main"],

@@ -64,6 +64,7 @@ import json
 import re
 import time
 from datetime import datetime, timezone, date, timedelta
+from pathlib import Path
 from typing import Any
 from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
@@ -107,9 +108,18 @@ _RETRY_WAIT  = 5   # 秒
 # 2026-07-12調整: 本番ログで30国中大半が429（GitHub共有IPはGDELTに強く制限され、
 # 各国リトライ3回×待機で計25分浪費）。①上限30→15 ②累計失敗でも回路を開く
 # ③429はリトライしない（_fetch_url側）の3点で「無駄な25分」を数分に短縮。
+# 2026-07-17調整: 上限15国に絞った後も全件429で全滅する日が常態化（GitHub共有IP
+# はGDELTに恒常的にブロックされている）。①サーキット閾値5→3に短縮し全滅日は
+# 数件で見切る ②取得失敗時は永続キャッシュ（gdelt_instability_cache.json）を
+# 減衰付きで代用する（BLOCK 5-2 参照）。
 _GDELT_MAX_COUNTRIES     = 15
-_GDELT_CIRCUIT_THRESHOLD = 5      # 連続失敗の閾値（従来どおり）
+_GDELT_CIRCUIT_THRESHOLD = 3      # 連続失敗の閾値（2026-07-17: 5→3に短縮）
 _GDELT_TOTAL_FAIL_LIMIT  = 8      # 累計失敗の閾値（成功が挟まっても打ち切る）
+
+# GDELT「最後に取れた値」永続キャッシュ（取得失敗時の代用に使う）
+#   形式: {country_code: {"score": float, "as_of": "YYYY-MM-DD"}}
+_GDELT_CACHE_FILENAME    = "gdelt_instability_cache.json"
+_GDELT_CACHE_DECAY_RATE  = 0.05   # 1日あたり5%減衰（下限0でクランプ）
 
 # 外務省危険レベルのテキストパターン（RSS title から抽出）
 _MOFA_LEVEL_PATTERNS = [
@@ -555,6 +565,99 @@ def _fetch_gdelt_instability(
 
 
 # ==============================================================
+# BLOCK 5-2: GDELT「最後に取れた値」永続キャッシュ（2026-07-17追加）
+# ==============================================================
+# GitHub Actions の共有IPがGDELTに恒常的にブロックされ「取りに行く」戦略が
+# 成立しない日が多い実害への対策。取得成功時に永続キャッシュへ書き込み、
+# 取得失敗時（429・レート制限HTML誤200等すべて -1.0 に集約される）はキャッシュ値を
+# 経過日数に応じて減衰させて代用する。キャッシュにも無ければ従来どおり -1.0（RSSのみで評価）。
+
+def decayed_score(
+    score: float,
+    days_old: int,
+    rate: float = _GDELT_CACHE_DECAY_RATE,
+) -> float:
+    """
+    キャッシュされたGDELTスコアを経過日数に応じて減衰させる純粋関数。
+
+    $decayed = \\max(0,\\ score \\times \\max(0,\\ 1 - rate \\times days\\_old))$
+
+    Args:
+        score:    キャッシュされていた元スコア（0〜100）
+        days_old: キャッシュ作成日からの経過日数
+        rate:     1日あたりの減衰率（デフォルト5%）
+
+    Returns:
+        float: 減衰後スコア（下限0でクランプ）
+    """
+    if days_old <= 0:
+        return round(max(0.0, float(score)), 2)
+    factor = max(0.0, 1.0 - rate * days_old)
+    return round(max(0.0, float(score) * factor), 2)
+
+
+def _gdelt_cache_path(cfg) -> Path:
+    """GDELTキャッシュファイルのフルパスを返す。"""
+    d = Path(getattr(cfg, "CACHE_DIR", "stock_data/cache")) if cfg else Path("stock_data/cache")
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return d / _GDELT_CACHE_FILENAME
+
+
+def _load_gdelt_cache(cfg) -> dict:
+    """GDELTキャッシュをJSONファイルから読み込む。失敗時は空辞書。"""
+    try:
+        p = _gdelt_cache_path(cfg)
+        if not p.exists():
+            return {}
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_gdelt_cache(cfg, cache: dict) -> None:
+    """GDELTキャッシュをJSONファイルに保存する。"""
+    try:
+        p = _gdelt_cache_path(cfg)
+        p.write_text(
+            json.dumps(cache, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        print(f"    ⚠️  GDELTキャッシュ保存失敗: {str(e)[:60]}")
+
+
+def _update_gdelt_cache(cache: dict, country_code: str, score: float, today: date) -> None:
+    """取得成功時にキャッシュを更新する純粋関数（cacheを破壊的に更新）。"""
+    cache[country_code] = {"score": round(float(score), 2), "as_of": today.isoformat()}
+
+
+def _gdelt_cached_or_fallback(
+    cache: dict,
+    country_code: str,
+    today: date,
+) -> tuple[float, int | None]:
+    """
+    取得失敗時にキャッシュから減衰後スコアを返す純粋関数。
+
+    Returns:
+        (score, days_old): キャッシュが無い/不正な場合は (-1.0, None)
+    """
+    entry = cache.get(country_code)
+    if not entry or "score" not in entry or "as_of" not in entry:
+        return -1.0, None
+    try:
+        as_of = date.fromisoformat(entry["as_of"])
+    except Exception:
+        return -1.0, None
+    days_old = max(0, (today - as_of).days)
+    score = decayed_score(float(entry["score"]), days_old)
+    return score, days_old
+
+
+# ==============================================================
 # BLOCK 6: 合成リスクスコア計算
 # ==============================================================
 
@@ -810,35 +913,53 @@ def run_country_risk_update(
         _consec_fail  = 0
         _total_fail   = 0
         _circuit_open = False
+        _gdelt_cache  = _load_gdelt_cache(cfg)
+        _cache_hits   = 0
+        _today        = date.today()
         for i, code in enumerate(ordered_codes):
             if code not in GDELT_COUNTRY_QUERY_MAP:
                 gdelt_scores[code] = -1.0
                 continue
-            if _circuit_open:
-                gdelt_scores[code] = -1.0
-                continue
-            score = _fetch_gdelt_instability(code, days_back=3)
-            gdelt_scores[code] = score
-            # 失敗の監視（-1.0 = 取得失敗）。レート制限なら早期に打ち切る。
-            # ★ 2026-07-12: 成功が間に挟まると連続カウンタがリセットされ、429の
-            #   波状失敗でも回路が開かず25分浪費した実害 → 累計カウンタを併設。
-            if score < 0:
-                _consec_fail += 1
-                _total_fail  += 1
-                if (_consec_fail >= _GDELT_CIRCUIT_THRESHOLD
-                        or _total_fail >= _GDELT_TOTAL_FAIL_LIMIT):
-                    _circuit_open = True
-                    print(f"   ⏹️  GDELT: 失敗 連続{_consec_fail}/累計{_total_fail}件"
-                          f"（レート制限の可能性）→ 残りはスキップ（RSSのみで評価）")
+            if not _circuit_open:
+                score = _fetch_gdelt_instability(code, days_back=3)
+                gdelt_scores[code] = score
+                # 失敗の監視（-1.0 = 取得失敗。429・レート制限ページの200返却＝JSON
+                # パース失敗もすべてここに集約される）。レート制限なら早期に打ち切る。
+                # ★ 2026-07-12: 成功が間に挟まると連続カウンタがリセットされ、429の
+                #   波状失敗でも回路が開かず25分浪費した実害 → 累計カウンタを併設。
+                if score < 0:
+                    _consec_fail += 1
+                    _total_fail  += 1
+                    if (_consec_fail >= _GDELT_CIRCUIT_THRESHOLD
+                            or _total_fail >= _GDELT_TOTAL_FAIL_LIMIT):
+                        _circuit_open = True
+                        print(f"   ⏹️  GDELT: 失敗 連続{_consec_fail}/累計{_total_fail}件"
+                              f"（レート制限の可能性）→ 残りはスキップ（RSSのみで評価）")
+                else:
+                    _consec_fail = 0
+                    _update_gdelt_cache(_gdelt_cache, code, score, _today)
+                # API負荷軽減のため1件ごとに0.5秒待機
+                time.sleep(0.5)
+                if (i + 1) % 10 == 0:
+                    print(f"   GDELT進捗: {i+1}/{len(ordered_codes)}")
             else:
-                _consec_fail = 0
-            # API負荷軽減のため1件ごとに0.5秒待機
-            time.sleep(0.5)
-            if (i + 1) % 10 == 0:
-                print(f"   GDELT進捗: {i+1}/{len(ordered_codes)}")
+                gdelt_scores[code] = -1.0
 
+            # ── 取得失敗時（-1.0）は永続キャッシュを減衰付きで代用 ──────
+            # 2026-07-17: GitHub共有IPがGDELTに恒常的にブロックされ「取りに行く」
+            # 戦略自体が成立しない日が多いための対策。
+            if gdelt_scores[code] < 0:
+                fb_score, fb_days = _gdelt_cached_or_fallback(_gdelt_cache, code, _today)
+                if fb_score >= 0:
+                    gdelt_scores[code] = fb_score
+                    _cache_hits += 1
+                    print(f"   ♻️  GDELT[{code}] キャッシュ代用"
+                          f"（{fb_days}日前・減衰後{fb_score:.1f}）")
+
+        _save_gdelt_cache(cfg, _gdelt_cache)
         valid_gdelt = {k: v for k, v in gdelt_scores.items() if v >= 0}
-        print(f"   ✅ GDELT: {len(valid_gdelt)} 件取得完了")
+        print(f"   ✅ GDELT: {len(valid_gdelt)} 件取得完了"
+              f"（うちキャッシュ代用 {_cache_hits} 件）")
 
     # ── ④ 合成スコア計算・MERGE行データ構築 ──────────────────────
     rows: list[dict] = []
