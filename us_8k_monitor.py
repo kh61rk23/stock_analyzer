@@ -50,6 +50,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from datetime import datetime, timedelta, date
@@ -99,6 +100,20 @@ ITEM_PRIORITY = {
 # ==============================================================
 # BLOCK 1: キャッシュ管理
 # ==============================================================
+
+# 2026-07-13是正（I-4同型バグ）: SECは連絡先を含まないUser-Agentを403で拒否する。
+# 旧 "stock_analyzer/1.0 (educational use)" は拒否対象だった。
+# us_fundamental_rotator / institutional_13f_monitor と同じ SEC_USER_AGENT 規約に統一。
+def _sec_user_agent() -> str:
+    ua = os.getenv("SEC_USER_AGENT", "")
+    if ua:
+        return ua
+    try:
+        import config as _cfg
+        return getattr(_cfg, "SEC_USER_AGENT", "") or "StockAnalyzer stockanalyzer@example.com"
+    except Exception:
+        return "StockAnalyzer stockanalyzer@example.com"
+
 
 def _cache_path(cfg) -> Path:
     return Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / CACHE_FILE
@@ -160,7 +175,7 @@ def _fetch_8k_filings(target_date: str) -> list[dict]:
         resp = requests.get(
             EDGAR_SEARCH_URL,
             params=params,
-            headers={"User-Agent": "stock_analyzer/1.0 (educational use)"},
+            headers={"User-Agent": _sec_user_agent()},
             timeout=REQUEST_TIMEOUT,
         )
         if resp.status_code != 200:
@@ -224,7 +239,7 @@ def _fetch_8k_items(cik: int, accession_number: str) -> list[str]:
                    f"{acc_no_dash}/{accession_number}-index.htm")
         resp = requests.get(
             idx_url,
-            headers={"User-Agent": "stock_analyzer/1.0 (educational use)"},
+            headers={"User-Agent": _sec_user_agent()},
             timeout=REQUEST_TIMEOUT,
         )
         if resp.status_code != 200:

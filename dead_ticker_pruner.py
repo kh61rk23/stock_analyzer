@@ -12,6 +12,12 @@
 #   例: python3 dead_ticker_pruner.py --report
 #       python3 dead_ticker_pruner.py --apply
 #
+# 【v1.2 / 2026-07-16】2パス方式（デッド候補の再検証）を標準化
+#   v1.1でも防げない失敗モードが実測で判明: yfinanceは取得失敗時に例外ではなく
+#   「空DataFrame＋possibly delistedログ」を返すため unknown に落ちず dead に
+#   誤分類される（実害: 実行中盤のDNS断でsp500のM以降215銘柄が偽デッド）。
+#   → 第1パスのデッド候補を60秒待機後に再検証し、生存していれば救済。
+#   → 再検証でも候補の50%超がデッドのままなら計測異常として apply 拒否。
 # 【v1.1 / 2026-07-12】判定の3値化＋計測異常セーフガード
 #   v1.0は「取得例外＝デッド」だったため、yfinance未導入・ネットワーク断・
 #   レート制限でも全銘柄デッドと誤報告した（実害: 2026-07-12にAAPL/MSFT含む
@@ -114,6 +120,37 @@ def main(apply: bool = False) -> int:
                                 + ("…" if len(unknown) > 10 else ""))
         if not dead and not unknown:
             report_lines.append(f"✅ {jf.name}: 全{len(tickers)}銘柄生存")
+
+    # ⑤ v1.2: デッド候補の再検証パス（一過性のネットワーク断・レート制限を救済）
+    all_candidates = [t2 for _, (_, ds) in dead_by_file.items() for t2 in ds]
+    if all_candidates:
+        print(f"\n🔁 デッド候補 {len(all_candidates)}件を60秒待機後に再検証...")
+        time.sleep(60)
+        confirmed_total = 0
+        for jf in list(dead_by_file):
+            payload, dead = dead_by_file[jf]
+            confirmed, revived = [], []
+            for t2 in dead:
+                if _check_liveness(t2) == "alive":
+                    revived.append(t2)
+                else:
+                    confirmed.append(t2)
+                time.sleep(WAIT_SEC)
+            confirmed_total += len(confirmed)
+            if revived:
+                report_lines.append(f"♻️ {jf.name}: 再検証で{len(revived)}件生存を確認（救済）→ {revived[:8]}"
+                                    + ("…" if len(revived) > 8 else ""))
+            if confirmed:
+                dead_by_file[jf] = (payload, confirmed)
+            else:
+                del dead_by_file[jf]
+        total_dead = confirmed_total
+        # 再検証しても候補の大半がdeadのまま = 計測系が死んでいる疑い
+        if (confirmed_total / len(all_candidates)) > DEAD_RATIO_GUARD and confirmed_total >= 30:
+            report_lines.append(
+                f"\n🚨 再検証後も候補の{confirmed_total}/{len(all_candidates)}件がデッドのまま。"
+                "ネットワーク/レート制限の持続疑い → --apply は拒否します。")
+            apply = False
 
     # ④ 計測異常セーフガード
     dead_ratio = (total_dead / total_checked) if total_checked else 0.0

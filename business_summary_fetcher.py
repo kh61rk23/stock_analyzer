@@ -68,6 +68,11 @@ def _save_cache(path: Path, data: dict):
 # BLOCK 2: DeepL 翻訳
 # ==============================================================
 
+# 2026-07-13: 403/456はキー無効・quota超過であり同一実行内でリトライしても
+# 回復しない。1社ごとにHTTPエラーを繰り返さないよう実行内フラグでfail-fastする。
+_deepl_disabled_this_run = False
+
+
 def _translate_deepl(text: str, api_key: str) -> Optional[str]:
     """
     DeepL API 無料枠で英語→日本語翻訳。
@@ -75,9 +80,16 @@ def _translate_deepl(text: str, api_key: str) -> Optional[str]:
     Pro API URL : api.deepl.com
     （無料キーは "-:fx" で終わる）
     """
+    global _deepl_disabled_this_run
+
     if not text or not api_key:
         return None
 
+    if _deepl_disabled_this_run:
+        # 403/quota超過を検出済み: 静かに原文使用へフォールバック
+        return None
+
+    import urllib.error
     import urllib.request
     import urllib.parse
 
@@ -108,6 +120,16 @@ def _translate_deepl(text: str, api_key: str) -> Optional[str]:
         with urllib.request.urlopen(req, timeout=15) as resp:
             result = json.loads(resp.read().decode("utf-8"))
             return result["translations"][0]["text"]
+
+    except urllib.error.HTTPError as e:
+        if e.code in (403, 456):
+            # キー無効/quota超過: 実行内リトライは無意味なので以降スキップ
+            _deepl_disabled_this_run = True
+            print("      ⚠️  DeepL無効（403/quota）: 以降は英語原文のまま保存"
+                  "（DEEPL_API_KEY要点検）")
+        else:
+            print(f"      ⚠️  DeepL 翻訳エラー: {str(e)[:60]}")
+        return None
 
     except Exception as e:
         print(f"      ⚠️  DeepL 翻訳エラー: {str(e)[:60]}")

@@ -198,7 +198,13 @@ class EDINETBQClient:
 
     def query_to_df(self, sql: str) -> pd.DataFrame:
         """SQL クエリ結果を DataFrame で返す"""
-        return self.client.query(sql).to_dataframe()
+        # 2026-07-16是正: 2026-07-12にgoogle-cloud-bigquery-storageを導入した結果、
+        # to_dataframe()がStorage Read API経由に切り替わり bigquery.readsessions.create
+        # 権限（roles/bigquery.readSessionUser）を要求→SAに無く edinet_rotation が
+        # 3日連続403で停止した。本システムの読取量ではREST経路で十分なため明示的に
+        # Storage APIを使わない（権限付与に依存しない構成）。将来SAに
+        # readSessionUser を付与すれば True に戻して高速化してよい。
+        return self.client.query(sql).to_dataframe(create_bqstorage_client=False)
 
     def get_unfetched_docs(self, limit: int = 33) -> pd.DataFrame:
         """

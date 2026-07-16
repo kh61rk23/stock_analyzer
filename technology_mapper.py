@@ -38,6 +38,95 @@ from typing import Optional
 _MODULE_VERSION = "1.0"
 _CACHE_TTL_DAYS = 30          # cluster_master.json の有効期間
 
+# 承認済み taxonomy seed の場所（taxonomy_loader.py / taxonomy_hotness.py と同一解決）
+_REPO = Path(__file__).resolve().parent
+_SEED_DIR = _REPO / "data" / "taxonomy_seed"
+
+
+# ==============================================================
+# BLOCK 0b: TECH_KEYWORD_MAP の動的構築（seed正本）
+# ==============================================================
+# 2026-07-13: TECH_KEYWORD_MAPはSSOT再建で消失（幻キー）→承認済みseedから動的構築へ
+
+def build_keyword_map_from_seeds(seed_dir: Path = _SEED_DIR) -> dict:
+    """
+    承認済み taxonomy seed（data/taxonomy_seed/batch*.json）から
+    {node_id: [キーワード...]} を動的構築する。
+
+    - verified_flag=true のノードのみ対象
+    - キーワード = node_name_ja / node_name_en / node_id をアンダースコア分割した
+      英単語（2文字以下は除外）。description は誤マッチ源になるため使わない
+    - seedすら読めない場合は警告して空 dict を返す（クラッシュさせない）
+
+    Returns:
+        {"semiconductor": ["半導体", "Semiconductor", "semiconductor"], ...}
+    """
+    keyword_map: dict = {}
+    try:
+        batch_files = sorted(Path(seed_dir).glob("batch*.json"))
+        for p in batch_files:
+            try:
+                d = json.loads(p.read_text(encoding="utf-8"))
+            except Exception as e:
+                print(
+                    f"  [technology_mapper] seed読込失敗 "
+                    f"({p.name}: {str(e)[:60]}): スキップ"
+                )
+                continue
+
+            for node in d.get("nodes", []):
+                if not node.get("verified_flag"):
+                    continue
+                node_id = node.get("node_id")
+                if not node_id:
+                    continue
+
+                kws: list[str] = []
+                seen: set[str] = set()
+
+                def _add(term):
+                    if not term:
+                        return
+                    term = str(term).strip()
+                    if not term or term in seen:
+                        return
+                    seen.add(term)
+                    kws.append(term)
+
+                _add(node.get("node_name_ja"))
+                _add(node.get("node_name_en"))
+                # node_id をアンダースコア分割した英単語（2文字以下は除外）
+                for tok in str(node_id).split("_"):
+                    if len(tok) > 2:
+                        _add(tok)
+
+                keyword_map[node_id] = kws
+    except Exception as e:
+        print(
+            f"  [technology_mapper] ⚠️  seedからのキーワード構築失敗 "
+            f"({str(e)[:80]}): 空を返す"
+        )
+        return {}
+
+    if not keyword_map:
+        print(
+            "  [technology_mapper] ⚠️  seedから技術キーワードを構築できませんでした "
+            f"（{seed_dir} 確認）"
+        )
+    return keyword_map
+
+
+def _get_keyword_map(cfg) -> dict:
+    """
+    技術キーワード表を取得する。
+    config.TECH_KEYWORD_MAP が定義されていればそちら優先（将来の手動上書き用）、
+    無ければ承認済みseedから自動構築する。
+    """
+    cfg_map = getattr(cfg, "TECH_KEYWORD_MAP", {})
+    if cfg_map:
+        return cfg_map
+    return build_keyword_map_from_seeds()
+
 
 # ==============================================================
 # BLOCK 1: キャッシュ管理
@@ -275,9 +364,9 @@ def build_cluster_master(cfg) -> dict:
         print(f"  [technology_mapper] subtheme_loader import失敗: {e}")
         return {}
 
-    tech_keyword_map = getattr(cfg, "TECH_KEYWORD_MAP", {})
+    tech_keyword_map = _get_keyword_map(cfg)
     if not tech_keyword_map:
-        print("  [technology_mapper] ⚠️  TECH_KEYWORD_MAP が空です（config.py 確認）")
+        print("  [technology_mapper] ⚠️  技術キーワード表が空です（seed/config.py 確認）")
         return {}
 
     result = {
@@ -416,7 +505,7 @@ def run_technology_mapper(cfg, results: dict) -> dict:
             results["cluster_master"] = cached
             jp_count = len(cached.get("markets", {}).get("JP", {}))
             us_count = len(cached.get("markets", {}).get("US", {}))
-            tech_keyword_map = getattr(cfg, "TECH_KEYWORD_MAP", {})
+            tech_keyword_map = _get_keyword_map(cfg)
             out.update({
                 "success":      True,
                 "sector_count": jp_count + us_count,
@@ -442,7 +531,7 @@ def run_technology_mapper(cfg, results: dict) -> dict:
 
         jp_count = len(cluster_master.get("markets", {}).get("JP", {}))
         us_count = len(cluster_master.get("markets", {}).get("US", {}))
-        tech_keyword_map = getattr(cfg, "TECH_KEYWORD_MAP", {})
+        tech_keyword_map = _get_keyword_map(cfg)
 
         out.update({
             "success":      True,

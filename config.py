@@ -99,31 +99,36 @@ LOG_FILENAME    = "run_history.json"
 #   ・primary / fallback の 2 URL 構成に変更
 #   ・requests で生 XML を取得 → feedparser に渡す方式を採用
 #     （feedparser 直接呼び出しは SSL/UA 問題で 0 件になる場合がある）
+# 2026-07-13是正: export.arxiv.org/rss と rss.arxiv.org はどちらも「当日分のみの
+#   日次ダイジェスト」で、q-fin.PM 等の低頻度カテゴリでは entries=0 が正常応答
+#   になり得ることを curl で実証（両URL同一・bozo=False・0件）。日付に依存せず
+#   最新N件を確実に返す arXiv API (export.arxiv.org/api/query) を primary に変更。
+#   旧 RSS(export) は fallback として存置。
 
 ARXIV_FEEDS = {
     "q-fin.PM": {
-        "primary":  "https://export.arxiv.org/rss/q-fin.PM",
-        "fallback": "https://rss.arxiv.org/rss/q-fin.PM",
+        "primary":  "https://export.arxiv.org/api/query?search_query=cat:q-fin.PM&sortBy=submittedDate&sortOrder=descending&max_results=50",
+        "fallback": "https://export.arxiv.org/rss/q-fin.PM",
         "label":    "ポートフォリオ管理",
     },
     "q-fin.TR": {
-        "primary":  "https://export.arxiv.org/rss/q-fin.TR",
-        "fallback": "https://rss.arxiv.org/rss/q-fin.TR",
+        "primary":  "https://export.arxiv.org/api/query?search_query=cat:q-fin.TR&sortBy=submittedDate&sortOrder=descending&max_results=50",
+        "fallback": "https://export.arxiv.org/rss/q-fin.TR",
         "label":    "取引・市場微細構造",
     },
     "q-fin.ST": {
-        "primary":  "https://export.arxiv.org/rss/q-fin.ST",
-        "fallback": "https://rss.arxiv.org/rss/q-fin.ST",
+        "primary":  "https://export.arxiv.org/api/query?search_query=cat:q-fin.ST&sortBy=submittedDate&sortOrder=descending&max_results=50",
+        "fallback": "https://export.arxiv.org/rss/q-fin.ST",
         "label":    "統計ファイナンス",
     },
     "q-fin.RM": {
-        "primary":  "https://export.arxiv.org/rss/q-fin.RM",
-        "fallback": "https://rss.arxiv.org/rss/q-fin.RM",
+        "primary":  "https://export.arxiv.org/api/query?search_query=cat:q-fin.RM&sortBy=submittedDate&sortOrder=descending&max_results=50",
+        "fallback": "https://export.arxiv.org/rss/q-fin.RM",
         "label":    "リスク管理",
     },
     "econ.EM": {
-        "primary":  "https://export.arxiv.org/rss/econ.EM",
-        "fallback": "https://rss.arxiv.org/rss/econ.EM",
+        "primary":  "https://export.arxiv.org/api/query?search_query=cat:econ.EM&sortBy=submittedDate&sortOrder=descending&max_results=50",
+        "fallback": "https://export.arxiv.org/rss/econ.EM",
         "label":    "計量経済学",
     },
 }

@@ -322,6 +322,11 @@ def fetch_single_category(
     【v1.0 との差分】
       v1.0: feedparser.parse(rss.arxiv.org URL) の 1 段のみ
       v2.0: 3 段フォールバック + リトライ
+
+    2026-07-13是正: config.ARXIV_FEEDS の primary を旧 RSS(export.arxiv.org/rss)
+      から arXiv API(export.arxiv.org/api/query) に変更（日次RSSは低頻度カテゴリで
+      entries=0 が正常応答になり得るため）。取得ルート構造（3段フォールバック）
+      自体は本関数のまま変更していない。
     """
     primary  = urls["primary"]
     fallback = urls["fallback"]

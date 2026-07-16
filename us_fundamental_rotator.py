@@ -65,7 +65,9 @@ from typing import Optional
 # ==============================================================
 
 SEC_BASE_URL       = "https://data.sec.gov"
-COMPANY_TICKERS_URL = f"{SEC_BASE_URL}/files/company_tickers.json"
+# company_tickers.json は data.sec.gov ではなく www.sec.gov 配下（ファイルヘッダの
+# コメント通りが正。SEC_BASE_URL から組み立てると 404 になる 2026-07 実害バグ）。
+COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL    = f"{SEC_BASE_URL}/submissions/CIK{{:010d}}.json"
 XBRL_FACTS_URL     = f"{SEC_BASE_URL}/api/xbrl/companyfacts/CIK{{:010d}}.json"
 
@@ -236,7 +238,17 @@ def lookup_us_fundamentals_by_path(data_dir, ticker: str) -> Optional[dict]:
 # BLOCK 2: CIK 取得とマッピング
 # ==============================================================
 
-def _fetch_company_tickers() -> dict:
+def _sec_user_agent(cfg) -> str:
+    """
+    SEC EDGAR 向け User-Agent を取得する。
+    SEC は連絡先（メールアドレス等）を含まない User-Agent を 403 で拒否するため、
+    config.py の SEC_USER_AGENT（GitHub Secrets: SEC_USER_AGENT で上書き可）を使う。
+    institutional_13f_monitor.py / sec_summarizer.py / insider_monitor.py と同じ参照方法。
+    """
+    return getattr(cfg, "SEC_USER_AGENT", "StockAnalyzer stockanalyzer@example.com")
+
+
+def _fetch_company_tickers(cfg) -> dict:
     """
     SEC の company_tickers.json を取得して ticker→CIK のマッピングを返す。
     全上場企業のCIKを一括取得できる（約15,000社）。
@@ -248,10 +260,11 @@ def _fetch_company_tickers() -> dict:
         import requests
         resp = requests.get(
             COMPANY_TICKERS_URL,
-            headers={"User-Agent": "stock_analyzer/1.0 (educational use)"},
+            headers={"User-Agent": _sec_user_agent(cfg)},
             timeout=REQUEST_TIMEOUT,
         )
         if resp.status_code != 200:
+            print(f"    ⚠️  company_tickers.json 取得失敗: HTTP {resp.status_code}")
             return {}
         data = resp.json()
         # 形式: {"0": {"cik_str":"0001018724","ticker":"AMZN","title":"AMAZON.COM INC"}, ...}
@@ -266,7 +279,7 @@ def _fetch_company_tickers() -> dict:
                     pass
         return mapping
     except Exception as e:
-        print(f"    ⚠️  company_tickers.json 取得失敗: {str(e)[:60]}")
+        print(f"    ⚠️  company_tickers.json 取得失敗: {type(e).__name__}: {str(e)[:60]}")
         return {}
 
 
@@ -283,7 +296,7 @@ def get_or_update_cik_map(cfg, force_refresh: bool = False) -> dict:
         return cik_map
 
     print("    📥 SEC CIK一覧を取得中...")
-    new_map = _fetch_company_tickers()
+    new_map = _fetch_company_tickers(cfg)
     if new_map:
         save_cik_map(cfg, new_map)
         print(f"    ✅ CIKマップ更新: {len(new_map)}社")
@@ -295,7 +308,7 @@ def get_or_update_cik_map(cfg, force_refresh: bool = False) -> dict:
 # BLOCK 3: XBRL 財務データ取得
 # ==============================================================
 
-def _fetch_submissions(cik: int) -> Optional[dict]:
+def _fetch_submissions(cik: int, cfg) -> Optional[dict]:
     """
     submissions/{CIK}.json を取得して最新提出情報を返す。
     8-K の提出タイミング検知に使用する。
@@ -305,17 +318,18 @@ def _fetch_submissions(cik: int) -> Optional[dict]:
         url  = SUBMISSIONS_URL.format(cik)
         resp = requests.get(
             url,
-            headers={"User-Agent": "stock_analyzer/1.0 (educational use)"},
+            headers={"User-Agent": _sec_user_agent(cfg)},
             timeout=REQUEST_TIMEOUT,
         )
         if resp.status_code == 200:
             return resp.json()
-    except Exception:
-        pass
+        print(f"    ⚠️  submissions取得失敗 (CIK {cik}): HTTP {resp.status_code}")
+    except Exception as e:
+        print(f"    ⚠️  submissions取得失敗 (CIK {cik}): {type(e).__name__}: {str(e)[:60]}")
     return None
 
 
-def _fetch_xbrl_facts(cik: int) -> Optional[dict]:
+def _fetch_xbrl_facts(cik: int, cfg) -> Optional[dict]:
     """
     XBRL companyfacts/{CIK}.json を取得する（全財務データの塊）。
     レスポンスは大きい（数MB）ため、必要項目のみ抽出する。
@@ -325,13 +339,14 @@ def _fetch_xbrl_facts(cik: int) -> Optional[dict]:
         url  = XBRL_FACTS_URL.format(cik)
         resp = requests.get(
             url,
-            headers={"User-Agent": "stock_analyzer/1.0 (educational use)"},
+            headers={"User-Agent": _sec_user_agent(cfg)},
             timeout=30,  # XBRL は大きいので長め
         )
         if resp.status_code == 200:
             return resp.json()
-    except Exception:
-        pass
+        print(f"    ⚠️  XBRL facts取得失敗 (CIK {cik}): HTTP {resp.status_code}")
+    except Exception as e:
+        print(f"    ⚠️  XBRL facts取得失敗 (CIK {cik}): {type(e).__name__}: {str(e)[:60]}")
     return None
 
 
@@ -502,14 +517,14 @@ def fetch_one_ticker(
     """
     try:
         # XBRL facts 取得
-        facts_data = _fetch_xbrl_facts(cik)
+        facts_data = _fetch_xbrl_facts(cik, cfg)
         time.sleep(REQUEST_DELAY)
 
         if not facts_data:
             return {"ok": False, "ticker": ticker, "error": "XBRL取得失敗"}
 
         # submissions 取得（8-K日程検知用）
-        submissions = _fetch_submissions(cik)
+        submissions = _fetch_submissions(cik, cfg)
         time.sleep(REQUEST_DELAY)
 
         # 財務項目の抽出
