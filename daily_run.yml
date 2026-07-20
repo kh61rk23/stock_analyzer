@@ -21,7 +21,7 @@
 #   ALERT_GMAIL_TO        送信先アドレス（同じアドレスでも可）
 #   ALERT_LINE_TOKEN      LINE Messaging API チャネルアクセストークン（任意）
 #   ALERT_LINE_USER_ID    通知先 LINE ユーザーID（任意）
-#   EDINET_API_KEY        EDINET API キー（任意）
+#   EDINET_API_KEY        残置のみ（dormant、実行では使用しない）
 #   POLICY_FRED_API_KEY   FRED API キー（任意）
 #   BQ_PROJECT_ID         BigQuery プロジェクト ID
 #   BQ_CREDENTIALS        BigQuery サービスアカウント JSON（文字列）
@@ -123,11 +123,13 @@ jobs:
           echo "▶ 実行モード: $MODE"
 
       # ── 3-B. EDINET インデックス更新 (追加箇所) ──────────────
-      - name: Run EDINET doc indexer
+      - name: Run EdinetDB ingest and doc_index maintenance
         env:
           BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+          EDINETDB_API_KEY: ${{ secrets.EDINETDB_API_KEY }}
         run: |
-          python edinet_doc_indexer.py
+          python edinetdb_ingestor.py
       # ── 3-B3. Wave 6 - U-4: 機関投資家 13F 監視（四半期提出期間のみ）──
       - name: 🏦 Run institutional 13F monitor (quarterly filing period only)
         if: steps.set-mode.outputs.mode == 'weekly'
@@ -177,7 +179,6 @@ jobs:
         env:
           BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
           BQ_PROJECT_ID:  ${{ secrets.BQ_PROJECT_ID }}
-          EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
           EDINETDB_API_KEY: ${{ secrets.EDINETDB_API_KEY }}
           STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
         run: |
@@ -236,14 +237,6 @@ jobs:
           nonzero = sum(1 for v in bonus_map.values() if v != 0.0)
           print(f"✅ text_signal 完了: {nonzero}/{len(bonus_map)}社でリスク検出")
           EOF
-      # ── 3-C. EDINET インデックス追加更新 (追加箇所) ──────────────      
-      - name: Run EDINET direct fetcher (optional bootstrap)
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'all'
-        env:
-          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
-          BQ_PROJECT_ID:  ${{ secrets.BQ_PROJECT_ID }}
-        run: |
-          python edinet_direct_fetcher.py --limit 33
       # ── 5. アナライザー実行 ───────────────────────────────
       # github actionsのAPIキーやファイルパスをそれぞれ定義している。
       # シングルモードの時は指定モジュールを実行。そうでないときはrun_headless.pyから参照する。
@@ -258,7 +251,6 @@ jobs:
           ALERT_GMAIL_TO:       ${{ secrets.ALERT_GMAIL_TO }}
           ALERT_LINE_TOKEN:     ${{ secrets.ALERT_LINE_TOKEN }}
           ALERT_LINE_USER_ID:   ${{ secrets.ALERT_LINE_USER_ID }}
-          EDINET_API_KEY:       ${{ secrets.EDINET_API_KEY }}
           POLICY_FRED_API_KEY:  ${{ secrets.POLICY_FRED_API_KEY }}
           ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
           GOOGLE_CSE_API_KEY:   ${{ secrets.GOOGLE_CSE_API_KEY }}
@@ -270,6 +262,7 @@ jobs:
           GOOGLE_DRIVE_FOLDER_ID:     ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
           ESTAT_API_KEY:              ${{ secrets.ESTAT_API_KEY }}
           EDINETDB_API_KEY:           ${{ secrets.EDINETDB_API_KEY }}
+          FUDOSAN_API_KEY:            ${{ secrets.FUDOSAN_API_KEY }}
           DEEPL_API_KEY:              ${{ secrets.DEEPL_API_KEY }}
           NOTION_API_KEY:             ${{ secrets.NOTION_API_KEY }}  # 2026-06-10 ハードコード廃止に伴い追加
           CONGRESS_API_KEY:           ${{ secrets.CONGRESS_API_KEY }}  # 2026-06-10 congress_monitor配線復元に伴い追加
@@ -336,8 +329,6 @@ jobs:
             git add stock_data/data/cycle_phase_history.json || true
             git add stock_data/data/rule_weights.json || true
             git add stock_data/data/cross_sector_signal_history.json || true # R-1 履歴保存実装後に有効化
-            git add stock_data/data/us_fundamentals_db/ || true
-            git add stock_data/data/us_cik_mapping.json || true
             git add stock_data/data/tdnet_notified.json || true
             git add stock_data/data/investment_journal.json || true
             git add stock_data/data/score_drift_log.json || true
@@ -357,8 +348,6 @@ jobs:
             git add stock_data/data/ml_corrections_latest.json || true
             git add stock_data/data/sentiment_cache.json || true
             git add stock_data/data/policy_radar_cache.json || true
-            git add stock_data/data/us_fundamentals_meta.json || true
-            git add stock_data/data/us_cik_map.json || true
             git add stock_data/data/us_macro_cache.json || true
             git add stock_data/data/us_8k_cache.json || true
             git add stock_data/data/cross_sector_signal_history.json || true

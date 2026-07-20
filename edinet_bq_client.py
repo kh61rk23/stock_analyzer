@@ -98,7 +98,7 @@ class EDINETBQClient:
     # 書き込み系
     # ----------------------------------------------------------
 
-    def insert_rows(self, table_name: str, rows: list[dict]) -> bool:
+    def insert_rows(self, table_name: str, rows: list[dict], dataset: str | None = None) -> bool:
         """
         行を挿入する。
         BigQuery はネイティブ upsert 非対応のため追記式。
@@ -106,7 +106,7 @@ class EDINETBQClient:
         """
         if not rows:
             return True
-        table_ref = f"{self.dataset}.{table_name}"
+        table_ref = f"{self.project}.{dataset or BQ_DATASET}.{table_name}"
         errors = self.client.insert_rows_json(table_ref, rows)
         if errors:
             print(f"[BQClient] insert_rows error ({table_name}): {errors}")

@@ -295,6 +295,7 @@ def calc_composite_score(
     edinet_text_risk_bonus:   float = 0.0,   # Wave 5 - E4: テキストリスクボーナス
     geo_impact_bonus:         float = 0.0,   # Wave 6 - G-X: 地政学×権益統合シグナル
     cluster_phase_bonus:      float = 0.0,   # Wave 6 - B: 技術クラスターフェーズボーナス
+    real_estate_bonus:        float = 0.0,   # D-②-2: corporate property enrichment
 ) -> tuple:
     """
     財務スコア(40) + マクロスコア(30) + アナリストスコア(5) + EDINET信用ボーナス(最大+5/-5)
@@ -430,6 +431,13 @@ def calc_composite_score(
             )
     except Exception:
         pass   # 失敗時は 0.0 のまま継続   # 失敗時は 0.0 のまま継続
+    try:
+        _re_bonus = max(-2.0, min(3.0, float(real_estate_bonus)))
+        if _re_bonus:
+            total += _re_bonus
+            print(f"    🏢 不動産ボーナス（D-②）: {_re_bonus:+.2f}pt")
+    except Exception:
+        pass
     total = max(-30.0, min(100.0, total))   # ★追い風多数/逆風多数時の異常値防止
 
     headwinds = sum(1 for s in macro_signals if s["signal"] == "headwind")
@@ -927,6 +935,17 @@ def build_result(
                 f"{str(_gse)[:60]}"
             )
 
+    _real_estate_bonus = 0.0
+    if getattr(cfg, "ENABLE_REAL_ESTATE_SIGNAL", True):
+        try:
+            from real_estate_signal import get_real_estate_bonus
+            _values = [get_real_estate_bonus(str(c.get("ticker", "")).replace(".T", ""))
+                       for c in companies if c.get("fetch_ok")]
+            _values = [v for v in _values if v]
+            _real_estate_bonus = round(sum(_values) / len(_values), 2) if _values else 0.0
+        except Exception:
+            _real_estate_bonus = 0.0
+
     score, risk_level = calc_composite_score(
         companies,
         macro_signals,
@@ -937,16 +956,14 @@ def build_result(
         _edinet_text_risk_bonus,      # Wave 5 - E4: テキストリスクボーナス
         _geo_impact_bonus,            # Wave 6 - G-X: 地政学×権益統合シグナル
         _cluster_phase_bonus,         # Wave 6 - B: 技術クラスターフェーズボーナス
+        _real_estate_bonus,
     )
 
-    # ── EdinetDB + 政府EDINET 一括取得 ──────────────────────────
+    # ── EdinetDB only ───────────────────────────────────────────
     edinet_data  = {}  # {ticker: full_company_data}
     edinet_risks = {}  # {ticker: [リスク文字列リスト]} ← 後方互換用
 
-    db_api_key = (
-        getattr(cfg, "EDINETDB_API_KEY", "")
-        or getattr(cfg, "EDINET_API_KEY", "")
-    )
+    db_api_key = getattr(cfg, "EDINETDB_API_KEY", "")
     if getattr(cfg, "ENABLE_EDINET", False) and db_api_key:
         try:
             _edinet = _load_edinet_client(cfg)
@@ -1018,6 +1035,7 @@ def build_result(
         "geo_impact_bonus":      _geo_impact_bonus,   # Wave 6 - G-X: 地政学×権益
         # ── Wave 6 - B 追加フィールド ────────────────────────
         "cluster_phase_bonus":   _cluster_phase_bonus, # Wave 6 - B: 技術クラスターフェーズボーナス
+        "real_estate_bonus":     _real_estate_bonus,
     }
 
     # score_explainer 連携

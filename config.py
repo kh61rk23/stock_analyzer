@@ -1240,6 +1240,7 @@ GOV_VEGPRICE_API = "https://api.cultivationdata.net/yasai_kakaku?div=all&type=cs
 #   旧キーはコードに露出していたため失効・再発行を推奨。
 EDINET_API_KEY: str = os.getenv("EDINET_API_KEY", "")      # 金融庁 EDINET
 EDINETDB_API_KEY: str = os.getenv("EDINETDB_API_KEY", "")  # 民間 EdinetDB
+FUDOSAN_API_KEY: str = os.getenv("FUDOSAN_API_KEY", "")
 ESTAT_API_KEY: str = os.getenv("ESTAT_API_KEY", "")
 
 # 深掘り分析対象ティッカー（S3-4）
@@ -1272,7 +1273,7 @@ EDINET_CACHE_DAYS = 100
 # ==============================================================
 # BLOCK 19: EdinetDB ローテーション設定
 # ==============================================================
-ENABLE_EDINET_ROTATION: bool   = True # ローテーション実行中
+ENABLE_EDINET_ROTATION: bool   = False # D-①: legacy direct/XBRL rotation retired
 EDINET_ROTATION_PER_DAY: int   = 33   # 1日あたりのローテーション取得社数
 EDINET_ROTATION_CACHE_DAYS: int = 30  # analysis再取得間隔（日）
 EDINET_DAILY_BUDGET: int        = 80  # 1日の最大APIコール数（バッファ20）
@@ -1285,6 +1286,18 @@ ENABLE_EDINET: bool = True
 # APIキー設定後に True に変更。
 # 現在はEDINETDBの業種ごとの検索を止めており、
 # 別フラグの箇所にて、EDINETDBを動かしている。
+ENABLE_EDINETDB_INGEST: bool = True
+ENABLE_EDINET_DIRECT_FETCH: bool = False
+EDINETDB_BASE_URL: str = os.getenv("EDINETDB_BASE_URL", "https://edinetdb.jp/v1")
+EDINETDB_LOOKBACK_DAYS: int = 7
+EDINETDB_TEXTBLOCK_EVERY_N: int = 2
+
+# D-②: P1 corporate real-estate enrichment; all missing data is neutral.
+ENABLE_FUDOSANDB_INGEST: bool = True
+ENABLE_REAL_ESTATE_SIGNAL: bool = True
+FUDOSANDB_BASE_URL: str = os.getenv("FUDOSANDB_BASE_URL", "https://fudosandb.jp/v1")
+FUDOSANDB_DAILY_BUDGET: int = 90
+FUDOSANDB_P1_TICKERS: list = []
 
 # ==============================================================
 # BLOCK 9: タイムライン設定（3-A）
