@@ -30,10 +30,8 @@
 #   8-K提出タイミングを submissions から検知 → ウォッチリストに動的追加
 #   鮮度管理: 取得後30日は再取得しない（財務は四半期更新）
 #
-# 【キャッシュ構造】
-#   stock_data/data/us_fundamentals_db/{ticker}.json  （銘柄ごと）
-#   stock_data/data/us_fundamentals_meta.json          （管理台帳）
-#   stock_data/data/us_cik_map.json                    （ticker→CIK変換）
+# 【永続化】
+#   BigQuery us.fundamentals（ローカル JSON は使用しない）
 #
 # 【screener との連携】
 #   us_stock_screener.py の _fetch_ticker_data() が
@@ -70,10 +68,6 @@ SEC_BASE_URL       = "https://data.sec.gov"
 COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL    = f"{SEC_BASE_URL}/submissions/CIK{{:010d}}.json"
 XBRL_FACTS_URL     = f"{SEC_BASE_URL}/api/xbrl/companyfacts/CIK{{:010d}}.json"
-
-DB_DIR_NAME        = "us_fundamentals_db"
-META_FILENAME      = "us_fundamentals_meta.json"
-CIK_MAP_FILENAME   = "us_cik_map.json"
 
 CACHE_DAYS         = 30    # 財務データの再取得間隔（日）
 DAILY_FETCH_LIMIT  = 20    # 1日あたりの最大取得社数
@@ -122,78 +116,52 @@ XBRL_FACT_MAP = {
 
 
 # ==============================================================
-# BLOCK 1: ファイル I/O
+# BLOCK 1: BigQuery persistence (BQ-only)
 # ==============================================================
-
-def _db_dir(cfg) -> Path:
-    return Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / DB_DIR_NAME
-
-
-def _meta_path(cfg) -> Path:
-    return Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / META_FILENAME
-
-
-def _cik_map_path(cfg) -> Path:
-    return Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / CIK_MAP_FILENAME
-
-
 def load_meta(cfg) -> dict:
-    """
-    管理台帳を読み込む。
-    構造:
-      {ticker: {cik, name, last_fetched, next_due, fetch_count, priority}}
-    """
-    p = _meta_path(cfg)
-    if p.exists():
-        try:
-            return json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    return {}
+    """Read the rotational ledger from BigQuery, returning an empty ledger on outage."""
+    try:
+        from edinet_bq_client import EDINETBQClient
+        bq = EDINETBQClient()
+        frame = bq.query_to_df(f"SELECT ticker, cik, last_fetched, fetch_count, recent_8k_dates, latest_eps FROM `{bq.project}.us.fundamentals_latest`")
+        return {str(r.ticker): {"ticker": str(r.ticker), "cik": r.cik,
+                "last_fetched": str(r.last_fetched or ""), "fetch_count": int(r.fetch_count or 0),
+                "recent_8k_dates": list(r.recent_8k_dates or []), "eps_latest": r.latest_eps}
+                for r in frame.itertuples()}
+    except Exception as exc:
+        print(f"    ⚠️ BQ US ledger read failed: {str(exc)[:80]}")
+        return {}
 
 
 def save_meta(cfg, meta: dict) -> None:
-    p = _meta_path(cfg)
-    try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception as e:
-        print(f"    ⚠️  us_fundamentals_meta.json 保存失敗: {e}")
+    # Metadata is included in each MERGE row by save_ticker_db().
+    return None
 
 
 def load_cik_map(cfg) -> dict:
-    """ticker → CIK の変換マップを読み込む。"""
-    p = _cik_map_path(cfg)
-    if p.exists():
-        try:
-            return json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
-            pass
     return {}
 
 
 def save_cik_map(cfg, cik_map: dict) -> None:
-    p = _cik_map_path(cfg)
-    try:
-        p.write_text(json.dumps(cik_map, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception as e:
-        print(f"    ⚠️  us_cik_map.json 保存失敗: {e}")
-
-
-def _ticker_path(cfg, ticker: str) -> Path:
-    """個別銘柄の財務DBパスを返す。"""
-    safe = ticker.replace("/", "_").replace(".", "_")
-    return _db_dir(cfg) / f"{safe}.json"
+    return None
 
 
 def save_ticker_db(cfg, ticker: str, data: dict) -> None:
-    p = _ticker_path(cfg, ticker)
     try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        data["_saved_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception as e:
-        print(f"    ⚠️  {ticker}.json 保存失敗: {e}")
+        from edinet_bq_client import EDINETBQClient
+        bq = EDINETBQClient()
+        allowed = {"ticker", "cik", "eps_history", "revenue_history", "operating_income_history",
+                   "net_income_history", "fcf_history", "buyback_history", "shares_history",
+                   "recent_8k_dates", "eps_accel_score_xbrl", "latest_eps", "latest_revenue",
+                   "latest_net_income", "latest_fcf", "data_source"}
+        row = {key: value for key, value in data.items() if key in allowed}
+        row.update({"ticker": ticker, "fetched_at": datetime.now().isoformat(),
+                    "last_fetched": date.today().isoformat()})
+        errors = bq.client.insert_rows_json(f"{bq.project}.us.fundamentals", [row])
+        if errors:
+            raise RuntimeError(errors)
+    except Exception as exc:
+        raise RuntimeError(f"BQ us.fundamentals write failed: {exc}") from exc
 
 
 def lookup_us_fundamentals(cfg, ticker: str) -> Optional[dict]:
@@ -206,11 +174,12 @@ def lookup_us_fundamentals(cfg, ticker: str) -> Optional[dict]:
          net_income_history, fcf_history, eps_accel_score, ...}
         | None（データなし）
     """
-    p = _ticker_path(cfg, ticker)
-    if not p.exists():
-        return None
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        from edinet_bq_client import EDINETBQClient
+        bq = EDINETBQClient()
+        safe = str(ticker).replace("'", "")
+        frame = bq.query_to_df(f"SELECT * FROM `{bq.project}.us.fundamentals_latest` WHERE ticker = '{safe}' LIMIT 1")
+        return frame.iloc[0].to_dict() if not frame.empty else None
     except Exception:
         return None
 
@@ -224,14 +193,8 @@ def lookup_us_fundamentals_by_path(data_dir, ticker: str) -> Optional[dict]:
       常時欠落していた。_ticker_path と同じレイアウト
       （<data_dir>/us_fundamentals_db/<ticker>.json）を参照する。
     """
-    try:
-        safe = ticker.replace("/", "_").replace(".", "_")
-        p = Path(data_dir) / DB_DIR_NAME / f"{safe}.json"
-        if not p.exists():
-            return None
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return None
+    class _Cfg: pass
+    return lookup_us_fundamentals(_Cfg(), ticker)
 
 
 # ==============================================================
@@ -291,17 +254,12 @@ def get_or_update_cik_map(cfg, force_refresh: bool = False) -> dict:
     Returns:
         {ticker_upper: cik_int}
     """
-    cik_map = load_cik_map(cfg)
-    if cik_map and not force_refresh:
-        return cik_map
-
     print("    📥 SEC CIK一覧を取得中...")
     new_map = _fetch_company_tickers(cfg)
     if new_map:
-        save_cik_map(cfg, new_map)
-        print(f"    ✅ CIKマップ更新: {len(new_map)}社")
+        print(f"    ✅ CIKマップ取得: {len(new_map)}社（メモリのみ）")
         return new_map
-    return cik_map  # 取得失敗時はキャッシュを返す
+    return {}
 
 
 # ==============================================================

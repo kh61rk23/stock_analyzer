@@ -4081,6 +4081,22 @@ def run_all_tasks(mode: str = "all") -> dict:
             print("  ⏩ 米国株スクリーニング: スキップ（ENABLE_US_SCREENER=False）")
 
     # ── EdinetDB ローテーション取得 ──────────────────────────
+    if getattr(cfg, "ENABLE_EDINETDB_INGEST", True) and _in_mode("edinet_rotation"):
+        try:
+            _edi = _load_local_module("edinetdb_ingestor", "/content/edinetdb_ingestor.py", cfg.DRIVE_BASE / "edinetdb_ingestor.py")
+            if _edi:
+                results["edinetdb_ingest"] = _edi.run_edinetdb_ingest(cfg, results)
+                logger.add("edinetdb_ingest", "success", str(results["edinetdb_ingest"]))
+        except Exception as e:
+            logger.add("edinetdb_ingest", "error", str(e)[:100])
+    if getattr(cfg, "ENABLE_FUDOSANDB_INGEST", True) and _in_mode("edinet_rotation"):
+        try:
+            _fudo = _load_local_module("fudosan_ingestor", "/content/fudosan_ingestor.py", cfg.DRIVE_BASE / "fudosan_ingestor.py")
+            if _fudo:
+                results["fudosan_ingest"] = _fudo.run_fudosan_ingest(cfg, results)
+                logger.add("fudosan_ingest", "success", str(results["fudosan_ingest"]))
+        except Exception as e:
+            logger.add("fudosan_ingest", "error", str(e)[:100])
     if getattr(cfg, "ENABLE_EDINET_ROTATION", False) and _in_mode("edinet_rotation"):
         print("\n  🔄 EdinetDB ローテーション...")
         try:

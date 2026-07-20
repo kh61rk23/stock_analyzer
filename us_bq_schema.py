@@ -106,6 +106,24 @@ DDL = [
     )
     PARTITION BY signal_date
     """,
+    """
+    CREATE TABLE IF NOT EXISTS `{project}.us.fundamentals` (
+      ticker STRING NOT NULL, cik INT64, eps_history JSON, revenue_history JSON,
+      operating_income_history JSON, net_income_history JSON, fcf_history JSON,
+      buyback_history JSON, shares_history JSON, recent_8k_dates JSON,
+      eps_accel_score_xbrl FLOAT64, latest_eps FLOAT64, latest_revenue FLOAT64,
+      latest_net_income FLOAT64, latest_fcf FLOAT64, data_source STRING,
+      fetched_at TIMESTAMP, last_fetched DATE, fetch_count INT64,
+      last_status STRING
+    ) PARTITION BY last_fetched CLUSTER BY ticker
+    """,
+    """
+    CREATE OR REPLACE VIEW `{project}.us.fundamentals_latest` AS
+    SELECT * EXCEPT(rn) FROM (
+      SELECT *, ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY fetched_at DESC) AS rn
+      FROM `{project}.us.fundamentals`
+    ) WHERE rn = 1
+    """,
 ]
 
 

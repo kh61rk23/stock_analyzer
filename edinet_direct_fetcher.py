@@ -412,6 +412,14 @@ def fetch_and_store_one(doc_meta: dict, bq_client: EDINETBQClient) -> bool:
 # ============================================================
 
 def run_fetcher(daily_limit: int = 33) -> dict:
+    # D-①-1: retained only for historical recovery; active runs must use EdinetDB.
+    try:
+        import config
+        if not getattr(config, "ENABLE_EDINET_DIRECT_FETCH", False):
+            print("[fetcher] skipped: government EDINET parser is retired")
+            return {"skipped": True, "reason": "ENABLE_EDINET_DIRECT_FETCH=False"}
+    except Exception:
+        pass
     """
     BQ doc_index から未取得レコードを daily_limit 件取得・処理する。
     edinet_rotation_manager.py の run() から呼び出す想定。

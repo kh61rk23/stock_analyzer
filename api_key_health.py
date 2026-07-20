@@ -199,7 +199,8 @@ def _entry(state: str, message: str) -> dict:
 
 
 def _probe_edinet(key: str) -> dict:
-    """金融庁 EDINET documents.json を1コール。200=✅ / 401,403=❌ / 他=⚠️。"""
+    """D-⑧: secret is retained dormant; do not call the retired government API."""
+    return _entry(STATE_UNSET, "dormant（EdinetDB 一本化のため照会しない）")
     req = _requests()
     if req is None:
         return _entry(STATE_LIMITED, "判定不能（requests 未導入）")
