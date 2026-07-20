@@ -1,0 +1,20 @@
+# イベントドリブン・プレイブック（Wave R4-1 / S5）
+# 元となる文字列式（要件§R4-1）: "surprise_pct >= 5 and drift_score >= threshold"
+# → 安全評価のため conditions を構造化（eval不使用）。
+id: pead_long_v1
+event_source: pead_monitor
+description: PEAD（決算後ドリフト）ロング。サプライズ＋ドリフト継続で翌日始値買い。
+entry:
+  side: BUY
+  conditions:
+    - {field: surprise_magnitude, op: ">=", value: 5}
+    - {field: pead_score, op: ">=", value: 3.0}
+    - {field: direction, op: "==", value: positive}
+  timing: next_open
+  max_concurrent: 3
+  size_pct_of_casino: 5
+exit:
+  hold_days_max: 40
+  take_profit_pct: 15
+  stop_loss_pct: -7
+status: paper

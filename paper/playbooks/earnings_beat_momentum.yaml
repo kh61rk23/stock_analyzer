@@ -1,0 +1,17 @@
+# イベントドリブン・プレイブック（Wave R4-1 / S5）
+id: earnings_beat_momentum
+event_source: earnings_surprise
+description: 決算サプライズ＋ガイダンス上方修正のモメンタム追随。
+entry:
+  side: BUY
+  conditions:
+    - {field: surprise_pct, op: ">=", value: 5}
+    - {field: guidance_raised, op: "==", value: true}
+  timing: next_open
+  max_concurrent: 3
+  size_pct_of_casino: 5
+exit:
+  hold_days_max: 30
+  take_profit_pct: 12
+  stop_loss_pct: -7
+status: paper
