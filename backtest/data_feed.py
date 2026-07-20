@@ -64,6 +64,10 @@ class YFinanceFeed(InMemoryFeed):
     実データフィード。yfinance の調整済み日足を取得し
     stock_data/cache/backtest/{ticker}.csv にキャッシュする。
     ネットワーク不通時はキャッシュから復元（無ければそのtickerは空）。
+
+    auto_adjust=True のOHLCは配当落ちを調整済みのため、Dividendsを別途
+    Engineへ渡すと配当を二重計上する。実データ経路ではdividendsを常に空にし、
+    配当cash加算の単体検証はInMemoryFeed（未調整価格）で行う。
     """
 
     def __init__(self, tickers: list, start: str, end: str, cfg=None,
@@ -108,9 +112,6 @@ class YFinanceFeed(InMemoryFeed):
                                  "open": float(r["Open"]), "high": float(r["High"]),
                                  "low": float(r["Low"]), "close": float(r["Close"]),
                                  "volume": float(r.get("Volume", 0) or 0)})
-                    div = float(r.get("Dividends", 0) or 0)
-                    if div > 0:
-                        divs[d] = div
                 self._save_cache(cache, rows, divs)
                 return rows, divs
         except Exception:
@@ -125,8 +126,8 @@ class YFinanceFeed(InMemoryFeed):
                                          "open": float(r["open"]), "high": float(r["high"]),
                                          "low": float(r["low"]), "close": float(r["close"]),
                                          "volume": float(r["volume"])})
-                            if float(r.get("dividend", 0) or 0) > 0:
-                                divs[r["date"]] = float(r["dividend"])
+                            # キャッシュ旧版にdividend列があっても、OHLCは
+                            # auto_adjust済みなので読み戻さない（二重計上防止）。
             except Exception:
                 pass
         return rows, divs

@@ -15,7 +15,9 @@
 
 from __future__ import annotations
 
+import argparse
 import json
+import re
 import sys
 from datetime import date
 from pathlib import Path
@@ -217,13 +219,40 @@ def build_report(plan: dict, yyyymm: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def main():
-    yyyymm = sys.argv[1] if len(sys.argv) > 1 else date.today().strftime("%Y%m")
+def _yyyymm(value: str) -> str:
+    """YYYYMMを検証し、月次成果物の不正なファイル名生成を防ぐ。"""
+    if not re.fullmatch(r"\d{6}", value):
+        raise argparse.ArgumentTypeError("対象月はYYYYMM（例: 202607）で指定してください")
+    month = int(value[4:])
+    if not 1 <= month <= 12:
+        raise argparse.ArgumentTypeError("対象月のMMは01〜12で指定してください")
+    return value
+
+
+def main(argv: list[str] | None = None):
+    parser = argparse.ArgumentParser(
+        description="S2ペーパー成績から月次の資金配分提案を作成"
+    )
+    parser.add_argument(
+        "yyyymm",
+        nargs="?",
+        type=_yyyymm,
+        default=date.today().strftime("%Y%m"),
+        help="対象月（YYYYMM、省略時は当月）",
+    )
+    args = parser.parse_args(argv)
+    yyyymm = args.yyyymm
     try:
         import config as cfg
     except Exception:
         cfg = None
     returns, pf, pval = _load_paper_returns(cfg)
+    if not returns:
+        print(
+            "⏩ S2月次リターンなし → 資金配分提案をスキップ"
+            "（accounts.jsonに3ヶ月以上蓄積後に実行）"
+        )
+        return
     total = _total_assets(cfg)
     budget = _casino_budget(cfg, total)
     plan = build_allocation(returns, pf, pval, total, budget, cfg)

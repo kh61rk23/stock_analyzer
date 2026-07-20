@@ -144,7 +144,12 @@ def load_to_bq(rows: list[dict], cfg) -> tuple[bool, int]:
         from google.cloud import bigquery
         from edinet_bq_client import EDINETBQClient
         bq = EDINETBQClient()
-        project = getattr(cfg, "BQ_PROJECT_ID", "stock-analyzer-edinet")
+        # configに属性があっても空文字の場合がある。認証JSONから解決済みの
+        # client.projectを正本にし、`.taxonomy...` という壊れたtable idを防ぐ。
+        project = (
+            str(getattr(cfg, "BQ_PROJECT_ID", "") or "").strip()
+            or bq.project
+        )
         staging = f"{project}.taxonomy._staging_taxonomy_node"
 
         # staging はJSON列を含むため本テーブルの LIKE で作る（冪等）

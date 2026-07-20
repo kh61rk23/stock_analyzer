@@ -122,6 +122,39 @@ class TestEngine:
         expected = 0.98 / 1.002 * (1 + underlying) + 0.02 - 1
         assert abs(engine_ret - expected) < 0.005
 
+    def test_adjusted_price_feed_does_not_double_count_dividends(self, tmp_path, monkeypatch):
+        """auto_adjust済み価格ではDividendsをEngineへ重ねて渡さない。"""
+        import pandas as pd
+        from backtest.data_feed import YFinanceFeed
+
+        index = pd.to_datetime(["2026-01-05", "2026-01-06"])
+        history = pd.DataFrame(
+            {
+                "Open": [100.0, 101.0],
+                "High": [101.0, 102.0],
+                "Low": [99.0, 100.0],
+                "Close": [100.5, 101.5],
+                "Volume": [1000, 1000],
+                "Dividends": [5.0, 0.0],
+            },
+            index=index,
+        )
+
+        class FakeTicker:
+            def history(self, **_kwargs):
+                return history
+
+        import yfinance as yf
+
+        monkeypatch.setattr(yf, "Ticker", lambda _ticker: FakeTicker())
+        feed = YFinanceFeed.__new__(YFinanceFeed)
+        rows, dividends = feed._load(
+            "1306.T", "2026-01-01", "2026-02-01", tmp_path
+        )
+
+        assert len(rows) == 2
+        assert dividends == {}
+
     def test_golden_two_days(self):
         """2営業日ゴールデン: 手計算と完全一致。"""
         prices = {"7203.T": [

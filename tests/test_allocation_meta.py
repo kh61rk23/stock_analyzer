@@ -16,7 +16,7 @@ import pytest
 REPO = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO))
 
-from allocation_meta import (apply_casino_constraint, build_allocation,   # noqa: E402
+from allocation_meta import (_yyyymm, apply_casino_constraint, build_allocation,   # noqa: E402
                              build_report, cull_check, kelly_fraction,
                              risk_parity_weights)
 
@@ -148,3 +148,13 @@ class TestBuildAllocation:
         md = build_report(plan, "202607")
         assert "getattr" not in md
         assert "最低3ヶ月未満" in md
+
+
+class TestCli:
+    def test_yyyymm_accepts_valid_month(self):
+        assert _yyyymm("202607") == "202607"
+
+    @pytest.mark.parametrize("value", ["--help", "202600", "202613", "20267"])
+    def test_yyyymm_rejects_invalid_value(self, value):
+        with pytest.raises(Exception):
+            _yyyymm(value)

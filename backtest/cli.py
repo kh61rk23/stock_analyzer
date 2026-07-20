@@ -107,11 +107,21 @@ def main():
 
     if args.verify_benchmark:
         rows = feed.history(bench_ticker, args.end, 100000)
-        raw = rows[-1]["close"] / rows[0]["close"] - 1
+        if len(rows) < 2:
+            raise SystemExit("❌ ベンチマーク照合に必要な価格データが不足しています")
+        # 戦略は初日に発注し2日目始値で98%を投入する。初日終値からの単純騰落率と
+        # 比べると、翌日約定・現金2%・スリッページの差を「誤差」と誤判定するため、
+        # 合成データ受入テストと同じコスト調整済み理論値を比較対象にする。
+        underlying = rows[-1]["close"] / rows[1]["open"] - 1
+        slip = getattr(cfg, "BT_SLIPPAGE_BPS_JP", 20) / 10000.0
+        expected = 0.98 / (1.0 + slip) * (1.0 + underlying) + 0.02 - 1.0
         bt = bench.final_equity / args.capital - 1
-        diff = abs(bt - raw)
-        print(f"受入条件①: エンジン{bt:+.4%} vs 現物{raw:+.4%} → 誤差{diff:.4%} "
+        diff = abs(bt - expected)
+        print(f"受入条件①: エンジン{bt:+.4%} vs コスト調整済み現物{expected:+.4%} "
+              f"→ 誤差{diff:.4%} "
               f"{'✅ ±0.5%以内' if diff <= 0.005 else '❌ 0.5%超'}")
+        if diff > 0.005:
+            raise SystemExit(1)
 
     out_dir = REPO / "insights" / "backtest"
     out_dir.mkdir(parents=True, exist_ok=True)

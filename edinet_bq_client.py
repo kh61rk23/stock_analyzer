@@ -56,23 +56,43 @@ class EDINETBQClient:
     def _init_client(self):
         """認証初期化"""
         bq_json = os.environ.get("BQ_CREDENTIALS", "")
+        credential_project = ""
         if bq_json:
             # GitHub Actions: Secret から直接 JSON 文字列を読み込む
             info  = json.loads(bq_json)
+            credential_project = str(info.get("project_id", "")).strip()
             creds = service_account.Credentials.from_service_account_info(
                 info,
                 scopes=["https://www.googleapis.com/auth/cloud-platform"],
             )
         else:
             # Colab / ローカル: ファイルから読み込む
+            credential_path = str(BQ_CREDENTIALS_PATH or "").strip()
+            if not credential_path:
+                raise ValueError(
+                    "BQ認証情報がありません。BQ_CREDENTIALS（JSON文字列）または"
+                    "BQ_CREDENTIALS_PATH（JSONファイル）を設定してください"
+                )
+            try:
+                with open(credential_path, encoding="utf-8") as f:
+                    credential_project = str(
+                        json.load(f).get("project_id", "")
+                    ).strip()
+            except (OSError, ValueError, TypeError):
+                credential_project = ""
             creds = service_account.Credentials.from_service_account_file(
-                BQ_CREDENTIALS_PATH,
+                credential_path,
                 scopes=["https://www.googleapis.com/auth/cloud-platform"],
             )
 
-        self.project = BQ_PROJECT_ID
-        self.dataset = f"{BQ_PROJECT_ID}.{BQ_DATASET}"
-        self.client  = bigquery.Client(project=BQ_PROJECT_ID, credentials=creds)
+        project = str(BQ_PROJECT_ID or "").strip() or credential_project
+        if not project:
+            raise ValueError(
+                "BQ_PROJECT_IDが未設定で、認証情報にもproject_idがありません"
+            )
+        self.project = project
+        self.dataset = f"{project}.{BQ_DATASET}"
+        self.client  = bigquery.Client(project=project, credentials=creds)
 
     # ----------------------------------------------------------
     # 書き込み系

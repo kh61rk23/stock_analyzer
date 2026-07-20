@@ -135,6 +135,9 @@ jobs:
           BQ_CREDENTIALS:  ${{ secrets.BQ_CREDENTIALS }}
           BQ_PROJECT_ID:   ${{ secrets.BQ_PROJECT_ID }}
           SEC_USER_AGENT:  ${{ secrets.SEC_USER_AGENT }}
+          # config.py を単独ロードするため、この指定がないとColab既定の
+          # /content/drive/MyDrive/stock_analyzer を参照してrunner上でPermissionErrorになる。
+          STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
         run: |
           python - <<'EOF'
           import importlib.util, sys, pathlib, os
