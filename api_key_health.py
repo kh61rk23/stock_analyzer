@@ -397,12 +397,20 @@ def _probe_bq(cfg) -> dict:
                 break
     if client is None:
         return _entry(STATE_LIMITED, "判定不能（BQクライアント生成関数が見つからない）")
+    # 2026-07-19是正: EDINETBQClient はラッパーで query() を持たない
+    # （生の google.cloud.bigquery.Client は .client 属性に保持）。
+    # 旧コードは client.query("SELECT 1") が AttributeError になり
+    # 「認証・権限エラーの疑い」と誤報告していた（IAMは正常だった実害あり）。
+    raw = getattr(client, "client", None) or client
+    if not callable(getattr(raw, "query", None)):
+        return _entry(STATE_LIMITED, "判定不能（query可能なBQクライアントが見つからない）")
     try:
-        job = client.query("SELECT 1")
+        job = raw.query("SELECT 1")
         list(job.result(timeout=PROBE_TIMEOUT))
         return _entry(STATE_ALIVE, "SELECT 1 成功")
-    except Exception:
-        return _entry(STATE_DEAD, "SELECT 1 失敗（認証・権限エラーの疑い）")
+    except Exception as e:
+        return _entry(STATE_DEAD,
+                      f"SELECT 1 失敗（{type(e).__name__}・認証/権限エラーの疑い）")
 
 
 def _http_msg(state: str, status_code: Optional[int]) -> str:

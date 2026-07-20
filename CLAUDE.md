@@ -9,7 +9,8 @@
 ## 絶対禁止
 
 - **`../stock_analyzer-main_bk` を変更しない**（バックアップ。読むのは可）
-- APIキー・トークンのハードコード（`os.getenv()` + GitHub Secrets 経由のみ）
+- APIキー・トークンのコード内ハードコード（`os.getenv()` + GitHub Secrets 経由のみ）
+※資料に記載は可とする。
 - config.py のモジュールレベル重複定義（Pythonは後勝ち上書きで黙って壊れる。
   2026-06 に LEADING_INDICATOR_RULES 三重定義で先行指標7本が無効化されていた実害事例）
 

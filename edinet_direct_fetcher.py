@@ -9,15 +9,21 @@ edinet_direct_fetcher.py
 【更新日】 2026-04-11
 """
 
+import os
 import requests
 import zipfile
 import io
 import time
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
 from typing import Optional
 
-from edinet_bq_client import EDINETBQClient
+# 2026-07-19: BQクライアントは遅延インポート化（google-cloud未導入のローカル環境
+# でも純関数（build_financials_row / build_segment_rows）を利用・テスト可能にする）
+try:
+    from edinet_bq_client import EDINETBQClient
+except Exception:
+    EDINETBQClient = None
+
 from config import (
     XBRL_TAG_MAP,
     XBRL_SEGMENT_TAGS,
@@ -56,8 +62,19 @@ def download_xbrl_zip(doc_id: str) -> Optional[bytes]:
     url = f"{EDINET_BASE}/documents/{doc_id}"
     params = {"type": XBRL_TYPE}
 
+    # 2026-07-19是正: EDINET API v2 は Subscription-Key 必須。旧コードは
+    # 無認証でリクエストしており、キーがあっても 401 で全滅する構造だった。
+    # 認証方式は既存流儀（edinet_client.py / api_key_health.py と同じ
+    # Ocp-Apim-Subscription-Key ヘッダ）に統一。
+    api_key = os.getenv("EDINET_API_KEY", "")
+    if not api_key:
+        print(f"[fetcher] {doc_id}: EDINET_API_KEY 未設定のためスキップ（再発行後に自動復旧）")
+        return None
+    headers = {"Ocp-Apim-Subscription-Key": api_key}
+
     try:
-        resp = requests.get(url, params=params, timeout=EDINET_REQUEST_TIMEOUT)
+        resp = requests.get(url, params=params, headers=headers,
+                            timeout=EDINET_REQUEST_TIMEOUT)
         resp.raise_for_status()
         # Content-Type が application/zip であることを確認
         content_type = resp.headers.get("Content-Type", "")
@@ -219,21 +236,142 @@ def parse_segments_from_xbrl(xbrl_text: str, segment_tags: dict) -> list[dict]:
 
 
 # ============================================================
-# Step 4: 1社分の取得・解析・BQ 格納
+# Step 4: BQ 行ビルダー（純関数・実スキーマ準拠）
+# ============================================================
+# 2026-07-19是正: 旧コードは実在しない列（edinet_code/securities_code/
+# period_end/fiscal_year/ifrs_flag/created_at 等）で INSERT しており、
+# 実テーブル（financials: fin_id/company_code/fiscal_year_end/...、
+# segments: segment_id/segment_name/...、segment_finance: sf_id/revenue/...）
+# に対して全行 insert エラーになる構造だった（EDINETキー失効前から
+# financials/segments が 0 行のままだった根本原因の一つ）。
+# 実スキーマは MCP 直query（2026-07-19）で確認済み。
+
+def _ratio(num, den) -> Optional[float]:
+    """分子/分母の安全な除算（None・0分母は None）。"""
+    try:
+        if num is None or den is None or float(den) == 0.0:
+            return None
+        return round(float(num) / float(den), 6)
+    except (TypeError, ValueError):
+        return None
+
+
+def build_financials_row(doc_meta: dict, fin_data: dict, now: str) -> dict:
+    """
+    XBRL 抽出結果（XBRL_TAG_MAP のキー）を edinet.financials の
+    実スキーマ行へ変換する純関数。
+    """
+    doc_id       = doc_meta.get("doc_id", "")
+    company_code = doc_meta.get("company_code") or None
+    fye          = doc_meta.get("fiscal_year_end")
+    fye_str      = str(fye)[:10] if fye is not None and str(fye) not in ("", "None", "NaT") else None
+
+    op_cf  = fin_data.get("operating_cf")
+    inv_cf = fin_data.get("investing_cf")
+    free_cf = (op_cf + inv_cf) if (op_cf is not None and inv_cf is not None) else None
+
+    emp = fin_data.get("num_employees")
+    return {
+        "fin_id":                doc_id + "_fin",
+        "doc_id":                doc_id,
+        "company_code":          company_code,
+        "fiscal_year_end":       fye_str,
+        "report_period":         "FY",
+        "net_sales":             fin_data.get("net_sales"),
+        "operating_income":      fin_data.get("operating_income"),
+        "ordinary_income":       fin_data.get("ordinary_income"),
+        "net_income":            fin_data.get("net_income"),
+        "total_assets":          fin_data.get("total_assets"),
+        "equity":                fin_data.get("equity"),
+        "interest_bearing_debt": fin_data.get("interest_bearing_debt"),
+        "cash_and_equiv":        fin_data.get("cash"),
+        "operating_cf":          op_cf,
+        "investing_cf":          inv_cf,
+        "free_cf":               free_cf,
+        "employee_count":        int(emp) if emp is not None else None,
+        "avg_age_years":         fin_data.get("avg_age"),
+        "avg_annual_salary":     fin_data.get("avg_salary"),
+        "total_director_comp":   fin_data.get("total_director_remuneration"),
+        "max_single_comp":       fin_data.get("max_director_remuneration"),
+        "capex":                 fin_data.get("capex"),
+        "depreciation":          fin_data.get("depreciation"),
+        "roe":               _ratio(fin_data.get("net_income"), fin_data.get("equity")),
+        "roa":               _ratio(fin_data.get("net_income"), fin_data.get("total_assets")),
+        "operating_margin":  _ratio(fin_data.get("operating_income"), fin_data.get("net_sales")),
+        "labor_productivity": _ratio(fin_data.get("net_sales"), emp),
+        "currency":              "JPY",
+        "source":                "edinet_direct",
+        "updated_at":            now,
+    }
+
+
+def build_segment_rows(doc_meta: dict, seg_records: list[dict], now: str) -> tuple[list[dict], list[dict]]:
+    """
+    セグメント抽出結果を edinet.segments（名称マスタ）と
+    edinet.segment_finance（数値）の実スキーマ行ペアへ変換する純関数。
+
+    Returns:
+        (segments_rows, segment_finance_rows)
+    """
+    doc_id       = doc_meta.get("doc_id", "")
+    company_code = doc_meta.get("company_code") or None
+    fye          = doc_meta.get("fiscal_year_end")
+    period       = str(fye)[:10] if fye is not None and str(fye) not in ("", "None", "NaT") else None
+
+    total_sales = sum(
+        float(s["segment_sales"]) for s in seg_records
+        if s.get("segment_sales") is not None
+    )
+
+    seg_rows, fin_rows = [], []
+    for i, seg in enumerate(seg_records):
+        name  = str(seg.get("raw_segment_name", "")).strip() or f"segment_{i}"
+        sid   = f"{doc_id}_seg{i:02d}"
+        sales = seg.get("segment_sales")
+        profit = seg.get("segment_profit")
+        seg_rows.append({
+            "segment_id":        sid,
+            "doc_id":            doc_id,
+            "company_code":      company_code,
+            "segment_name":      name,
+            "segment_name_norm": name.lower().replace(" ", "").replace("　", ""),
+            "segment_type":      "business",
+            "parent_segment_id": None,
+            "report_period":     period,
+            "source_id":         doc_id,
+            "updated_at":        now,
+        })
+        fin_rows.append({
+            "sf_id":            sid + "_fin",
+            "segment_id":       sid,
+            "revenue":          sales,
+            "revenue_ratio":    _ratio(sales, total_sales),
+            "operating_profit": profit,
+            "operating_margin": _ratio(profit, sales),
+            "assets":           seg.get("segment_assets"),
+            "geography":        None,
+            "currency":         "JPY",
+            "report_period":    period,
+            "updated_at":       now,
+        })
+    return seg_rows, fin_rows
+
+
+# ============================================================
+# Step 4b: 1社分の取得・解析・BQ 格納
 # ============================================================
 
 def fetch_and_store_one(doc_meta: dict, bq_client: EDINETBQClient) -> bool:
     """
     doc_index の 1 レコード分の XBRL を取得・解析・BQ に格納する。
-    doc_meta: doc_index テーブルの行 dict
+    doc_meta: doc_index テーブルの行 dict（実列: doc_id/company_code/
+              edinet_code/fiscal_year_end/disclosure_date 等）
     戻り値: 成功 True / 失敗 False
     """
-    doc_id         = doc_meta.get("doc_id", "")
-    edinet_code    = doc_meta.get("edinet_code", "")
-    securities_code = doc_meta.get("securities_code", "")
-    period_end     = str(doc_meta.get("period_end", ""))
-    submit_date    = str(doc_meta.get("submit_date", ""))
-    now            = bq_client.now_iso()
+    doc_id       = doc_meta.get("doc_id", "")
+    edinet_code  = doc_meta.get("edinet_code", "")
+    company_code = doc_meta.get("company_code", "")
+    now          = bq_client.now_iso()
 
     # ---- XBRL ダウンロード ----
     zip_bytes = download_xbrl_zip(doc_id)
@@ -246,63 +384,27 @@ def fetch_and_store_one(doc_meta: dict, bq_client: EDINETBQClient) -> bool:
         print(f"[fetcher] {doc_id}: XBRL インスタンス文書が見つからない")
         return False
 
-    # ---- 財務データ解析 ----
+    # ---- 財務データ解析 → financials（実スキーマ）----
     fin_data = parse_financials_from_xbrl(xbrl_text, XBRL_TAG_MAP)
-
-    # fiscal_year を period_end から計算
-    fiscal_year = None
-    if period_end and len(period_end) >= 4:
-        try:
-            fiscal_year = int(period_end[:4])
-        except ValueError:
-            pass
-
-    # free_cf の計算（operating_cf + investing_cf）
-    op_cf  = fin_data.get("operating_cf")
-    inv_cf = fin_data.get("investing_cf")
-    free_cf = (op_cf + inv_cf) if (op_cf is not None and inv_cf is not None) else None
-
-    financials_row = {
-        "edinet_code":                 edinet_code,
-        "securities_code":             securities_code,
-        "doc_id":                      doc_id,
-        "period_end":                  period_end or None,
-        "fiscal_year":                 fiscal_year,
-        **fin_data,
-        "free_cf":                     free_cf,
-        "ifrs_flag":                   doc_meta.get("ifrs_flag", False),
-        "created_at":                  now,
-    }
-
+    financials_row = build_financials_row(doc_meta, fin_data, now)
     ok_fin = bq_client.insert_rows("financials", [financials_row])
 
-    # ---- セグメントデータ解析 ----
+    # ---- セグメントデータ解析 → segments + segment_finance（実スキーマ）----
     seg_records = parse_segments_from_xbrl(xbrl_text, XBRL_SEGMENT_TAGS)
-    seg_rows = [
-        {
-            "edinet_code":      edinet_code,
-            "securities_code":  securities_code,
-            "doc_id":           doc_id,
-            "period_end":       period_end or None,
-            "raw_segment_name": seg["raw_segment_name"],
-            "segment_sales":    seg.get("segment_sales"),
-            "segment_profit":   seg.get("segment_profit"),
-            "segment_assets":   seg.get("segment_assets"),
-            "created_at":       now,
-        }
-        for seg in seg_records
-    ]
+    seg_rows, seg_fin_rows = build_segment_rows(doc_meta, seg_records, now)
     ok_seg = bq_client.insert_rows("segments", seg_rows) if seg_rows else True
+    ok_sf  = bq_client.insert_rows("segment_finance", seg_fin_rows) if seg_fin_rows else True
 
     # ---- fetched_flag を更新 ----
     if ok_fin:
         bq_client.mark_doc_as_fetched(doc_id)
         print(
-            f"[fetcher] {edinet_code} ({securities_code}) "
-            f"period={period_end}: 財務 OK / セグメント {len(seg_rows)} 件"
+            f"[fetcher] {edinet_code} ({company_code}) "
+            f"fiscal_year_end={financials_row.get('fiscal_year_end')}: "
+            f"財務 OK / セグメント {len(seg_rows)} 件"
         )
 
-    return ok_fin and ok_seg
+    return ok_fin and ok_seg and ok_sf
 
 
 # ============================================================
@@ -315,6 +417,9 @@ def run_fetcher(daily_limit: int = 33) -> dict:
     edinet_rotation_manager.py の run() から呼び出す想定。
     戻り値: { "success": int, "failure": int }
     """
+    if EDINETBQClient is None:
+        print("[fetcher] google-cloud-bigquery 未導入のためスキップ")
+        return {"success": 0, "failure": 0}
     bq_client = EDINETBQClient()
     unfetched = bq_client.get_unfetched_docs(limit=daily_limit)
 

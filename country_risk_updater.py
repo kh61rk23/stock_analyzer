@@ -354,8 +354,10 @@ def _fetch_url(url: str, timeout: int = _FETCH_TIMEOUT) -> str | None:
             # ★ 2026-07-12: 429（レート制限）は待っても同一実行内では回復しない
             #   （GitHub共有IP起因）ためリトライせず即諦める。1国あたり最大
             #   ~75秒→~30秒に短縮し、サーキットブレーカーへ早く到達させる。
-            if isinstance(e, HTTPError) and e.code == 429:
-                print(f"    ⚠️  fetch失敗 ({url[:60]}...): HTTP 429（リトライなし）")
+            # ★ 2026-07-19: 403（IPブロック。travel.state.gov が GitHub Actions IP を
+            #   恒常的に拒否）も同一実行内では回復しないためリトライしない。
+            if isinstance(e, HTTPError) and e.code in (403, 429):
+                print(f"    ⚠️  fetch失敗 ({url[:60]}...): HTTP {e.code}（リトライなし）")
                 return None
             if attempt < _MAX_RETRIES:
                 time.sleep(_RETRY_WAIT * attempt)
@@ -554,14 +556,115 @@ def _fetch_gdelt_instability(
             return 0.0
 
         avg_tone = sum(tones) / len(tones)
-        # 負値ほど敵対的・不安定 → instability に変換
-        # $instability = \max(0, -avg\_tone) \times 5.0$ (0〜100)
-        instability = max(0.0, -avg_tone) * 5.0
-        return round(min(100.0, instability), 2)
+        # 負値ほど敵対的・不安定 → instability に変換（BQ経路と共通の純関数）
+        return tone_to_instability(avg_tone)
 
     except Exception as e:
         print(f"    ⚠️  GDELT [{country_code}] 取得エラー: {str(e)[:80]}")
         return -1.0
+
+
+# ==============================================================
+# BLOCK 5-1B: GDELT BigQuery 公開データセット経路（2026-07-19追加）
+# ==============================================================
+# GDELT Doc API は GitHub Actions の共有IPが恒常的に 429 でブロックされ
+# 「取りに行く」戦略が成立しない（2026-07-17時点で全滅が常態化）。
+# GDELT は BigQuery 公開データセット（gdelt-bq.gdeltv2、15分毎更新）としても
+# 提供されており、既存の BQ_CREDENTIALS で1クエリ・全対象国一括取得できる。
+# スキャン量は実測 ~4MB/クエリ（3日分・イベント表・3列）で無料枠に対し無視できる。
+# 本経路を primary とし、失敗時のみ従来の Doc API → 永続キャッシュへフォールバック。
+#
+# 意味論の差分（許容・ドキュメント化）:
+#   Doc API 版 = 「国名 AND (conflict OR unrest OR ...)」記事の平均トーン
+#   BQ 版      = 紛争系 EventRootCode（14抗議/15軍事態勢/17強制/18襲撃/19戦闘/
+#                20大規模暴力）イベントの平均トーン
+#   いずれも $instability = \max(0, -avg\_tone) \times 5.0$（0〜100クリップ）で共通。
+
+_GDELT_BQ_TABLE      = "gdelt-bq.gdeltv2.events_partitioned"
+_GDELT_BQ_ROOT_CODES = ("14", "15", "17", "18", "19", "20")
+
+# ISO 3166-1 alpha-3 → FIPS 10-4（GDELT events の ActionGeo_CountryCode は FIPS）
+# 対象は GDELT_COUNTRY_QUERY_MAP の 59 国。FIPS は ISO2 と異なる国が多い点に注意
+# （例: 日本 JA / 中国 CH / ロシア RS / ウクライナ UP / ザンビア ZA / 南ア SF）。
+_ISO3_TO_FIPS: dict[str, str] = {
+    "SAU": "SA", "ARE": "AE", "IRN": "IR", "IRQ": "IZ", "KWT": "KU",
+    "QAT": "QA", "RUS": "RS", "NOR": "NO", "USA": "US", "CAN": "CA",
+    "NGA": "NI", "LBY": "LY", "DZA": "AG", "AUS": "AS", "CHL": "CI",
+    "PER": "PE", "ZAF": "SF", "COD": "CG", "IDN": "ID", "PHL": "RP",
+    "KAZ": "KZ", "MNG": "MG", "GIN": "GV", "BWA": "BC", "BRA": "BR",
+    "ARG": "AR", "UKR": "UP", "THA": "TH", "VNM": "VM", "IND": "IN",
+    "CHN": "CH", "JPN": "JA", "KOR": "KS", "TWN": "TW", "SGP": "SN",
+    "MYS": "MY", "EGY": "EG", "TUR": "TU", "ISR": "IS", "PAK": "PK",
+    "DEU": "GM", "FRA": "FR", "GBR": "UK", "NLD": "NL", "POL": "PL",
+    "MEX": "MX", "ZMB": "ZA", "MOZ": "MZ", "PNG": "PP", "UZB": "UZ",
+    "MMR": "BM", "KHM": "CB", "LAO": "LA", "BGD": "BG", "COL": "CO",
+    "VEN": "VE", "ETH": "ET", "TZA": "TZ", "ZWE": "ZI",
+}
+
+
+def tone_to_instability(avg_tone: float) -> float:
+    """
+    GDELT 平均トーンを不安定性スコアへ変換する純粋関数。
+
+    $instability = \\min(100, \\max(0, -avg\\_tone) \\times 5.0)$
+
+    Args:
+        avg_tone: GDELT の平均トーン（負値ほど敵対的・不安定）
+
+    Returns:
+        float: 0〜100 の不安定性スコア
+    """
+    return round(min(100.0, max(0.0, -float(avg_tone)) * 5.0), 2)
+
+
+def _fetch_gdelt_instability_bq(
+    country_codes: list[str],
+    days_back: int = 3,
+) -> dict[str, float]:
+    """
+    GDELT BigQuery 公開データセットから全対象国の不安定性スコアを一括取得する。
+
+    Returns:
+        {iso3: instability_score}（FIPS マッピングを持つ国のみ）。
+        紛争系イベント0件の国は 0.0（= リスク情報なし。Doc API 版の
+        articles==[] → 0.0 と同義）。クエリ失敗時は {}（呼び出し側で
+        Doc API → キャッシュへフォールバック）。
+    """
+    fips_map = {c: _ISO3_TO_FIPS[c] for c in country_codes if c in _ISO3_TO_FIPS}
+    if not fips_map:
+        return {}
+    try:
+        from edinet_bq_client import EDINETBQClient
+        bq = EDINETBQClient()
+        fips_list = ", ".join(f"'{f}'" for f in sorted(set(fips_map.values())))
+        root_list = ", ".join(f"'{c}'" for c in _GDELT_BQ_ROOT_CODES)
+        # _PARTITIONTIME は日単位のため days_back+1 日で「直近 days_back 日」を包含
+        sql = f"""
+        SELECT ActionGeo_CountryCode AS fips,
+               AVG(AvgTone)          AS avg_tone
+        FROM `{_GDELT_BQ_TABLE}`
+        WHERE _PARTITIONTIME >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(),
+                                              INTERVAL {int(days_back) + 1} DAY)
+          AND ActionGeo_CountryCode IN ({fips_list})
+          AND EventRootCode IN ({root_list})
+        GROUP BY 1
+        """
+        df = bq.query_to_df(sql)
+        tone_by_fips: dict[str, float] = {}
+        for _, r in df.iterrows():
+            tone = r["avg_tone"]
+            if tone is not None and tone == tone:  # NaN 除外
+                tone_by_fips[str(r["fips"])] = float(tone)
+        out: dict[str, float] = {}
+        for iso3, fips in fips_map.items():
+            if fips in tone_by_fips:
+                out[iso3] = tone_to_instability(tone_by_fips[fips])
+            else:
+                out[iso3] = 0.0
+        return out
+    except Exception as e:
+        print(f"    ⚠️  GDELT BQ経路 失敗（Doc APIへフォールバック）: {str(e)[:80]}")
+        return {}
 
 
 # ==============================================================
@@ -665,6 +768,8 @@ def _calc_composite_risk(
     gdelt_instability: float,
     mofa_level: int,
     state_level: int,
+    mofa_available: bool = True,
+    state_available: bool = True,
 ) -> float:
     """
     3ソースを加重平均して composite_risk_score (0〜100) を算出する。
@@ -682,8 +787,11 @@ def _calc_composite_risk(
     $composite = gdelt\\_norm \times 0.50 + mofa\\_norm \times 0.25 + state\\_norm \times 0.25$
 
     データ欠損時の処理:
-      - GDELT取得失敗（-1.0）: GDELT成分をゼロとして計算し残り50%をスケーリング
-      - RSS取得失敗（0）: そのまま0として扱う
+      - GDELT取得失敗（-1.0）: GDELT成分を除外し残ソースへ再正規化
+      - RSS取得失敗（*_available=False）: そのソースを除外し残ソースへ再正規化
+        （2026-07-19追加。国務省RSSが403で恒常取得不能な期間、レベル0＝「安全」と
+        誤解釈してリスクを下振れさせないため、「取得失敗」と「言及なし=レベル0」を区別する）
+      - RSS取得成功・当該国の言及なし（レベル0）: 実データとしてそのまま0で計算
     """
     components = []
     weights    = []
@@ -692,20 +800,16 @@ def _calc_composite_risk(
     if gdelt_instability >= 0:
         components.append(float(gdelt_instability))
         weights.append(0.50)
-    else:
-        # GDELT取得失敗時はRSSの重みを増やす
-        components.append(0.0)
-        weights.append(0.0)
 
     # 外務省
-    mofa_norm = (mofa_level / 4.0) * 100.0
-    components.append(mofa_norm)
-    weights.append(0.25)
+    if mofa_available:
+        components.append((mofa_level / 4.0) * 100.0)
+        weights.append(0.25)
 
     # 国務省
-    state_norm = (state_level / 4.0) * 100.0
-    components.append(state_norm)
-    weights.append(0.25)
+    if state_available:
+        components.append((state_level / 4.0) * 100.0)
+        weights.append(0.25)
 
     total_weight = sum(weights)
     if total_weight == 0:
@@ -858,10 +962,12 @@ def run_country_risk_update(
 
     # ── ① 外務省RSS 取得・解析 ────────────────────────────────
     mofa_levels: dict[str, int] = {}
+    mofa_available = False   # RSS取得成功フラグ（失敗時は合成スコアから除外）
     print("   📡 外務省RSS 取得中...")
     try:
         mofa_xml = _fetch_url(MOFA_RSS_URL)
         if mofa_xml:
+            mofa_available = True
             mofa_levels = _parse_mofa_rss(mofa_xml)
             print(f"   ✅ 外務省RSS: {len(mofa_levels)} 件の危険情報取得")
             # 高レベル国を表示
@@ -874,18 +980,24 @@ def run_country_risk_update(
         print(f"   ⚠️  外務省RSS 解析エラー: {str(e)[:80]}")
 
     # ── ② 国務省RSS 取得・解析 ─────────────────────────────────
+    # 2026-07-19: travel.state.gov は GitHub Actions IP を恒常403でブロックしており
+    # 取得失敗が常態。403は非リトライ化済み（_fetch_url）のため実行時間ロスは
+    # 1リクエスト分のみ。失敗時は合成スコアを残ソース（GDELT+外務省）で
+    # 再正規化する（state_available フラグ）。
     state_levels: dict[str, int] = {}
+    state_available = False
     print("   📡 国務省RSS 取得中...")
     try:
         state_xml = _fetch_url(STATE_DEPT_RSS_URL)
         if state_xml:
+            state_available = True
             state_levels = _parse_state_dept_rss(state_xml)
             print(f"   ✅ 国務省RSS: {len(state_levels)} 件の警告情報取得")
             high_state = {k: v for k, v in state_levels.items() if v >= 3}
             if high_state:
                 print(f"   ⚠️  Level3以上: {high_state}")
         else:
-            print("   ⚠️  国務省RSS: 取得失敗（スキップ）")
+            print("   ⚠️  国務省RSS: 取得失敗 → 合成スコアはGDELT+外務省で再正規化")
     except Exception as e:
         print(f"   ⚠️  国務省RSS 解析エラー: {str(e)[:80]}")
 
@@ -894,6 +1006,23 @@ def run_country_risk_update(
     if skip_gdelt:
         print("   ⏩ GDELT: スキップ（skip_gdelt=True）")
     else:
+        # ── ③-a BigQuery 公開データセット経路（primary・2026-07-19）──────
+        # 1クエリで全対象国を一括取得。レート制限なし・BQ_CREDENTIALS流用。
+        print(f"   📡 GDELT 取得中（BigQuery公開データセット経路・{len(all_codes)}国一括）...")
+        bq_scores = _fetch_gdelt_instability_bq(all_codes, days_back=3)
+        if bq_scores:
+            gdelt_scores.update(bq_scores)
+            # 成功値は永続キャッシュにも反映（将来のフォールバックを最新化）
+            _bq_cache = _load_gdelt_cache(cfg)
+            _bq_today = date.today()
+            for _code, _score in bq_scores.items():
+                if _score >= 0:
+                    _update_gdelt_cache(_bq_cache, _code, _score, _bq_today)
+            _save_gdelt_cache(cfg, _bq_cache)
+            print(f"   ✅ GDELT(BQ): {len(bq_scores)} 国取得完了")
+
+    if not skip_gdelt and not gdelt_scores:
+        # ── ③-b Doc API 経路（BQ失敗時のフォールバック・従来ロジック）────
         # GDELT は高リスク国（外務省/国務省でLv2以上）を優先して取得。
         # API負荷・レート制限(429)対策として、取得は上限件数までに絞り、
         # 連続失敗が閾値に達したら以降は打ち切る（旧コードは全59件を無条件で
@@ -971,7 +1100,11 @@ def run_country_risk_update(
         mofa_v  = mofa_levels.get(code, 0)
         state_v = state_levels.get(code, 0)
 
-        composite = _calc_composite_risk(gdelt_v, mofa_v, state_v)
+        composite = _calc_composite_risk(
+            gdelt_v, mofa_v, state_v,
+            mofa_available=mofa_available,
+            state_available=state_available,
+        )
         risk_scores[code] = composite
 
         row = {

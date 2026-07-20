@@ -180,7 +180,45 @@ class EDINETBQClient:
         company_code: str,
         report_period: str = None
     ) -> list[dict]:
-        """1セグメント1行のリストを返す"""
+        """
+        1セグメント1行のリストを返す（全期間・report_period降順）。
+
+        2026-07-19実装: 従来は docstring のみのスタブ（幻のAPI）で、
+        consumer（segment_signal）は常に空リストを受け取っていた。
+        実テーブル edinet.segments（名称マスタ）× edinet.segment_finance（数値）
+        を segment_id で結合して返す。
+
+        Returns:
+            [{"segment_name", "segment_name_norm", "report_period",
+              "revenue", "revenue_ratio", "operating_margin"}, ...]
+        """
+        code = str(company_code).replace(".T", "").replace("'", "''").strip()
+        if not code:
+            return []
+        pf = ""
+        if report_period:
+            pf = "AND sf.report_period = '{}'".format(
+                str(report_period).replace("'", "''"))
+        sql = f"""
+        SELECT s.segment_name,
+               s.segment_name_norm,
+               sf.report_period,
+               sf.revenue,
+               sf.revenue_ratio,
+               sf.operating_margin
+        FROM `{self.dataset}.segments` s
+        JOIN `{self.dataset}.segment_finance` sf
+          ON sf.segment_id = s.segment_id
+        WHERE s.company_code = '{code}' {pf}
+        ORDER BY sf.report_period DESC
+        """
+        try:
+            df = self.query_to_df(sql)
+            return df.to_dict("records") if not df.empty else []
+        except Exception as e:
+            print(f"[BQClient] get_segment_finance失敗 "
+                  f"({company_code}): {str(e)[:80]}")
+            return []
 
     def get_geo_exposure(
         self,

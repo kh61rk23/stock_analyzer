@@ -523,15 +523,22 @@ def extract_sections(cfg, securities_code: str) -> Optional[dict]:
         return result
 
     # ── Step 3: EDINET API 直接取得 ───────────────────────────
-    api_key = getattr(cfg, "EDINET_API_KEY", "") or getattr(cfg, "EDINETDB_API_KEY", "")
+    # 2026-07-19是正: 旧コードは EDINETDB_API_KEY でも本ルートを起動していたが、
+    # ダウンロード側（_download_edinet_html）は EDINET_API_KEY のみ参照するため
+    # EDINETDB キーだけの環境では毎銘柄2回のHTTP無駄打ち＋失敗ログになっていた。
+    # 本ルートは EDINET_API_KEY（金融庁）専用。
+    api_key = getattr(cfg, "EDINET_API_KEY", "")
     if api_key:
         result = _extract_from_edinet_api(cfg, securities_code)
         if result:
             _save_cache(cfg, result)
             return result
+        print(f"    ⚠️  [text_extractor] {securities_code}: 全ルートで取得失敗")
+    else:
+        print(f"    ⚠️  [text_extractor] {securities_code}: "
+              f"キャッシュなし・EDINET_API_KEY未設定（再発行後に自動復旧）")
 
     # ── Step 4: すべて失敗 ────────────────────────────────────
-    print(f"    ⚠️  [text_extractor] {securities_code}: 全ルートで取得失敗")
     return None
 
 
@@ -573,6 +580,9 @@ def batch_extract_sections(
     results = {}
 
     print(f"\n  📄 [text_extractor] バッチ抽出開始: {total}社")
+    if not getattr(cfg, "EDINET_API_KEY", ""):
+        print("  🔑 [text_extractor] EDINET_API_KEY未設定 → "
+              "EDINET APIルート無効（キャッシュのみ・キー再発行後に自動復旧）")
 
     for i, code in enumerate(target_codes, start=1):
         try:

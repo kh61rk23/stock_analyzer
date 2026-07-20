@@ -80,52 +80,78 @@ def _fetch_segment_data_from_bq(ticker: str, cfg) -> list[dict]:
         ]
         [] : 取得失敗時
     """
+    # 2026-07-19是正: 旧コードは (a) 存在しない bq.get_segment_data / bq.query を
+    # 参照して常に空リストを返し（幻のAPI）、(b) フォールバックSQLも実在しない
+    # テーブル（taxonomy.segments_master / edinet.segment_financials）を参照していた。
+    # 実テーブルは edinet.segments × edinet.segment_finance（MCP直queryで確認済み）。
+    # EDINETBQClient.get_segment_finance（2026-07-19実装）→ build_segment_view で
+    # 本モジュールの期待スキーマへ変換する。
     try:
         import sys as _sys, importlib as _imp, pathlib as _pl
         _sys.path.insert(0, str(_pl.Path(__file__).parent.parent))
         bq_mod = _imp.import_module("edinet_bq_client")
         bq = bq_mod.EDINETBQClient()
-
-        # get_segment_data() がある場合は使用、なければ query にフォールバック
-        if hasattr(bq, "get_segment_data"):
-            rows = bq.get_segment_data(ticker)
-            return rows if isinstance(rows, list) else []
-
-        # フォールバック: 直接 BQ クエリ
-        if hasattr(bq, "query"):
-            sql = f"""
-                SELECT
-                    sm.segment_raw_name,
-                    sm.sector_code,
-                    sm.sector_name_ja,
-                    sm.similarity_score,
-                    sm.verified_flag,
-                    sd.revenue_share,
-                    sd.growth_rate,
-                    sd.op_margin
-                FROM `taxonomy.segments_master` sm
-                LEFT JOIN `edinet.segment_financials` sd
-                    ON sm.segment_raw_name = sd.segment_raw_name
-                    AND sd.ticker = '{ticker}'
-                WHERE sd.ticker = '{ticker}'
-                   OR sm.segment_raw_name IN (
-                       SELECT segment_raw_name
-                       FROM `edinet.segment_financials`
-                       WHERE ticker = '{ticker}'
-                   )
-                ORDER BY sd.revenue_share DESC
-            """
-            rows = bq.query(sql)
-            return rows if isinstance(rows, list) else []
-
-        return []
-
+        raw_rows = bq.get_segment_finance(ticker)
+        return build_segment_view(raw_rows)
     except Exception as e:
         print(
             f"    ⚠️  [segment_signal] BQ セグメントデータ取得失敗 "
             f"({ticker}): {str(e)[:80]}"
         )
         return []
+
+
+def build_segment_view(raw_rows: list[dict]) -> list[dict]:
+    """
+    get_segment_finance の生行（全期間）を本モジュールの期待スキーマ
+    （最新期1セグメント1行＋growth_rate）へ変換する純粋関数。
+
+    growth_rate は同名セグメント（segment_name_norm キー）の
+    最新期 revenue と直前期 revenue から計算する:
+      $growth\\_rate = (rev_{latest} - rev_{prev}) / |rev_{prev}|$
+    直前期がない・revenue が欠損 → None（スコア側で中立 0.0 扱い）。
+
+    verified_flag は True 固定（EDINET XBRL の実数値由来であり、
+    taxonomy マッピングの推定値ではないため信頼度割引の対象にしない）。
+    """
+    if not raw_rows:
+        return []
+
+    periods = sorted(
+        {str(r.get("report_period")) for r in raw_rows if r.get("report_period")},
+        reverse=True,
+    )
+    if not periods:
+        return []
+    latest = periods[0]
+    prev   = periods[1] if len(periods) > 1 else None
+
+    def _key(r):
+        return str(r.get("segment_name_norm") or r.get("segment_name") or "")
+
+    prev_rev = {}
+    if prev:
+        for r in raw_rows:
+            if str(r.get("report_period")) == prev and r.get("revenue") is not None:
+                prev_rev[_key(r)] = float(r["revenue"])
+
+    out = []
+    for r in raw_rows:
+        if str(r.get("report_period")) != latest:
+            continue
+        growth = None
+        rev = r.get("revenue")
+        pv  = prev_rev.get(_key(r))
+        if rev is not None and pv is not None and pv != 0:
+            growth = round((float(rev) - pv) / abs(pv), 6)
+        out.append({
+            "segment_raw_name": r.get("segment_name"),
+            "revenue_share":    r.get("revenue_ratio"),
+            "op_margin":        r.get("operating_margin"),
+            "growth_rate":      growth,
+            "verified_flag":    True,
+        })
+    return out
 
 
 # ==============================================================
