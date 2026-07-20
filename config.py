@@ -30,14 +30,21 @@ from pathlib import Path
 # ベースパス（SSOT）。
 #   GitHub Actions / ローカル実行では環境変数 STOCK_ANALYZER_BASE で上書きする
 #   （run_headless.py が ${{ github.workspace }}/stock_data を渡す）。
-#   未設定の場合（Colab）は従来どおり Google Drive 配下にフォールバックする。
+#   未設定の場合は、Google Driveが実在するColabだけ従来パスへフォールバックし、
+#   GitHub Actions・ローカルCLIではリポジトリ直下 stock_data を使用する。
 #   ★ ここで DRIVE_BASE を確定させることで CACHE_DIR / SUBTHEME_JSON_PATH 等の
 #     DRIVE_BASE 由来パスがすべて一括で正しい場所を指す。
 #     （旧構成では run_headless 側の個別上書きが CACHE_DIR を取りこぼし、
 #       score_prior 等が Colab パス /content に書こうとして
 #       「Permission denied: '/content'」で全業種スコアが無効化していた。）
 _BASE_ENV    = os.getenv("STOCK_ANALYZER_BASE", "").strip()
-DRIVE_BASE   = Path(_BASE_ENV) if _BASE_ENV else Path("/content/drive/MyDrive/stock_analyzer")
+_COLAB_DRIVE = Path("/content/drive/MyDrive")
+if _BASE_ENV:
+    DRIVE_BASE = Path(_BASE_ENV).expanduser()
+elif _COLAB_DRIVE.is_dir():
+    DRIVE_BASE = _COLAB_DRIVE / "stock_analyzer"
+else:
+    DRIVE_BASE = Path(__file__).resolve().parent / "stock_data"
 VIEWER_BASE  = Path("/content/drive/MyDrive/stock_viewer")
 
 DATA_DIR     = DRIVE_BASE / "data"

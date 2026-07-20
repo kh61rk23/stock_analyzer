@@ -100,7 +100,10 @@ def fetch_segments_from_bq(cfg) -> dict:
     try:
         from edinet_bq_client import EDINETBQClient
         bq = EDINETBQClient()
-        project = getattr(cfg, "BQ_PROJECT_ID", "stock-analyzer-edinet")
+        project = (
+            str(getattr(cfg, "BQ_PROJECT_ID", "") or "").strip()
+            or bq.project
+        )
         sql = f"""
         SELECT s.company_code, s.segment_name,
                MAX(f.revenue_ratio) AS revenue_ratio
@@ -133,7 +136,10 @@ def upsert_to_bq(rows: list[dict], cfg) -> tuple[bool, int]:
         from edinet_bq_client import EDINETBQClient
         import io
         bq = EDINETBQClient()
-        project = getattr(cfg, "BQ_PROJECT_ID", "stock-analyzer-edinet")
+        project = (
+            str(getattr(cfg, "BQ_PROJECT_ID", "") or "").strip()
+            or bq.project
+        )
         staging = f"{project}.taxonomy._staging_company_map"
         bq.client.query(
             f"CREATE OR REPLACE TABLE `{staging}` "

@@ -50,6 +50,6 @@ pdfplumber>=0.10.0
 PyMuPDF>=1.23.0
 
 google-cloud-bigquery
+db-dtypes  # BigQuery query_to_df() のDATE/JSON型変換に必要（ローカルCLI含む）
 google-cloud-bigquery-storage  # 2026-07-12: 未導入だとBQ読取のたびUserWarning＋低速なREST経路になる
 google-auth
-db-dtypes  # BigQueryのDATE型をpandasで扱うのに必要
