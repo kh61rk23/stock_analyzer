@@ -1343,6 +1343,7 @@ def run_all_tasks(mode: str = "all") -> dict:
         "screener":     {},
         "geo_risk":     {},   # Wave 6 - G-N: 国別リスク日次更新結果
               }
+    source_ingest_done = {"edinet": False, "fudosan": False, "us": False}
     # ── [Wave 3 - Policy Ph2] EMERGENCY_OVERRIDE_FLAG チェック ──
     # VIX > EMERGENCY_VIX_THRESHOLD(45.0) の場合、政策シグナルを全停止
     try:
@@ -1374,6 +1375,36 @@ def run_all_tasks(mode: str = "all") -> dict:
                 )
         except Exception as _khe:
             print(f"  ⚠️  APIキー生存判定エラー（スキップ）: {_khe}")
+
+    # ── Source ingestion preflight ───────────────────────────────
+    # Persist new source data before sector/US screening consumes BQ.
+    if getattr(cfg, "ENABLE_EDINETDB_INGEST", True) and _in_mode("edinet_rotation"):
+        try:
+            _edi = _load_local_module("edinetdb_ingestor", "/content/edinetdb_ingestor.py", cfg.DRIVE_BASE / "edinetdb_ingestor.py")
+            if _edi:
+                results["edinetdb_ingest"] = _edi.run_edinetdb_ingest(cfg, results)
+                source_ingest_done["edinet"] = True
+                logger.add("edinetdb_ingest", "success", str(results["edinetdb_ingest"]))
+        except Exception as exc:
+            logger.add("edinetdb_ingest", "error", str(exc)[:100])
+    if getattr(cfg, "ENABLE_FUDOSANDB_INGEST", True) and _in_mode("edinet_rotation"):
+        try:
+            _fudo = _load_local_module("fudosan_ingestor", "/content/fudosan_ingestor.py", cfg.DRIVE_BASE / "fudosan_ingestor.py")
+            if _fudo:
+                results["fudosan_ingest"] = _fudo.run_fudosan_ingest(cfg, results)
+                source_ingest_done["fudosan"] = True
+                logger.add("fudosan_ingest", "success", str(results["fudosan_ingest"]))
+        except Exception as exc:
+            logger.add("fudosan_ingest", "error", str(exc)[:100])
+    if getattr(cfg, "ENABLE_US_FUNDAMENTALS", True) and _in_mode("us_fundamentals"):
+        try:
+            _ufr = _load_local_module("us_fundamental_rotator", "/content/us_fundamental_rotator.py", cfg.DRIVE_BASE / "us_fundamental_rotator.py")
+            if _ufr:
+                results["us_fundamentals"] = _ufr.run_us_fundamental_rotator(cfg, results)
+                source_ingest_done["us"] = True
+                logger.add("us_fundamentals", "success", str(results["us_fundamentals"]))
+        except Exception as exc:
+            logger.add("us_fundamentals", "error", str(exc)[:100])
 
    # ── [④] キャッシュ鮮度管理 ──────────────────────────────────
     if getattr(cfg, "ENABLE_CACHE_FRESHNESS", True):
@@ -4081,7 +4112,7 @@ def run_all_tasks(mode: str = "all") -> dict:
             print("  ⏩ 米国株スクリーニング: スキップ（ENABLE_US_SCREENER=False）")
 
     # ── EdinetDB ローテーション取得 ──────────────────────────
-    if getattr(cfg, "ENABLE_EDINETDB_INGEST", True) and _in_mode("edinet_rotation"):
+    if getattr(cfg, "ENABLE_EDINETDB_INGEST", True) and _in_mode("edinet_rotation") and not source_ingest_done["edinet"]:
         try:
             _edi = _load_local_module("edinetdb_ingestor", "/content/edinetdb_ingestor.py", cfg.DRIVE_BASE / "edinetdb_ingestor.py")
             if _edi:
@@ -4089,7 +4120,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                 logger.add("edinetdb_ingest", "success", str(results["edinetdb_ingest"]))
         except Exception as e:
             logger.add("edinetdb_ingest", "error", str(e)[:100])
-    if getattr(cfg, "ENABLE_FUDOSANDB_INGEST", True) and _in_mode("edinet_rotation"):
+    if getattr(cfg, "ENABLE_FUDOSANDB_INGEST", True) and _in_mode("edinet_rotation") and not source_ingest_done["fudosan"]:
         try:
             _fudo = _load_local_module("fudosan_ingestor", "/content/fudosan_ingestor.py", cfg.DRIVE_BASE / "fudosan_ingestor.py")
             if _fudo:
@@ -4128,7 +4159,7 @@ def run_all_tasks(mode: str = "all") -> dict:
         except Exception as e:
             logger.add("edinet_rotation", "error", str(e)[:100])
     # ── [Phase US-1] US財務DBローテーター ────────────────────────
-    if getattr(cfg, "ENABLE_US_FUNDAMENTALS", True) and _in_mode("us_fundamentals"):
+    if getattr(cfg, "ENABLE_US_FUNDAMENTALS", True) and _in_mode("us_fundamentals") and not source_ingest_done["us"]:
         try:
             _ufr = _load_local_module(
                 "us_fundamental_rotator",

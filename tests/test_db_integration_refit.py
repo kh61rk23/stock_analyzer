@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 from db_rest_client import DBRestClient
 from edinetdb_ingestor import _fiscal_year_end
+from edinetdb_ingestor import run_edinetdb_ingest
 from real_estate_signal import calc_real_estate_bonus
 
 
@@ -34,3 +35,10 @@ def test_rest_client_does_not_retry_auth_error():
     except RuntimeError:
         pass
     assert session.count == 1
+
+
+def test_edinet_ingest_skips_cleanly_without_optional_key():
+    cfg = SimpleNamespace(ENABLE_EDINETDB_INGEST=True, EDINETDB_API_KEY="")
+    result = run_edinetdb_ingest(cfg, doc_index_only=True)
+    assert result["skipped"] is True
+    assert "API_KEY" in result["reason"]

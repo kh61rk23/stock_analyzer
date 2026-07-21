@@ -122,14 +122,8 @@ jobs:
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
           echo "▶ 実行モード: $MODE"
 
-      # ── 3-B. EDINET インデックス更新 (追加箇所) ──────────────
-      - name: Run EdinetDB ingest and doc_index maintenance
-        env:
-          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
-          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
-          EDINETDB_API_KEY: ${{ secrets.EDINETDB_API_KEY }}
-        run: |
-          python edinetdb_ingestor.py
+      # Source ingestion is run by stock_analyzer_main before all consumers.
+      # This avoids a duplicate standalone call and makes a missing optional key non-fatal.
       # ── 3-B3. Wave 6 - U-4: 機関投資家 13F 監視（四半期提出期間のみ）──
       - name: 🏦 Run institutional 13F monitor (quarterly filing period only)
         if: steps.set-mode.outputs.mode == 'weekly'

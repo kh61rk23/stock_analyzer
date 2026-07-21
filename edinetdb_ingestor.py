@@ -51,10 +51,21 @@ def _doc_rows(disclosures):
 
 def run_edinetdb_ingest(cfg, results: dict | None = None, doc_index_only: bool = False) -> dict:
     if not getattr(cfg, "ENABLE_EDINETDB_INGEST", True):
-        return {"skipped": True}
-    client, bq = DBRestClient.edinetdb(cfg), EDINETBQClient()
-    lookback = int(getattr(cfg, "EDINETDB_LOOKBACK_DAYS", 7))
-    data = client.get("/disclosures/search", {"days": lookback, "limit": 200})
+        return {"skipped": True, "reason": "disabled"}
+    client = DBRestClient.edinetdb(cfg)
+    # A missing key and budget exhaustion are expected operational states, not
+    # workflow failures.  Downstream analysis can use yesterday's BQ records.
+    if not client.api_key:
+        return {"skipped": True, "reason": "EDINETDB_API_KEY is not configured", "api_calls": 0}
+    if client.calls >= client.daily_budget:
+        return {"skipped": True, "reason": "daily API budget exhausted", "api_calls": 0}
+    try:
+        bq = EDINETBQClient()
+        lookback = int(getattr(cfg, "EDINETDB_LOOKBACK_DAYS", 7))
+        data = client.get("/disclosures/search", {"days": lookback, "limit": 200})
+    except (RuntimeError, ValueError, OSError) as exc:
+        print(f"[edinetdb_ingest] skipped: {exc}")
+        return {"skipped": True, "reason": str(exc), "api_calls": client.calls}
     disclosures = _items(data)
     doc_rows = _doc_rows(disclosures)
     inserted = bq.insert_rows("doc_index", doc_rows) if doc_rows else True
