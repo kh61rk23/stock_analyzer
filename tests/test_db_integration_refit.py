@@ -2,7 +2,13 @@ from types import SimpleNamespace
 
 from db_rest_client import DBRestClient
 from edinetdb_ingestor import _fiscal_year_end
+from edinetdb_ingestor import run_edinetdb_ingest
 from real_estate_signal import calc_real_estate_bonus
+from dead_ticker_pruner import (
+    _candidate_scan_is_reliable,
+    _classify_yahoo_chart_response,
+    _partition_confirmation,
+)
 
 
 def test_fiscal_year_end_uses_provider_month_and_submit_date():
@@ -34,3 +40,30 @@ def test_rest_client_does_not_retry_auth_error():
     except RuntimeError:
         pass
     assert session.count == 1
+
+
+def test_edinet_ingest_skips_cleanly_without_optional_key():
+    cfg = SimpleNamespace(ENABLE_EDINETDB_INGEST=True, EDINETDB_API_KEY="")
+    result = run_edinetdb_ingest(cfg, doc_index_only=True)
+    assert result["skipped"] is True
+    assert "API_KEY" in result["reason"]
+
+
+def test_pruner_never_confirms_unknown_ticker_for_deletion():
+    confirmed, revived, unresolved = _partition_confirmation(
+        {"DEAD": "dead", "LIVE": "alive", "RETRY": "unknown"}
+    )
+    assert confirmed == ["DEAD"]
+    assert revived == ["LIVE"]
+    assert unresolved == ["RETRY"]
+
+
+def test_pruner_requires_explicit_yahoo_404_to_confirm_dead():
+    assert _classify_yahoo_chart_response(404, {}) == "dead"
+    assert _classify_yahoo_chart_response(429, {}) == "unknown"
+    assert _classify_yahoo_chart_response(200, {"chart": {"result": [{}]}}) == "alive"
+
+
+def test_pruner_rejects_broad_candidate_scan_as_measurement_failure():
+    assert _candidate_scan_is_reliable(10, 1_000)
+    assert not _candidate_scan_is_reliable(101, 1_000)

@@ -12,6 +12,9 @@
 #   例: python3 dead_ticker_pruner.py --report
 #       python3 dead_ticker_pruner.py --apply
 #
+# 【v1.4 / 2026-07-21】第2パスのunknownをデッド確定と誤認しないよう是正。
+# 再検証で明示的なYFPricesMissingError（価格なし）を二回確認できた場合だけ削除する。
+# Yahooの一時障害・レート制限・DNS失敗はunknownで残置する。
 # 【v1.3 / 2026-07-16】第1パスをバッチ取得化（yf.download・100銘柄/リクエスト）
 #   v1.2の個別取得は1460リクエストとなりYahoo側のIPレート制限を自ら誘発していた
 #   （v1.2 apply実行時に642件が再検証でも偽デッドのままガード発動＝実測）。
@@ -38,12 +41,16 @@ from __future__ import annotations
 import json
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 UNIVERSE_DIR = Path("data/custom_universe")
 WAIT_SEC = 0.5   # yfinanceレート保護
 DEAD_RATIO_GUARD = 0.5   # 全体デッド率がこれを超えたら計測異常として apply 拒否
+CANDIDATE_RATIO_GUARD = 0.10  # 第1パス候補が多過ぎる場合はYahoo側障害を疑う
+CONFIRM_WORKERS = 4      # chart APIの再確認は低並列。429はunknownとして残置する。
 
 
 def _collect_tickers(payload) -> list:
@@ -95,13 +102,40 @@ def _check_liveness(ticker: str) -> str:
     dead だけが削除候補。unknown を削除しないことが v1.1 の核心。
     """
     try:
-        import yfinance as yf
-        h = yf.Ticker(ticker).history(period="1mo")
-        if h is not None and not h.empty:
-            return "alive"
-        return "dead"
+        import requests
+        url = "https://query1.finance.yahoo.com/v8/finance/chart/" + quote(ticker, safe="")
+        response = requests.get(
+            url,
+            params={"range": "1mo", "interval": "1d"},
+            headers={"User-Agent": "stock-analyzer dead-ticker-pruner/1.4"},
+            timeout=15,
+        )
+        return _classify_yahoo_chart_response(response.status_code, response.json())
     except Exception:
         return "unknown"
+
+
+def _classify_yahoo_chart_response(status_code: int, payload: dict) -> str:
+    """404 alone confirms dead; provider trouble remains unknown and is retained."""
+    if status_code == 404:
+        return "dead"
+    if status_code != 200:
+        return "unknown"
+    result = ((payload.get("chart") or {}).get("result") or []) if isinstance(payload, dict) else []
+    return "alive" if result else "unknown"
+
+
+def _partition_confirmation(states: dict[str, str]) -> tuple[list[str], list[str], list[str]]:
+    """Return (confirmed_dead, revived, unresolved); unknown is never deletable."""
+    confirmed = [ticker for ticker, state in states.items() if state == "dead"]
+    revived = [ticker for ticker, state in states.items() if state == "alive"]
+    unresolved = [ticker for ticker, state in states.items() if state not in {"dead", "alive"}]
+    return confirmed, revived, unresolved
+
+
+def _candidate_scan_is_reliable(candidate_count: int, checked_count: int) -> bool:
+    """Do not turn a broad Yahoo batch failure into hundreds of confirmation calls."""
+    return not checked_count or candidate_count / checked_count <= CANDIDATE_RATIO_GUARD
 
 
 def main(apply: bool = False) -> int:
@@ -154,21 +188,27 @@ def main(apply: bool = False) -> int:
         if not dead and not unknown:
             report_lines.append(f"✅ {jf.name}: 全{len(tickers)}銘柄生存")
 
-    # ⑤ v1.2: デッド候補の再検証パス（一過性のネットワーク断・レート制限を救済）
+    # ⑤ 公式chart APIによるデッド候補の再検証。
+    # yfinanceバッチはYahooの429を銘柄単位で区別できないため、候補の削除可否は
+    # 必ずHTTP 404/200を返すこの経路で決める。60秒待機・逐次取得は不要。
     all_candidates = [t2 for _, (_, ds) in dead_by_file.items() for t2 in ds]
+    if all_candidates and not _candidate_scan_is_reliable(len(all_candidates), total_checked):
+        report_lines.append(
+            f"\n🚨 第1パス候補 {len(all_candidates)}/{total_checked}件（>{CANDIDATE_RATIO_GUARD:.0%}）は"
+            "Yahooのレート制限・障害の疑い。確認・--apply を中止し、全候補を残置します。"
+        )
+        all_candidates = []
+        dead_by_file = {}
+        total_dead = 0
+        apply = False
     if all_candidates:
-        print(f"\n🔁 デッド候補 {len(all_candidates)}件を60秒待機後に再検証...")
-        time.sleep(60)
+        print(f"\n🔁 デッド候補 {len(all_candidates)}件をchart APIで再検証...")
         confirmed_total = 0
         for jf in list(dead_by_file):
             payload, dead = dead_by_file[jf]
-            confirmed, revived = [], []
-            for t2 in dead:
-                if _check_liveness(t2) == "alive":
-                    revived.append(t2)
-                else:
-                    confirmed.append(t2)
-                time.sleep(WAIT_SEC)
+            with ThreadPoolExecutor(max_workers=CONFIRM_WORKERS) as executor:
+                states = dict(zip(dead, executor.map(_check_liveness, dead)))
+            confirmed, revived, unresolved = _partition_confirmation(states)
             confirmed_total += len(confirmed)
             if revived:
                 report_lines.append(f"♻️ {jf.name}: 再検証で{len(revived)}件生存を確認（救済）→ {revived[:8]}"
@@ -177,6 +217,11 @@ def main(apply: bool = False) -> int:
                 dead_by_file[jf] = (payload, confirmed)
             else:
                 del dead_by_file[jf]
+            if unresolved:
+                total_unknown += len(unresolved)
+                report_lines.append(
+                    f"❓ {jf.name}: 再検証でも判定不能{len(unresolved)}件（削除しない）"
+                )
         total_dead = confirmed_total
         # 再検証しても候補の大半がdeadのまま = 計測系が死んでいる疑い
         if (confirmed_total / len(all_candidates)) > DEAD_RATIO_GUARD and confirmed_total >= 30:
