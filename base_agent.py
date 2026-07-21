@@ -938,13 +938,20 @@ def build_result(
     _real_estate_bonus = 0.0
     if getattr(cfg, "ENABLE_REAL_ESTATE_SIGNAL", True):
         try:
-            from real_estate_signal import get_real_estate_bonus
-            _values = [get_real_estate_bonus(str(c.get("ticker", "")).replace(".T", ""))
-                       for c in companies if c.get("fetch_ok")]
-            _values = [v for v in _values if v]
-            _real_estate_bonus = round(sum(_values) / len(_values), 2) if _values else 0.0
-        except Exception:
-            _real_estate_bonus = 0.0
+            from real_estate_signal import calc_real_estate_bonus
+            _bq_re = _BQClient()
+            _values = []
+            for company in [c for c in companies if c.get("fetch_ok")][:5]:
+                ticker = str(company.get("ticker", company.get("code", "")) or "")
+                if not ticker:
+                    continue
+                holdings = _bq_re.get_real_estate_holdings(ticker)
+                if holdings:
+                    _values.append(calc_real_estate_bonus(holdings, cfg))
+            if _values:
+                _real_estate_bonus = round(sum(_values) / len(_values), 4)
+        except Exception as exc:
+            print(f"    ⚠️  不動産ボーナス取得エラー（スキップ）: {str(exc)[:60]}")
 
     score, risk_level = calc_composite_score(
         companies,

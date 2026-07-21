@@ -12,6 +12,7 @@ from google.oauth2 import service_account
 import pandas as pd
 import os
 import json
+import re
 from datetime import datetime, timezone
 
 
@@ -120,6 +121,89 @@ class EDINETBQClient:
         job    = self.client.query(sql)
         result = job.result()
         return result.num_dml_affected_rows or 0
+
+    def merge_rows(
+        self,
+        table_name: str,
+        rows: list[dict],
+        key_columns: list[str],
+        dataset: str = "edinet",
+    ) -> bool:
+        """実テーブルの列型に合わせ、JSON配列を主キーで冪等MERGEする。"""
+        if not rows:
+            return True
+        identifier = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+        if not identifier.fullmatch(table_name) or not identifier.fullmatch(dataset):
+            raise ValueError("dataset/table name must be a BigQuery identifier")
+        table_ref = f"{self.project}.{dataset}.{table_name}"
+        schema = list(self.client.get_table(table_ref).schema)
+        schema_by_name = {field.name: field for field in schema}
+        missing_keys = [key for key in key_columns if key not in schema_by_name]
+        if missing_keys:
+            raise ValueError(f"MERGE key columns missing from {table_ref}: {missing_keys}")
+        if any(
+            key not in row or row.get(key) is None or row.get(key) == ""
+            for row in rows for key in key_columns
+        ):
+            raise ValueError(f"MERGE rows contain empty keys: {key_columns}")
+        # BigQuery MERGEは同一source keyが複数あると既存行へのUPDATEで失敗し得る。
+        # APIページ内の重複をここで吸収し、最後に観測した行を正本とする。
+        deduplicated = {}
+        for row in rows:
+            deduplicated[tuple(row[key] for key in key_columns)] = row
+        rows = list(deduplicated.values())
+        columns = [field.name for field in schema if any(field.name in row for row in rows)]
+        if not columns or any(key not in columns for key in key_columns):
+            raise ValueError(f"MERGE rows do not contain all keys: {key_columns}")
+
+        def source_expr(column: str) -> str:
+            field_type = schema_by_name[column].field_type.upper()
+            json_path = f"$.{column}"
+            if field_type == "STRING":
+                return f"JSON_VALUE(row, '{json_path}') AS `{column}`"
+            if field_type == "JSON":
+                return f"JSON_QUERY(row, '{json_path}') AS `{column}`"
+            cast_type = {
+                "INTEGER": "INT64", "INT64": "INT64",
+                "FLOAT": "FLOAT64", "FLOAT64": "FLOAT64",
+                "NUMERIC": "NUMERIC", "BIGNUMERIC": "BIGNUMERIC",
+                "BOOLEAN": "BOOL", "BOOL": "BOOL", "DATE": "DATE",
+                "DATETIME": "DATETIME", "TIMESTAMP": "TIMESTAMP",
+            }.get(field_type)
+            if not cast_type:
+                raise ValueError(f"unsupported MERGE field type: {field_type} ({column})")
+            return f"SAFE_CAST(JSON_VALUE(row, '{json_path}') AS {cast_type}) AS `{column}`"
+
+        source_columns = ",\n            ".join(source_expr(column) for column in columns)
+        on_clause = " AND ".join(f"T.`{key}` = S.`{key}`" for key in key_columns)
+        update_columns = [column for column in columns if column not in key_columns]
+        matched_clause = ""
+        if update_columns:
+            assignments = ",\n          ".join(
+                f"T.`{column}` = S.`{column}`" for column in update_columns
+            )
+            matched_clause = f"WHEN MATCHED THEN UPDATE SET\n          {assignments}"
+        insert_columns = ", ".join(f"`{column}`" for column in columns)
+        insert_values = ", ".join(f"S.`{column}`" for column in columns)
+        sql = f"""
+        MERGE `{table_ref}` AS T
+        USING (
+          SELECT
+            {source_columns}
+          FROM UNNEST(JSON_QUERY_ARRAY(PARSE_JSON(@rows_json))) AS row
+        ) AS S
+        ON {on_clause}
+        {matched_clause}
+        WHEN NOT MATCHED THEN INSERT ({insert_columns})
+        VALUES ({insert_values})
+        """
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter(
+                "rows_json", "STRING", json.dumps(rows, ensure_ascii=False, default=str)
+            )
+        ])
+        self.client.query(sql, job_config=job_config).result()
+        return True
 
     def mark_doc_as_fetched(self, doc_id: str) -> int:
         """doc_index の fetched_flag を True に更新"""
@@ -319,6 +403,36 @@ class EDINETBQClient:
         """
         df = self.query_to_df(sql)
         return df.drop(columns=["rn"]).to_dict("records")[0] if not df.empty else {}
+
+    def get_real_estate_holdings(self, securities_code: str) -> list[dict]:
+        """証券コードに対応する最新年度の企業保有不動産を返す。"""
+        code = "".join(
+            char for char in str(securities_code).split(".")[0] if char.isdigit()
+        )[:4]
+        if not code:
+            return []
+        sql = f"""
+        SELECT h.*
+        FROM `{self.project}.real_estate.corporate_holdings_p1` AS h
+        JOIN `{self.dataset}.company` AS c USING (edinet_code)
+        WHERE SUBSTR(c.sec_code, 1, 4) = @company_code
+          AND h.fiscal_year = (
+            SELECT MAX(h2.fiscal_year)
+            FROM `{self.project}.real_estate.corporate_holdings_p1` AS h2
+            WHERE h2.edinet_code = h.edinet_code
+          )
+        ORDER BY h.facility_name
+        """
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("company_code", "STRING", code)
+        ])
+        try:
+            return [dict(row.items()) for row in self.client.query(
+                sql, job_config=job_config
+            ).result()]
+        except Exception as exc:
+            print(f"[BQ] get_real_estate_holdings({code}) skip: {str(exc)[:80]}")
+            return []
 
     def get_segment_bonus(self, securities_code: str) -> float:
         """
@@ -711,6 +825,76 @@ class EDINETBQClient:
                 f"({securities_code}): {str(e)[:60]}"
             )
             return 0.0
+
+    def get_xbrl_text_sections(self, securities_code: str) -> list[dict]:
+        """EdinetDB由来の最新raw textをtext_extractor互換形で返す。"""
+        code = "".join(
+            char for char in str(securities_code).split(".")[0] if char.isdigit()
+        )[:4]
+        if not code:
+            return []
+        sql = f"""
+        SELECT
+          section_type AS element_name,
+          raw_text AS text_value,
+          CAST(fiscal_year_end AS STRING) AS period_end
+        FROM `{self.dataset}.text_analysis`
+        WHERE company_code = @company_code
+          AND raw_text IS NOT NULL
+        QUALIFY ROW_NUMBER() OVER (
+          PARTITION BY section_type
+          ORDER BY fiscal_year_end DESC, updated_at DESC
+        ) = 1
+        """
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("company_code", "STRING", code)
+        ])
+        try:
+            return [dict(row.items()) for row in self.client.query(
+                sql, job_config=job_config
+            ).result()]
+        except Exception:
+            return []
+
+    def search_company_text(
+        self,
+        securities_code: str,
+        query: str,
+        *,
+        limit: int = 50,
+    ) -> list[dict]:
+        """BQへ保存した有報全文を、個社内キーワードで安全に検索する。"""
+        code = "".join(
+            char for char in str(securities_code).split(".")[0] if char.isdigit()
+        )[:4]
+        keyword = str(query or "").strip()
+        if not code or not keyword:
+            return []
+        bounded_limit = max(1, min(200, int(limit)))
+        sql = f"""
+        SELECT section_type, fiscal_year_end, raw_text, updated_at
+        FROM `{self.dataset}.text_analysis`
+        WHERE company_code = @company_code
+          AND raw_text IS NOT NULL
+          AND STRPOS(
+            NORMALIZE_AND_CASEFOLD(raw_text),
+            NORMALIZE_AND_CASEFOLD(@query)
+          ) > 0
+        ORDER BY fiscal_year_end DESC, section_type
+        LIMIT @limit
+        """
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("company_code", "STRING", code),
+            bigquery.ScalarQueryParameter("query", "STRING", keyword),
+            bigquery.ScalarQueryParameter("limit", "INT64", bounded_limit),
+        ])
+        try:
+            return [dict(row.items()) for row in self.client.query(
+                sql, job_config=job_config
+            ).result()]
+        except Exception as exc:
+            print(f"[BQ] search_company_text({code}) skip: {str(exc)[:80]}")
+            return []
 
 # ----------------------------------------------------------
     # Wave 6 - R-2: sub_theme_master / ticker_subtheme_mapping

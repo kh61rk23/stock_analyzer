@@ -1376,24 +1376,54 @@ def run_all_tasks(mode: str = "all") -> dict:
         except Exception as _khe:
             print(f"  ⚠️  APIキー生存判定エラー（スキップ）: {_khe}")
 
-    # ── Source ingestion preflight ───────────────────────────────
-    # Persist new source data before sector/US screening consumes BQ.
-    if getattr(cfg, "ENABLE_EDINETDB_INGEST", True) and _in_mode("edinet_rotation"):
+    # ── [DB統合 W3] EdinetDBを唯一のEDINET一次取得元としてBQへ格納 ──
+    if getattr(cfg, "ENABLE_EDINETDB_INGEST", True) and _in_mode("edinetdb_ingest"):
         try:
             _edi = _load_local_module("edinetdb_ingestor", "/content/edinetdb_ingestor.py", cfg.DRIVE_BASE / "edinetdb_ingestor.py")
             if _edi:
-                results["edinetdb_ingest"] = _edi.run_edinetdb_ingest(cfg, results)
+                results["edinetdb_ingest"] = _edi.run_edinetdb_ingest(cfg)
                 source_ingest_done["edinet"] = True
-                logger.add("edinetdb_ingest", "success", str(results["edinetdb_ingest"]))
+                value = results["edinetdb_ingest"]
+                logger.add(
+                    "edinetdb_ingest",
+                    "skipped" if value.get("skipped") else (
+                        "success" if not value.get("failure") else "alert"
+                    ),
+                    str(value),
+                )
         except Exception as exc:
             logger.add("edinetdb_ingest", "error", str(exc)[:100])
-    if getattr(cfg, "ENABLE_FUDOSANDB_INGEST", True) and _in_mode("edinet_rotation"):
+
+    # ── [DB統合 W4] 政府EDINET検索を使わず有報doc_indexを更新 ─────
+    if _in_mode("edinet_doc_index"):
+        try:
+            _indexer = _load_local_module("edinet_doc_indexer", "/content/edinet_doc_indexer.py", cfg.DRIVE_BASE / "edinet_doc_indexer.py")
+            if _indexer:
+                results["edinet_doc_index"] = _indexer.run_doc_indexer(cfg=cfg)
+                value = results["edinet_doc_index"]
+                logger.add(
+                    "edinet_doc_index",
+                    "skipped" if value.get("skipped") else "success",
+                    str(value),
+                )
+        except Exception as exc:
+            logger.add("edinet_doc_index", "error", str(exc)[:100])
+
+    # ── [DB統合 W5] 不動産DB P1をBQへ格納 ─────────────────────
+    if getattr(cfg, "ENABLE_FUDOSAN_INGEST", True) and _in_mode("fudosan_ingest"):
         try:
             _fudo = _load_local_module("fudosan_ingestor", "/content/fudosan_ingestor.py", cfg.DRIVE_BASE / "fudosan_ingestor.py")
             if _fudo:
-                results["fudosan_ingest"] = _fudo.run_fudosan_ingest(cfg, results)
+                results["fudosan_ingest"] = _fudo.run_fudosan_ingest(cfg)
                 source_ingest_done["fudosan"] = True
-                logger.add("fudosan_ingest", "success", str(results["fudosan_ingest"]))
+                value = results["fudosan_ingest"]
+                logger.add(
+                    "fudosan_ingest",
+                    "skipped" if value.get("skipped") else (
+                        "success" if not value.get("failure") else "alert"
+                    ),
+                    str(value),
+                )
         except Exception as exc:
             logger.add("fudosan_ingest", "error", str(exc)[:100])
     if getattr(cfg, "ENABLE_US_FUNDAMENTALS", True) and _in_mode("us_fundamentals"):
@@ -4111,23 +4141,7 @@ def run_all_tasks(mode: str = "all") -> dict:
         if not getattr(cfg, "ENABLE_US_SCREENER", False):
             print("  ⏩ 米国株スクリーニング: スキップ（ENABLE_US_SCREENER=False）")
 
-    # ── EdinetDB ローテーション取得 ──────────────────────────
-    if getattr(cfg, "ENABLE_EDINETDB_INGEST", True) and _in_mode("edinet_rotation") and not source_ingest_done["edinet"]:
-        try:
-            _edi = _load_local_module("edinetdb_ingestor", "/content/edinetdb_ingestor.py", cfg.DRIVE_BASE / "edinetdb_ingestor.py")
-            if _edi:
-                results["edinetdb_ingest"] = _edi.run_edinetdb_ingest(cfg, results)
-                logger.add("edinetdb_ingest", "success", str(results["edinetdb_ingest"]))
-        except Exception as e:
-            logger.add("edinetdb_ingest", "error", str(e)[:100])
-    if getattr(cfg, "ENABLE_FUDOSANDB_INGEST", True) and _in_mode("edinet_rotation") and not source_ingest_done["fudosan"]:
-        try:
-            _fudo = _load_local_module("fudosan_ingestor", "/content/fudosan_ingestor.py", cfg.DRIVE_BASE / "fudosan_ingestor.py")
-            if _fudo:
-                results["fudosan_ingest"] = _fudo.run_fudosan_ingest(cfg, results)
-                logger.add("fudosan_ingest", "success", str(results["fudosan_ingest"]))
-        except Exception as e:
-            logger.add("fudosan_ingest", "error", str(e)[:100])
+    # ── legacy EdinetDBローテーション（政府EDINET直取得は無効）──
     if getattr(cfg, "ENABLE_EDINET_ROTATION", False) and _in_mode("edinet_rotation"):
         print("\n  🔄 EdinetDB ローテーション...")
         try:

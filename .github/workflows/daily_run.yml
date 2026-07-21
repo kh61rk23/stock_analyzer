@@ -33,6 +33,7 @@
 #   GOOGLE_DRIVE_FOLDER_ID    GDrive バックアップ先フォルダ ID
 #   ESTAT_API_KEY         e-Stat API キー（任意）
 #   EDINETDB_API_KEY      EdinetDB API キー（任意）
+#   FUDOSAN_API_KEY       不動産DB API キー（任意）
 #   DEEPL_API_KEY         DeepL API キー（任意）
 #   SEC_USER_AGENT        SEC EDGAR User-Agent（例: MyApp/1.0 your@email.com）
 #                         ※ institutional_13f_monitor.py が参照（任意・未設定時はデフォルト値使用）
@@ -122,12 +123,6 @@ jobs:
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
           echo "▶ 実行モード: $MODE"
 
-      # ── 3-B. EDINET インデックス更新 (追加箇所) ──────────────
-      - name: Run EDINET doc indexer
-        env:
-          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
-        run: |
-          python edinet_doc_indexer.py
       # ── 3-B3. Wave 6 - U-4: 機関投資家 13F 監視（四半期提出期間のみ）──
       - name: 🏦 Run institutional 13F monitor (quarterly filing period only)
         if: steps.set-mode.outputs.mode == 'weekly'
@@ -239,14 +234,6 @@ jobs:
           nonzero = sum(1 for v in bonus_map.values() if v != 0.0)
           print(f"✅ text_signal 完了: {nonzero}/{len(bonus_map)}社でリスク検出")
           EOF
-      # ── 3-C. EDINET インデックス追加更新 (追加箇所) ──────────────      
-      - name: Run EDINET direct fetcher (optional bootstrap)
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'all'
-        env:
-          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
-          BQ_PROJECT_ID:  ${{ secrets.BQ_PROJECT_ID }}
-        run: |
-          python edinet_direct_fetcher.py --limit 33
       # ── 5. アナライザー実行 ───────────────────────────────
       # github actionsのAPIキーやファイルパスをそれぞれ定義している。
       # シングルモードの時は指定モジュールを実行。そうでないときはrun_headless.pyから参照する。
@@ -273,6 +260,7 @@ jobs:
           GOOGLE_DRIVE_FOLDER_ID:     ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
           ESTAT_API_KEY:              ${{ secrets.ESTAT_API_KEY }}
           EDINETDB_API_KEY:           ${{ secrets.EDINETDB_API_KEY }}
+          FUDOSAN_API_KEY:            ${{ secrets.FUDOSAN_API_KEY }}
           DEEPL_API_KEY:              ${{ secrets.DEEPL_API_KEY }}
           NOTION_API_KEY:             ${{ secrets.NOTION_API_KEY }}  # 2026-06-10 ハードコード廃止に伴い追加
           CONGRESS_API_KEY:           ${{ secrets.CONGRESS_API_KEY }}  # 2026-06-10 congress_monitor配線復元に伴い追加
@@ -301,6 +289,11 @@ jobs:
             git add stock_data/data/fed_calendar_cache.json 2>/dev/null || true
             git add stock_data/data/edinet_db/ 2>/dev/null || true
             git add stock_data/data/edinet_cache/ 2>/dev/null || true
+            git add stock_data/data/edinetdb_cache/ 2>/dev/null || true
+            git add stock_data/data/edinetdb_company_cache.json 2>/dev/null || true
+            git add stock_data/data/edinetdb_rotation_meta.json 2>/dev/null || true
+            git add stock_data/data/fudosandb_cache/ 2>/dev/null || true
+            git add stock_data/data/fudosan_rotation_meta.json 2>/dev/null || true
             git add stock_data/data/biz_summary_cache/ 2>/dev/null || true
             git add stock_data/data/imf_cache.json 2>/dev/null || true
             git add stock_data/insights/ideas/evaluations.json 2>/dev/null || true
@@ -335,8 +328,9 @@ jobs:
             git add stock_data/data/cycle_phase_history.json 2>/dev/null || true
             git add stock_data/data/rule_weights.json 2>/dev/null || true
             git add stock_data/data/cross_sector_signal_history.json || true # R-1 履歴保存実装後に有効化
-            git add stock_data/data/us_fundamentals_db/ 2>/dev/null || true
-            git add stock_data/data/us_cik_mapping.json 2>/dev/null || true
+            # 個別US財務JSONはrun内キャッシュ（.gitignore対象）。永続正本はus.fundamentals BQ。
+            git add stock_data/data/us_fundamentals_meta.json 2>/dev/null || true
+            git add stock_data/data/us_cik_map.json 2>/dev/null || true
             git add stock_data/data/tdnet_notified.json 2>/dev/null || true
             git add stock_data/data/investment_journal.json 2>/dev/null || true
             git add stock_data/data/score_drift_log.json 2>/dev/null || true

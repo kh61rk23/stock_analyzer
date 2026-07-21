@@ -1,26 +1,21 @@
-"""Idempotent BigQuery schema for corporate real-estate enrichment."""
+"""W5 BigQuery schema compatibility entrypoint.
+
+The first implementation used incompatible columns in the unversioned tables.
+New deployments use the non-destructive ``*_p1`` tables from
+``setup_db_integration_bq.py``.
+"""
 from __future__ import annotations
 
-DDL = [
-    "CREATE SCHEMA IF NOT EXISTS `{project}.real_estate` OPTIONS(location='asia-northeast1')",
-    """CREATE TABLE IF NOT EXISTS `{project}.real_estate.corporate_holdings` (
-      company_code STRING NOT NULL, property_id STRING NOT NULL, property_name STRING,
-      prefecture STRING, municipality STRING, latitude FLOAT64, longitude FLOAT64,
-      land_area_sqm FLOAT64, book_value_jpy FLOAT64, estimated_land_value_jpy FLOAT64,
-      source STRING, as_of_date DATE, updated_at TIMESTAMP
-    ) PARTITION BY as_of_date CLUSTER BY company_code""",
-    """CREATE TABLE IF NOT EXISTS `{project}.real_estate.area_profile` (
-      area_code STRING NOT NULL, as_of_date DATE NOT NULL, flood_risk_score FLOAT64,
-      population_decline_score FLOAT64, updated_at TIMESTAMP
-    ) PARTITION BY as_of_date CLUSTER BY area_code""",
-]
+from setup_db_integration_bq import _statements
 
 
-def create_all():
+def create_all() -> None:
     from edinet_bq_client import EDINETBQClient
+
     client = EDINETBQClient()
-    for ddl in DDL:
-        client.client.query(ddl.replace("{project}", client.project)).result()
+    statements = [sql for sql in _statements(client.project) if ".real_estate" in sql]
+    for sql in statements:
+        client.client.query(sql).result()
 
 
 if __name__ == "__main__":

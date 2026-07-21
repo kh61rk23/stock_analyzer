@@ -1290,13 +1290,33 @@ ENABLE_EDINETDB_INGEST: bool = True
 ENABLE_EDINET_DIRECT_FETCH: bool = False
 EDINETDB_BASE_URL: str = os.getenv("EDINETDB_BASE_URL", "https://edinetdb.jp/v1")
 EDINETDB_LOOKBACK_DAYS: int = 7
+EDINETDB_DAILY_BUDGET: int = 90
+EDINETDB_MONTHLY_GUARD: int = 1450
+EDINETDB_REFRESH_DAYS: int = 180
 EDINETDB_TEXTBLOCK_EVERY_N: int = 2
+EDINETDB_ROTATION_META: str = "edinetdb_rotation_meta.json"
+EDINETDB_DOC_INDEX_LIMIT: int = 10
+EDINETDB_DOC_INDEX_RESERVE: int = 11  # /usage 1 + 開示10社
 
 # D-②: P1 corporate real-estate enrichment; all missing data is neutral.
-ENABLE_FUDOSANDB_INGEST: bool = True
+ENABLE_FUDOSAN_INGEST: bool = True
+ENABLE_FUDOSANDB_INGEST: bool = ENABLE_FUDOSAN_INGEST  # 後方互換
 ENABLE_REAL_ESTATE_SIGNAL: bool = True
-FUDOSANDB_BASE_URL: str = os.getenv("FUDOSANDB_BASE_URL", "https://fudosandb.jp/v1")
-FUDOSANDB_DAILY_BUDGET: int = 90
+FUDOSAN_BASE_URL: str = os.getenv(
+    "FUDOSAN_BASE_URL",
+    os.getenv("FUDOSANDB_BASE_URL", "https://fudosandb.jp/v1"),
+)
+FUDOSAN_DAILY_BUDGET: int = 900
+FUDOSAN_BACKFILL_CUTOFF: str = "2026-07-30"
+FUDOSAN_POST_CUTOFF_BUDGET: int = 90
+FUDOSAN_REFRESH_DAYS: int = 365
+FUDOSAN_ROTATION_META: str = "fudosan_rotation_meta.json"
+FUDOSAN_HOLDINGS_TABLE: str = "corporate_holdings_p1"
+FUDOSAN_AREA_TABLE: str = "area_profile_p1"
+RE_BONUS_MIN: float = -2.0
+RE_BONUS_MAX: float = 3.0
+FUDOSANDB_BASE_URL: str = FUDOSAN_BASE_URL  # 後方互換
+FUDOSANDB_DAILY_BUDGET: int = FUDOSAN_DAILY_BUDGET  # 後方互換
 FUDOSANDB_P1_TICKERS: list = []
 
 # ==============================================================
@@ -1467,6 +1487,9 @@ NEWS_ALERT_MAX_ARTICLES: int = 5  # Gmailアラートに含める記事数
 # 実行対象モジュールキー（ENABLE_* フラグが True の場合のみ実際に動く）
 DAILY_MODULES = [
     "key_health",    # APIキー生存判定（Issue J-2・最序盤で実行）
+    "edinetdb_ingest",  # DB統合W3: EdinetDB→BQ
+    "edinet_doc_index", # DB統合W4: EdinetDB開示→doc_index
+    "fudosan_ingest",   # DB統合W5: 企業保有不動産→BQ
     "gov",           # 政府データパイプライン
     "macro",         # マクロ指標取得
     "sector",        # セクターエージェント
@@ -3810,7 +3833,7 @@ JOB_SURGE_SECTOR_MAP: dict = {
 }
 
 # ── I-3: 役員転職トラッカー設定 ─────────────────────────────
-ENABLE_EXECUTIVE_TRANSITION: bool = True
+ENABLE_EXECUTIVE_TRANSITION: bool = False  # W4: 政府EDINET直取得に依存するため停止
 EXECUTIVE_CACHE_TTL_DAYS: int     = 90     # executive_transition_cache.json の TTL
 EXECUTIVE_CACHE_PATH: str         = "executive_transition_cache.json"  # CACHE_DIR 配下
 
@@ -4331,6 +4354,8 @@ EXIT_STORY_DROP_NEAR_PCT: float = 30.0  # R-STORY: 接近通知
 ENABLE_DATA_SLA: bool = True
 # Wave R0-2: usデータセットへのBQ格納（job/executive/facility の3モジュール）
 ENABLE_US_BQ_EXPORT: bool = True
+ENABLE_US_FUNDAMENTALS_BQ: bool = True
+US_FUNDAMENTALS_BQ_TABLE: str = "fundamentals"
 # D-09（2026-07-05決定）: Notion連携は廃止（Obsidian一本化）。
 # notion_obsidian_writer.py の Notion API 呼び出しのみ停止（Obsidian出力は継続）。
 ENABLE_NOTION_API: bool = False

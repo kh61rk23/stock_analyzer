@@ -544,6 +544,15 @@ def run_executive_transition_tracker(cfg, results: dict) -> dict:
         print("  ⏩ 役員転職トラッカー: スキップ（ENABLE_EXECUTIVE_TRANSITION=False）")
         return {"skipped": True, "sector_boosts": {}, "transition_alerts": []}
 
+    # W4: 政府EDINET documents.json の直接取得は撤去済み。
+    # EdinetDB側の役員履歴契約へ移行するまで、明示的にfail-softする。
+    return {
+        "skipped": True,
+        "reason": "retired: government EDINET direct fetch",
+        "sector_boosts": {},
+        "transition_alerts": [],
+    }
+
     print("\n  👔 [exec_transition] 役員転職トラッカー 開始...")
     t0 = datetime.now()
 
