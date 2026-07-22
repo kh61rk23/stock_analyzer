@@ -257,7 +257,8 @@ def main(argv: list[str] | None = None):
     budget = _casino_budget(cfg, total)
     plan = build_allocation(returns, pf, pval, total, budget, cfg)
     md = build_report(plan, yyyymm)
-    out = REPO / "insights" / f"allocation_proposal_{yyyymm}.md"
+    insight_dir = Path(getattr(cfg, "INSIGHT_DIR", REPO / "stock_data" / "insights"))
+    out = insight_dir / f"allocation_proposal_{yyyymm}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(md, encoding="utf-8")
     print(f"✅ 資金配分提案出力: {out}（{plan['reason']}）")

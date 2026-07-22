@@ -9,6 +9,7 @@ from dead_ticker_pruner import (
     _classify_yahoo_chart_response,
     _partition_confirmation,
 )
+import config
 
 
 def test_fiscal_year_end_only_uses_explicit_provider_date():
@@ -51,6 +52,14 @@ def test_edinet_ingest_skips_cleanly_without_optional_key():
     result = run_edinetdb_ingest(cfg, doc_index_only=True)
     assert result["skipped"] is True
     assert "API_KEY" in result["reason"]
+
+
+def test_daily_edinet_route_is_bq_read_only():
+    assert config.ENABLE_EDINET_BQ_ANALYSIS is True
+    assert config.ENABLE_EDINET is False
+    assert config.ENABLE_EDINETDB_INGEST is False
+    assert "edinetdb_ingest" not in config.DAILY_MODULES
+    assert "edinet_doc_index" not in config.DAILY_MODULES
 
 
 def test_pruner_never_confirms_unknown_ticker_for_deletion():

@@ -138,7 +138,8 @@ def gather_sources(cfg, yyyymm: str) -> dict:
         "paper_accounts": _load_json(paper_dir / "accounts.json"),
     }
     # E4レポートの存在＋簡易件数
-    e4 = REPO / "insights" / f"signal_culling_{yyyymm}.md"
+    insight_dir = Path(getattr(cfg, "INSIGHT_DIR", REPO / "stock_data" / "insights"))
+    e4 = insight_dir / f"signal_culling_{yyyymm}.md"
     if e4.exists():
         txt = e4.read_text(encoding="utf-8")
         m = re.search(r"提案あり[:：]\s*(\d+)件.*判定不能[:：]\s*(\d+)件", txt)
@@ -168,7 +169,8 @@ def main():
     if vault and vault.exists():
         out = vault / "30_レポート" / f"strategy_review_{yyyymm}.md"
     else:
-        out = REPO / "insights" / f"strategy_review_{yyyymm}.md"
+        insight_dir = Path(getattr(cfg, "INSIGHT_DIR", REPO / "stock_data" / "insights"))
+        out = insight_dir / f"strategy_review_{yyyymm}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(md, encoding="utf-8")
     print(f"✅ 月次戦略レビュー出力: {out}")

@@ -135,6 +135,12 @@ def _us_fundamentals_to_bq_rows(ticker: str, data: dict) -> list[dict]:
     if not updated_at:
         updated_at = datetime.now(timezone.utc).isoformat()
     cik = data.get("cik")
+    statement_period = str(data.get("statement_period") or "quarterly")
+    source = {
+        "sec_xbrl": "sec_edgar",
+        "sec_edgar_bq": "sec_edgar",
+        "yahoo_finance_fallback": "yahoo_finance",
+    }.get(str(data.get("data_source") or ""), str(data.get("data_source") or "sec_edgar"))
     rows = []
     for period, metrics in sorted(by_period.items()):
         row = {
@@ -142,8 +148,12 @@ def _us_fundamentals_to_bq_rows(ticker: str, data: dict) -> list[dict]:
             "ticker": ticker,
             "cik": int(cik) if cik is not None else None,
             "period_end": period,
-            "fiscal_period": _fiscal_period_from_date(period),
-            "source": "sec_edgar",
+            "fiscal_period": (
+                f"{date.fromisoformat(period).year}FY"
+                if statement_period == "annual"
+                else _fiscal_period_from_date(period)
+            ),
+            "source": source,
             "updated_at": str(updated_at),
         }
         row.update({column: metrics.get(column) for column in metric_sources})
@@ -208,7 +218,7 @@ def _upsert_us_fundamentals_to_bq(rows: list[dict], table_name: str) -> bool:
         bq.client.query(_us_fundamentals_merge_sql(table_ref), job_config=config).result()
         return True
     except Exception as exc:
-        print(f"    ⚠️  us.fundamentals BQ UPSERT失敗: {type(exc).__name__}: {str(exc)[:80]}")
+        print(f"    ⚠️  us.fundamentals BQ UPSERT失敗: {type(exc).__name__}: {str(exc)[:300]}")
         return False
 
 # 取得する XBRL 財務項目の優先順（上から順に試す）
@@ -702,6 +712,108 @@ def calc_eps_accel_score_xbrl(
 
 
 # ==============================================================
+# BLOCK 4-B: SEC companyfacts非対応銘柄のYahooフォールバック
+# ==============================================================
+
+def _yahoo_statement_series(statement, labels: list[str], n_quarters: int = 12) -> list[dict]:
+    """yfinanceの計算書から最初の有効な候補行を取り出す。"""
+    if statement is None or getattr(statement, "empty", True):
+        return []
+    import math
+
+    for label in labels:
+        if label not in statement.index:
+            continue
+        result = []
+        for period, raw_value in statement.loc[label].items():
+            try:
+                value = float(raw_value)
+                if not math.isfinite(value):
+                    continue
+                period_text = period.date().isoformat() if hasattr(period, "date") else str(period)[:10]
+                date.fromisoformat(period_text)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            result.append({"period": period_text, "val": value, "form": "YF"})
+        if result:
+            return sorted(result, key=lambda item: item["period"], reverse=True)[:n_quarters]
+    return []
+
+
+def _fetch_yahoo_fundamentals(ticker: str, cik: int) -> Optional[dict]:
+    """SEC companyfactsが404のADR等をYahooの四半期／年次値で補完する。"""
+    try:
+        import yfinance as yf
+
+        value = yf.Ticker(ticker)
+        income = value.quarterly_income_stmt
+        cashflow = value.quarterly_cashflow
+        statement_period = "quarterly"
+        # 外国民間発行体のADRはSEC companyfactsだけでなくYahooの
+        # 四半期表も空の場合がある。その場合は年次確定値を保存する。
+        if getattr(income, "empty", True) and getattr(cashflow, "empty", True):
+            income = value.income_stmt
+            cashflow = value.cashflow
+            statement_period = "annual"
+
+        eps_history = _yahoo_statement_series(income, ["Diluted EPS", "Basic EPS"])
+        revenue_history = _yahoo_statement_series(income, ["Total Revenue", "Operating Revenue"])
+        oi_history = _yahoo_statement_series(income, ["Operating Income"])
+        ni_history = _yahoo_statement_series(
+            income, ["Net Income", "Net Income Common Stockholders"]
+        )
+        fcf_history = _yahoo_statement_series(cashflow, ["Free Cash Flow"], 8)
+        if not fcf_history:
+            op_cf = _yahoo_statement_series(
+                cashflow, ["Operating Cash Flow", "Total Cash From Operating Activities"], 8
+            )
+            capex = _yahoo_statement_series(cashflow, ["Capital Expenditure", "Capital Expenditures"], 8)
+            capex_by_period = {item["period"]: item["val"] for item in capex}
+            fcf_history = [
+                {
+                    "period": item["period"],
+                    "val": item["val"] - abs(capex_by_period[item["period"]]),
+                    "form": "YF",
+                }
+                for item in op_cf if item["period"] in capex_by_period
+            ]
+        buyback_history = _yahoo_statement_series(
+            cashflow, ["Repurchase Of Capital Stock"], 8
+        )
+        for item in buyback_history:
+            item["val"] = abs(item["val"])
+        shares_history = _yahoo_statement_series(
+            income, ["Diluted Average Shares", "Basic Average Shares"]
+        )
+
+        if not any((eps_history, revenue_history, oi_history, ni_history, fcf_history)):
+            return None
+        return {
+            "ticker": ticker,
+            "cik": cik,
+            "eps_history": eps_history,
+            "revenue_history": revenue_history,
+            "operating_income_history": oi_history,
+            "net_income_history": ni_history,
+            "fcf_history": fcf_history,
+            "buyback_history": buyback_history,
+            "shares_history": shares_history,
+            "recent_8k_dates": [],
+            "eps_accel_score_xbrl": calc_eps_accel_score_xbrl(eps_history),
+            "latest_eps": eps_history[0]["val"] if eps_history else None,
+            "latest_revenue": revenue_history[0]["val"] if revenue_history else None,
+            "latest_net_income": ni_history[0]["val"] if ni_history else None,
+            "latest_fcf": fcf_history[0]["val"] if fcf_history else None,
+            "data_source": "yahoo_finance_fallback",
+            "statement_period": statement_period,
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as exc:
+        print(f"    ⚠️  Yahoo財務取得失敗 ({ticker}): {type(exc).__name__}: {str(exc)[:100]}")
+        return None
+
+
+# ==============================================================
 # BLOCK 5: 1銘柄の取得処理
 # ==============================================================
 
@@ -722,7 +834,16 @@ def fetch_one_ticker(
         time.sleep(REQUEST_DELAY)
 
         if not facts_data:
-            return {"ok": False, "ticker": ticker, "error": "XBRL取得失敗"}
+            print(f"    ↪️  {ticker}: Yahoo Finance財務へフォールバック")
+            result_data = _fetch_yahoo_fundamentals(ticker, cik)
+            if not result_data:
+                return {
+                    "ok": False,
+                    "ticker": ticker,
+                    "error": "SEC XBRLおよびYahoo財務の取得失敗",
+                }
+            save_ticker_db(cfg, ticker, result_data)
+            return {"ok": True, "ticker": ticker, "data": result_data, "error": ""}
 
         # submissions 取得（8-K日程検知用）
         submissions = _fetch_submissions(cik, cfg)

@@ -970,32 +970,22 @@ def build_result(
     edinet_data  = {}  # {ticker: full_company_data}
     edinet_risks = {}  # {ticker: [リスク文字列リスト]} ← 後方互換用
 
-    db_api_key = getattr(cfg, "EDINETDB_API_KEY", "")
-    if getattr(cfg, "ENABLE_EDINET", False) and db_api_key:
+    if getattr(cfg, "ENABLE_EDINET_BQ_ANALYSIS", True):
         try:
-            _edinet = _load_edinet_client(cfg)
-            if _edinet:
-                ok_tickers = [c["ticker"] for c in companies if c.get("fetch_ok")]
-                max_co     = getattr(cfg, "EDINET_MAX_COMPANIES", 2)
-                data_dir   = getattr(cfg, "DATA_DIR", None)
-                cache_dir  = (Path(data_dir) / "edinet_cache") if data_dir else None
-                print(f"    📄 EdinetDB 取得中（最大 {max_co} 社）...")
-                # スキップ対象業種はEdinetDBを叩かない
-                skip_sectors = getattr(cfg, "EDINET_SKIP_SECTORS", [])
-                if sector_code in skip_sectors:
-                    print(f"    ⏩ {sector_name}: EdinetDB スキップ（優先度低）")
-                else:
-                    result_data = _edinet.get_sector_data(ok_tickers, cfg, max_co, cache_dir)
-                    edinet_data = result_data.get("ticker_data", {})
-                    calls_used  = result_data.get("calls_used", 0)
-                    print(f"    ✅ EdinetDB: {len(edinet_data)} 社取得 | 本日コール数: {calls_used}/80")
-                    # 後方互換: risk_factors リストに変換
-                    for ticker, tdata in edinet_data.items():
-                        a = tdata.get("analysis", {})
-                        if a and a.get("risk_factors"):
-                             edinet_risks[ticker] = a["risk_factors"]
+            ok_tickers = [c["ticker"] for c in companies if c.get("fetch_ok")]
+            max_co = getattr(cfg, "EDINET_MAX_COMPANIES", 2)
+            if ok_tickers:
+                print(f"    📄 EDINET BQ既存データ参照中（最大 {max_co} 社）...")
+                edinet_data = _BQClient().get_company_analysis_bundle(
+                    ok_tickers, max_companies=max_co
+                )
+                print(f"    ✅ EDINET BQ: {len(edinet_data)} 社参照 | 外部API: 0回")
+                for ticker, tdata in edinet_data.items():
+                    analysis = tdata.get("analysis", {})
+                    if analysis.get("risk_factors"):
+                        edinet_risks[ticker] = analysis["risk_factors"]
         except Exception as e:
-            print(f"    ⚠️  EdinetDB 取得エラー（スキップ）: {str(e)[:80]}")
+            print(f"    ⚠️  EDINET BQ参照エラー（スキップ）: {str(e)[:120]}")
 
     insight_text = build_insight_text(
         sector_name, companies, macro_signals, score, risk_level,

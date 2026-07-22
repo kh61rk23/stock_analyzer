@@ -1281,12 +1281,13 @@ EDINET_RETRY_BUDGET: int        = 5   # リトライ用予備コール数
 EDINET_WATCHLIST_TICKERS: list  = []  # 空ならPRIORITY_TICKERSを参照
 EDINET_SCREENER_CANDIDATES: list = [] # 前日screener通過銘柄（自動注入される）
 
-# EDINETDB を有効化するフラグ（APIキーが設定されていれば自動的に有効）
-ENABLE_EDINET: bool = True
-# APIキー設定後に True に変更。
-# 現在はEDINETDBの業種ごとの検索を止めており、
-# 別フラグの箇所にて、EDINETDBを動かしている。
-ENABLE_EDINETDB_INGEST: bool = True
+# 日次分析は既存の BigQuery edinet.* を正本とし、EdinetDB RESTを呼ばない。
+ENABLE_EDINET: bool = False                 # legacy 業種別REST取得
+ENABLE_EDINET_BQ_ANALYSIS: bool = True      # BQ既存データのread-only分析
+# 日次分析は常にFalseのまま。08:30 JSTの専用Actionだけ環境変数で有効化する。
+ENABLE_EDINETDB_INGEST: bool = os.getenv(
+    "ENABLE_EDINETDB_INGEST", "0"
+).strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_EDINET_DIRECT_FETCH: bool = False
 EDINETDB_BASE_URL: str = os.getenv("EDINETDB_BASE_URL", "https://edinetdb.jp/v1")
 EDINETDB_LOOKBACK_DAYS: int = 7
@@ -1487,8 +1488,6 @@ NEWS_ALERT_MAX_ARTICLES: int = 5  # Gmailアラートに含める記事数
 # 実行対象モジュールキー（ENABLE_* フラグが True の場合のみ実際に動く）
 DAILY_MODULES = [
     "key_health",    # APIキー生存判定（Issue J-2・最序盤で実行）
-    "edinetdb_ingest",  # DB統合W3: EdinetDB→BQ
-    "edinet_doc_index", # DB統合W4: EdinetDB開示→doc_index
     "fudosan_ingest",   # DB統合W5: 企業保有不動産→BQ
     "gov",           # 政府データパイプライン
     "macro",         # マクロ指標取得

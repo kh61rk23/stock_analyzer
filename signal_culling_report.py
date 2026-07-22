@@ -225,7 +225,7 @@ def main():
     judgments = build_judgments(panel, fwd, weights)
     md = render_report(judgments, weights, yyyymm, note)
 
-    out_dir = REPO / "insights"
+    out_dir = Path(getattr(cfg, "INSIGHT_DIR", REPO / "stock_data" / "insights"))
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f"signal_culling_{yyyymm}.md"
     out.write_text(md, encoding="utf-8")

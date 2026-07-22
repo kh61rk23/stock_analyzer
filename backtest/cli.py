@@ -5,7 +5,7 @@
 #   python3 -m backtest.cli --strategy bh_benchmark --start 2024-07-01 --end 2026-07-01
 #   python3 -m backtest.cli --strategy screener_topN --start 2025-01-01 --end 2026-07-01
 #   python3 -m backtest.cli --strategy bh_benchmark --verify-benchmark   # 受入条件①
-# レポート出力先: insights/backtest/{strategy}_{end}.md
+# レポート出力先: stock_data/insights/backtest/{strategy}_{end}.md
 # ネットワーク必須（yfinance）。GitHub Actions/ローカルMacでの実行を想定。
 # ==============================================================
 
@@ -123,7 +123,9 @@ def main():
         if diff > 0.005:
             raise SystemExit(1)
 
-    out_dir = REPO / "insights" / "backtest"
+    out_dir = Path(
+        getattr(cfg, "INSIGHT_DIR", REPO / "stock_data" / "insights")
+    ) / "backtest"
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f"{strategy.strategy_id}_{args.end}.md"
     out.write_text(render_report(strategy.strategy_id, summary, val,

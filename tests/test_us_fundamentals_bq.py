@@ -1,5 +1,7 @@
 """us.fundamentals への変換・主キー・MERGE 契約を検証する。"""
 
+import pandas as pd
+
 from conftest import load_module
 from us_bq_schema import DDL
 
@@ -45,6 +47,67 @@ def test_rows_have_unique_primary_keys_and_null_for_missing_metrics():
     assert rows[0]["f_id"] == "MSFT_2025-09-30"
     assert rows[0]["net_income"] == 12.5
     assert rows[0]["revenue"] is None
+
+
+def test_yahoo_fallback_rows_keep_their_source():
+    rows = ufr._us_fundamentals_to_bq_rows(
+        "BAESY",
+        {
+            "cik": 895564,
+            "data_source": "yahoo_finance_fallback",
+            "revenue_history": [{"period": "2025-06-30", "val": 12.5}],
+        },
+    )
+
+    assert rows[0]["source"] == "yahoo_finance"
+
+
+def test_yahoo_annual_fallback_is_labelled_as_fiscal_year():
+    rows = ufr._us_fundamentals_to_bq_rows(
+        "BAESY",
+        {
+            "cik": 895564,
+            "data_source": "yahoo_finance_fallback",
+            "statement_period": "annual",
+            "revenue_history": [{"period": "2025-12-31", "val": 12.5}],
+        },
+    )
+
+    assert rows[0]["fiscal_period"] == "2025FY"
+
+
+def test_yahoo_series_tries_secondary_label_when_primary_is_all_nan():
+    statement = pd.DataFrame(
+        {pd.Timestamp("2025-06-30"): [float("nan"), 1.25]},
+        index=["Diluted EPS", "Basic EPS"],
+    )
+
+    result = ufr._yahoo_statement_series(statement, ["Diluted EPS", "Basic EPS"])
+
+    assert result == [{"period": "2025-06-30", "val": 1.25, "form": "YF"}]
+
+
+def test_sec_404_uses_yahoo_quarterly_fallback(monkeypatch, tmp_cfg):
+    fallback = {
+        "ticker": "BAESY",
+        "cik": 895564,
+        "eps_history": [{"period": "2025-06-30", "val": 1.2}],
+        "revenue_history": [{"period": "2025-06-30", "val": 10.0}],
+        "data_source": "yahoo_finance_fallback",
+    }
+    saved = {}
+    monkeypatch.setattr(ufr, "_fetch_xbrl_facts", lambda cik, cfg: None)
+    monkeypatch.setattr(ufr, "_fetch_yahoo_fundamentals", lambda ticker, cik: fallback)
+    monkeypatch.setattr(ufr.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        ufr, "save_ticker_db", lambda cfg, ticker, data: saved.update({ticker: data})
+    )
+
+    result = ufr.fetch_one_ticker("BAESY", 895564, tmp_cfg)
+
+    assert result["ok"] is True
+    assert result["data"]["data_source"] == "yahoo_finance_fallback"
+    assert saved["BAESY"] is fallback
 
 
 def test_bq_quarter_rows_restore_the_existing_screener_history_contract():

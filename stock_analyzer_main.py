@@ -830,16 +830,29 @@ def _load_local_module(name: str, local_path: str, drive_path: Path):
     """モジュールをロードする（GitHub Actions / Colab 両対応）"""
     import importlib.util
 
-    # 候補パスを順番に探す
-    candidates = [
-        Path(local_path),                        # /content/xxx.py（Colab）
-        drive_path,                               # Google Drive パス
-        Path(__file__).parent / f"{name}.py",    # リポジトリ直下（GitHub Actions）
-    ]
+    repo_root = Path(__file__).resolve().parent
+    local = Path(local_path)
+    candidates = [local]                         # /content/xxx.py（Colab）
+    # GitHub Actions では /content/paper/x.py の階層をリポジトリ
+    # 直下に写像する。従来は name.py だけを直下で探し、
+    # paper/ と ml/ 配下の実在ファイルを見落としていた。
+    try:
+        candidates.append(repo_root / local.relative_to("/content"))
+    except ValueError:
+        pass
+    candidates.extend([
+        Path(drive_path),                         # Google Drive パス
+        repo_root / f"{name}.py",               # リポジトリ直下
+    ])
 
     found = None
+    seen = set()
     for p in candidates:
-        if p.exists():
+        resolved = str(p.resolve())
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if p.is_file():
             found = p
             break
 

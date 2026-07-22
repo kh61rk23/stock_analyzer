@@ -86,3 +86,39 @@ def test_merge_rows_deduplicates_source_keys_with_last_row_winning():
 
     payload = json.loads(fake.calls[0][1].query_parameters[0].value)
     assert payload == [{"text_id": "same", "raw_text": "new"}]
+
+
+def test_company_analysis_bundle_reads_existing_bq_tables_in_one_query():
+    fake = _Client([_Row(
+        company_code="7203",
+        company={"company_name": "トヨタ自動車", "credit_score": 85},
+        financials=[
+            {"fiscal_year": 2025, "revenue": 133.1, "operating_income": 20.0},
+            {"fiscal_year": 2024, "revenue": 121.0, "operating_income": 18.0},
+            {"fiscal_year": 2023, "revenue": 110.0, "operating_income": 16.0},
+            {"fiscal_year": 2022, "revenue": 100.0, "operating_income": 14.0},
+        ],
+        texts=[
+            {"section_type": "事業の内容", "raw_text": "自動車事業を展開。"},
+            {"section_type": "事業等のリスク", "raw_text": "為替変動リスク。\n供給網リスク。"},
+        ],
+        gov_meta={"submit_date": "2026-06-20", "period_end": "2026-03-31"},
+    )])
+    bq = _bq(fake)
+
+    result = bq.get_company_analysis_bundle(["7203.T", "bad"], max_companies=2)
+
+    assert list(result) == ["7203.T"]
+    company = result["7203.T"]
+    assert company["data_source"] == "bigquery_edinet"
+    assert company["analysis"]["credit_rating"] == "excellent"
+    assert company["analysis"]["risk_factors"] == ["為替変動リスク。", "供給網リスク。"]
+    assert company["financials"]["years"] == [2022, 2023, 2024, 2025]
+    assert round(company["financials"]["revenue_cagr"], 6) == 0.1
+    assert len(fake.calls) == 1
+    sql, config = fake.calls[0]
+    assert "`test-project.edinet.company`" in sql
+    assert "`test-project.edinet.financials`" in sql
+    assert "`test-project.edinet.text_analysis`" in sql
+    assert "`test-project.edinet.doc_index`" in sql
+    assert config.query_parameters[0].values == ["7203"]

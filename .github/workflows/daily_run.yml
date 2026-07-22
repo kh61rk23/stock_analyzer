@@ -296,7 +296,9 @@ jobs:
             git add stock_data/data/fudosan_rotation_meta.json 2>/dev/null || true
             git add stock_data/data/biz_summary_cache/ 2>/dev/null || true
             git add stock_data/data/imf_cache.json 2>/dev/null || true
-            git add stock_data/insights/ideas/evaluations.json 2>/dev/null || true
+            # 全レポートの正本は config.INSIGHT_DIR (= stock_data/insights)。
+            # runner内だけに残さず、業種・月次・backtestを含めて永続化する。
+            git add stock_data/insights/ 2>/dev/null || true
             git add stock_data/logs/ 2>/dev/null || true
             git add stock_data/data/earnings_surprise_cache.json 2>/dev/null || true
             git add stock_data/data/multi_currency_cache.json 2>/dev/null || true
