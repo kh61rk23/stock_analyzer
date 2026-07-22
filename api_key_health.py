@@ -449,7 +449,12 @@ def run_key_health(cfg) -> dict:
     g = lambda k: getattr(cfg, k, "") or ""
 
     _run("EDINET_API_KEY",       _probe_edinet,   g("EDINET_API_KEY"))
-    _run("EDINETDB_API_KEY",     _probe_edinetdb, g("EDINETDB_API_KEY"))
+    if getattr(cfg, "ENABLE_EDINETDB_INGEST", False):
+        _run("EDINETDB_API_KEY", _probe_edinetdb, g("EDINETDB_API_KEY"))
+    else:
+        entries["EDINETDB_API_KEY"] = _entry(
+            STATE_SKIPPED, "dormant（日次分析はBQ既存データを参照）"
+        )
     _run("FUDOSAN_API_KEY",      _probe_fudosan,  g("FUDOSAN_API_KEY"))
     _run("ESTAT_API_KEY",        _probe_estat,    g("ESTAT_API_KEY"))
     _run("POLICY_FRED_API_KEY",  _probe_fred,     g("POLICY_FRED_API_KEY"))

@@ -213,7 +213,8 @@ def main():
     if dry:
         print(md)
         return
-    out = REPO / "insights" / f"commodity_alloc_{yyyymm}.md"
+    insight_dir = Path(getattr(cfg, "INSIGHT_DIR", REPO / "stock_data" / "insights"))
+    out = insight_dir / f"commodity_alloc_{yyyymm}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(md, encoding="utf-8")
     # 注文票の追記（既存 order_tickets.jsonl へ）

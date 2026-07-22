@@ -404,6 +404,209 @@ class EDINETBQClient:
         df = self.query_to_df(sql)
         return df.drop(columns=["rn"]).to_dict("records")[0] if not df.empty else {}
 
+    def get_company_analysis_bundle(
+        self,
+        tickers: list[str],
+        *,
+        max_companies: int = 2,
+    ) -> dict[str, dict]:
+        """BQ ``edinet.*`` の既存行だけで業種分析互換dictを作る。
+
+        EdinetDB RESTは呼ばず、company / financials / text_analysis /
+        doc_index を1本のパラメータ化クエリで参照する。
+        """
+        bounded = max(1, min(20, int(max_companies)))
+        requested: list[tuple[str, str]] = []
+        seen = set()
+        for raw in tickers:
+            ticker = str(raw or "").strip()
+            code = "".join(ch for ch in ticker.split(".")[0] if ch.isdigit())[:4]
+            if len(code) != 4 or code in seen:
+                continue
+            seen.add(code)
+            requested.append((code, ticker if "." in ticker else f"{code}.T"))
+            if len(requested) >= bounded:
+                break
+        if not requested:
+            return {}
+
+        sql = f"""
+        WITH requested AS (
+          SELECT code FROM UNNEST(@company_codes) AS code
+        ),
+        company_latest AS (
+          SELECT
+            SUBSTR(c.sec_code, 1, 4) AS company_code,
+            ARRAY_AGG(
+              STRUCT(c.name AS company_name, c.credit_score AS credit_score)
+              ORDER BY c.updated_at DESC LIMIT 1
+            )[SAFE_OFFSET(0)] AS company
+          FROM `{self.dataset}.company` AS c
+          JOIN requested AS r ON SUBSTR(c.sec_code, 1, 4) = r.code
+          GROUP BY company_code
+        ),
+        financial_latest AS (
+          SELECT * EXCEPT(rn)
+          FROM (
+            SELECT f.*,
+              ROW_NUMBER() OVER (
+                PARTITION BY f.company_code, f.fiscal_year_end
+                ORDER BY f.updated_at DESC
+              ) AS rn
+            FROM `{self.dataset}.financials` AS f
+            JOIN requested AS r ON f.company_code = r.code
+          )
+          WHERE rn = 1
+        ),
+        financial_grouped AS (
+          SELECT company_code,
+            ARRAY_AGG(STRUCT(
+              COALESCE(fiscal_year, EXTRACT(YEAR FROM fiscal_year_end)) AS fiscal_year,
+              net_sales AS revenue,
+              operating_income AS operating_income,
+              net_income AS net_income,
+              total_assets AS total_assets,
+              equity AS equity,
+              operating_cf AS cf_operating,
+              investing_cf AS cf_investing,
+              free_cf AS free_cf,
+              capex AS capex
+            ) ORDER BY fiscal_year_end DESC LIMIT 6) AS financials
+          FROM financial_latest
+          GROUP BY company_code
+        ),
+        text_latest AS (
+          SELECT * EXCEPT(rn)
+          FROM (
+            SELECT t.*,
+              ROW_NUMBER() OVER (
+                PARTITION BY t.company_code, t.section_type
+                ORDER BY t.fiscal_year_end DESC, t.updated_at DESC
+              ) AS rn
+            FROM `{self.dataset}.text_analysis` AS t
+            JOIN requested AS r ON t.company_code = r.code
+            WHERE t.raw_text IS NOT NULL
+          )
+          WHERE rn = 1
+        ),
+        text_grouped AS (
+          SELECT company_code,
+            ARRAY_AGG(STRUCT(section_type, raw_text) LIMIT 12) AS texts
+          FROM text_latest
+          GROUP BY company_code
+        ),
+        doc_latest AS (
+          SELECT company_code,
+            STRUCT(
+              CAST(disclosure_date AS STRING) AS submit_date,
+              CAST(fiscal_year_end AS STRING) AS period_end
+            ) AS gov_meta
+          FROM `{self.dataset}.doc_index` AS d
+          JOIN requested AS r ON d.company_code = r.code
+          QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY company_code ORDER BY disclosure_date DESC, updated_at DESC
+          ) = 1
+        )
+        SELECT r.code AS company_code, c.company, f.financials, t.texts, d.gov_meta
+        FROM requested AS r
+        LEFT JOIN company_latest AS c ON c.company_code = r.code
+        LEFT JOIN financial_grouped AS f ON f.company_code = r.code
+        LEFT JOIN text_grouped AS t ON t.company_code = r.code
+        LEFT JOIN doc_latest AS d ON d.company_code = r.code
+        """
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ArrayQueryParameter(
+                "company_codes", "STRING", [code for code, _ in requested]
+            )
+        ])
+
+        def plain(value):
+            if value is None or isinstance(value, (str, int, float, bool)):
+                return value
+            if isinstance(value, (list, tuple)):
+                return [plain(item) for item in value]
+            if isinstance(value, dict):
+                return {key: plain(item) for key, item in value.items()}
+            if hasattr(value, "items"):
+                return {key: plain(item) for key, item in value.items()}
+            return value
+
+        def cagr(values: list) -> float | None:
+            positive = [float(value) for value in values if value is not None and value > 0]
+            if len(positive) < 4:
+                return None
+            start, end = positive[-4], positive[-1]
+            return (end / start) ** (1 / 3) - 1
+
+        ticker_by_code = dict(requested)
+        bundles = {}
+        rows = self.client.query(sql, job_config=job_config).result()
+        for row in rows:
+            record = plain(row)
+            code = str(record.get("company_code") or "")
+            company = plain(record.get("company")) or {}
+            financial_rows = list(reversed(plain(record.get("financials")) or []))
+            texts = plain(record.get("texts")) or []
+            gov_meta = plain(record.get("gov_meta")) or {}
+            if not company and not financial_rows and not texts and not gov_meta:
+                continue
+
+            business_summary = ""
+            risk_factors = []
+            for section in texts:
+                section_type = str(section.get("section_type") or "")
+                raw_text = str(section.get("raw_text") or "").strip()
+                lowered = section_type.casefold()
+                if not business_summary and (
+                    "事業の内容" in section_type or "business" in lowered
+                ):
+                    business_summary = raw_text[:1000]
+                if "リスク" in section_type or "risk" in lowered:
+                    points = [
+                        part.strip(" 　・ー-")
+                        for part in re.split(r"[\r\n]+|(?<=。)", raw_text)
+                        if part.strip(" 　・ー-")
+                    ]
+                    risk_factors.extend(points[:5])
+
+            years = [item.get("fiscal_year") for item in financial_rows]
+            revenue = [item.get("revenue") for item in financial_rows]
+            operating_income = [item.get("operating_income") for item in financial_rows]
+            score = company.get("credit_score")
+            rating = ""
+            if score is not None:
+                rating = "excellent" if score >= 80 else "good" if score >= 60 else (
+                    "fair" if score >= 40 else "poor"
+                )
+            ticker = ticker_by_code.get(code, f"{code}.T")
+            bundles[ticker] = {
+                "ticker": ticker,
+                "company_name": company.get("company_name") or ticker,
+                "analysis": {
+                    "credit_score": score,
+                    "credit_rating": rating,
+                    "business_summary": business_summary,
+                    "risk_factors": risk_factors[:5],
+                },
+                "financials": {
+                    "years": years,
+                    "revenue": revenue,
+                    "operating_income": operating_income,
+                    "net_income": [item.get("net_income") for item in financial_rows],
+                    "total_assets": [item.get("total_assets") for item in financial_rows],
+                    "equity": [item.get("equity") for item in financial_rows],
+                    "cf_operating": [item.get("cf_operating") for item in financial_rows],
+                    "cf_investing": [item.get("cf_investing") for item in financial_rows],
+                    "free_cf": [item.get("free_cf") for item in financial_rows],
+                    "capex": [item.get("capex") for item in financial_rows],
+                    "revenue_cagr": cagr(revenue),
+                    "op_income_cagr": cagr(operating_income),
+                },
+                "gov_meta": gov_meta,
+                "data_source": "bigquery_edinet",
+            }
+        return bundles
+
     def get_real_estate_holdings(self, securities_code: str) -> list[dict]:
         """証券コードに対応する最新年度の企業保有不動産を返す。"""
         code = "".join(

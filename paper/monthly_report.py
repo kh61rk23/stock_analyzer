@@ -66,7 +66,10 @@ def main():
     if vault and vault.exists():
         out = vault / "30_レポート" / f"paper_{yyyymm}.md"
     else:
-        out = _REPO / "insights" / f"paper_{yyyymm}.md"
+        insight_dir = Path(
+            getattr(cfg, "INSIGHT_DIR", _REPO / "stock_data" / "insights")
+        )
+        out = insight_dir / f"paper_{yyyymm}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(md, encoding="utf-8")
     print(f"✅ 月次レポート出力: {out}")

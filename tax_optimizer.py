@@ -214,7 +214,8 @@ def main():
                        getattr(cfg, "NISA_GROWTH_TOTAL_LIMIT", 12_000_000))
     md = build_report(harvest, countdown, usage, year)
 
-    out = REPO / "insights" / f"tax_report_{year}.md"
+    insight_dir = Path(getattr(cfg, "INSIGHT_DIR", REPO / "stock_data" / "insights"))
+    out = insight_dir / f"tax_report_{year}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(md, encoding="utf-8")
     print(f"✅ 税・NISAレポート出力: {out}（節税目安 ¥{harvest['tax_saving']:,.0f}）")
