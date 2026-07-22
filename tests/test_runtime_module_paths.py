@@ -53,16 +53,27 @@ def test_edinet_ingest_flag_is_opt_in(monkeypatch):
     assert config.ENABLE_EDINETDB_INGEST is False
 
 
-def test_edinet_workflow_runs_after_provider_refresh():
+def test_daily_workflow_runs_edinet_after_provider_refresh():
     repo = Path(main.__file__).resolve().parent
-    workflow = (repo / ".github/workflows/edinetdb_ingest.yml").read_text(
+    workflow = (repo / ".github/workflows/daily_run.yml").read_text(
         encoding="utf-8"
     )
-    assert 'cron: "30 23 * * *"' in workflow
+    assert 'cron: "0 0 * * *"' in workflow
+    assert '$(date -u +%u)" = "1"' in workflow
     assert 'ENABLE_EDINETDB_INGEST: "1"' in workflow
     assert "python setup_db_integration_bq.py" in workflow
     assert "run_edinetdb_ingest" in workflow
     assert "run_doc_indexer" in workflow
+    assert workflow.index("run_edinetdb_ingest") < workflow.index("🚀 Run analyzer")
+    assert not (repo / ".github/workflows/edinetdb_ingest.yml").exists()
+    assert not (repo / "daily_run.yml").exists()
+
+
+def test_all_schedulers_are_set_to_0900_jst():
+    repo = Path(main.__file__).resolve().parent
+    colab = (repo / "colab_analyzer_start_v3.py").read_text(encoding="utf-8")
+    assert config.RUN_SCHEDULE_HOUR == 9
+    assert "SCHEDULE_HOUR   = 9" in colab
 
 
 def test_daily_workflow_persists_all_insights():

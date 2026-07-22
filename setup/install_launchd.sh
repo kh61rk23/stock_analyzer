@@ -8,7 +8,7 @@
 # やること:
 #   1. plist の REPO_URL / リポジトリパスを埋めて
 #      ~/Library/LaunchAgents/ にコピー
-#   2. launchctl で登録（毎朝7:30に obsidian_sync.py all が走る）
+#   2. launchctl で登録（毎朝10:30に obsidian_sync.py all が走る）
 # 解除したい場合:
 #   launchctl unload ~/Library/LaunchAgents/com.kentaryobe.stock-analyzer.obsidian-sync.plist
 # ==============================================================
@@ -33,6 +33,6 @@ sed -e "s|__REPO_DIR__|$REPO_DIR|g" \
 
 launchctl unload "$DEST" 2>/dev/null || true
 launchctl load "$DEST"
-echo "✅ 登録完了: 毎朝7:30に obsidian_sync.py all が実行されます"
+echo "✅ 登録完了: 毎朝10:30に obsidian_sync.py all が実行されます"
 echo "   ログ: /tmp/stock-analyzer-obsidian-sync.log"
 echo "   手動テスト: launchctl start $LABEL"

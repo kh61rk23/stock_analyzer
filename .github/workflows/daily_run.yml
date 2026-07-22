@@ -3,10 +3,10 @@
 # GitHub Actions 自律実行ワークフロー
 # ==============================================================
 # 【スケジュール】
-#   デイリー : 毎日 06:00 JST (= UTC 21:00 前日)  cron "0 21 * * *"
-#   ウィークリー: 毎週月曜 06:00 JST に自動切替
-#       └ デイリー cron は毎日 UTC 21:00 に発火する。日曜 UTC 21:00 = 月曜 06:00 JST
-#         であり、その回を "Set execution mode" が UTC 日曜(=月曜 JST)と判定して
+#   デイリー : 毎日 09:00 JST (= UTC 00:00)  cron "0 0 * * *"
+#   ウィークリー: 毎週月曜 09:00 JST に自動切替
+#       └ デイリー cron は毎日 UTC 00:00 に発火する。月曜 UTC 00:00 = 月曜 09:00 JST
+#         であり、その回を "Set execution mode" が UTC 月曜と判定して
 #         weekly モードへ自動昇格する。専用 cron は不要（重複起動を避けるため）。
 #
 # 【手動実行】
@@ -42,11 +42,11 @@
 name: 📊 Stock Analyzer 自律実行
 
 on:
-  # ── デイリー: 毎日 06:00 JST ──────────────────────────────
-  #   日本は DST がないため UTC+9 固定。UTC 21:00 = 翌日 JST 06:00。
-  #   月曜 JST（= 日曜 UTC）の回は "Set execution mode" が weekly に昇格する。
+  # ── デイリー: 毎日 09:00 JST ──────────────────────────────
+  #   日本は DST がないため UTC+9 固定。UTC 00:00 = JST 09:00。
+  #   月曜 JST（= 月曜 UTC）の回は "Set execution mode" が weekly に昇格する。
   schedule:
-    - cron: "0 21 * * *"      # UTC 21:00 = JST 06:00（毎日）
+    - cron: "0 0 * * *"       # UTC 00:00 = JST 09:00（毎日）
 
   # ── 手動実行 ──────────────────────────────────────────────
   # 実行モードは四種類ある。
@@ -106,7 +106,7 @@ jobs:
 
       # ── 3-A. 実行モード決定 ───────────────────────────────
       #   手動実行       → inputs.mode を使用（daily / weekly / all / single）
-      #   スケジュール実行 → UTC 日曜（= 月曜 JST）なら weekly、それ以外は daily
+      #   スケジュール実行 → UTC 月曜（= 月曜 JST）なら weekly、それ以外は daily
       #   ※ 後続の週次専用ステップ（13F・text_extractor）がこの出力を参照するため、
       #     それらより前に実行する必要がある。
       - name: 🎯 Set execution mode
@@ -114,14 +114,53 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             MODE="${{ github.event.inputs.mode }}"
-          elif [ "$(date -u +%u)" = "7" ]; then
-            # 日曜 UTC = 月曜 JST → weekly
+          elif [ "$(date -u +%u)" = "1" ]; then
+            # 月曜 UTC 00:00 = 月曜 JST 09:00 → weekly
             MODE="weekly"
           else
             MODE="daily"
           fi
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
           echo "▶ 実行モード: $MODE"
+
+      # ── 3-B1. EdinetDB同期（公式更新08:00 JST後・日次分析より先）────
+      - name: 🗄️ Ensure EdinetDB BigQuery schema
+        continue-on-error: true
+        env:
+          STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+        run: python setup_db_integration_bq.py
+
+      - name: 🗄️ Sync EdinetDB into BigQuery
+        continue-on-error: true
+        env:
+          STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
+          ENABLE_EDINETDB_INGEST: "1"
+          EDINETDB_API_KEY: ${{ secrets.EDINETDB_API_KEY }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+        run: |
+          python - <<'PY'
+          import json
+
+          import config as cfg
+          from edinet_doc_indexer import run_doc_indexer
+          from edinetdb_ingestor import run_edinetdb_ingest
+
+          ingest = run_edinetdb_ingest(cfg)
+          print(json.dumps({"ingest": ingest}, ensure_ascii=False, indent=2))
+          if ingest.get("skipped"):
+              print(f"⏭️ EdinetDB同期スキップ: {ingest.get('reason')}")
+              raise SystemExit(0)
+
+          docs = run_doc_indexer(
+              days_back=int(getattr(cfg, "EDINETDB_LOOKBACK_DAYS", 7)), cfg=cfg
+          )
+          print(json.dumps({"doc_index": docs}, ensure_ascii=False, indent=2))
+          if docs.get("skipped"):
+              print(f"⏭️ EdinetDB開示同期スキップ: {docs.get('reason')}")
+          PY
 
       # ── 3-B3. Wave 6 - U-4: 機関投資家 13F 監視（四半期提出期間のみ）──
       - name: 🏦 Run institutional 13F monitor (quarterly filing period only)
