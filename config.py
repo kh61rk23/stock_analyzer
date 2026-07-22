@@ -85,7 +85,7 @@ SPREADSHEET_ID   = "1CePiavYj_6OR0cOz84V4RkA0c0S6IwZlcHCv8_bsOjc"
 CREDENTIALS_PATH = str(VIEWER_BASE / "service_account.json")
 WRITE_SHEET      = True   # True にすると Google Sheets に書き込む
 
-RUN_SCHEDULE_HOUR   = 6    # 毎朝何時に自動実行するか（0〜23）※GitHub Actions は 06:00 JST 実行に統一
+RUN_SCHEDULE_HOUR   = 9    # 毎朝何時に自動実行するか（0〜23）※GitHub Actions は 09:00 JST 実行に統一
 RUN_SCHEDULE_MINUTE = 0
 
 # モジュール有効フラグ（False にすると当該モジュールをスキップ）
@@ -1284,7 +1284,7 @@ EDINET_SCREENER_CANDIDATES: list = [] # 前日screener通過銘柄（自動注�
 # 日次分析は既存の BigQuery edinet.* を正本とし、EdinetDB RESTを呼ばない。
 ENABLE_EDINET: bool = False                 # legacy 業種別REST取得
 ENABLE_EDINET_BQ_ANALYSIS: bool = True      # BQ既存データのread-only分析
-# 日次分析は常にFalseのまま。08:30 JSTの専用Actionだけ環境変数で有効化する。
+# 通常ロード時はFalse。09:00 JSTのdaily_run同期ステップだけ環境変数で有効化する。
 ENABLE_EDINETDB_INGEST: bool = os.getenv(
     "ENABLE_EDINETDB_INGEST", "0"
 ).strip().lower() in {"1", "true", "yes", "on"}

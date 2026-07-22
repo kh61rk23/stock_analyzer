@@ -22,12 +22,12 @@
     <string>__REPO_URL__</string>
   </dict>
 
-  <!-- 毎朝 7:30（GitHub Actions の JST 6:00 実行が終わった後。
+  <!-- 毎朝 10:30（GitHub Actions の JST 9:00 実行が終わった後。
        日次modeは通常90分未満で完了するため余裕あり。月曜のweekly modeのみ
        長引く可能性があり、その朝は前回commit分をpullするが翌日自動で追いつく） -->
   <key>StartCalendarInterval</key>
   <dict>
-    <key>Hour</key><integer>7</integer>
+    <key>Hour</key><integer>10</integer>
     <key>Minute</key><integer>30</integer>
   </dict>
 

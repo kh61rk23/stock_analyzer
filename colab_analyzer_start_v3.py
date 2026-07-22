@@ -29,7 +29,7 @@ from pathlib import Path
 # ============================================================
 
 ANALYZER_DIR    = "/content/drive/MyDrive/stock_analyzer"
-SCHEDULE_HOUR   = 6      # 自動実行する時刻（時）※GitHub Actions と同じ 06:00 に統一
+SCHEDULE_HOUR   = 9      # 自動実行する時刻（時）※GitHub Actions と同じ 09:00 に統一
 SCHEDULE_MINUTE = 0      # 自動実行する時刻（分）
 RUN_NOW         = True   # True: 起動直後にすぐ 1 回実行する
 LAUNCH_UI       = True   # True: Streamlit UI を起動する
@@ -114,7 +114,7 @@ ALL_DIRS     = [DATA_DIR, RESULT_DIR, INSIGHT_DIR, ARXIV_DIR,
 SPREADSHEET_ID   = "1CePiavYj_6OR0cOz84V4RkA0c0S6IwZlcHCv8_bsOjc"
 CREDENTIALS_PATH = str(VIEWER_BASE / "service_account.json")
 WRITE_SHEET      = False
-RUN_SCHEDULE_HOUR   = 6   # ※未使用の旧定数。実際の起動時刻は上部 SCHEDULE_HOUR を参照
+RUN_SCHEDULE_HOUR   = 9   # ※未使用の旧定数。実際の起動時刻は上部 SCHEDULE_HOUR を参照
 RUN_SCHEDULE_MINUTE = 0
 ENABLE_GOV_PIPELINE = True
 ENABLE_ARXIV        = True

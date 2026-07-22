@@ -54,6 +54,12 @@ class TestValidation:
         for pb in pbs:
             assert validate_playbook(pb) == [], f"{pb.get('id')}: {validate_playbook(pb)}"
 
+    def test_playbooks_have_one_canonical_directory(self):
+        root_files = sorted((REPO / "playbooks").glob("*.yaml"))
+        duplicate_files = sorted((REPO / "paper" / "playbooks").glob("*.yaml"))
+        assert len(root_files) == 4
+        assert duplicate_files == []
+
 
 class TestConditions:
     def test_all_true(self):
