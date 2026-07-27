@@ -12,19 +12,23 @@ from typing import Optional
 # SECTION 1: 定数・設定値
 # ==============================================================
 
-DEFAULT_THRESHOLDS = {
-    "per_max":           15.0,
-    "pbr_max":            1.5,
-    "psr_max":            5.0,   # PSR 上限: 5倍超は割高
-    "pcfr_max":          20.0,   # PCFR 上限: 20倍超は割高
-    "div_yield_min":      0.03,
-    "roe_min":            0.10,
-    "roa_min":            0.05,
-    "equity_ratio_min":   0.40,
-    "current_ratio_min":  1.5,
-    "op_cf_margin_min":   0.05,
-    "cf_ni_ratio_min":    1.0,
-}
+
+def get_default_thresholds() -> dict[str, float]:
+    """ビューアの設定シート初期値を、新しい辞書として返す。"""
+    return {
+        "per_max":           15.0,
+        "pbr_max":            1.5,
+        "psr_max":            5.0,
+        "pcfr_max":          20.0,
+        "div_yield_min":      0.03,
+        "roe_min":            0.10,
+        "roa_min":            0.05,
+        "equity_ratio_min":   0.40,
+        "current_ratio_min":  1.5,
+        "op_cf_margin_min":   0.05,
+        "cf_ni_ratio_min":    1.0,
+    }
+
 
 THRESHOLD_LABELS = {
     "per_max":           "PER 上限（倍）",
@@ -364,3 +368,79 @@ def get_yahoo_finance_url(ticker: str) -> str:
     if is_japan_stock(ticker):
         return f"https://finance.yahoo.co.jp/quote/{ticker.upper()}"
     return f"https://finance.yahoo.com/quote/{ticker.upper()}"
+
+
+# ==============================================================
+# SECTION 8: 統計ユーティリティ（U-7 / Batch 10 共通化）
+# ==============================================================
+
+def pearson(
+    xs: list,
+    ys: list,
+    *,
+    min_n: int = 2,
+    round_digits: Optional[int] = None,
+) -> Optional[float]:
+    """
+    2リストの Pearson 相関係数を計算する（numpy 不使用・標準ライブラリのみ）。
+
+    correlation_heatmap.py / jp_us_sector_bridge.py /
+    jp_us_sector_correlation.py / rule_optimizer.py にあった 4つの
+    `_pearson` 実装を統合したもの（U-7）。
+
+    4実装は最低データ点数（3 / 5 / 20）と丸め桁数（3 / 4）が異なっていたため、
+    その2点は呼び出し元ごとにキーワード引数で明示指定させることで、
+    各ファイルの既存の挙動を変えずに委譲できるようにしてある。
+    （xs/ys の位置合わせは全呼び出し元で常に等長リストが渡されるため、
+      先頭 n 個・末尾 n 個のどちらを採用しても実結果は変わらない。
+      本実装は先頭 n 個を採用する。）
+
+    Args:
+        xs, ys:        比較する数値リスト（長さが異なる場合は短い方に合わせる）
+        min_n:          計算に必要な最低データ点数（未満は None を返す）
+        round_digits:   丸め桁数。None なら丸めない
+
+    Returns:
+        相関係数（-1.0〜1.0）。データ不足 or 分散0の場合は None。
+        NaN が混入した場合は判定式が NaN を捕捉できず NaN を返す
+        （4実装とも同じ挙動であり、本移設で新たに導入したものではない）。
+    """
+    n = min(len(xs), len(ys))
+    if n < min_n:
+        return None
+    xs = xs[:n]
+    ys = ys[:n]
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    dx = sum((x - mx) ** 2 for x in xs) ** 0.5
+    dy = sum((y - my) ** 2 for y in ys) ** 0.5
+    if dx < 1e-9 or dy < 1e-9:
+        return None
+    r = num / (dx * dy)
+    return round(r, round_digits) if round_digits is not None else r
+
+
+def linear_slope(
+    values: list,
+    *,
+    min_n: int = 3,
+    round_digits: int = 6,
+) -> float:
+    """等間隔の値列を最小二乗回帰し、1ステップ当たりの傾きを返す。
+
+    sector_rotation_detector._calc_slope と
+    jp_us_sector_correlation._calc_trend に完全重複していた実装を
+    Batch 10で集約した。データ不足・分母0は従来どおり0.0を返す。
+    """
+    n = len(values)
+    if n < min_n:
+        return 0.0
+    xs = list(range(n))
+    mx = sum(xs) / n
+    my = sum(values) / n
+    numerator = sum((x - mx) * (y - my) for x, y in zip(xs, values))
+    denominator = sum((x - mx) ** 2 for x in xs)
+    if denominator < 1e-9:
+        return 0.0
+    return round(numerator / denominator, round_digits)

@@ -512,63 +512,35 @@ def extract_alerts(cfg, results: dict) -> list:
                 "severity": severity_level,
             })
 
-    # ── [D-3新規] セクタースコア急変検知 ─────────────────────────────
-    # score_history.json の前日スコアと今日のスコアを比較し、
-    # SCORE_JUMP_THRESHOLD 点以上の変動があれば通知する。
-    # 依存: score_history.json（1-6実装後に蓄積）
-    if getattr(cfg, "ALERT_ON_SCORE_JUMP", True):
-        jump_threshold = getattr(cfg, "ALERT_SCORE_JUMP_THRESHOLD", 15.0)
-        sector_results_sj = results.get("sectors", {})
-
-        try:
-            import json as _json
-            from pathlib import Path as _Path
-            from datetime import datetime as _dt, timedelta as _td
-
-            sh_path = _Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / "score_history.json"
-            if sh_path.exists() and sector_results_sj:
-                history = _json.loads(sh_path.read_text(encoding="utf-8"))
-                # 前日エントリを探す（直近7日以内）
-                today_s = _dt.now().strftime("%Y-%m-%d")
-                prev_entry = None
-                for i in range(1, 8):
-                    cand = (_dt.now() - _td(days=i)).strftime("%Y-%m-%d")
-                    if cand in history and cand != today_s:
-                        prev_entry = history[cand]
-                        prev_date  = cand
-                        break
-
-                if prev_entry:
-                    jump_lines = []
-                    for code, res in sector_results_sj.items():
-                        if not isinstance(res, dict):
-                            continue
-                        curr_score = res.get("composite_score", 0)
-                        prev_raw   = prev_entry.get(code)
-                        if prev_raw is None:
-                            continue
-                        prev_score = (prev_raw.get("score") if isinstance(prev_raw, dict)
-                                      else float(prev_raw))
-                        if prev_score is None:
-                            continue
-                        diff = curr_score - prev_score
-                        if abs(diff) >= jump_threshold:
-                            name  = res.get("sector_name_ja", code)
-                            sign  = "+" if diff >= 0 else ""
-                            icon  = "📈" if diff > 0 else "📉"
-                            jump_lines.append(
-                                (abs(diff), f"  {icon} {name}: {prev_score:.0f}→{curr_score:.0f}点 ({sign}{diff:.0f}pt)")
-                            )
-                    if jump_lines:
-                        jump_lines.sort(key=lambda x: -x[0])
-                        alerts.append({
-                            "trigger":  "score_jump",
-                            "title":    f"⚡ 業種スコア急変: {len(jump_lines)}業種（前日比±{jump_threshold:.0f}点超）",
-                            "body":     f"  基準日: {prev_date}\n" + "\n".join(l for _, l in jump_lines[:8]),# type: ignore
-                            "severity": "high" if any(d >= 20 for d, _ in jump_lines) else "medium",
-                        })
-        except Exception as _e:
-            pass  # score_history未蓄積の場合は静かにスキップ
+    # ── [D-3] anomaly_detector が独立判定したセクタースコア急変 ──────
+    # anomaly モード外でも通知機能を維持するため、結果が無い場合だけ同じ判定APIを呼ぶ。
+    try:
+        jump_result = (results.get("anomaly", {}) or {}).get("score_jump_result")
+        if not isinstance(jump_result, dict):
+            from anomaly_detector import detect_score_jumps as _detect_score_jumps
+            jump_result = _detect_score_jumps(cfg, results)
+        jump_items = jump_result.get("alerts", [])
+        if jump_items:
+            threshold = jump_result.get("threshold", 15.0)
+            lines = []
+            for item in jump_items[:8]:
+                icon = "📈" if item.get("diff", 0) > 0 else "📉"
+                lines.append(
+                    f"  {icon} {item.get('sector_name', item.get('sector_code',''))}: "
+                    f"{item.get('previous_score',0):.1f}→{item.get('current_score',0):.1f}点 "
+                    f"({item.get('diff',0):+.1f}pt)"
+                )
+            alerts.append({
+                "trigger":  "score_jump",
+                "title":    f"⚡ 業種スコア急変: {len(jump_items)}業種（±{threshold:.1f}点以上）",
+                "body":     f"  基準日: {jump_result.get('previous_date','')}\n" + "\n".join(lines),
+                "severity": "high" if any(
+                    item.get("severity") == "high" for item in jump_items
+                ) else "medium",
+                "_score_jump_items": jump_items,
+            })
+    except Exception:
+        pass
 
     # ── [2-5新規] FEDカレンダー接近アラート ──────────────────────────
     fed_cal = results.get("fed_calendar", {})
@@ -869,10 +841,14 @@ def extract_alerts(cfg, results: dict) -> list:
             c for c in screener_res.get("candidates", [])
             if c.get("is_high_prob_surprise") and c.get("pass_filters")
         ]
+        # 2026-07-25 バッチ3: ALERT_ON_NEGATIVE_RISK を配線。
+        # 従来このブロック全体が ALERT_ON_HIGH_PROB_SURPRISE だけで守られており、
+        # ネガ側の専用フラグは定義だけで誰も読んでいなかった（False にしても
+        # ネガティブサプライズ通知が止まらなかった）。
         neg_risk = [
             c for c in screener_res.get("candidates", [])
             if c.get("is_negative_risk")
-        ]
+        ] if getattr(cfg, "ALERT_ON_NEGATIVE_RISK", True) else []
 
         if high_prob:
             lines = []
@@ -2006,6 +1982,20 @@ def run_alert_notifier(cfg, results: dict) -> dict:
             else:
                 errors.append(f"Gmail: {err}")
                 print(f"    ⚠️  Gmail: {err}")
+
+    # 少なくとも1チャネルに届いた後でのみ通知済み状態を更新する。
+    if sent > 0:
+        _sent_score_jumps = [
+            item
+            for alert in alerts if alert.get("trigger") == "score_jump"
+            for item in alert.get("_score_jump_items", [])
+        ]
+        if _sent_score_jumps:
+            try:
+                from anomaly_detector import mark_score_jumps_notified as _mark_score_jumps
+                _mark_score_jumps(cfg, _sent_score_jumps)
+            except Exception:
+                pass
 
     return {
         "alerts_sent": sent,

@@ -285,13 +285,13 @@ _REQUEST_HEADERS = {
     "Accept": "application/json, text/html, */*",
 }
 
-# スコア重み
-_ACADEMIC_SCORE_WEIGHTS = {
-    "paper_count_norm":    0.40,
-    "univ_collab_ratio":   0.20,
-    "yoy_growth":          0.25,
-    "field_diversity":     0.15,
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'ACT_ACADEMIC_SCORE_MAX': '_ACADEMIC_SCORE_MAX',
+    'B5_ACADEMIC_CONF_TRACKER_REQUEST_TIMEOUT': '_REQUEST_TIMEOUT',
 }
+
 _ACADEMIC_SCORE_MAX = 100.0
 
 
@@ -803,6 +803,7 @@ def run_academic_conf_tracker(cfg=None, force_refresh: bool = False) -> dict:
           "timestamp":       str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  🎓 学術カンファレンス追跡（Wave 7 - Step 2）実行中...")
 
     # ── キャッシュ確認 ──────────────────────────────────────────

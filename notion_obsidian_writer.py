@@ -47,6 +47,12 @@ OBSIDIAN_DIR_NAME  = "stock_analyzer_vault"   # GDrive上のVaultフォルダ名
 DAILY_NOTE_SUBDIR  = "投資ジャーナル"
 TICKER_NOTE_SUBDIR = "銘柄メモ"
 SCREENER_SUBDIR    = "スクリーニング"
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B6_NOTION_OBSIDIAN_WRITER_MAX_NOTION_PAGES': 'MAX_NOTION_PAGES',
+}
+
 MAX_NOTION_PAGES   = 20   # 1日の最大ページ生成数（APIレート制限対策）
 
 
@@ -424,6 +430,7 @@ def run_notion_obsidian_writer(cfg, results: dict) -> dict:
           "timestamp": str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  📓 Notion / Obsidian 書き込み開始...")
 
     # ── Obsidian（GDrive Markdown）────────────────────────────

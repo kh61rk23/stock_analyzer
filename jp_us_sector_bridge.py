@@ -1,20 +1,88 @@
 # ==============================================================
-# jp_us_sector_bridge.py  v1.0
+# jp_us_sector_bridge.py  v1.0（U-10 責務明確化: 2026-07-28）
 # JP業種 × US セクター 横断相関分析 + ローテーション検出
 # ==============================================================
 # 【役割】
 #   JP 33業種と US 11セクターの composite_score の週次相関を計算し、
 #   「XLK(IT)が上昇した翌週に 1016(電気機器)が上昇する」という
 #   パターンをデータから自動発見して業種スコアに先行シグナルを注入する。
-#
-# 【追加実装】
-#   sector_rotation_detector: 業種スコアの時系列から
-#   GARTHサイクル（上昇加速/天井/下落加速/底値）の4象限を判定
+#   加えて、Wave 3〜7 で以下を同一ファイルに集約している:
+#     ・議員取引シグナルのJP業種波及（apply_politician_signal_to_jp）
+#     ・クロスマーケット潜伏銘柄検出（detect_cross_market_latent）
+#     ・Cross-Size シグナル呼び出し（cross_size_signal 経由）
+#     ・独立性/規模減衰スコアの bridge 経由公開（independence_bridge / size_decay_bridge）
+#   本ファイル自身も detect_rotation_phase() で簡易ローテーション判定を持つが、
+#   これは sector_rotation_detector.py とは別実装（詳細は下記「他3モジュールとの違い」）。
 #
 # 【composite_score への影響】
 #   JP業種 X の1週先行シグナルがある場合:
 #     相関 > 0.5 かつ US 先行業種がスコア上昇中 → JP業種に +3pt
 #     相関 > 0.5 かつ US 先行業種がスコア下落中 → JP業種に -3pt
+#
+# 【入力（実コード確認済み）】
+#   ・score_history.json（JP 33業種の日次 composite_score）
+#     _load_score_history(cfg) が読む。候補パス（先頭が存在すれば採用）:
+#       1. DATA_DIR.parent/insights/score_history.json
+#       2. stock_data/insights/score_history.json（相対パスの固定フォールバック）
+#   ・stock_data/insights/us_sectors/us_sector_scores_YYYY-MM-DD.json（US 11セクターETFスコア）
+#     _load_us_score_history(cfg) が同ディレクトリの最新52ファイルを読む
+#     （us_sector_pipeline.py が生成する想定。ファイル形式: {"sectors": {ETF: {"composite_score"|"score": float}}}）
+#   ・引数 sector_results（run_all_tasks() から渡される JP セクター分析結果 dict。
+#     先行シグナル補正の適用対象を絞り込むために参照するのみで、直接の読み込み元ではない）
+#   ・DATA_DIR/jp_us_bridge_cache.json（24*7時間 TTLの自前キャッシュ。有効なら以降の入力を読まず即返す）
+#   ・補助入力（例外握り潰しのベストエフォート。無くても本体は動く）:
+#     cross_size_signal.run_cross_size_signal() の結果 /
+#     latent_pearl_manager.get_latent_pearls_list() /
+#     CACHE_DIR/independence_scores.json / CACHE_DIR/size_decay_state.json
+#
+# 【出力（results["jp_us_bridge"]、実コード確認済み）】
+#   {
+#     "lagged_correlations": dict,   # {jp_code: {us_etf, lag0_corr, lag1_corr, best_lag, best_corr, significant}}
+#     "lead_adjustments":    dict,   # {jp_sector_code: delta_pt}
+#     "rotation_phases":     dict,   # {jp_sector_code: {"phase": LEADING|WEAKENING|LAGGING|IMPROVING, "score", "momentum"}}
+#     "summary_text":        str,
+#     "timestamp":           str,
+#     "politician_adjustments": dict,   # 現状は常に {}（run_jp_us_bridge内では未計算。空のまま公開）
+#     "cross_size":           dict,     # cross_size_signal.run_cross_size_signal() の結果
+#     "size_decay_bridge":    dict,     # {ticker: {effective_signal, size_tier, taxonomy_size_correction}}
+#     "independence_bridge":  dict,     # {ticker: independence_score}
+#     "cross_market_latent":  list,     # detect_cross_market_latent() の結果
+#   }
+#
+# 【消費者（grep実測。2026-07-28）】
+#   ・signal_aggregator.py:221 _extract_us_lead_score() — lead_adjustments / rotation_phases を読み、
+#     JP業種の composite_score 補正量に変換する（本モジュールの主目的の実消費経路）
+#   ・alert_notifier.py:1422 — rotation_phases の phase（IMPROVING/LEADING）を Latent Pearl 反転検知に利用
+#   ・weekly_report_generator.py:1256 _section_jp_us_bridge() — summary_text をレポート本文に出力
+#   ・weekly_report_generator.py:2133 — rotation_phases / cross_market_latent を潜伏銘柄プロモーション欄に利用
+#   ・stock_analyzer_main.py:2472-2480 — independence_bridge / size_decay_bridge を
+#     results["wave7_trackers"] へ昇格し、lead_adjustments を sector_results に適用する
+#
+# 【他3モジュールとの違い（30秒で分かるように）】
+#   ・vs jp_us_sector_correlation.py: 名前が似ているが役割が異なる。
+#     本モジュール = 週次スコアの「1週ラグ付き」相関 + composite_scoreへの能動的な補正注入
+#     （signal_aggregatorがlead_adjustmentsを読んでスコアを動かす）。
+#     jp_us_sector_correlation.py = 日次データの「同時60日ローリング」相関の算出のみで、
+#     スコアは一切動かさず weekly_report のレポート表示専用（受動的）。
+#     「ラグを見て補正するか／同時相関を見て報告するだけか」が最大の違い。
+#   ・vs sector_rotation_detector.py: 両者ともJP業種の「ローテーション4象限」を判定するが、
+#     算出パラメータ・判定基準・出力ラベルが異なる別実装（意図的な非統合。§2-4参照）。
+#     本モジュールの detect_rotation_phase() は 8週窓・固定閾値50・
+#     LEADING/WEAKENING/LAGGING/IMPROVING ラベルで、signal_aggregator向けではなく
+#     alert_notifier / weekly_report_generator の補助表示用。
+#     signal_aggregator._apply_rotation_boost() が正式に参照するのは
+#     sector_rotation_detector.py の results["sector_rotation"]（84日/28日窓・rising/peak/falling/trough）。
+#   ・vs us_sector_bridge_enhanced.py: 本モジュールは「週次ETFスコアの相関」（遅延あり）。
+#     us_sector_bridge_enhanced.py は「8-K決算×SIC/CIKチェーン」による当日イベント伝播で、
+#     時間軸・データソースとも別物。
+#
+# 【既知の状態（2026-07-28 時点）】
+#   実効出力ゼロが継続している（有意な先行相関 0ペア / 先行補正 0業種。
+#   2026-07-06・2026-07-13 台帳とも同様）。原因は score_history の蓄積不足
+#   （60日ローリング相関を要する設計に対し、当時のデータ日数が不足）。
+#   意思決定 J-04（2026-07-27, 健太承認）= a: score_history が60日蓄積されるまで
+#   存廃判断を保留。本ファイルは今回の U-10 で削除・無効化はしない
+#   （責務明確化と重複洗い出しのみを実施）。
 #
 # 【依存】score_history.json / config.py
 # ==============================================================
@@ -22,12 +90,24 @@
 from __future__ import annotations
 
 import json
-import math
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+import finance_logic
+import score_history_io
+
 # ── 定数 ──────────────────────────────────────────────────────
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B4_JP_US_SECTOR_BRIDGE_CORR_LOOKBACK_WEEKS': 'CORR_LOOKBACK_WEEKS',
+    'B4_JP_US_SECTOR_BRIDGE_ROTATION_LOOKBACK': 'ROTATION_LOOKBACK',
+    'B4_JP_US_SECTOR_BRIDGE_CACHE_HOURS': 'CACHE_HOURS',
+    'B6_JP_US_SECTOR_BRIDGE_CORR_SIGNIFICANT': 'CORR_SIGNIFICANT',
+    'B6_JP_US_SECTOR_BRIDGE_LAG_ADJUSTMENT_PTS': 'LAG_ADJUSTMENT_PTS',
+}
+
 CORR_LOOKBACK_WEEKS  = 52   # 相関計算期間（1年）
 CORR_SIGNIFICANT     = 0.45  # 有意な相関閾値
 LAG_ADJUSTMENT_PTS   = 3.0   # 先行シグナルによる composite_score 補正
@@ -53,34 +133,16 @@ JP_US_AFFINITY = {
 CACHE_FILENAME = "jp_us_bridge_cache.json"
 CACHE_HOURS    = 24 * 7
 
-# ── Wave 7 追加定数（規模帯横断・独立性スコアブリッジ）──────────
-# independence_score_calculator.py のスコアを bridge 経由で渡す際の
-# 最低閾値（これ未満は cross_market_latent の対象外）
-INDEPENDENCE_BRIDGE_THRESHOLD: float = 40.0
-
 # size_decay_manager.py の有効シグナルを bridge 経由で参照する際のフラグキー
 SIZE_DECAY_BRIDGE_KEY: str = "size_decay"
-
-# JP/US 規模帯横断シグナルの business に加算する際の最大ブーストpt
-CROSS_SIZE_BRIDGE_MAX_BOOST: float = 5.0
 
 # ==============================================================
 # BLOCK 1: score_history からJP/USの週次スコアを読み込む
 # ==============================================================
 
 def _load_score_history(cfg) -> dict:
-    candidates = [
-        Path(getattr(cfg, "DATA_DIR", "stock_data/data")).parent
-        / "insights" / "score_history.json",
-        Path("stock_data/insights/score_history.json"),
-    ]
-    for p in candidates:
-        if p.exists():
-            try:
-                return json.loads(p.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-    return {}
+    """公開済み関数名を維持し、完全同一だった共通I/Oへ委譲する。"""
+    return score_history_io.load_score_history(cfg)
 
 
 def _load_us_score_history(cfg) -> dict:
@@ -157,17 +219,8 @@ def _to_weekly(daily_history: dict, score_key: Optional[str] = None) -> dict:
 # ==============================================================
 
 def _pearson(xs: list, ys: list) -> Optional[float]:
-    n = min(len(xs), len(ys))
-    if n < 5:
-        return None
-    xs = xs[:n]; ys = ys[:n]
-    mx = sum(xs) / n; my = sum(ys) / n
-    num = sum((x-mx)*(y-my) for x,y in zip(xs,ys))
-    sx  = math.sqrt(sum((x-mx)**2 for x in xs))
-    sy  = math.sqrt(sum((y-my)**2 for y in ys))
-    if sx < 1e-9 or sy < 1e-9:
-        return None
-    return round(num / (sx*sy), 4)
+    """共通実装は finance_logic.pearson（U-7）。"""
+    return finance_logic.pearson(xs, ys, min_n=5, round_digits=4)
 
 
 def calc_lagged_correlations(
@@ -688,6 +741,7 @@ def run_jp_us_bridge(cfg, sector_results: dict) -> dict:
           "timestamp":           str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  🌐 JP×US横断分析開始...")
 
     cached = _load_cache(cfg)

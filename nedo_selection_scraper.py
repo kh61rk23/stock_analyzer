@@ -59,6 +59,16 @@ from typing import Optional
 
 CACHE_FILENAME   = "nedo_cache.json"
 CACHE_TTL_DAYS   = 7
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'NSS_FUZZY_THRESHOLD': 'FUZZY_THRESHOLD',
+    'B4_NEDO_SELECTION_SCRAPER_CACHE_TTL_DAYS': 'CACHE_TTL_DAYS',
+    'B5_NEDO_SELECTION_SCRAPER_REQUEST_TIMEOUT': 'REQUEST_TIMEOUT',
+    'B6_NEDO_SELECTION_SCRAPER_REQUEST_INTERVAL': 'REQUEST_INTERVAL',
+}
+
 FUZZY_THRESHOLD  = 0.82    # SequenceMatcher 採用閾値（0.0〜1.0）
 REQUEST_TIMEOUT  = 20
 REQUEST_INTERVAL = 1.5     # スクレイプ間隔（秒）NEDO サーバー負荷軽減
@@ -726,6 +736,7 @@ def run_nedo_selection_scraper(
           "timestamp":         str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  🏛️  NEDO採択情報スクレイパー（Wave 1 - I-2）実行中...")
 
     # ── キャッシュ確認 ───────────────────────────────────────────

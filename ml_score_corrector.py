@@ -54,6 +54,17 @@ MODEL_FILE        = "ml_model.pkl"
 IMPORTANCE_FILE   = "ml_feature_importance.json"
 CORRECTIONS_FILE  = "ml_corrections_latest.json"
 
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'MLSC_ML_CORRECTION_MAX': 'ML_CORRECTION_MAX',
+    'MLSC_TRAIN_WEEKS_MIN': 'TRAIN_WEEKS_MIN',
+    'B4_ML_SCORE_CORRECTOR_LOOKBACK_WEEKS': 'LOOKBACK_WEEKS',
+    'B6_ML_SCORE_CORRECTOR_TEST_SPLIT_WEEKS': 'TEST_SPLIT_WEEKS',
+    'B6_ML_SCORE_CORRECTOR_XGB_PARAMS': 'XGB_PARAMS',
+}
+
 ML_CORRECTION_MAX = 5.0    # 補正量の上限（pt）
 TRAIN_WEEKS_MIN   = 26     # 最低学習週数（6ヶ月）
 LOOKBACK_WEEKS    = 26     # 直近6ヶ月のみ学習（古い市場環境は不使用）
@@ -571,6 +582,7 @@ def run_ml_score_corrector(cfg, results: dict = None) -> dict:
           "skipped":              bool,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     if not getattr(cfg, "ENABLE_ML_CORRECTION", False):
         print("  ⏩ ML補正: スキップ（ENABLE_ML_CORRECTION=False）")
         return {"skipped": True, "corrections": {}}

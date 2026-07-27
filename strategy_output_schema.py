@@ -66,6 +66,12 @@ STRATEGY_SCHEMAS = {
 CORE_COMPOSITE_THRESHOLD      = 70.0   # composite_score がこれ以上でコア候補
 CORE_LONGTERM_THRESHOLD       = 65.0   # longterm_scenario_score がこれ以上
 SATELLITE_EVENT_SIGNAL_MIN    = 3      # イベントの独立根拠の最小数
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B6_STRATEGY_OUTPUT_SCHEMA_SATELLITE_SMALLCAP_DISCOVERY': 'SATELLITE_SMALLCAP_DISCOVERY',
+}
+
 SATELLITE_SMALLCAP_DISCOVERY  = 80     # discovery_score がこれ以上で小型特殊
 AVOID_COMPOSITE_THRESHOLD     = 45.0   # composite_score がこれ未満で回避
 
@@ -209,6 +215,7 @@ def enrich_all_candidates(candidates: list, cfg=None) -> tuple[list, dict]:
     Returns:
         (enriched_candidates, strategy_summary)
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     core_list     = []
     event_list    = []
     smallcap_list = []

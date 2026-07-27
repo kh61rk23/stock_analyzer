@@ -3,10 +3,10 @@
 # GitHub Actions 自律実行ワークフロー
 # ==============================================================
 # 【スケジュール】
-#   デイリー : 毎日 06:00 JST (= UTC 21:00 前日)  cron "0 21 * * *"
-#   ウィークリー: 毎週月曜 06:00 JST に自動切替
-#       └ デイリー cron は毎日 UTC 21:00 に発火する。日曜 UTC 21:00 = 月曜 06:00 JST
-#         であり、その回を "Set execution mode" が UTC 日曜(=月曜 JST)と判定して
+#   デイリー : 毎日 09:00 JST (= UTC 00:00)  cron "0 0 * * *"
+#   ウィークリー: 毎週月曜 09:00 JST に自動切替
+#       └ デイリー cron は毎日 UTC 00:00 に発火する。月曜 UTC 00:00 = 月曜 09:00 JST
+#         であり、その回を "Set execution mode" が UTC 月曜と判定して
 #         weekly モードへ自動昇格する。専用 cron は不要（重複起動を避けるため）。
 #
 # 【手動実行】
@@ -33,6 +33,7 @@
 #   GOOGLE_DRIVE_FOLDER_ID    GDrive バックアップ先フォルダ ID
 #   ESTAT_API_KEY         e-Stat API キー（任意）
 #   EDINETDB_API_KEY      EdinetDB API キー（任意）
+#   FUDOSAN_API_KEY       不動産DB API キー（任意）
 #   DEEPL_API_KEY         DeepL API キー（任意）
 #   SEC_USER_AGENT        SEC EDGAR User-Agent（例: MyApp/1.0 your@email.com）
 #                         ※ institutional_13f_monitor.py が参照（任意・未設定時はデフォルト値使用）
@@ -41,11 +42,11 @@
 name: 📊 Stock Analyzer 自律実行
 
 on:
-  # ── デイリー: 毎日 06:00 JST ──────────────────────────────
-  #   日本は DST がないため UTC+9 固定。UTC 21:00 = 翌日 JST 06:00。
-  #   月曜 JST（= 日曜 UTC）の回は "Set execution mode" が weekly に昇格する。
+  # ── デイリー: 毎日 09:00 JST ──────────────────────────────
+  #   日本は DST がないため UTC+9 固定。UTC 00:00 = JST 09:00。
+  #   月曜 JST（= 月曜 UTC）の回は "Set execution mode" が weekly に昇格する。
   schedule:
-    - cron: "0 21 * * *"      # UTC 21:00 = JST 06:00（毎日）
+    - cron: "0 0 * * *"       # UTC 00:00 = JST 09:00（毎日）
 
   # ── 手動実行 ──────────────────────────────────────────────
   # 実行モードは四種類ある。
@@ -105,7 +106,7 @@ jobs:
 
       # ── 3-A. 実行モード決定 ───────────────────────────────
       #   手動実行       → inputs.mode を使用（daily / weekly / all / single）
-      #   スケジュール実行 → UTC 日曜（= 月曜 JST）なら weekly、それ以外は daily
+      #   スケジュール実行 → UTC 月曜（= 月曜 JST）なら weekly、それ以外は daily
       #   ※ 後続の週次専用ステップ（13F・text_extractor）がこの出力を参照するため、
       #     それらより前に実行する必要がある。
       - name: 🎯 Set execution mode
@@ -113,8 +114,8 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             MODE="${{ github.event.inputs.mode }}"
-          elif [ "$(date -u +%u)" = "7" ]; then
-            # 日曜 UTC = 月曜 JST → weekly
+          elif [ "$(date -u +%u)" = "1" ]; then
+            # 月曜 UTC 00:00 = 月曜 JST 09:00 → weekly
             MODE="weekly"
           else
             MODE="daily"
@@ -122,12 +123,45 @@ jobs:
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
           echo "▶ 実行モード: $MODE"
 
-      # ── 3-B. EDINET インデックス更新 (追加箇所) ──────────────
-      - name: Run EDINET doc indexer
+      # ── 3-B1. EdinetDB同期（公式更新08:00 JST後・日次分析より先）────
+      - name: 🗄️ Ensure EdinetDB BigQuery schema
+        continue-on-error: true
         env:
+          STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
           BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+        run: python setup_db_integration_bq.py
+
+      - name: 🗄️ Sync EdinetDB into BigQuery
+        continue-on-error: true
+        env:
+          STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
+          ENABLE_EDINETDB_INGEST: "1"
+          EDINETDB_API_KEY: ${{ secrets.EDINETDB_API_KEY }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
         run: |
-          python edinet_doc_indexer.py
+          python - <<'PY'
+          import json
+
+          import config as cfg
+          from edinet_doc_indexer import run_doc_indexer
+          from edinetdb_ingestor import run_edinetdb_ingest
+
+          ingest = run_edinetdb_ingest(cfg)
+          print(json.dumps({"ingest": ingest}, ensure_ascii=False, indent=2))
+          if ingest.get("skipped"):
+              print(f"⏭️ EdinetDB同期スキップ: {ingest.get('reason')}")
+              raise SystemExit(0)
+
+          docs = run_doc_indexer(
+              days_back=int(getattr(cfg, "EDINETDB_LOOKBACK_DAYS", 7)), cfg=cfg
+          )
+          print(json.dumps({"doc_index": docs}, ensure_ascii=False, indent=2))
+          if docs.get("skipped"):
+              print(f"⏭️ EdinetDB開示同期スキップ: {docs.get('reason')}")
+          PY
+
       # ── 3-B3. Wave 6 - U-4: 機関投資家 13F 監視（四半期提出期間のみ）──
       - name: 🏦 Run institutional 13F monitor (quarterly filing period only)
         if: steps.set-mode.outputs.mode == 'weekly'
@@ -239,14 +273,29 @@ jobs:
           nonzero = sum(1 for v in bonus_map.values() if v != 0.0)
           print(f"✅ text_signal 完了: {nonzero}/{len(bonus_map)}社でリスク検出")
           EOF
-      # ── 3-C. EDINET インデックス追加更新 (追加箇所) ──────────────      
-      - name: Run EDINET direct fetcher (optional bootstrap)
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'all'
+
+      # ── 3-B4. taxonomy台帳の投入（週次・2026-07-25追加）──────────
+      # T-1後半 / T-2A。どちらも実装・テストまで揃っていたのに Actions にも
+      # launchd にも登録が無く、承認済みseed 293ノードが BQ に入らないまま
+      # taxonomy 信号（BLOCK 55）が空のテーブルを参照していた。
+      #
+      # 実行順は固定: node（親テーブル）を先に MERGE してから、企業×node の
+      # マッピングを入れる。逆順だと参照先ノードが無い行ができる。
+      # どちらも MERGE で冪等。taxonomy_loader は _meta.status=APPROVED の
+      # バッチしか投入しないため、自動実行でも未承認データは入らない。
+      # continue-on-error: taxonomy が落ちても日次分析は続ける（信号1本ぶん）。
+      - name: 🗂️ Load taxonomy nodes & company map (weekly)
+        if: steps.set-mode.outputs.mode == 'weekly'
+        continue-on-error: true
         env:
-          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
-          BQ_PROJECT_ID:  ${{ secrets.BQ_PROJECT_ID }}
+          STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
+          BQ_CREDENTIALS:      ${{ secrets.BQ_CREDENTIALS }}
+          BQ_PROJECT_ID:       ${{ secrets.BQ_PROJECT_ID }}
+          EDINETDB_API_KEY:    ${{ secrets.EDINETDB_API_KEY }}
         run: |
-          python edinet_direct_fetcher.py --limit 33
+          python -u taxonomy_loader.py 2>&1
+          python -u taxonomy_company_mapper.py 2>&1
+
       # ── 5. アナライザー実行 ───────────────────────────────
       # github actionsのAPIキーやファイルパスをそれぞれ定義している。
       # シングルモードの時は指定モジュールを実行。そうでないときはrun_headless.pyから参照する。
@@ -273,6 +322,7 @@ jobs:
           GOOGLE_DRIVE_FOLDER_ID:     ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
           ESTAT_API_KEY:              ${{ secrets.ESTAT_API_KEY }}
           EDINETDB_API_KEY:           ${{ secrets.EDINETDB_API_KEY }}
+          FUDOSAN_API_KEY:            ${{ secrets.FUDOSAN_API_KEY }}
           DEEPL_API_KEY:              ${{ secrets.DEEPL_API_KEY }}
           NOTION_API_KEY:             ${{ secrets.NOTION_API_KEY }}  # 2026-06-10 ハードコード廃止に伴い追加
           CONGRESS_API_KEY:           ${{ secrets.CONGRESS_API_KEY }}  # 2026-06-10 congress_monitor配線復元に伴い追加
@@ -284,6 +334,32 @@ jobs:
           else
             python -u run_headless.py --mode ${{ steps.set-mode.outputs.mode }} 2>&1
           fi
+
+      # ── 5-A2. 月次・四半期ランナー（2026-07-25 B-5追加）──────────
+      # 月初のみ実行。E4淘汰 / S2月次成績 / S11配分提案 / S6コモディティ /
+      # S10税・NISA / E12戦略レビューを依存順に流す（monthly_runner.py）。
+      #
+      # 【なぜ日次に内包するか】これらは設計・実装・テストまで揃っていたのに
+      # Actions にも launchd にも実行主体が無く、2026-07-25 の棚卸しまで
+      # 一度も走っていなかった。専用ワークフローを増やすと Secrets 定義と
+      # commit 処理が二重管理になるため、CHANGELOG 2026-07-22 の
+      # 「Actions正本は daily_run.yml だけ」方針に合わせて内包する。
+      #
+      # 月初判定は monthly_runner 側（config.MONTHLY_RUN_MAX_DAY）が持つので
+      # ここは常時呼び、対象外の日は runner が自分でスキップする。
+      # continue-on-error: 月次提案の失敗で日次の状態コミットを落とさない。
+      - name: 🗓️ Run monthly runner (month start only)
+        if: steps.set-mode.outputs.mode != 'single'
+        continue-on-error: true
+        env:
+          STOCK_ANALYZER_BASE:  ${{ github.workspace }}/stock_data
+          BQ_CREDENTIALS:       ${{ secrets.BQ_CREDENTIALS }}
+          BQ_PROJECT_ID:        ${{ secrets.BQ_PROJECT_ID }}
+          EDINETDB_API_KEY:     ${{ secrets.EDINETDB_API_KEY }}
+          FUDOSAN_API_KEY:      ${{ secrets.FUDOSAN_API_KEY }}
+          POLICY_FRED_API_KEY:  ${{ secrets.POLICY_FRED_API_KEY }}
+        run: python -u monthly_runner.py 2>&1
+
       # ── 5-B. 状態ファイル・キャッシュをリポジトリにコミット ───────
       # 2026-07-12 BUG-03対応: .iqy生成（Excel Webクエリ）は廃止（ENABLE_EXCEL_EXPORT=False）。
       # あわせて「ダッシュボードCSVが存在する時だけコミット」というゲートを撤去した。
@@ -301,9 +377,16 @@ jobs:
             git add stock_data/data/fed_calendar_cache.json 2>/dev/null || true
             git add stock_data/data/edinet_db/ 2>/dev/null || true
             git add stock_data/data/edinet_cache/ 2>/dev/null || true
+            git add stock_data/data/edinetdb_cache/ 2>/dev/null || true
+            git add stock_data/data/edinetdb_company_cache.json 2>/dev/null || true
+            git add stock_data/data/edinetdb_rotation_meta.json 2>/dev/null || true
+            git add stock_data/data/fudosandb_cache/ 2>/dev/null || true
+            git add stock_data/data/fudosan_rotation_meta.json 2>/dev/null || true
             git add stock_data/data/biz_summary_cache/ 2>/dev/null || true
             git add stock_data/data/imf_cache.json 2>/dev/null || true
-            git add stock_data/insights/ideas/evaluations.json 2>/dev/null || true
+            # 全レポートの正本は config.INSIGHT_DIR (= stock_data/insights)。
+            # runner内だけに残さず、業種・月次・backtestを含めて永続化する。
+            git add stock_data/insights/ 2>/dev/null || true
             git add stock_data/logs/ 2>/dev/null || true
             git add stock_data/data/earnings_surprise_cache.json 2>/dev/null || true
             git add stock_data/data/multi_currency_cache.json 2>/dev/null || true
@@ -335,8 +418,9 @@ jobs:
             git add stock_data/data/cycle_phase_history.json 2>/dev/null || true
             git add stock_data/data/rule_weights.json 2>/dev/null || true
             git add stock_data/data/cross_sector_signal_history.json || true # R-1 履歴保存実装後に有効化
-            git add stock_data/data/us_fundamentals_db/ 2>/dev/null || true
-            git add stock_data/data/us_cik_mapping.json 2>/dev/null || true
+            # 個別US財務JSONはrun内キャッシュ（.gitignore対象）。永続正本はus.fundamentals BQ。
+            git add stock_data/data/us_fundamentals_meta.json 2>/dev/null || true
+            git add stock_data/data/us_cik_map.json 2>/dev/null || true
             git add stock_data/data/tdnet_notified.json 2>/dev/null || true
             git add stock_data/data/investment_journal.json 2>/dev/null || true
             git add stock_data/data/score_drift_log.json 2>/dev/null || true
@@ -419,6 +503,14 @@ jobs:
             git add stock_data/data/ml_dataset/ 2>/dev/null || true
             # ── GDELT「最後に取れた値」永続キャッシュ（2026-07-17追加・Issue J-1）──
             git add stock_data/cache/gdelt_instability_cache.json 2>/dev/null || true
+            # ── 月次ランナーの成果物（2026-07-25 B-5追加）──────────
+            # 提案系の注文票と月次ループの実行状況。insights/ は上で add 済み。
+            git add stock_data/orders/ 2>/dev/null || true
+            git add stock_data/monthly_loop_status.json 2>/dev/null || true
+            # 実行間隔の判定に使う状態ファイル。これが永続化されないと
+            # 毎回「初回」扱いになり、30日間隔・隔週間隔が効かなくなる。
+            git add stock_data/data/geo_exposure_state.json 2>/dev/null || true
+            git add stock_data/data/deliberation_state.json 2>/dev/null || true
             git diff --cached --quiet || git commit -m "auto: daily update $(date '+%Y-%m-%d')"
             # 2026-07-16是正: 未ステージ変更が残ると pull --rebase が
             # 「You have unstaged changes」で失敗し、リモートが先行している日は

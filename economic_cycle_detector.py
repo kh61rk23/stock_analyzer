@@ -418,7 +418,10 @@ def _load_phase_history(cfg) -> list:
     形式: [{"date": "YYYY-MM-DD", "phase": "B", "gdp": 0.5, "cpi": 1.2}, ...]
     保持: 直近12ヶ月分
     """
-    path = Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / "cycle_phase_history.json"
+    # 2026-07-25 バッチ4: ファイル名を config.CYCLE_PHASE_HISTORY_FILE から読む
+    # （従来は直書きで config 側の定数が未参照だった）
+    path = (Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
+            / getattr(cfg, "CYCLE_PHASE_HISTORY_FILE", "cycle_phase_history.json"))
     if path.exists():
         try:
             return json.loads(path.read_text(encoding="utf-8"))
@@ -452,7 +455,10 @@ def _save_phase_history(cfg, today: str, phase: str,
     history = [h for h in history if h.get("date", "") >= cutoff]
     history = sorted(history, key=lambda x: x.get("date", ""))
 
-    path = Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / "cycle_phase_history.json"
+    # 2026-07-25 バッチ4: ファイル名を config.CYCLE_PHASE_HISTORY_FILE から読む
+    # （従来は直書きで config 側の定数が未参照だった）
+    path = (Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
+            / getattr(cfg, "CYCLE_PHASE_HISTORY_FILE", "cycle_phase_history.json"))
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")

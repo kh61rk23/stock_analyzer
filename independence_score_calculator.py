@@ -115,6 +115,16 @@ _INDEPENDENCE_TIERS = {
 }
 
 # α年率換算基準（30%を満点とする）
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'ISC_ALPHA_SCORE_MAX_ANNUAL': '_ALPHA_SCORE_MAX_ANNUAL',
+    'ISC_CATALYST_SCORE_MAX': '_CATALYST_SCORE_MAX',
+    'ISC_COMBINED_WEIGHTS': '_COMBINED_WEIGHTS',
+    'B4_INDEPENDENCE_SCORE_CALCULATOR_ROLLING_WINDOW_DAYS': '_ROLLING_WINDOW_DAYS',
+}
+
 _ALPHA_SCORE_MAX_ANNUAL = 0.30
 
 # カタリスト検出キーワード辞書
@@ -429,11 +439,18 @@ def _calc_independence_score(
         return 0.0
 
 
-def _judge_independence_tier(score: float) -> str:
-    """独立性スコアからティアを判定する。"""
-    if score >= _INDEPENDENCE_TIERS["HIGH"]:
+def _judge_independence_tier(score: float, cfg=None) -> str:
+    """独立性スコアからティアを判定する。
+
+    2026-07-25 バッチ5: 閾値を config.INDEPENDENCE_TIER_THRESHOLDS から読む。
+    従来はモジュール定数 _INDEPENDENCE_TIERS のみが効いており、config 側
+    （同義・同値）は誰にも読まれていなかった。
+    config 側は HIGH / MID の2キーのみ（LOW は「それ以外」なので不要）。
+    """
+    tiers = getattr(cfg, "INDEPENDENCE_TIER_THRESHOLDS", None) or _INDEPENDENCE_TIERS
+    if score >= float(tiers.get("HIGH", _INDEPENDENCE_TIERS["HIGH"])):
         return "HIGH"
-    elif score >= _INDEPENDENCE_TIERS["MID"]:
+    elif score >= float(tiers.get("MID", _INDEPENDENCE_TIERS["MID"])):
         return "MID"
     else:
         return "LOW"
@@ -551,9 +568,12 @@ def calc_independence_score_for_ticker(
     today_str    = datetime.now().strftime("%Y-%m-%d")
 
     # 価格データ取得
+    # 2026-07-25 バッチ5: 観測窓を config.INDEPENDENCE_ROLLING_WINDOW_DAYS から読む
+    # （従来はモジュール定数 _ROLLING_WINDOW_DAYS のみが効いていた）
     stock_rets, index_rets, data_days = _fetch_price_returns(
         ticker, index_ticker,
-        window_days=_ROLLING_WINDOW_DAYS,
+        window_days=int(getattr(cfg, "INDEPENDENCE_ROLLING_WINDOW_DAYS",
+                                _ROLLING_WINDOW_DAYS)),
     )
 
     # OLS 計算
@@ -566,7 +586,7 @@ def calc_independence_score_for_ticker(
 
     # 独立性スコア
     indep_score = _calc_independence_score(beta, alpha_annual)
-    indep_tier  = _judge_independence_tier(indep_score)
+    indep_tier  = _judge_independence_tier(indep_score, cfg)
 
     # EDINET カタリスト検出（JP のみ）
     catalyst_score = 0.0
@@ -748,6 +768,7 @@ def run_independence_score_calculator(
           "timestamp": str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  📐 市場独立性スコア計算（Wave 7 - Step 7）実行中...")
 
     # ── キャッシュ確認 ──────────────────────────────────────────

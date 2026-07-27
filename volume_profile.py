@@ -39,6 +39,8 @@
 
 from __future__ import annotations
 
+from config_sync import sync_module_constants
+
 import json
 import time
 from datetime import datetime, timedelta
@@ -70,6 +72,27 @@ CACHE_HOURS    = 24
 # ==============================================================
 # BLOCK 1: 出来高プロファイル計算（コア）
 # ==============================================================
+
+
+# ── config を正本とする定数の対応表（2026-07-25 SSOT移設）──
+# config.py BLOCK 59 が正本。run_* の冒頭で一度だけ取り込む。
+# 値は移設時点の実装値と同一のため挙動は変わらない。
+_CFG_CONST_MAP = {
+    "VP_LOOKBACK_DAYS": "VP_LOOKBACK_DAYS",
+    "VP_HVN_MULTIPLIER": "HVN_MULTIPLIER",
+    "VP_LVN_MULTIPLIER": "LVN_MULTIPLIER",
+    "VP_BONUS_ABOVE_VAH": "BONUS_ABOVE_VAH",
+    "VP_PENALTY_BELOW_VAL": "PENALTY_BELOW_VAL",
+    "VP_BONUS_POC_CHEAP": "BONUS_POC_CHEAP",
+    "VP_PENALTY_POC_DEAR": "PENALTY_POC_DEAR",
+    "VP_BONUS_HVN": "BONUS_HVN",
+    "VP_PENALTY_LVN": "PENALTY_LVN",
+    "VP_POC_DEVIATION_THRESH": "POC_DEVIATION_THRESH",
+    "VP_CACHE_HOURS": "CACHE_HOURS",
+    'B5_VOLUME_PROFILE_FETCH_DELAY': 'FETCH_DELAY',
+    'B6_VOLUME_PROFILE_VP_NUM_BUCKETS': 'VP_NUM_BUCKETS',
+    'B6_VOLUME_PROFILE_VALUE_AREA_PCT': 'VALUE_AREA_PCT',
+}
 
 def calc_volume_profile(closes: list, highs: list, lows: list,
                          volumes: list, n_buckets: int = VP_NUM_BUCKETS) -> Optional[dict]:
@@ -333,6 +356,9 @@ def run_volume_profile(cfg, tickers: list) -> dict:
     Returns:
         {"results": {ticker: vp_result}, "top_poc_cheap": [...], "timestamp": str}
     """
+    # 2026-07-25: 閾値・重みを config.py BLOCK 59 から取り込む
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
+
     print(f"\n  📊 出来高プロファイル分析開始（{len(tickers)}銘柄）...")
 
     cached   = _load_cache(cfg)

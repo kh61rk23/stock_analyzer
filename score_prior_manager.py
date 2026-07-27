@@ -70,6 +70,13 @@ from typing import Optional
 # config.py BLOCK 35 の定数を参照。未定義時はここのデフォルト値を使用。
 
 _DEFAULT_TTL_DAYS        = 90
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B6_SCORE_PRIOR_MANAGER_DEFAULT_HALF_LIFE': '_DEFAULT_HALF_LIFE',
+    'B6_SCORE_PRIOR_MANAGER_DEFAULT_MIN_OBS': '_DEFAULT_MIN_OBS',
+}
+
 _DEFAULT_HALF_LIFE       = 14    # 2週間で鮮度が半減
 _DEFAULT_MIN_OBS         = 7     # 7観測日で prior_weight=1.0
 _DEFAULT_SCORE_HISTORY   = "score_history.json"
@@ -545,6 +552,7 @@ def apply_freshness_weight_batch(
     Returns:
         補正済みの sector_results（in-place でも更新）
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     try:
         if alpha is None:
             alpha = float(getattr(cfg, "CONFIDENCE_PRIOR_ALPHA", 0.15))

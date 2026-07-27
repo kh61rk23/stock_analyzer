@@ -830,16 +830,29 @@ def _load_local_module(name: str, local_path: str, drive_path: Path):
     """モジュールをロードする（GitHub Actions / Colab 両対応）"""
     import importlib.util
 
-    # 候補パスを順番に探す
-    candidates = [
-        Path(local_path),                        # /content/xxx.py（Colab）
-        drive_path,                               # Google Drive パス
-        Path(__file__).parent / f"{name}.py",    # リポジトリ直下（GitHub Actions）
-    ]
+    repo_root = Path(__file__).resolve().parent
+    local = Path(local_path)
+    candidates = [local]                         # /content/xxx.py（Colab）
+    # GitHub Actions では /content/paper/x.py の階層をリポジトリ
+    # 直下に写像する。従来は name.py だけを直下で探し、
+    # paper/ と ml/ 配下の実在ファイルを見落としていた。
+    try:
+        candidates.append(repo_root / local.relative_to("/content"))
+    except ValueError:
+        pass
+    candidates.extend([
+        Path(drive_path),                         # Google Drive パス
+        repo_root / f"{name}.py",               # リポジトリ直下
+    ])
 
     found = None
+    seen = set()
     for p in candidates:
-        if p.exists():
+        resolved = str(p.resolve())
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if p.is_file():
             found = p
             break
 
@@ -1073,6 +1086,11 @@ def _apply_capped_adjustment(
     """
     cap = float(getattr(cfg, cap_config_key, 30.0))
     global_cap = float(getattr(cfg, "SCORE_MAX_TOTAL_ADJ", 30.0))
+    # 2026-07-25 バッチ4: composite_score の上下限を config から読む。
+    # 従来 max(0.0, min(100.0, ...)) の直書きで、BLOCK SCORE-CAP の
+    # SCORE_MIN_COMPOSITE / SCORE_MAX_COMPOSITE は未参照だった。
+    score_min = float(getattr(cfg, "SCORE_MIN_COMPOSITE", 0.0))
+    score_max = float(getattr(cfg, "SCORE_MAX_COMPOSITE", 100.0))
 
     for code, delta in adjustments.items():
         if code not in sector_results:
@@ -1098,7 +1116,8 @@ def _apply_capped_adjustment(
         elif new_total < -global_cap:
             capped_delta = -global_cap - existing_total
 
-        new_score = round(max(0.0, min(100.0, old_score + capped_delta)), 1)
+        new_score = round(
+            max(score_min, min(score_max, old_score + capped_delta)), 1)
         res["composite_score"]         = new_score
         res[adj_key]                   = round(capped_delta, 2)
         res["_total_adj_so_far"]       = round(existing_total + capped_delta, 2)
@@ -1236,6 +1255,13 @@ def _load_prev_macro_snapshot(cfg) -> dict:
     return {}
 
 # GAP-7 の急変閾値（指標ごとに設定）
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'SAM_DELTA_THRESHOLDS': '_DELTA_THRESHOLDS',
+}
+
 _DELTA_THRESHOLDS = {
     "usdjpy":  3.0,    # 3円以上の変化
     "us10y":   0.2,    # 0.2%以上の変化
@@ -1315,6 +1341,7 @@ def run_all_tasks(mode: str = "all") -> dict:
     mode="daily"   : DAILY_MODULES のみ実行
     mode="weekly"  : DAILY_MODULES + WEEKLY_MODULES を実行
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     daily_mods  = getattr(cfg, "DAILY_MODULES",  [])
     weekly_mods = getattr(cfg, "WEEKLY_MODULES", [])
 
@@ -1376,24 +1403,54 @@ def run_all_tasks(mode: str = "all") -> dict:
         except Exception as _khe:
             print(f"  ⚠️  APIキー生存判定エラー（スキップ）: {_khe}")
 
-    # ── Source ingestion preflight ───────────────────────────────
-    # Persist new source data before sector/US screening consumes BQ.
-    if getattr(cfg, "ENABLE_EDINETDB_INGEST", True) and _in_mode("edinet_rotation"):
+    # ── [DB統合 W3] EdinetDBを唯一のEDINET一次取得元としてBQへ格納 ──
+    if getattr(cfg, "ENABLE_EDINETDB_INGEST", True) and _in_mode("edinetdb_ingest"):
         try:
             _edi = _load_local_module("edinetdb_ingestor", "/content/edinetdb_ingestor.py", cfg.DRIVE_BASE / "edinetdb_ingestor.py")
             if _edi:
-                results["edinetdb_ingest"] = _edi.run_edinetdb_ingest(cfg, results)
+                results["edinetdb_ingest"] = _edi.run_edinetdb_ingest(cfg)
                 source_ingest_done["edinet"] = True
-                logger.add("edinetdb_ingest", "success", str(results["edinetdb_ingest"]))
+                value = results["edinetdb_ingest"]
+                logger.add(
+                    "edinetdb_ingest",
+                    "skipped" if value.get("skipped") else (
+                        "success" if not value.get("failure") else "alert"
+                    ),
+                    str(value),
+                )
         except Exception as exc:
             logger.add("edinetdb_ingest", "error", str(exc)[:100])
-    if getattr(cfg, "ENABLE_FUDOSANDB_INGEST", True) and _in_mode("edinet_rotation"):
+
+    # ── [DB統合 W4] 政府EDINET検索を使わず有報doc_indexを更新 ─────
+    if _in_mode("edinet_doc_index"):
+        try:
+            _indexer = _load_local_module("edinet_doc_indexer", "/content/edinet_doc_indexer.py", cfg.DRIVE_BASE / "edinet_doc_indexer.py")
+            if _indexer:
+                results["edinet_doc_index"] = _indexer.run_doc_indexer(cfg=cfg)
+                value = results["edinet_doc_index"]
+                logger.add(
+                    "edinet_doc_index",
+                    "skipped" if value.get("skipped") else "success",
+                    str(value),
+                )
+        except Exception as exc:
+            logger.add("edinet_doc_index", "error", str(exc)[:100])
+
+    # ── [DB統合 W5] 不動産DB P1をBQへ格納 ─────────────────────
+    if getattr(cfg, "ENABLE_FUDOSAN_INGEST", True) and _in_mode("fudosan_ingest"):
         try:
             _fudo = _load_local_module("fudosan_ingestor", "/content/fudosan_ingestor.py", cfg.DRIVE_BASE / "fudosan_ingestor.py")
             if _fudo:
-                results["fudosan_ingest"] = _fudo.run_fudosan_ingest(cfg, results)
+                results["fudosan_ingest"] = _fudo.run_fudosan_ingest(cfg)
                 source_ingest_done["fudosan"] = True
-                logger.add("fudosan_ingest", "success", str(results["fudosan_ingest"]))
+                value = results["fudosan_ingest"]
+                logger.add(
+                    "fudosan_ingest",
+                    "skipped" if value.get("skipped") else (
+                        "success" if not value.get("failure") else "alert"
+                    ),
+                    str(value),
+                )
         except Exception as exc:
             logger.add("fudosan_ingest", "error", str(exc)[:100])
     if getattr(cfg, "ENABLE_US_FUNDAMENTALS", True) and _in_mode("us_fundamentals"):
@@ -2280,14 +2337,17 @@ def run_all_tasks(mode: str = "all") -> dict:
                         )
 
                 # ── [GAP-3] 乖離ログを永続記録 ──────────────
+                # 2026-07-25: ENABLE_PERFORMANCE_TRACKER を配線。
+                # 定義だけあって誰も読まず、False にしても止まらなかった。
                 try:
-                    _pt = _load_local_module(
-                        "performance_tracker",
-                        "/content/performance_tracker.py",
-                        cfg.DRIVE_BASE / "performance_tracker.py",
-                    )
-                    if _pt and hasattr(_pt, "record_score_drift"):
-                        _pt.record_score_drift(cfg, _updated)
+                    if getattr(cfg, "ENABLE_PERFORMANCE_TRACKER", True):
+                        _pt = _load_local_module(
+                            "performance_tracker",
+                            "/content/performance_tracker.py",
+                            cfg.DRIVE_BASE / "performance_tracker.py",
+                        )
+                        if _pt and hasattr(_pt, "record_score_drift"):
+                            _pt.record_score_drift(cfg, _updated)
                 except Exception as _ge:
                     pass  # ログ失敗はメイン処理を止めない
 
@@ -2300,39 +2360,14 @@ def run_all_tasks(mode: str = "all") -> dict:
 
         print(f"  ✅ セクター分析完了: {len(sector_results)} 業種")
 
-        # ── [Wave0 Size Ph1] 規模分類マスター生成（sector実行直後）──────
-    if _in_mode("size_tier_classifier"):
-        try:
-            _stc = _load_local_module(
-                "size_tier_classifier",
-                "/content/size_tier_classifier.py",
-                cfg.DRIVE_BASE / "size_tier_classifier.py",
-            )
-            if _stc:
-                stc_result = _stc.run_size_tier_classifier(cfg, results)
-                results["size_tier_master"] = stc_result.get("master", {})
-                _stc_stats = stc_result.get("stats", {})
-                _td = _stc_stats.get("tier_distribution", {})
-                logger.add(
-                    "size_tier_classifier", "success",
-                    f"JP:{_stc_stats.get('jp_total', 0)} / "
-                    f"US:{_stc_stats.get('us_total', 0)} / "
-                    f"Large:{_td.get('Large', 0)} "
-                    f"Mid:{_td.get('Mid', 0)} "
-                    f"Small:{_td.get('Small', 0)} "
-                    f"Micro:{_td.get('Micro', 0)} "
-                    f"Nano:{_td.get('Nano', 0)}",
-                )
-            else:
-                print("  ⚠️  size_tier_classifier.py が見つかりません")
-        except Exception as _stce:
-            logger.add("size_tier_classifier", "error", str(_stce)[:100])
-            print(
-                f"  ⚠️  規模分類マスター生成エラー（スキップ）: {str(_stce)[:80]}"
-            )
-    else:
-        print("  ⏩ 規模分類マスター: スキップ（週次以外）")
-        
+        # ── [Wave0 Size Ph1] 規模分類マスター生成 ────────────────────
+        # ★ 2026-07-27 X-1: 本ブロックはここ（sector直後）にあったが、
+        #   入力である results["screener"] / results["us_screener"] は
+        #   それぞれ後段の stock_screener / us_stock_screener が生成するため、
+        #   毎回 0 銘柄で早期 return し、台帳に success + 全0 を記録し続けていた
+        #   （2026-07-06 / 07-13 の2回連続で確認、キャッシュ実体も未生成）。
+        #   us_stock_screener の直後へ移設済み。ここには戻さないこと。
+
         # ── [Wave 7 - DAILY] 規模別減衰管理 ──────────────────────────
     if getattr(cfg, "ENABLE_SIZE_DECAY_MANAGER", False) and _in_mode("size_tier"):
         try:
@@ -2483,17 +2518,27 @@ def run_all_tasks(mode: str = "all") -> dict:
                     results["cross_sector_signals"] = (
                         existing + usbe_result["cross_signals"]
                     )
-                    logger.add(
-                        "us_sector_bridge", "success",
-                        f"JP影響業種{len(usbe_result.get('jp_affected',[]))}業種 / "
-                        f"beat{len(usbe_result.get('beat_tickers',[]))} / "
-                        f"miss{len(usbe_result.get('miss_tickers',[]))}",
-                    )
+                # 2026-07-25 B-2: logger.add が cross_signals ありの分岐内にあり、
+                # クロスシグナル0件の日は成功しても台帳が「記録なし」になっていた。
+                # 実行できた事実は件数に関わらず必ず記録する。
+                logger.add(
+                    "us_sector_bridge", "success",
+                    f"JP影響業種{len(usbe_result.get('jp_affected',[]))}業種 / "
+                    f"beat{len(usbe_result.get('beat_tickers',[]))} / "
+                    f"miss{len(usbe_result.get('miss_tickers',[]))} / "
+                    f"cross{len(usbe_result.get('cross_signals',[]))}",
+                )
+            else:
+                print("  ⚠️  us_sector_bridge_enhanced.py が見つかりません")
+                logger.add("us_sector_bridge", "warn",
+                           "us_sector_bridge_enhanced.py not found")
         except Exception as e:
             logger.add("us_sector_bridge", "error", str(e)[:100])
             print(f"  ⚠️  US-JP セクターブリッジエラー: {str(e)[:80]}")
     else:
         print("  ⏩ US-JP セクターブリッジ: スキップ")
+        logger.add("us_sector_bridge", "skipped",
+                   "ENABLE_US_SECTOR_BRIDGE=False または対象モード外")
     # ── [3-7] 市場幅指標（マーケットブレス / B-4） ─────────────────
     # 注: sector分析直後に実行してcomposite_scoreを補正する
     if getattr(cfg, "ENABLE_MARKET_BREADTH", True) and _in_mode("market_breadth"):
@@ -2996,6 +3041,34 @@ def run_all_tasks(mode: str = "all") -> dict:
                     results["debt_cycle"]["us_macro_supplement"] = d2_supp
 
                 score = um_result.get("composite_us_macro_score", 50)
+
+                # ── [US-2] composite_us_macro_score を業種スコアへ反映 ──
+                # 2026-07-25 バッチ6で新設。config.US_MACRO_MAX_SECTOR_ADJ は
+                # 「sector スコアへの反映上限（pt）」と定義されていたのに、
+                # 反映処理そのものが存在せず（週次レポートに表示するだけ）、
+                # 定数は誰にも読まれていなかった。
+                #
+                # 反映式: 50点を中立とし、乖離を上限内に線形マップする。
+                #   adj = (score - 50) / 50 * US_MACRO_MAX_SECTOR_ADJ
+                #   例) score=100 → +5.0pt / score=0 → -5.0pt / score=50 → 0
+                # 米国マクロは全業種に一様に効くため、業種別の差は付けない。
+                # 上限適用・全補正累積の管理は既存の _apply_capped_adjustment に委ねる。
+                try:
+                    _um_cap = float(getattr(cfg, "US_MACRO_MAX_SECTOR_ADJ", 5.0))
+                    _um_adj = round((float(score) - 50.0) / 50.0 * _um_cap, 2)
+                    if sector_results and abs(_um_adj) >= 0.1:
+                        _apply_capped_adjustment(
+                            sector_results,
+                            {code: _um_adj for code in sector_results},
+                            adj_key        = "us_macro_adjustment",
+                            cap_config_key = "US_MACRO_MAX_SECTOR_ADJ",
+                            label          = "US_MACRO",
+                        )
+                        print(f"  🇺🇸 US マクロ補正: 全業種 {_um_adj:+.2f}pt"
+                              f"（スコア{score:.0f}/上限±{_um_cap:.0f}pt）")
+                except Exception as _ume:
+                    print(f"  ⚠️  USマクロ補正の適用エラー（スキップ）: {str(_ume)[:60]}")
+
                 n_sigs = len(um_result.get("leading_signals", []))
                 logger.add(
                     "us_macro", "success",
@@ -3234,19 +3307,15 @@ def run_all_tasks(mode: str = "all") -> dict:
                         if comps_cache:
                             for c in screen_result.get("candidates", []):
                                 t = c.get("ticker", "")
-                                cb = _ca.get_comps_bonus(t, comps_cache)
-                                if cb != 0:
-                                    c["comps_bonus"] = cb
-                                    old_vs = c.get("value_score", 50) or 50
-                                    new_vs = round(
-                                        old_vs * 0.7
-                                        + comps_cache[t].get("comps_score", 50) * 0.3, 1)
-                                    c["value_score"]     = new_vs
-                                    c["composite_score"] = round(
-                                        c.get("sector_score", 50)     * 0.35
-                                        + new_vs                      * 0.25
-                                        + c.get("quality_score", 50)  * 0.20
-                                        + c.get("technical_score", 50)* 0.20, 1)
+                                if t in comps_cache:
+                                    _sc.apply_valuation_to_candidate(
+                                        c,
+                                        comps_cache[t],
+                                        c.get("dcf_bonus")
+                                        if "dcf" in c.get("valuation_sources", [])
+                                        else None,
+                                        cfg,
+                                    )
                         n_cheap = len(ca_result.get("top_cheap", []))
                         logger.add("comps_analyzer", "success", f"割安候補: {n_cheap}銘柄")
                 except Exception as _e:
@@ -3300,16 +3369,19 @@ def run_all_tasks(mode: str = "all") -> dict:
                             dcf_cache = dcf_result.get("results", {})
                             for c in screen_result.get("candidates", []):
                                 t = c.get("ticker", "")
-                                bonus = _dcf.get_dcf_bonus(t, dcf_cache)
-                                if bonus != 0:
-                                    c["dcf_bonus"] = bonus
-                                    old_vs = c.get("value_score", 50) or 50
-                                    c["value_score"] = round(max(0, min(100, old_vs + bonus)), 1)
-                                    c["composite_score"] = round(
-                                        c.get("sector_score", 50)     * 0.35
-                                        + c["value_score"]            * 0.25
-                                        + c.get("quality_score", 50)  * 0.20
-                                        + c.get("technical_score", 50)* 0.20, 1)
+                                if t in dcf_cache:
+                                    bonus = _dcf.get_dcf_bonus(t, dcf_cache)
+                                    _fresh_comps = (
+                                        results.get("comps_analyzer", {})
+                                        .get("results", {}).get(t)
+                                    )
+                                    if (_fresh_comps is None
+                                            and "comps" in c.get("valuation_sources", [])
+                                            and c.get("comps_score") is not None):
+                                        _fresh_comps = {"comps_score": c["comps_score"]}
+                                    _sc.apply_valuation_to_candidate(
+                                        c, _fresh_comps, bonus, cfg
+                                    )
                             n_under = len(dcf_result.get("top_undervalued", []))
                             logger.add("dcf_valuation", "success",
                                        f"理論株価算出:{len(dcf_cache)}銘柄 割安:{n_under}件")
@@ -3637,14 +3709,20 @@ def run_all_tasks(mode: str = "all") -> dict:
             # ── [B-1] 決算短信開示銘柄をEDINETの最優先に追加 ────
             if getattr(cfg, "ENABLE_B1_TDNET_EDINET", True):
                 _kessan_tickers = []
+                # 2026-07-25 バッチ6: 決算短信カテゴリを config から読む。
+                # 従来はタプル直書きで、config.B1_KESSAN_CATEGORIES は
+                # 誰にも読まれていなかった（config 側には "1"/"q_report" も
+                # 含まれており、直書き側と内容がズレていた）。
+                _kessan_cats = set(getattr(
+                    cfg, "B1_KESSAN_CATEGORIES",
+                    ["kessan", "financial_results", "決算短信", "earnings"]))
                 # TDnet の決算短信（kessan）銘柄を収集
                 for _item in tdnet_result.get("disclosures", []):
                     if isinstance(_item, dict):
                         _cat = _item.get("category", "")
                         _t   = _item.get("ticker", "") or _item.get("code", "")
                         # 決算短信カテゴリのみ対象
-                        if _cat in ("kessan", "financial_results",
-                                    "決算短信", "earnings") and _t:
+                        if _cat in _kessan_cats and _t:
                             _ticker_jp = (
                                 f"{_t}.T" if not str(_t).endswith(".T")
                                 and len(str(_t)) == 4 else str(_t)
@@ -4111,23 +4189,50 @@ def run_all_tasks(mode: str = "all") -> dict:
         if not getattr(cfg, "ENABLE_US_SCREENER", False):
             print("  ⏩ 米国株スクリーニング: スキップ（ENABLE_US_SCREENER=False）")
 
-    # ── EdinetDB ローテーション取得 ──────────────────────────
-    if getattr(cfg, "ENABLE_EDINETDB_INGEST", True) and _in_mode("edinet_rotation") and not source_ingest_done["edinet"]:
+    # ── [Wave0 Size Ph1] 規模分類マスター生成（両スクリーナーの直後）────
+    # ★ 2026-07-27 X-1: sector 直後から本位置へ移設。
+    #   results["screener"]（stock_screener）と results["us_screener"]
+    #   （us_stock_screener）の両方が確定してから実行する必要がある。
+    if _in_mode("size_tier_classifier"):
         try:
-            _edi = _load_local_module("edinetdb_ingestor", "/content/edinetdb_ingestor.py", cfg.DRIVE_BASE / "edinetdb_ingestor.py")
-            if _edi:
-                results["edinetdb_ingest"] = _edi.run_edinetdb_ingest(cfg, results)
-                logger.add("edinetdb_ingest", "success", str(results["edinetdb_ingest"]))
-        except Exception as e:
-            logger.add("edinetdb_ingest", "error", str(e)[:100])
-    if getattr(cfg, "ENABLE_FUDOSANDB_INGEST", True) and _in_mode("edinet_rotation") and not source_ingest_done["fudosan"]:
-        try:
-            _fudo = _load_local_module("fudosan_ingestor", "/content/fudosan_ingestor.py", cfg.DRIVE_BASE / "fudosan_ingestor.py")
-            if _fudo:
-                results["fudosan_ingest"] = _fudo.run_fudosan_ingest(cfg, results)
-                logger.add("fudosan_ingest", "success", str(results["fudosan_ingest"]))
-        except Exception as e:
-            logger.add("fudosan_ingest", "error", str(e)[:100])
+            _stc = _load_local_module(
+                "size_tier_classifier",
+                "/content/size_tier_classifier.py",
+                cfg.DRIVE_BASE / "size_tier_classifier.py",
+            )
+            if _stc:
+                stc_result = _stc.run_size_tier_classifier(cfg, results)
+                results["size_tier_master"] = stc_result.get("master", {})
+                _stc_stats = stc_result.get("stats", {})
+                _td = _stc_stats.get("tier_distribution", {})
+                if stc_result.get("skipped"):
+                    # 全0を success として記録し続ける事象（X-1）の再発検知点
+                    logger.add(
+                        "size_tier_classifier", "skipped",
+                        str(stc_result.get("reason", "master未生成"))[:100],
+                    )
+                else:
+                    logger.add(
+                        "size_tier_classifier", "success",
+                        f"JP:{_stc_stats.get('jp_total', 0)} / "
+                        f"US:{_stc_stats.get('us_total', 0)} / "
+                        f"Large:{_td.get('Large', 0)} "
+                        f"Mid:{_td.get('Mid', 0)} "
+                        f"Small:{_td.get('Small', 0)} "
+                        f"Micro:{_td.get('Micro', 0)} "
+                        f"Nano:{_td.get('Nano', 0)}",
+                    )
+            else:
+                print("  ⚠️  size_tier_classifier.py が見つかりません")
+        except Exception as _stce:
+            logger.add("size_tier_classifier", "error", str(_stce)[:100])
+            print(
+                f"  ⚠️  規模分類マスター生成エラー（スキップ）: {str(_stce)[:80]}"
+            )
+    else:
+        print("  ⏩ 規模分類マスター: スキップ（週次以外）")
+
+    # ── legacy EdinetDBローテーション（政府EDINET直取得は無効）──
     if getattr(cfg, "ENABLE_EDINET_ROTATION", False) and _in_mode("edinet_rotation"):
         print("\n  🔄 EdinetDB ローテーション...")
         try:
@@ -4158,6 +4263,11 @@ def run_all_tasks(mode: str = "all") -> dict:
                            f"カバレッジ:{erm_result.get('db_coverage',0):.1f}%")
         except Exception as e:
             logger.add("edinet_rotation", "error", str(e)[:100])
+    else:
+        # 2026-07-25 B-2: D-① で legacy 直取得を退役させた意図的停止。
+        # skipped を残さないと台帳の「記録なし」に出続け、配線漏れと紛れる。
+        logger.add("edinet_rotation", "skipped",
+                   "ENABLE_EDINET_ROTATION=False（D-① legacy直取得を退役）")
     # ── [Phase US-1] US財務DBローテーター ────────────────────────
     if getattr(cfg, "ENABLE_US_FUNDAMENTALS", True) and _in_mode("us_fundamentals") and not source_ingest_done["us"]:
         try:
@@ -4685,12 +4795,20 @@ def run_all_tasks(mode: str = "all") -> dict:
                            f"ETF:{export_result['breakdown'].get('ETF',0)}")
             else:
                 print("  ⚠️  excel_dashboard_exporter.py が見つかりません")
+                logger.add("excel_export", "warn",
+                           "excel_dashboard_exporter.py not found")
         except Exception as e:
             logger.add("excel_export", "error", str(e)[:100])
             print(f"  ⚠️  Excelエクスポートエラー: {str(e)[:80]}")
     else:
+        # 2026-07-25 B-2: 意図的停止（BUG-03で廃止）でも台帳に skipped を残す。
+        # 記録が無いと「配線漏れ」と区別できず監査ノイズになるため。
         if not getattr(cfg, "ENABLE_EXCEL_EXPORT", False):
             print("  ⏩ Excelエクスポート: スキップ（ENABLE_EXCEL_EXPORT=False）")
+            logger.add("excel_export", "skipped",
+                       "ENABLE_EXCEL_EXPORT=False（2026-07-12 BUG-03で廃止）")
+        else:
+            logger.add("excel_export", "skipped", "対象モード外")
 
     # ── スコア履歴・スクリーナー履歴の蓄積（Excel出力の有無に関わらず毎回実行）──
     try:
@@ -4698,13 +4816,21 @@ def run_all_tasks(mode: str = "all") -> dict:
             _append_score_history(cfg, results["sectors"])
         if results.get("screener"):
             # performance_tracker 版に一本化（_append_screener_history は C-1 で削除）
-            _pt_hist = _load_local_module(
-                "performance_tracker",
-                "/content/performance_tracker.py",
-                cfg.DRIVE_BASE / "performance_tracker.py",
-            )
-            if _pt_hist:
-                _pt_hist.append_screener_history(cfg, results["screener"])
+            # 2026-07-25: ENABLE_PERFORMANCE_TRACKER を配線。
+            # ⚠️ False にすると screener_history.json の蓄積が止まり、
+            #    審議キュー・審議パケット①・self_evaluator・backtester・
+            #    投資ジャーナルの入力が全て枯れる。切る前に影響範囲を確認すること。
+            if getattr(cfg, "ENABLE_PERFORMANCE_TRACKER", True):
+                _pt_hist = _load_local_module(
+                    "performance_tracker",
+                    "/content/performance_tracker.py",
+                    cfg.DRIVE_BASE / "performance_tracker.py",
+                )
+                if _pt_hist:
+                    _pt_hist.append_screener_history(cfg, results["screener"])
+            else:
+                print("  ⏩ screener履歴の蓄積: スキップ"
+                      "（ENABLE_PERFORMANCE_TRACKER=False）")
     except Exception as e:
         print(f"  ⚠️  履歴蓄積エラー（スキップ）: {str(e)[:60]}")
         # ── [Wave0 Idea2-B] 業種ローテーション検出（signal_aggregatorの前に必須）──
@@ -4905,16 +5031,19 @@ def run_all_tasks(mode: str = "all") -> dict:
             )
             if _ro_cf and hasattr(_ro_cf, "evaluate_contraction_flag"):
                 _contraction = _ro_cf.evaluate_contraction_flag(results, cfg)
-                # results["rule_optimizer"] が既にある場合（月末更新済み）は
+                # 2026-07-25 バッチ6: 格納先キーを config.CONTRACTION_RESULT_KEY
+                # から読む（従来 "rule_optimizer" 直書きで config 側は未参照）。
+                _ck = str(getattr(cfg, "CONTRACTION_RESULT_KEY", "rule_optimizer"))
+                # results[_ck] が既にある場合（月末更新済み）は
                 # contraction_flag だけ上書きし、他のキー（weights等）は保持する
-                _ro_existing = results.get("rule_optimizer", {})
+                _ro_existing = results.get(_ck, {})
                 if isinstance(_ro_existing, dict):
                     _ro_existing["contraction_flag"]    = _contraction
                     _ro_existing["contraction_mode"]    = _contraction.get("mode", "Normal")
                     _ro_existing["contraction_detail"]  = _contraction.get("detail", {})
-                    results["rule_optimizer"] = _ro_existing
+                    results[_ck] = _ro_existing
                 else:
-                    results["rule_optimizer"] = {
+                    results[_ck] = {
                         "contraction_flag":   _contraction,
                         "contraction_mode":   _contraction.get("mode", "Normal"),
                         "contraction_detail": _contraction.get("detail", {}),
@@ -5131,6 +5260,10 @@ def run_all_tasks(mode: str = "all") -> dict:
                     logger.add("ml_meta_dataset", "warn", "特徴量行なし（skip）")
             else:
                 print("  ⚠️  ml/dataset_builder.py が見つかりません")
+                # 2026-07-25 B-2: ロード失敗が print だけで台帳に残らず、
+                # 2026-07-22 の「ml_meta 記録なし」の実体はこれだった。
+                logger.add("ml_meta_dataset", "warn",
+                           "ml/dataset_builder.py not found")
         except Exception as e:
             logger.add("ml_meta_dataset", "error", str(e)[:100])
             print(f"  ⚠️  ML特徴量スナップショットエラー: {str(e)[:80]}")

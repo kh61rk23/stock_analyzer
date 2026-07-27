@@ -12,6 +12,7 @@ from google.oauth2 import service_account
 import pandas as pd
 import os
 import json
+import re
 from datetime import datetime, timezone
 
 
@@ -120,6 +121,89 @@ class EDINETBQClient:
         job    = self.client.query(sql)
         result = job.result()
         return result.num_dml_affected_rows or 0
+
+    def merge_rows(
+        self,
+        table_name: str,
+        rows: list[dict],
+        key_columns: list[str],
+        dataset: str = "edinet",
+    ) -> bool:
+        """実テーブルの列型に合わせ、JSON配列を主キーで冪等MERGEする。"""
+        if not rows:
+            return True
+        identifier = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+        if not identifier.fullmatch(table_name) or not identifier.fullmatch(dataset):
+            raise ValueError("dataset/table name must be a BigQuery identifier")
+        table_ref = f"{self.project}.{dataset}.{table_name}"
+        schema = list(self.client.get_table(table_ref).schema)
+        schema_by_name = {field.name: field for field in schema}
+        missing_keys = [key for key in key_columns if key not in schema_by_name]
+        if missing_keys:
+            raise ValueError(f"MERGE key columns missing from {table_ref}: {missing_keys}")
+        if any(
+            key not in row or row.get(key) is None or row.get(key) == ""
+            for row in rows for key in key_columns
+        ):
+            raise ValueError(f"MERGE rows contain empty keys: {key_columns}")
+        # BigQuery MERGEは同一source keyが複数あると既存行へのUPDATEで失敗し得る。
+        # APIページ内の重複をここで吸収し、最後に観測した行を正本とする。
+        deduplicated = {}
+        for row in rows:
+            deduplicated[tuple(row[key] for key in key_columns)] = row
+        rows = list(deduplicated.values())
+        columns = [field.name for field in schema if any(field.name in row for row in rows)]
+        if not columns or any(key not in columns for key in key_columns):
+            raise ValueError(f"MERGE rows do not contain all keys: {key_columns}")
+
+        def source_expr(column: str) -> str:
+            field_type = schema_by_name[column].field_type.upper()
+            json_path = f"$.{column}"
+            if field_type == "STRING":
+                return f"JSON_VALUE(row, '{json_path}') AS `{column}`"
+            if field_type == "JSON":
+                return f"JSON_QUERY(row, '{json_path}') AS `{column}`"
+            cast_type = {
+                "INTEGER": "INT64", "INT64": "INT64",
+                "FLOAT": "FLOAT64", "FLOAT64": "FLOAT64",
+                "NUMERIC": "NUMERIC", "BIGNUMERIC": "BIGNUMERIC",
+                "BOOLEAN": "BOOL", "BOOL": "BOOL", "DATE": "DATE",
+                "DATETIME": "DATETIME", "TIMESTAMP": "TIMESTAMP",
+            }.get(field_type)
+            if not cast_type:
+                raise ValueError(f"unsupported MERGE field type: {field_type} ({column})")
+            return f"SAFE_CAST(JSON_VALUE(row, '{json_path}') AS {cast_type}) AS `{column}`"
+
+        source_columns = ",\n            ".join(source_expr(column) for column in columns)
+        on_clause = " AND ".join(f"T.`{key}` = S.`{key}`" for key in key_columns)
+        update_columns = [column for column in columns if column not in key_columns]
+        matched_clause = ""
+        if update_columns:
+            assignments = ",\n          ".join(
+                f"T.`{column}` = S.`{column}`" for column in update_columns
+            )
+            matched_clause = f"WHEN MATCHED THEN UPDATE SET\n          {assignments}"
+        insert_columns = ", ".join(f"`{column}`" for column in columns)
+        insert_values = ", ".join(f"S.`{column}`" for column in columns)
+        sql = f"""
+        MERGE `{table_ref}` AS T
+        USING (
+          SELECT
+            {source_columns}
+          FROM UNNEST(JSON_QUERY_ARRAY(PARSE_JSON(@rows_json))) AS row
+        ) AS S
+        ON {on_clause}
+        {matched_clause}
+        WHEN NOT MATCHED THEN INSERT ({insert_columns})
+        VALUES ({insert_values})
+        """
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter(
+                "rows_json", "STRING", json.dumps(rows, ensure_ascii=False, default=str)
+            )
+        ])
+        self.client.query(sql, job_config=job_config).result()
+        return True
 
     def mark_doc_as_fetched(self, doc_id: str) -> int:
         """doc_index の fetched_flag を True に更新"""
@@ -319,6 +403,239 @@ class EDINETBQClient:
         """
         df = self.query_to_df(sql)
         return df.drop(columns=["rn"]).to_dict("records")[0] if not df.empty else {}
+
+    def get_company_analysis_bundle(
+        self,
+        tickers: list[str],
+        *,
+        max_companies: int = 2,
+    ) -> dict[str, dict]:
+        """BQ ``edinet.*`` の既存行だけで業種分析互換dictを作る。
+
+        EdinetDB RESTは呼ばず、company / financials / text_analysis /
+        doc_index を1本のパラメータ化クエリで参照する。
+        """
+        bounded = max(1, min(20, int(max_companies)))
+        requested: list[tuple[str, str]] = []
+        seen = set()
+        for raw in tickers:
+            ticker = str(raw or "").strip()
+            code = "".join(ch for ch in ticker.split(".")[0] if ch.isdigit())[:4]
+            if len(code) != 4 or code in seen:
+                continue
+            seen.add(code)
+            requested.append((code, ticker if "." in ticker else f"{code}.T"))
+            if len(requested) >= bounded:
+                break
+        if not requested:
+            return {}
+
+        sql = f"""
+        WITH requested AS (
+          SELECT code FROM UNNEST(@company_codes) AS code
+        ),
+        company_latest AS (
+          SELECT
+            SUBSTR(c.sec_code, 1, 4) AS company_code,
+            ARRAY_AGG(
+              STRUCT(c.name AS company_name, c.credit_score AS credit_score)
+              ORDER BY c.updated_at DESC LIMIT 1
+            )[SAFE_OFFSET(0)] AS company
+          FROM `{self.dataset}.company` AS c
+          JOIN requested AS r ON SUBSTR(c.sec_code, 1, 4) = r.code
+          GROUP BY company_code
+        ),
+        financial_latest AS (
+          SELECT * EXCEPT(rn)
+          FROM (
+            SELECT f.*,
+              ROW_NUMBER() OVER (
+                PARTITION BY f.company_code, f.fiscal_year_end
+                ORDER BY f.updated_at DESC
+              ) AS rn
+            FROM `{self.dataset}.financials` AS f
+            JOIN requested AS r ON f.company_code = r.code
+          )
+          WHERE rn = 1
+        ),
+        financial_grouped AS (
+          SELECT company_code,
+            ARRAY_AGG(STRUCT(
+              COALESCE(fiscal_year, EXTRACT(YEAR FROM fiscal_year_end)) AS fiscal_year,
+              net_sales AS revenue,
+              operating_income AS operating_income,
+              net_income AS net_income,
+              total_assets AS total_assets,
+              equity AS equity,
+              operating_cf AS cf_operating,
+              investing_cf AS cf_investing,
+              free_cf AS free_cf,
+              capex AS capex
+            ) ORDER BY fiscal_year_end DESC LIMIT 6) AS financials
+          FROM financial_latest
+          GROUP BY company_code
+        ),
+        text_latest AS (
+          SELECT * EXCEPT(rn)
+          FROM (
+            SELECT t.*,
+              ROW_NUMBER() OVER (
+                PARTITION BY t.company_code, t.section_type
+                ORDER BY t.fiscal_year_end DESC, t.updated_at DESC
+              ) AS rn
+            FROM `{self.dataset}.text_analysis` AS t
+            JOIN requested AS r ON t.company_code = r.code
+            WHERE t.raw_text IS NOT NULL
+          )
+          WHERE rn = 1
+        ),
+        text_grouped AS (
+          SELECT company_code,
+            ARRAY_AGG(STRUCT(section_type, raw_text) LIMIT 12) AS texts
+          FROM text_latest
+          GROUP BY company_code
+        ),
+        doc_latest AS (
+          SELECT company_code,
+            STRUCT(
+              CAST(disclosure_date AS STRING) AS submit_date,
+              CAST(fiscal_year_end AS STRING) AS period_end
+            ) AS gov_meta
+          FROM `{self.dataset}.doc_index` AS d
+          JOIN requested AS r ON d.company_code = r.code
+          QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY company_code ORDER BY disclosure_date DESC, updated_at DESC
+          ) = 1
+        )
+        SELECT r.code AS company_code, c.company, f.financials, t.texts, d.gov_meta
+        FROM requested AS r
+        LEFT JOIN company_latest AS c ON c.company_code = r.code
+        LEFT JOIN financial_grouped AS f ON f.company_code = r.code
+        LEFT JOIN text_grouped AS t ON t.company_code = r.code
+        LEFT JOIN doc_latest AS d ON d.company_code = r.code
+        """
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ArrayQueryParameter(
+                "company_codes", "STRING", [code for code, _ in requested]
+            )
+        ])
+
+        def plain(value):
+            if value is None or isinstance(value, (str, int, float, bool)):
+                return value
+            if isinstance(value, (list, tuple)):
+                return [plain(item) for item in value]
+            if isinstance(value, dict):
+                return {key: plain(item) for key, item in value.items()}
+            if hasattr(value, "items"):
+                return {key: plain(item) for key, item in value.items()}
+            return value
+
+        def cagr(values: list) -> float | None:
+            positive = [float(value) for value in values if value is not None and value > 0]
+            if len(positive) < 4:
+                return None
+            start, end = positive[-4], positive[-1]
+            return (end / start) ** (1 / 3) - 1
+
+        ticker_by_code = dict(requested)
+        bundles = {}
+        rows = self.client.query(sql, job_config=job_config).result()
+        for row in rows:
+            record = plain(row)
+            code = str(record.get("company_code") or "")
+            company = plain(record.get("company")) or {}
+            financial_rows = list(reversed(plain(record.get("financials")) or []))
+            texts = plain(record.get("texts")) or []
+            gov_meta = plain(record.get("gov_meta")) or {}
+            if not company and not financial_rows and not texts and not gov_meta:
+                continue
+
+            business_summary = ""
+            risk_factors = []
+            for section in texts:
+                section_type = str(section.get("section_type") or "")
+                raw_text = str(section.get("raw_text") or "").strip()
+                lowered = section_type.casefold()
+                if not business_summary and (
+                    "事業の内容" in section_type or "business" in lowered
+                ):
+                    business_summary = raw_text[:1000]
+                if "リスク" in section_type or "risk" in lowered:
+                    points = [
+                        part.strip(" 　・ー-")
+                        for part in re.split(r"[\r\n]+|(?<=。)", raw_text)
+                        if part.strip(" 　・ー-")
+                    ]
+                    risk_factors.extend(points[:5])
+
+            years = [item.get("fiscal_year") for item in financial_rows]
+            revenue = [item.get("revenue") for item in financial_rows]
+            operating_income = [item.get("operating_income") for item in financial_rows]
+            score = company.get("credit_score")
+            rating = ""
+            if score is not None:
+                rating = "excellent" if score >= 80 else "good" if score >= 60 else (
+                    "fair" if score >= 40 else "poor"
+                )
+            ticker = ticker_by_code.get(code, f"{code}.T")
+            bundles[ticker] = {
+                "ticker": ticker,
+                "company_name": company.get("company_name") or ticker,
+                "analysis": {
+                    "credit_score": score,
+                    "credit_rating": rating,
+                    "business_summary": business_summary,
+                    "risk_factors": risk_factors[:5],
+                },
+                "financials": {
+                    "years": years,
+                    "revenue": revenue,
+                    "operating_income": operating_income,
+                    "net_income": [item.get("net_income") for item in financial_rows],
+                    "total_assets": [item.get("total_assets") for item in financial_rows],
+                    "equity": [item.get("equity") for item in financial_rows],
+                    "cf_operating": [item.get("cf_operating") for item in financial_rows],
+                    "cf_investing": [item.get("cf_investing") for item in financial_rows],
+                    "free_cf": [item.get("free_cf") for item in financial_rows],
+                    "capex": [item.get("capex") for item in financial_rows],
+                    "revenue_cagr": cagr(revenue),
+                    "op_income_cagr": cagr(operating_income),
+                },
+                "gov_meta": gov_meta,
+                "data_source": "bigquery_edinet",
+            }
+        return bundles
+
+    def get_real_estate_holdings(self, securities_code: str) -> list[dict]:
+        """証券コードに対応する最新年度の企業保有不動産を返す。"""
+        code = "".join(
+            char for char in str(securities_code).split(".")[0] if char.isdigit()
+        )[:4]
+        if not code:
+            return []
+        sql = f"""
+        SELECT h.*
+        FROM `{self.project}.real_estate.corporate_holdings_p1` AS h
+        JOIN `{self.dataset}.company` AS c USING (edinet_code)
+        WHERE SUBSTR(c.sec_code, 1, 4) = @company_code
+          AND h.fiscal_year = (
+            SELECT MAX(h2.fiscal_year)
+            FROM `{self.project}.real_estate.corporate_holdings_p1` AS h2
+            WHERE h2.edinet_code = h.edinet_code
+          )
+        ORDER BY h.facility_name
+        """
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("company_code", "STRING", code)
+        ])
+        try:
+            return [dict(row.items()) for row in self.client.query(
+                sql, job_config=job_config
+            ).result()]
+        except Exception as exc:
+            print(f"[BQ] get_real_estate_holdings({code}) skip: {str(exc)[:80]}")
+            return []
 
     def get_segment_bonus(self, securities_code: str) -> float:
         """
@@ -711,6 +1028,76 @@ class EDINETBQClient:
                 f"({securities_code}): {str(e)[:60]}"
             )
             return 0.0
+
+    def get_xbrl_text_sections(self, securities_code: str) -> list[dict]:
+        """EdinetDB由来の最新raw textをtext_extractor互換形で返す。"""
+        code = "".join(
+            char for char in str(securities_code).split(".")[0] if char.isdigit()
+        )[:4]
+        if not code:
+            return []
+        sql = f"""
+        SELECT
+          section_type AS element_name,
+          raw_text AS text_value,
+          CAST(fiscal_year_end AS STRING) AS period_end
+        FROM `{self.dataset}.text_analysis`
+        WHERE company_code = @company_code
+          AND raw_text IS NOT NULL
+        QUALIFY ROW_NUMBER() OVER (
+          PARTITION BY section_type
+          ORDER BY fiscal_year_end DESC, updated_at DESC
+        ) = 1
+        """
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("company_code", "STRING", code)
+        ])
+        try:
+            return [dict(row.items()) for row in self.client.query(
+                sql, job_config=job_config
+            ).result()]
+        except Exception:
+            return []
+
+    def search_company_text(
+        self,
+        securities_code: str,
+        query: str,
+        *,
+        limit: int = 50,
+    ) -> list[dict]:
+        """BQへ保存した有報全文を、個社内キーワードで安全に検索する。"""
+        code = "".join(
+            char for char in str(securities_code).split(".")[0] if char.isdigit()
+        )[:4]
+        keyword = str(query or "").strip()
+        if not code or not keyword:
+            return []
+        bounded_limit = max(1, min(200, int(limit)))
+        sql = f"""
+        SELECT section_type, fiscal_year_end, raw_text, updated_at
+        FROM `{self.dataset}.text_analysis`
+        WHERE company_code = @company_code
+          AND raw_text IS NOT NULL
+          AND STRPOS(
+            NORMALIZE_AND_CASEFOLD(raw_text),
+            NORMALIZE_AND_CASEFOLD(@query)
+          ) > 0
+        ORDER BY fiscal_year_end DESC, section_type
+        LIMIT @limit
+        """
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("company_code", "STRING", code),
+            bigquery.ScalarQueryParameter("query", "STRING", keyword),
+            bigquery.ScalarQueryParameter("limit", "INT64", bounded_limit),
+        ])
+        try:
+            return [dict(row.items()) for row in self.client.query(
+                sql, job_config=job_config
+            ).result()]
+        except Exception as exc:
+            print(f"[BQ] search_company_text({code}) skip: {str(exc)[:80]}")
+            return []
 
 # ----------------------------------------------------------
     # Wave 6 - R-2: sub_theme_master / ticker_subtheme_mapping

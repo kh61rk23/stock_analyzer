@@ -5,7 +5,7 @@
 # 【目的】
 #   us_bq_schema.py を実行し、BigQuery の `us` データセットと
 #   institutional_positions / job_signal_cache / executive_transitions /
-#   facility_signals の4テーブルを作成する。
+#   facility_signals / fundamentals の5テーブルを作成する。
 #   これらが未作成のため institutional_13f_monitor.py 等の BQ 書込が
 #   宛先データセット不在で失敗していた問題への一回限りのセットアップ。
 #
@@ -36,7 +36,7 @@ permissions:
 
 jobs:
   setup-us-bq:
-    name: 🧩 us データセット（institutional_positions 等4テーブル）整備
+    name: 🧩 us データセット（fundamentals等5テーブル）整備
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:

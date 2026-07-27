@@ -41,6 +41,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+from config_sync import sync_module_constants
+
 # ── 定数 ──────────────────────────────────────────────────────
 MAX_EDINET_BONUS    =  8.0   # composite_score 補正の上限
 MAX_EDINET_PENALTY  = -8.0   # 下限
@@ -57,6 +59,16 @@ CREDIT_SCORE_MAP = {
 
 CACHE_FILENAME = "edinet_quality_cache.json"
 CACHE_HOURS    = 24 * 7  # 週次（EDINETデータはゆっくり変わる）
+
+_CFG_CONST_MAP = {
+    "SFL_MAX_EDINET_BONUS": "MAX_EDINET_BONUS",
+    "SFL_MAX_EDINET_PENALTY": "MAX_EDINET_PENALTY",
+    "SFL_CREDIT_WEIGHT": "CREDIT_WEIGHT",
+    "SFL_CAGR_WEIGHT": "CAGR_WEIGHT",
+    "SFL_ROE_TREND_WEIGHT": "ROE_TREND_WEIGHT",
+    "SFL_DEBT_WEIGHT": "DEBT_WEIGHT",
+    'B4_SCREENER_FEEDBACK_LOOP_CACHE_HOURS': 'CACHE_HOURS',
+}
 
 
 # ==============================================================
@@ -382,6 +394,7 @@ def run_screener_feedback_loop(cfg, screener_result: Optional[dict] = None) -> d
           "timestamp":       str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  🔄 screenerフィードバックループ実行...")
 
     # screener通過銘柄のリスト

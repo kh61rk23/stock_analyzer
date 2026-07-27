@@ -45,6 +45,12 @@ EDINETDB_BASE = "https://edinetdb.jp/v1"
 GOV_EDINET_BASE = "https://disclosure.edinet-fsa.go.jp/api/v2"
 
 # 1日あたりの最大APIコール数（民間EdinetDB）
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B5_EDINET_CLIENT_DAILY_BUDGET': 'DAILY_BUDGET',
+}
+
 DAILY_BUDGET = 80
 
 
@@ -450,7 +456,6 @@ def get_full_company_data(ticker: str, cfg,
     """
     1銘柄の全データを取得する。
     - EdinetDB: analysis（1コール）+ financials（1コール）= 最大2コール
-    - 政府EDINET: 書類メタデータ（予算カウントなし）
     - 日次キャッシュ: 同日中は0コール
 
     Args:
@@ -467,12 +472,12 @@ def get_full_company_data(ticker: str, cfg,
             "company_name": str,
             "analysis":     dict | None,   # credit_score, risk_factors, ...
             "financials":   dict | None,   # 6年間財務トレンド
-            "gov_meta":     dict | None,   # 政府EDINET メタデータ
+            "gov_meta":     None,          # 後方互換（W4で直接取得停止）
             "from_cache":   bool,
           }
     """
-    db_api_key  = getattr(cfg, "EDINETDB_API_KEY", "") or getattr(cfg, "EDINET_API_KEY", "")
-    gov_api_key = getattr(cfg, "EDINET_API_KEY", "")  # 政府EDINET キー
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
+    db_api_key = getattr(cfg, "EDINETDB_API_KEY", "")
     cache_days  = getattr(cfg, "EDINET_CACHE_DAYS", 100)
 
     sec_code = ticker.replace(".T", "").replace(".OS", "").strip()
@@ -561,13 +566,6 @@ def get_full_company_data(ticker: str, cfg,
             print(f"        📣 決算短信: {earnings.get('disclosure_date','N/A')} 開示")
         time.sleep(0.5)
     
-    # ── 政府EDINET メタデータ（予算カウントなし） ─────────────
-    if gov_api_key:
-        gov_meta = get_gov_edinet_filings(sec_code, gov_api_key, cache_dir)
-        if gov_meta:
-            result["gov_meta"] = gov_meta
-            print(f"        📋 有報: {gov_meta.get('submit_date', 'N/A')} 提出（期末: {gov_meta.get('period_end', 'N/A')}）")
-
     # ── 日次キャッシュに保存 ──────────────────────────────────
     if "companies" not in daily_cache:
         daily_cache["companies"] = {}
@@ -650,8 +648,7 @@ def get_sector_data(tickers: list, cfg,
 
     # ── ランキング取得（2コール固定）────────────────────────────
     if _budget_ok(daily_cache) and cache_dir:
-        _db_api_key = (getattr(cfg, "EDINETDB_API_KEY", "")
-                       or getattr(cfg, "EDINET_API_KEY", ""))
+        _db_api_key = getattr(cfg, "EDINETDB_API_KEY", "")
         for metric in ["roe", "dividend-yield"]:
             fetch_rankings(metric, _db_api_key, limit=50, cache_dir=cache_dir)
             _increment_budget(daily_cache)

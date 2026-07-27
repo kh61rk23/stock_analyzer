@@ -119,6 +119,13 @@ def _save_cache(cfg, data: dict) -> None:
 
 _EDINET_BASE    = "https://disclosure.edinet-api.go.jp/api/v2"
 _REQUEST_WAIT   = 1.0   # APIコール間の待機秒数
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B5_EXECUTIVE_TRANSITION_TRACKER_REQUEST_TIMEOUT': '_REQUEST_TIMEOUT',
+    'B6_EXECUTIVE_TRANSITION_TRACKER_REQUEST_WAIT': '_REQUEST_WAIT',
+}
+
 _REQUEST_TIMEOUT = 20   # タイムアウト秒数
 
 
@@ -540,9 +547,19 @@ def run_executive_transition_tracker(cfg, results: dict) -> dict:
           "skipped":            bool,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     if not getattr(cfg, "ENABLE_EXECUTIVE_TRANSITION", True):
         print("  ⏩ 役員転職トラッカー: スキップ（ENABLE_EXECUTIVE_TRANSITION=False）")
         return {"skipped": True, "sector_boosts": {}, "transition_alerts": []}
+
+    # W4: 政府EDINET documents.json の直接取得は撤去済み。
+    # EdinetDB側の役員履歴契約へ移行するまで、明示的にfail-softする。
+    return {
+        "skipped": True,
+        "reason": "retired: government EDINET direct fetch",
+        "sector_boosts": {},
+        "transition_alerts": [],
+    }
 
     print("\n  👔 [exec_transition] 役員転職トラッカー 開始...")
     t0 = datetime.now()

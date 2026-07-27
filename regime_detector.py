@@ -61,6 +61,18 @@ PHASE_TO_STATE = {"B": 0, "A": 1, "D": 2, "C": 3}
 STATE_TO_PHASE = {0: "B", 1: "A", 2: "D", 3: "C"}
 
 # confidence 補正の上限
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'RD_CONF_ADJ_MAX': 'CONF_ADJ_MAX',
+    'RD_CONF_ADJ_MIN': 'CONF_ADJ_MIN',
+    'RD_TRANSITION_ALERT_PROB_THRESHOLD': 'TRANSITION_ALERT_PROB_THRESHOLD',
+    'B4_REGIME_DETECTOR_MIN_TRAIN_DAYS': 'MIN_TRAIN_DAYS',
+    'B6_REGIME_DETECTOR_N_STATES': 'N_STATES',
+    'B6_REGIME_DETECTOR_N_FEATURES': 'N_FEATURES',
+}
+
 CONF_ADJ_MAX =  0.20   # HMMが一致する場合の最大加算補正
 CONF_ADJ_MIN = -0.15   # HMMが不一致の場合の最大減算補正
 
@@ -455,6 +467,7 @@ def run_regime_detector(cfg, results: dict = None) -> dict:
           "timestamp":        str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     if not getattr(cfg, "ENABLE_REGIME_DETECTOR", False):
         print("  ⏩ レジーム検知: スキップ（ENABLE_REGIME_DETECTOR=False）")
         return {

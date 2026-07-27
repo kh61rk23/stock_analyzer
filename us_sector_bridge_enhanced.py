@@ -34,6 +34,57 @@
 #     }, ...
 #   }
 #
+# 【入力（実コード確認済み）】
+#   ・results["us_8k"]["earnings_tickers"] / results["us_8k"]["screener_hits"]
+#     （us_8k_monitor.py が当日実行済みであること前提。run_us_sector_bridge_enhanced()
+#     の引数 results から読む。無ければ target_tickers=[] で早期returnする）
+#   ・DATA_DIR/us_cik_map.json（ticker→CIK。us_fundamental_rotator.py が書き込み維持）
+#   ・DATA_DIR/us_sector_mapping.json（本モジュール自身の出力兼キャッシュ。30日TTL）
+#   ・DATA_DIR/us_fundamentals_db/{ticker}.json の eps_history（決算beat/miss判定用）
+#   ・SEC submissions API（sec_client.submissions() 経由。CIK→SICコード取得）
+#   ・results["us_macro"] / results["macro_snapshot"]（enhance_ism_cross_sector_signal 用。
+#     ISM製造業指数が52未満または無ければこの補強シグナルはスキップされる）
+#
+# 【出力（results["us_sector_bridge"]、実コード確認済み）】
+#   {
+#     "cross_signals":   list,   # CROSS_SECTOR_RULES形式のシグナル辞書のリスト
+#     "mapping_updated": int,    # 今回SICマッピングを更新した銘柄数
+#     "jp_affected":     list,   # シグナルが波及したJP業種コードのリスト
+#     "beat_tickers":    list,   # 決算beat判定の銘柄
+#     "miss_tickers":    list,   # 決算miss判定の銘柄
+#     "timestamp":       str,
+#   }
+#   cross_signals は results["cross_sector_signals"] にも追記され、
+#   他モジュール共通の CROSS_SECTOR シグナル経路に合流する。
+#
+# 【消費者（grep実測。2026-07-28）】
+#   ・screener_candidate_builder.py:140,186 _load_us_bridge_jp_reps() 等 —
+#     jp_affected を読み、影響業種の代表銘柄をスクリーナー候補に反映する
+#   ・results["cross_sector_signals"] 経由（間接消費）: alpha_attributer.py / signal_dedup.py
+#     が他モジュール由来のシグナルと合わせて処理する（本モジュール専用の消費経路ではない）
+#   ・stock_analyzer_main.py:2513-2530 — results["us_sector_bridge"] 格納と
+#     cross_sector_signals への統合、および実行台帳への記録
+#
+# 【他3モジュールとの違い】
+#   ・vs jp_us_sector_bridge.py: bridge は「週次ETFスコアの相関」（遅延あり）で
+#     score_history に依存する。本モジュールは「8-K決算×SIC/CIKチェーン」による
+#     当日イベント伝播で、score_history には一切依存しない別データ系統。
+#   ・vs jp_us_sector_correlation.py: correlation は価格・スコアの統計的相関計算。
+#     本モジュールはSICコード表（SIC_TO_JP_SECTORS）に基づくルールベースの
+#     業種マッピングで、統計計算を一切行わない。
+#   ・vs sector_rotation_detector.py: rotation_detector はJPスコア単体のトレンド判定。
+#     本モジュールはUSの決算イベント発生（8-K）を起点に動くイベント駆動型で、
+#     JP側のスコア時系列は参照しない。
+#
+# 【既知の状態（2026-07-28 時点・X-3）】
+#   実行台帳に「記録なし」が続いていた（2026-07-06・2026-07-13 台帳とも
+#   日次・週次ともunrecorded）。本タスク（U-10）で原因調査のみ実施し、
+#   修正はしていない（別案件 X-3 として切り出し済み）。調査結果の詳細は
+#   実装セッションの完了報告を参照。
+#   意思決定 J-04（2026-07-27, 健太承認）は jp_us_bridge / jp_us_sector_correlation を
+#   名指しした決定だが、本タスクの対象範囲としては本モジュールも含め
+#   「今回は削除・機能修正をしない」対象として扱う。
+#
 # 【依存】requests / config.py / us_8k_monitor / us_fundamental_rotator
 # ==============================================================
 
@@ -44,6 +95,8 @@ import time
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Optional
+
+import sec_client
 
 
 # ==============================================================
@@ -154,6 +207,14 @@ REQUEST_TIMEOUT = 10
 
 # マッピングキャッシュファイル
 MAPPING_FILE    = "us_sector_mapping.json"
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B4_US_SECTOR_BRIDGE_ENHANCED_MAPPING_CACHE_DAYS': 'MAPPING_CACHE_DAYS',
+    'B5_US_SECTOR_BRIDGE_ENHANCED_REQUEST_DELAY': 'REQUEST_DELAY',
+    'B5_US_SECTOR_BRIDGE_ENHANCED_REQUEST_TIMEOUT': 'REQUEST_TIMEOUT',
+}
+
 MAPPING_CACHE_DAYS = 30   # SIC情報は30日キャッシュ
 
 
@@ -189,24 +250,29 @@ def save_sector_mapping(cfg, mapping: dict) -> None:
 # BLOCK 2: SIC 取得（SEC submissions API）
 # ==============================================================
 
-def _fetch_sic_from_submissions(cik: int) -> Optional[dict]:
+# 2026-07-27是正（U-2 / F-2）: SECは連絡先を含まないUser-Agentを403で拒否する。
+# us_8k_monitor.py:116-122 の _sec_user_agent() と同型（優先順: 環境変数 →
+# cfg.SEC_USER_AGENT（cfg未指定時は import config でのフォールバック取得）→ 固定文字列）。
+# U-1b: 実体は sec_client.user_agent() に統合済み。本関数は tests/test_sec_user_agent.py
+# の既存回帰テストとの互換のために薄いラッパーとして残す。
+_SEC_UA_FALLBACK = "StockAnalyzer stockanalyzer@example.com"
+
+
+def _sec_user_agent(cfg=None) -> str:
+    return sec_client.user_agent(cfg)
+
+
+def _fetch_sic_from_submissions(cik: int, cfg=None) -> Optional[dict]:
     """
-    SEC submissions API から SIC コードを取得する。
+    SEC submissions API から SIC コードを取得する（sec_client 経由）。
 
     Returns:
         {"sic": int, "sic_desc": str, "name": str} | None
     """
     try:
-        import requests
-        url  = SUBMISSIONS_URL.format(cik)
-        resp = requests.get(
-            url,
-            headers={"User-Agent": "stock_analyzer/1.0 (educational use)"},
-            timeout=REQUEST_TIMEOUT,
-        )
-        if resp.status_code != 200:
+        data = sec_client.submissions(cik, cfg=cfg)
+        if not data:
             return None
-        data = resp.json()
         sic      = data.get("sic")
         sic_desc = data.get("sicDescription", "")
         name     = data.get("name", "")
@@ -263,13 +329,16 @@ def update_sector_mapping(cfg, tickers_with_cik: list[dict]) -> dict:
         if last_upd:
             try:
                 days_old = (date.today() - date.fromisoformat(last_upd)).days
-                if days_old < MAPPING_CACHE_DAYS and existing.get("sic"):
+                # 2026-07-25 バッチ6: キャッシュ日数を config から読む
+                _cache_days = int(getattr(cfg, "US_SECTOR_MAPPING_CACHE_DAYS",
+                                          MAPPING_CACHE_DAYS))
+                if days_old < _cache_days and existing.get("sic"):
                     continue   # キャッシュ有効
             except Exception:
                 pass
 
         # SEC から SIC 取得
-        sic_data = _fetch_sic_from_submissions(cik)
+        sic_data = _fetch_sic_from_submissions(cik, cfg)
         time.sleep(REQUEST_DELAY)
 
         if not sic_data:
@@ -496,6 +565,7 @@ def run_us_sector_bridge_enhanced(cfg, results: dict = None) -> dict:
           "timestamp":       str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     if not getattr(cfg, "ENABLE_US_SECTOR_BRIDGE", True):
         return {"skipped": True}
 

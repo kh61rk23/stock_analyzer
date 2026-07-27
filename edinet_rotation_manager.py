@@ -51,7 +51,6 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
-from edinet_direct_fetcher import run_fetcher as _run_xbrl_fetcher
 
 # ==============================================================
 # BLOCK 1: 定数・パス管理
@@ -60,14 +59,6 @@ from edinet_direct_fetcher import run_fetcher as _run_xbrl_fetcher
 DB_DIR_NAME   = "edinet_db"
 META_FILENAME = "meta.json"
 ANALYSIS_DIR  = "analysis"
-
-# 市場区分ごとの優先順位（数値が小さいほど先に取得）
-MARKET_PRIORITY = {
-    "Prime":    1,
-    "Standard": 2,
-    "Growth":   3,
-    "Other":    4,
-}
 
 # 東証プライム代表銘柄（sector_code → 上位銘柄リスト）
 # JAPAN_SECTORSの33業種すべてに対応。各業種5社。
@@ -466,8 +457,7 @@ def _fetch_one_ticker(ticker: str, cfg, edinet_client,
         dict: {"ok": bool, "ticker": str, "edinet_code": str,
                "name": str, "data": dict, "error": str}
     """
-    api_key    = (getattr(cfg, "EDINETDB_API_KEY", "")
-                  or getattr(cfg, "EDINET_API_KEY", ""))
+    api_key = getattr(cfg, "EDINETDB_API_KEY", "")
     cache_days = getattr(cfg, "EDINET_ROTATION_CACHE_DAYS", 30)
 
     sec_code = ticker.replace(".T", "").replace(".OS", "").strip()
@@ -572,8 +562,7 @@ def _fetch_rankings(cfg, edinet_client) -> dict:
         # v2.0には未実装のため静かにスキップ
         return {}
 
-    api_key = (getattr(cfg, "EDINETDB_API_KEY", "")
-               or getattr(cfg, "EDINET_API_KEY", ""))
+    api_key = getattr(cfg, "EDINETDB_API_KEY", "")
 
     rankings = {}
     for metric in ["roe", "credit_score"]:
@@ -676,8 +665,7 @@ def run_edinet_rotation(cfg, results: dict | None = None) -> dict:
               "スキップ（ENABLE_EDINET_ROTATION=False）")
         return {"skipped": True, "ok_count": 0, "error_count": 0}
 
-    api_key = (getattr(cfg, "EDINETDB_API_KEY", "")
-               or getattr(cfg, "EDINET_API_KEY", ""))
+    api_key = getattr(cfg, "EDINETDB_API_KEY", "")
     if not api_key:
         print("  ⏩ EdinetDB ローテーション: "
               "スキップ（APIキー未設定）")
@@ -825,11 +813,10 @@ def run_edinet_rotation(cfg, results: dict | None = None) -> dict:
     print(f"     APIコール使用: {budget_used}/{budget_max}")
     print(f"     DBカバレッジ: {coverage:.1f}%")
     print(f"     所要時間: {elapsed:.0f}秒")
-    # ---- XBRL 取得・BQ 格納（E2追加）----
-    # doc_index の未取得レコードを本日の処理枠分だけ取得・格納する
-    # daily_limit は既存の rotation 処理枠（API budget）から残余を渡す
-    xbrl_result = _run_xbrl_fetcher(daily_limit=33)
-    results["edinet_xbrl_fetch"] = xbrl_result
+    # 政府EDINET XBRL直接取得はW4で停止。BQ更新はedinetdb_ingestorが担う。
+    results["edinet_xbrl_fetch"] = {
+        "skipped": True, "reason": "retired: EdinetDB-only ingestion"
+    }
     return {
         "skipped":       False,
         "fetch_results": fetch_results,

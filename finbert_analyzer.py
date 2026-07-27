@@ -57,6 +57,17 @@ _FINBERT_PIPELINE = None
 # ==============================================================
 
 SENTIMENT_CACHE_FILE = "sentiment_cache.json"
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B4_FINBERT_ANALYZER_CACHE_VALID_DAYS': 'CACHE_VALID_DAYS',
+    'B5_FINBERT_ANALYZER_DEFAULT_BATCH_SIZE': 'DEFAULT_BATCH_SIZE',
+    'B6_FINBERT_ANALYZER_MAX_TEXT_LEN': 'MAX_TEXT_LEN',
+    'B6_FINBERT_ANALYZER_SENTIMENT_STRONG_POS': 'SENTIMENT_STRONG_POS',
+    'B6_FINBERT_ANALYZER_SENTIMENT_STRONG_NEG': 'SENTIMENT_STRONG_NEG',
+    'B6_FINBERT_ANALYZER_SENTIMENT_TAILWIND_PTS': 'SENTIMENT_TAILWIND_PTS',
+}
+
 CACHE_VALID_DAYS     = 7
 MODEL_CACHE_DIR      = "models"      # stock_data/models/ に保存
 
@@ -617,6 +628,7 @@ def run_finbert_analyzer(cfg, results: dict = None) -> dict:
           "timestamp":      str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     if not getattr(cfg, "ENABLE_FINBERT", True):
         return {"skipped": True}
 

@@ -50,6 +50,20 @@ from typing import Optional
 # BLOCK 0: デフォルト定数
 # ==============================================================
 
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'PDF_CORR_THRESHOLD_DEFAULT': '_CORR_THRESHOLD_DEFAULT',
+    'PDF_HHI_ALERT_THRESHOLD': '_HHI_ALERT_THRESHOLD',
+    'B4_PORTFOLIO_DIVERSITY_FILTER_CORR_WINDOW_DAYS': '_CORR_WINDOW_DAYS',
+    'B5_PORTFOLIO_DIVERSITY_FILTER_FETCH_DELAY': '_FETCH_DELAY',
+    'B6_PORTFOLIO_DIVERSITY_FILTER_HHI_WARNING_DEFAULT': '_HHI_WARNING_DEFAULT',
+    'B6_PORTFOLIO_DIVERSITY_FILTER_HHI_CRITICAL_DEFAULT': '_HHI_CRITICAL_DEFAULT',
+    'B6_PORTFOLIO_DIVERSITY_FILTER_MIN_DATA_POINTS': '_MIN_DATA_POINTS',
+    'B6_PORTFOLIO_DIVERSITY_FILTER_MIN_CORR_PAIRS_FOR_ALERT': '_MIN_CORR_PAIRS_FOR_ALERT',
+}
+
 _CORR_THRESHOLD_DEFAULT  = 0.70   # 高相関とみなす閾値
 _HHI_WARNING_DEFAULT     = 0.25
 _HHI_CRITICAL_DEFAULT    = 0.35
@@ -57,7 +71,6 @@ _CORR_WINDOW_DAYS        = 60     # 相関計算ウィンドウ（日）
 _MIN_DATA_POINTS         = 20     # OLS最低データ数
 _MAX_TICKERS_FOR_CORR    = 30     # 相関行列計算の最大銘柄数（API負荷制限）
 _FETCH_DELAY             = 0.4    # yfinance API 間隔（秒）
-_CACHE_TTL_DAYS          = 1      # 相関キャッシュ TTL（日）
 _HHI_ALERT_THRESHOLD     = 0.30   # トリガー㉓ HHI 閾値
 _MIN_CORR_PAIRS_FOR_ALERT = 3     # トリガー㉓ 最低高相関ペア数
 
@@ -492,6 +505,7 @@ def run_portfolio_diversity_filter(
           "summary":          str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("  🔀 [portfolio_diversity_filter] 多様性分析実行中...")
 
     if results is None:

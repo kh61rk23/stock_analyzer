@@ -53,6 +53,13 @@ from datetime import datetime
 from typing import Optional
 
 # ── マクロ条件の評価閾値 ───────────────────────────────────────
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'IE_THRESHOLDS': 'THRESHOLDS',
+}
+
 THRESHOLDS = {
     "vix_fear":       25.0,   # VIX > 25 → 恐怖
     "vix_crisis":     35.0,   # VIX > 35 → 危機
@@ -440,6 +447,7 @@ def run_inference_engine(cfg, results: dict) -> dict:
           "timestamp":        str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  🧠 推論エンジン実行中...")
 
     ctx = _Ctx(results)

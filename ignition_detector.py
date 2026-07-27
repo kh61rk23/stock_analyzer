@@ -44,11 +44,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+from config_sync import sync_module_constants
+
 # ==============================================================
 # BLOCK 0: デフォルト定数（config.py BLOCK 30 で上書き可能）
 # ==============================================================
 
-_DEFAULT_CONVERGENCE_WINDOW  = 14      # シグナル収束ウィンドウ（日）
 _DEFAULT_MIN_SCORE_LINE      = 3.0    # LINE通知閾値
 _DEFAULT_CRITICAL_SCORE      = 3.5    # 最高警戒LINE閾値
 _DEFAULT_CRITICAL_REPEAT     = 14     # 最高警戒反復判定日数
@@ -61,6 +62,18 @@ _DEFAULT_WEIGHT_C = 0.25   # Category C（価格）
 
 # Category 検出閾値（各スコアがこの値以上で "detected" フラグが立つ）
 _CAT_DETECT_THRESHOLD = 0.30
+
+_CFG_CONST_MAP = {
+    "IGNITION_MIN_SCORE_LINE": "_DEFAULT_MIN_SCORE_LINE",
+    "IGNITION_WEIGHT_CATEGORY_A": "_DEFAULT_WEIGHT_A",
+    "IGNITION_WEIGHT_CATEGORY_B": "_DEFAULT_WEIGHT_B",
+    "IGNITION_WEIGHT_CATEGORY_C": "_DEFAULT_WEIGHT_C",
+    "IGNITION_CATEGORY_DETECT_THRESHOLD": "_CAT_DETECT_THRESHOLD",
+    'B6_IGNITION_DETECTOR_DEFAULT_CRITICAL_SCORE': '_DEFAULT_CRITICAL_SCORE',
+    'B6_IGNITION_DETECTOR_DEFAULT_CRITICAL_REPEAT': '_DEFAULT_CRITICAL_REPEAT',
+    'B6_IGNITION_DETECTOR_DEFAULT_ALERT_TTL': '_DEFAULT_ALERT_TTL',
+    'B6_IGNITION_DETECTOR_DEFAULT_HISTORY_TTL': '_DEFAULT_HISTORY_TTL',
+}
 
 # ==============================================================
 # BLOCK 1: キャッシュ I/O
@@ -649,6 +662,7 @@ def run_ignition_detector(cfg=None, results: Optional[dict] = None) -> dict:
           "generated":       str,    # 実行日時
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("  🔥 [ignition_detector] 収束シグナル検出開始...")
 
     # ── ① データバンドル構築 ──────────────────────────────────

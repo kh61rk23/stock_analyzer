@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 from db_rest_client import DBRestClient
-from edinetdb_ingestor import _fiscal_year_end
+from edinetdb_ingestor import _explicit_date
 from edinetdb_ingestor import run_edinetdb_ingest
 from real_estate_signal import calc_real_estate_bonus
 from dead_ticker_pruner import (
@@ -9,20 +9,25 @@ from dead_ticker_pruner import (
     _classify_yahoo_chart_response,
     _partition_confirmation,
 )
+import config
 
 
-def test_fiscal_year_end_uses_provider_month_and_submit_date():
-    assert _fiscal_year_end({"submit_date": "2026-06-20", "fiscal_month": 3}) == "2026-03-20"
-    assert _fiscal_year_end({"period_end": "2026-03-31"}) == "2026-03-31"
+def test_fiscal_year_end_only_uses_explicit_provider_date():
+    assert _explicit_date({"submit_date": "2026-06-20", "fiscal_month": 3}) is None
+    assert _explicit_date({"period_end": "2026-03-31"}) == "2026-03-31"
 
 
 def test_real_estate_bonus_is_neutral_without_valid_book_value():
-    assert calc_real_estate_bonus(None, None, None) == 0.0
-    assert calc_real_estate_bonus(100, 100, 0) == 0.0
+    cfg = SimpleNamespace(RE_BONUS_MIN=-2.0, RE_BONUS_MAX=3.0)
+    assert calc_real_estate_bonus([], cfg) == 0.0
+    assert calc_real_estate_bonus([{"facility_name": "本社"}], cfg) == 0.0
 
 
 def test_real_estate_bonus_is_clamped():
-    assert -2.0 <= calc_real_estate_bonus(10**12, 0, 1, 2, 2) <= 3.0
+    cfg = SimpleNamespace(RE_BONUS_MIN=-2.0, RE_BONUS_MAX=3.0)
+    row = {"land_area_m2": 10**6, "commercial_land_price_per_m2": 10**6,
+           "book_value_land_m_yen": 1, "book_value_buildings_m_yen": 1}
+    assert -2.0 <= calc_real_estate_bonus([row], cfg) <= 3.0
 
 
 def test_rest_client_does_not_retry_auth_error():
@@ -47,6 +52,14 @@ def test_edinet_ingest_skips_cleanly_without_optional_key():
     result = run_edinetdb_ingest(cfg, doc_index_only=True)
     assert result["skipped"] is True
     assert "API_KEY" in result["reason"]
+
+
+def test_daily_edinet_route_is_bq_read_only():
+    assert config.ENABLE_EDINET_BQ_ANALYSIS is True
+    assert config.ENABLE_EDINET is False
+    assert config.ENABLE_EDINETDB_INGEST is False
+    assert "edinetdb_ingest" not in config.DAILY_MODULES
+    assert "edinet_doc_index" not in config.DAILY_MODULES
 
 
 def test_pruner_never_confirms_unknown_ticker_for_deletion():

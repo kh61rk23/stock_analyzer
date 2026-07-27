@@ -55,6 +55,19 @@ from typing import Optional
 # BLOCK 0: 定数
 # ==============================================================
 
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'FCM_CROWDING_THRESHOLD': 'CROWDING_THRESHOLD',
+    'FCM_UNWIND_THRESHOLD': 'UNWIND_THRESHOLD',
+    'FCM_CROWDING_SCORE_CAP': 'CROWDING_SCORE_CAP',
+    'B4_FACTOR_CROWDING_MONITOR_LOOKBACK_DAYS': 'LOOKBACK_DAYS',
+    'B4_FACTOR_CROWDING_MONITOR_HISTORY_RETAIN_WEEKS': 'HISTORY_RETAIN_WEEKS',
+    'B5_FACTOR_CROWDING_MONITOR_TOP_N_DEFAULT': 'TOP_N_DEFAULT',
+    'B5_FACTOR_CROWDING_MONITOR_FETCH_DELAY': 'FETCH_DELAY',
+}
+
 CROWDING_THRESHOLD    = 0.60   # avg_corr >= これ → クラウディングアラート
 UNWIND_THRESHOLD      = 0.40   # 前週高 → 今週これ未満 → 解消売りアラート
 CROWDING_SCORE_CAP    = 100    # クラウディングスコア上限
@@ -495,6 +508,7 @@ def run_factor_crowding_monitor(cfg, results: dict = None) -> dict:
           "timestamp":         str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     if not getattr(cfg, "ENABLE_FACTOR_CROWDING", True):
         return {"skipped": True}
 

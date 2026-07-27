@@ -27,6 +27,13 @@ from typing import Optional
 STATE_UNSET   = "unset"    # 未設定（キーが空）
 STATE_ALIVE   = "alive"    # ✅ 生存
 STATE_DEAD    = "dead"     # ❌ 失効・権限エラー
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B5_API_KEY_HEALTH_STATE_LIMITED': 'STATE_LIMITED',
+    'B5_API_KEY_HEALTH_PROBE_TIMEOUT': 'PROBE_TIMEOUT',
+}
+
 STATE_LIMITED = "limited"  # ⚠️ レート制限・quota・判定不能
 STATE_SKIPPED = "skipped"  # ⏭️ チェック対象外
 
@@ -201,24 +208,6 @@ def _entry(state: str, message: str) -> dict:
 def _probe_edinet(key: str) -> dict:
     """D-⑧: secret is retained dormant; do not call the retired government API."""
     return _entry(STATE_UNSET, "dormant（EdinetDB 一本化のため照会しない）")
-    req = _requests()
-    if req is None:
-        return _entry(STATE_LIMITED, "判定不能（requests 未導入）")
-    date_str = prev_business_day().strftime("%Y-%m-%d")
-    try:
-        # 2026-07-16 Fable裁定: キーはURLに乗せず edinet_client._headers_gov と
-        # 同じヘッダ方式（Ocp-Apim-Subscription-Key）に統一。
-        resp = req.get(
-            "https://disclosure.edinet-fsa.go.jp/api/v2/documents.json",
-            params={"date": date_str, "type": 1},
-            headers={"Ocp-Apim-Subscription-Key": key,
-                     "User-Agent": "StockAnalyzer/3.0"},
-            timeout=PROBE_TIMEOUT,
-        )
-        state = classify_http_generic(resp.status_code)
-        return _entry(state, _http_msg(state, resp.status_code))
-    except Exception:
-        return _entry(STATE_LIMITED, "判定不能（通信エラー・タイムアウト）")
 
 
 def _probe_edinetdb(key: str) -> dict:
@@ -240,6 +229,26 @@ def _probe_edinetdb(key: str) -> dict:
             timeout=PROBE_TIMEOUT,
         )
         state = classify_edinetdb(resp.status_code)
+        if resp.status_code == 429:
+            return _entry(STATE_LIMITED, "HTTP 429（レート制限・失効ではない）")
+        return _entry(state, _http_msg(state, resp.status_code))
+    except Exception:
+        return _entry(STATE_LIMITED, "判定不能（通信エラー・タイムアウト）")
+
+
+def _probe_fudosan(key: str) -> dict:
+    """公式RESTの最小ページを1コールして認証状態を判定する。"""
+    req = _requests()
+    if req is None:
+        return _entry(STATE_LIMITED, "判定不能（requests 未導入）")
+    try:
+        resp = req.get(
+            "https://fudosandb.jp/v1/area-profiles",
+            params={"page": 1, "per_page": 1},
+            headers={"X-API-Key": key, "User-Agent": "StockAnalyzer/3.0"},
+            timeout=PROBE_TIMEOUT,
+        )
+        state = classify_http_generic(resp.status_code)
         if resp.status_code == 429:
             return _entry(STATE_LIMITED, "HTTP 429（レート制限・失効ではない）")
         return _entry(state, _http_msg(state, resp.status_code))
@@ -432,6 +441,7 @@ def run_key_health(cfg) -> dict:
     戻り値: {"summary": str, "entries": {key_name: {...}},
              "counts": {...}, "ledger_status": "success"|"warn"}
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     entries: dict = {}
 
     def _run(name: str, probe_fn, key_value) -> None:
@@ -447,7 +457,13 @@ def run_key_health(cfg) -> dict:
     g = lambda k: getattr(cfg, k, "") or ""
 
     _run("EDINET_API_KEY",       _probe_edinet,   g("EDINET_API_KEY"))
-    _run("EDINETDB_API_KEY",     _probe_edinetdb, g("EDINETDB_API_KEY"))
+    if getattr(cfg, "ENABLE_EDINETDB_INGEST", False):
+        _run("EDINETDB_API_KEY", _probe_edinetdb, g("EDINETDB_API_KEY"))
+    else:
+        entries["EDINETDB_API_KEY"] = _entry(
+            STATE_SKIPPED, "dormant（日次分析はBQ既存データを参照）"
+        )
+    _run("FUDOSAN_API_KEY",      _probe_fudosan,  g("FUDOSAN_API_KEY"))
     _run("ESTAT_API_KEY",        _probe_estat,    g("ESTAT_API_KEY"))
     _run("POLICY_FRED_API_KEY",  _probe_fred,     g("POLICY_FRED_API_KEY"))
     _run("DEEPL_API_KEY",        _probe_deepl,    g("DEEPL_API_KEY"))

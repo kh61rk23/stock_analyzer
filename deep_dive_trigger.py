@@ -57,6 +57,14 @@ from typing import Optional
 # BLOCK 1: 定数フォールバック
 # ==============================================================
 
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B6_DEEP_DIVE_TRIGGER_DEFAULT_CONFIDENCE_DROP': '_DEFAULT_CONFIDENCE_DROP',
+    'B6_DEEP_DIVE_TRIGGER_DEFAULT_RANK_JUMP': '_DEFAULT_RANK_JUMP',
+    'B6_DEEP_DIVE_TRIGGER_DEFAULT_HISTORY_TTL': '_DEFAULT_HISTORY_TTL',
+}
+
 _DEFAULT_CONFIDENCE_DROP = 15.0   # confidence 低下閾値（pt）
 _DEFAULT_RANK_JUMP       = 10     # screener 順位急変閾値（位）
 _DEFAULT_HISTORY_TTL     = 30     # deep_dive_history.json TTL（日）
@@ -382,6 +390,7 @@ def run_deep_dive_trigger(cfg, results: dict) -> dict:
           "timestamp":          str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  🔭 [deep_dive] トリガー検出 開始...")
 
     conf_threshold = _conf_drop_threshold(cfg)

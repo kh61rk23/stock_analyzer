@@ -74,6 +74,21 @@ from typing import Optional
 # Wave 3 - Pearl Ph3: D2（Smart Money）を追加し5次元ウェイトを再調整
 # $pearl\_score = D1 \times 0.25 + D2 \times 0.15 + D3 \times 0.30$
 #              $+ D4 \times 0.15 + D5 \times 0.15$
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'PSC_DEFAULT_WEIGHTS': '_DEFAULT_WEIGHTS',
+    'PSC_M_SCORE_PENALTY_THRESHOLD': '_M_SCORE_PENALTY_THRESHOLD',
+    'PSC_M_SCORE_MEDIUM_THRESHOLD': '_M_SCORE_MEDIUM_THRESHOLD',
+    'PSC_M_SCORE_STRONG_MULTIPLIER': '_M_SCORE_STRONG_MULTIPLIER',
+    'PSC_M_SCORE_MEDIUM_MULTIPLIER': '_M_SCORE_MEDIUM_MULTIPLIER',
+    'PSC_DEFAULT_TIER_BONUS': '_DEFAULT_TIER_BONUS',
+    'B6_PEARL_SCORE_CALCULATOR_D2_CONFIDENCE_DISCOUNT_US': '_D2_CONFIDENCE_DISCOUNT_US',
+    'B6_PEARL_SCORE_CALCULATOR_MARKET_RETURN_JP': '_MARKET_RETURN_JP',
+    'B6_PEARL_SCORE_CALCULATOR_MARKET_RETURN_US': '_MARKET_RETURN_US',
+}
+
 _DEFAULT_WEIGHTS = {
     "D1": 0.25,   # 方向性（Ph2: 0.30 → Ph3: 0.25）
     "D2": 0.15,   # Smart Money（Ph3新設）
@@ -94,13 +109,6 @@ _M_SCORE_MEDIUM_MULTIPLIER  = 0.75    # D3スコアを0.75倍
 # D5 計算用: 市場リターン前提値（年率）
 _MARKET_RETURN_JP = 0.10   # TOPIX 想定年率リターン
 _MARKET_RETURN_US = 0.15   # S&P500 想定年率リターン
-
-_DEFAULT_TIER_THRESHOLDS = {
-    "SS": 80.0,
-    "S":  70.0,
-    "A":  60.0,
-    "B":  50.0,
-}
 
 _DEFAULT_TIER_BONUS = {
     "SS": 15.0,
@@ -487,9 +495,19 @@ def _calc_d3_earnings_quality(data: dict, cfg=None) -> tuple[float, list[str], f
         # カタリストデータを D3 に反映する。
         # $D3_{final} = D3_{base} + bonus_{segment} + bonus_{catalyst} + bonus_{midterm}$
 
+        # 2026-07-25: Wave7 の D3統合フラグ3本を配線。
+        # 実装（_calc_edinet_segment_bonus / _calc_catalyst_bonus /
+        # _calc_midterm_bonus）はここに揃っていたのに、config の
+        # ENABLE_D3_* が誰にも読まれず「常時適用」になっていた。
+        # フラグ値は現在の挙動（＝常時適用）に合わせて True へ揃えてあるため、
+        # 本配線でスコアは変わらない。切りたい時に初めて効くようになる。
+        _d3_seg_on = getattr(cfg, "ENABLE_D3_EDINET_SEGMENT", True)
+        _d3_cat_on = getattr(cfg, "ENABLE_D3_CATALYST_INTEGRATION", True)
+        _d3_mid_on = getattr(cfg, "ENABLE_D3_MIDTERM_INTEGRATION", True)
+
         # (1) EDINETセグメント文脈ボーナス
         try:
-            segment_bonus = _calc_edinet_segment_bonus(data)
+            segment_bonus = _calc_edinet_segment_bonus(data, cfg) if _d3_seg_on else 0.0
             if segment_bonus > 0:
                 score += segment_bonus
                 flags.append(
@@ -505,7 +523,7 @@ def _calc_d3_earnings_quality(data: dict, cfg=None) -> tuple[float, list[str], f
 
         # (2) カタリストフラグ連携ボーナス
         try:
-            catalyst_bonus = _calc_catalyst_bonus(data, cfg)
+            catalyst_bonus = _calc_catalyst_bonus(data, cfg) if _d3_cat_on else 0.0
             if catalyst_bonus > 0:
                 score += catalyst_bonus
                 flags.append(f"カタリスト連携+{catalyst_bonus:.1f}pt✅")
@@ -514,7 +532,7 @@ def _calc_d3_earnings_quality(data: dict, cfg=None) -> tuple[float, list[str], f
 
         # (3) 中計達成率連携ボーナス
         try:
-            midterm_bonus = _calc_midterm_bonus(data, cfg)
+            midterm_bonus = _calc_midterm_bonus(data, cfg) if _d3_mid_on else 0.0
             if midterm_bonus > 0:
                 score += midterm_bonus
                 flags.append(f"中計達成連携+{midterm_bonus:.1f}pt✅")
@@ -533,7 +551,7 @@ def _calc_d3_earnings_quality(data: dict, cfg=None) -> tuple[float, list[str], f
 # BLOCK 2-B: D3補助関数（Wave 7 - EDINETセグメント統合）
 # ==============================================================
 
-def _calc_edinet_segment_bonus(data: dict) -> float:
+def _calc_edinet_segment_bonus(data: dict, cfg=None) -> float:
     """
     data に含まれる EDINET セグメントテキストから
     収益性キーワードを検出し、D3 への加算ボーナスを返す。
@@ -563,7 +581,9 @@ def _calc_edinet_segment_bonus(data: dict) -> float:
         )
         raw = positive_score - negative_score
         return round(
-            min(_D3_EDINET_SEGMENT_BONUS_MAX, max(-10.0, raw)), 2
+            min(float(getattr(cfg, "D3_EDINET_SEGMENT_BONUS_MAX",
+                              _D3_EDINET_SEGMENT_BONUS_MAX)),
+                max(-10.0, raw)), 2
         )
     except Exception:
         return 0.0
@@ -607,8 +627,10 @@ def _calc_catalyst_bonus(data: dict, cfg=None) -> float:
                 catalyst_score = 0.0
 
         cat = float(catalyst_score or 0.0)
-        bonus = (cat / 10.0) * _D3_CATALYST_BONUS_MAX
-        return round(min(_D3_CATALYST_BONUS_MAX, max(0.0, bonus)), 2)
+        _cat_max = float(getattr(cfg, "D3_CATALYST_BONUS_MAX",
+                                 _D3_CATALYST_BONUS_MAX))
+        bonus = (cat / 10.0) * _cat_max
+        return round(min(_cat_max, max(0.0, bonus)), 2)
     except Exception:
         return 0.0
 
@@ -652,7 +674,9 @@ def _calc_midterm_bonus(data: dict, cfg=None) -> float:
 
         score = float(midterm_score or 50.0)
         # $base = (score/100 - 0.5) \\times 2 \\times max$
-        base_bonus = ((score / 100.0) - 0.5) * 2.0 * _D3_MIDTERM_BONUS_MAX
+        _mid_max = float(getattr(cfg, "D3_MIDTERM_BONUS_MAX",
+                                 _D3_MIDTERM_BONUS_MAX))
+        base_bonus = ((score / 100.0) - 0.5) * 2.0 * _mid_max
 
         # trajectory 補正
         traj_adj = 0.0
@@ -665,7 +689,7 @@ def _calc_midterm_bonus(data: dict, cfg=None) -> float:
 
         total = base_bonus + traj_adj
         return round(
-            min(_D3_MIDTERM_BONUS_MAX + 3.0, max(-(_D3_MIDTERM_BONUS_MAX + 5.0), total)),
+            min(_mid_max + 3.0, max(-(_mid_max + 5.0), total)),
             2,
         )
     except Exception:
@@ -1300,6 +1324,7 @@ def calc_pearl_score(
           "m_score_proxy": float,        # M-Score proxy値（参考）
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     try:
         if not getattr(cfg, "ENABLE_PEARL_SCORE", True):
             return _zero_result()
@@ -1339,7 +1364,12 @@ def calc_pearl_score(
         # $latent\\_bonus = (latent\\_score / 100) \\times LATENT\\_PEARL\\_PROMOTION\\_BONUS\\_MAX$
         try:
             _ticker = ticker or data.get("ticker", data.get("Symbol", ""))
-            if _ticker and cfg is not None:
+            # 2026-07-25: ENABLE_LATENT_PEARL_BONUS を配線（D3三種と同じ理由）。
+            # 上限値も config.LATENT_PEARL_PROMOTION_BONUS_MAX を正本にする。
+            # 従来はモジュール定数 _LATENT_PEARL_PROMOTION_BONUS_MAX が固定で、
+            # config 側の同名定数が誰にも読まれていなかった（SSOT違反）。
+            if (_ticker and cfg is not None
+                    and getattr(cfg, "ENABLE_LATENT_PEARL_BONUS", True)):
                 import json as _json
                 from pathlib import Path as _Path
                 lp_path = _Path(getattr(cfg, "CACHE_DIR", "stock_data/cache")) / "latent_pearl_cache.json"
@@ -1348,9 +1378,10 @@ def calc_pearl_score(
                     lp_entry = lp_data.get("latent_pearls", {}).get(_ticker, {})
                     if lp_entry.get("promotion_eligible"):
                         lp_score    = float(lp_entry.get("latent_pearl_score", 0.0))
-                        latent_bonus = round(
-                            (lp_score / 100.0) * _LATENT_PEARL_PROMOTION_BONUS_MAX, 2
-                        )
+                        _lp_max = float(getattr(
+                            cfg, "LATENT_PEARL_PROMOTION_BONUS_MAX",
+                            _LATENT_PEARL_PROMOTION_BONUS_MAX))
+                        latent_bonus = round((lp_score / 100.0) * _lp_max, 2)
                         pearl_score = min(100.0, pearl_score + latent_bonus)
                         # all_flags は後段で定義されるため、
                         # Wave 7ボーナスフラグは d3_flags に一時格納する

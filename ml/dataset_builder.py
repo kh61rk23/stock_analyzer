@@ -110,7 +110,7 @@ def _size_tier_lookup(cfg, results: dict) -> dict:
 
 
 def forward_excess_returns(sorted_dates: list, price_by_date: dict,
-                           bench_by_date: dict, horizon: int) -> dict:
+                           bench_by_date: dict, horizon: int = None) -> dict:
     """
     目的変数 = H営業日先リターン − ベンチ同期間リターン（超過リターン）。
 
@@ -119,8 +119,14 @@ def forward_excess_returns(sorted_dates: list, price_by_date: dict,
 
     sorted_dates: 昇順の取引日リスト（銘柄・ベンチ共通の営業日軸）
     price_by_date / bench_by_date: {date: close}
+    horizon: 省略時は config.ML_META_TARGET_HORIZON_D（既定20）
+             ※2026-07-25 バッチ6: 従来は呼び出し側の直書きのみで、
+               config 側の定数は誰にも読まれていなかった
     Returns: {date: 超過リターン}（算出できた日付のみ）
     """
+    if horizon is None:
+        from ml.purged_cv import _cfg_default
+        horizon = _cfg_default("ML_META_TARGET_HORIZON_D", 20)
     out = {}
     n = len(sorted_dates)
     for i in range(n):

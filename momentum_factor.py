@@ -38,6 +38,13 @@ from typing import Optional
 # 定数（チューニング用）
 # ==============================================================
 
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B4_MOMENTUM_FACTOR_LOOKBACK_DAYS': 'LOOKBACK_DAYS',
+    'B6_MOMENTUM_FACTOR_MIN_DATA_POINTS': 'MIN_DATA_POINTS',
+}
+
 LOOKBACK_DAYS   = 28     # 4週分（Fama-French12Mの業種版として短期化）
 MIN_DATA_POINTS = 5      # 最低データ点数（これ未満はモメンタム計算スキップ）
 SCORE_CEILING   = 100.0  # composite_score 上限
@@ -524,6 +531,8 @@ def run_momentum_factor(
           "applied":    モメンタム調整済みの業種コードリスト,
         }
     """
+    import config as cfg
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     history_path = Path(data_dir) / "score_history.json"
     history      = load_score_history(history_path)
 

@@ -181,6 +181,12 @@ def main():
     except Exception:
         cfg = None
 
+    # 2026-07-25: 定期実行（週次）に載せたのに合わせて有効フラグを配線。
+    # --dry-run は検証用途なのでフラグに関わらず通す。
+    if not dry and not getattr(cfg, "ENABLE_TAXONOMY_LOADER", True):
+        print("⏩ taxonomy_loader: スキップ（ENABLE_TAXONOMY_LOADER=False）")
+        return
+
     batches = load_seed_batches()
     nodes, skipped = select_approved_nodes(batches)
     print(f"📦 seedバッチ: {len(batches)}件 / 承認済みノード: {len(nodes)}件")

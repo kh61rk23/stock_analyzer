@@ -85,6 +85,17 @@ from typing import Optional
 HISTORY_RETAIN_DAYS = 90    # screener_history.json 保持日数
 RETURN_FETCH_DELAY  = 0.25  # yfinance レート制限対策（秒）
 MIN_CANDIDATES      = 3     # 追跡対象の最低銘柄数（少なすぎる場合はスキップ）
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'PTR_SCORE_CORR_MIN_N': 'SCORE_CORR_MIN_N',
+    'B4_PERFORMANCE_TRACKER_HISTORY_RETAIN_DAYS': 'HISTORY_RETAIN_DAYS',
+    'B4_PERFORMANCE_TRACKER_DRIFT_LOG_RETAIN_DAYS': 'DRIFT_LOG_RETAIN_DAYS',
+    'B5_PERFORMANCE_TRACKER_RETURN_FETCH_DELAY': 'RETURN_FETCH_DELAY',
+    'B6_PERFORMANCE_TRACKER_MIN_CANDIDATES': 'MIN_CANDIDATES',
+}
+
 SCORE_CORR_MIN_N    = 5     # 相関係数を計算する最低データ点数
 
 
@@ -113,6 +124,49 @@ def load_screener_history(cfg) -> dict:
     except Exception as e:
         print(f"  ⚠️  screener_history 読み込み失敗: {e}")
         return {}
+
+
+def normalize_history_entry(entry) -> list:
+    """screener_history の1日分を候補リストへ正規化する（2026-07-25 追加）。
+
+    正本の形式は append_screener_history が書く {"YYYY-MM-DD": [候補, ...]}
+    ＝日付の値は「リスト」。
+    ところが読み手の一部が {"candidates": [...]} という辞書形式を前提に
+    entry.get("candidates") を呼んでおり、リストに .get は無いため
+    AttributeError → 呼び出し側の except で握り潰され、常に候補ゼロに
+    見えていた（投資部のパケット①・審議キュー・審議対象選定が全滅）。
+
+    どちらの形でも読めるようにして、書き手の形式変更にも耐えるようにする。
+
+    pass_filters について: append_screener_history は「通過した候補だけ」を
+    保存し、pass_filters キー自体は残さない。したがって既定は「通す」。
+    キーが明示的に False の場合（旧形式・テスト用データ）のみ落とす。
+    ここを「pass_filters が True のものだけ通す」にすると、実データには
+    キーが無いため全件が消える（実際にそうなっていた）。
+    """
+    if isinstance(entry, list):
+        cands = entry
+    elif isinstance(entry, dict):
+        cands = entry.get("candidates", [])
+    else:
+        return []
+    if not isinstance(cands, list):
+        return []
+    return [c for c in cands
+            if isinstance(c, dict) and c.get("pass_filters", True) is not False]
+
+
+def latest_candidates(history: dict) -> tuple:
+    """履歴から「候補が入っている最新日」を探す。Returns: (日付, 候補list)
+
+    直近日が空（休場・スクリーナー不発）でも遡って拾う。
+    見つからなければ ("", []) を返す。
+    """
+    for d in sorted((history or {}).keys(), reverse=True):
+        cands = normalize_history_entry(history[d])
+        if cands:
+            return d, cands
+    return "", []
 
 
 def append_screener_history(cfg, screener_result: dict) -> None:
@@ -765,6 +819,7 @@ def run_performance_tracker(cfg, reference_date: Optional[date] = None) -> dict:
     Returns:
         パフォーマンス集計結果辞書（上記スキーマ参照）
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     today = reference_date or date.today()
     print(f"\n  📊 パフォーマンストラッカー開始（基準日: {today}）...")
 

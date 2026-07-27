@@ -67,9 +67,21 @@ from typing import Optional
 _DECAY_STATE_FILENAME      = "size_decay_state.json"
 _NANO_QUEUE_FILENAME       = "nano_evaluation_queue.json"
 _COMPOSITE_SCORES_FILENAME = "size_composite_scores.json"
-_DEFAULT_TTL_DAYS          = 7
 
 # ── Size Tier 閾値（Wave 2） ──
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'SDM_DEFAULT_THRESHOLDS_JP': '_DEFAULT_THRESHOLDS_JP',
+    'SDM_DEFAULT_THRESHOLDS_US': '_DEFAULT_THRESHOLDS_US',
+    'SDM_TIER_COMPOSITE_WEIGHTS': '_TIER_COMPOSITE_WEIGHTS',
+    'SDM_SECTOR_WEIGHT_MULTIPLIER': '_SECTOR_WEIGHT_MULTIPLIER',
+    'SDM_EFFECTIVE_SIGNAL_MIN_THRESHOLD': '_EFFECTIVE_SIGNAL_MIN_THRESHOLD',
+    'SDM_NANO_PRIORITY_WEIGHTS': '_NANO_PRIORITY_WEIGHTS',
+    'B6_SIZE_DECAY_MANAGER_DEFAULT_NANO_MAX_PER_DAY': '_DEFAULT_NANO_MAX_PER_DAY',
+}
+
 _DEFAULT_THRESHOLDS_JP: dict[str, float] = {
     "Large":  10_000.0,
     "Mid":     1_000.0,
@@ -448,6 +460,7 @@ def resolve_size_tier(
 
 def run_size_decay_manager(cfg=None, force_refresh: bool = False) -> dict:
     """日次で実行される減衰・キュー更新のエントリポイント"""
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  📉 規模別シグナル減衰管理（Wave 2 & 7 統合版）実行中...")
 
     if not force_refresh:

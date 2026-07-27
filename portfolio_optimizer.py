@@ -56,9 +56,19 @@ from datetime import datetime, timedelta, date
 from pathlib import Path
 from typing import Optional
 
-LOOKBACK_DAYS    = 252    # 1年分の日次リターンを使用
 N_SIMULATIONS    = 2000   # モンテカルロ法のシミュレーション数
 RISK_FREE_RATE   = 0.005  # 無リスク金利（年率0.5%）
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'PO_REBALANCE_THRESH': 'REBALANCE_THRESH',
+    'B4_PORTFOLIO_OPTIMIZER_CACHE_HOURS': 'CACHE_HOURS',
+    'B5_PORTFOLIO_OPTIMIZER_FETCH_DELAY': 'FETCH_DELAY',
+    'B6_PORTFOLIO_OPTIMIZER_N_SIMULATIONS': 'N_SIMULATIONS',
+    'B6_PORTFOLIO_OPTIMIZER_RISK_FREE_RATE': 'RISK_FREE_RATE',
+}
+
 REBALANCE_THRESH = 0.05   # リバランシング閾値（±5%）
 FETCH_DELAY      = 0.3
 CACHE_FILENAME   = "portfolio_optimizer_cache.json"
@@ -109,24 +119,59 @@ def load_portfolio(cfg) -> list:
 # BLOCK 2: 価格・リターンデータ取得
 # ==============================================================
 
-def _fetch_daily_returns(ticker: str) -> Optional[list]:
+def _calendar_days_for_trading_days(trading_days: int) -> int:
+    """取引日数を、週末と祝日の余裕を含む暦日取得幅へ変換する。"""
+    return math.ceil(trading_days * 7 / 5) + 14
+
+
+def _validate_return_window(lookback_days: int, min_observations: int) -> None:
+    if lookback_days <= 0 or min_observations <= 0:
+        raise ValueError("portfolio return window values must be positive")
+    if lookback_days < min_observations:
+        raise ValueError(
+            "PORTFOLIO_LOOKBACK_DAYS must be >= PORTFOLIO_MIN_RETURN_OBSERVATIONS"
+        )
+
+
+def _fetch_daily_returns(
+    ticker: str,
+    lookback_days: int = 252,
+    min_observations: int = 60,
+    now: Optional[datetime] = None,
+) -> Optional[list]:
     """
-    直近LOOKBACK_DAYS分の日次リターン（%）を取得する。
+    指定取引日数分の日次リターンを取得する。
+
+    API取得は週末・祝日を考慮した暦日幅で行い、取得後に直近
+    ``lookback_days + 1`` 終値へ切り詰める。
     """
+    _validate_return_window(lookback_days, min_observations)
     try:
         import yfinance as yf
-        hist = yf.Ticker(ticker).history(period="1y", auto_adjust=True)
-        if hist is None or len(hist) < 60:
+        current_dt = now or datetime.now()
+        calendar_days = _calendar_days_for_trading_days(lookback_days)
+        start = (current_dt - timedelta(days=calendar_days)).strftime("%Y-%m-%d")
+        end = (current_dt + timedelta(days=1)).strftime("%Y-%m-%d")
+        hist = yf.Ticker(ticker).history(
+            start=start, end=end, auto_adjust=True
+        )
+        if hist is None or len(hist) < min_observations + 1:
             return None
-        closes = hist["Close"].dropna().tolist()
+        closes = hist["Close"].dropna().tolist()[-(lookback_days + 1):]
         rets   = [(closes[i] - closes[i-1]) / closes[i-1]
                   for i in range(1, len(closes))]
+        if len(rets) < min_observations:
+            return None
         return rets
     except Exception:
         return None
 
 
-def fetch_portfolio_data(holdings: list) -> dict:
+def fetch_portfolio_data(
+    holdings: list,
+    lookback_days: int = 252,
+    min_observations: int = 60,
+) -> dict:
     """
     全保有銘柄の価格・リターン・現在時価を一括取得する。
 
@@ -152,7 +197,9 @@ def fetch_portfolio_data(holdings: list) -> dict:
             t     = yf.Ticker(ticker)
             info  = t.info or {}
             price = info.get("regularMarketPrice") or info.get("currentPrice") or 0
-            rets  = _fetch_daily_returns(ticker)
+            rets  = _fetch_daily_returns(
+                ticker, lookback_days, min_observations
+            )
             if not rets or not price:
                 continue
             mean_daily = sum(rets) / len(rets)
@@ -562,12 +609,22 @@ stock_analyzer — 自動生成 {datetime.now().strftime('%Y-%m-%d %H:%M')}
 def _cache_path(cfg) -> Path:
     return Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / CACHE_FILENAME
 
-def _load_cache(cfg) -> Optional[dict]:
+def _load_cache(
+    cfg,
+    lookback_days: Optional[int] = None,
+    min_observations: Optional[int] = None,
+) -> Optional[dict]:
     try:
         p = _cache_path(cfg)
         if not p.exists():
             return None
         data = json.loads(p.read_text(encoding="utf-8"))
+        if (lookback_days is not None
+                and int(data.get("lookback_days", -1)) != lookback_days):
+            return None
+        if (min_observations is not None
+                and int(data.get("min_return_observations", -1)) != min_observations):
+            return None
         if datetime.now() - datetime.fromisoformat(data.get("cached_at", "2000-01-01")) \
                 < timedelta(hours=CACHE_HOURS):
             return data
@@ -604,9 +661,16 @@ def run_portfolio_optimizer(
     Returns:
         portfolio optimizer result dict
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  💼 ポートフォリオ最適化開始...")
 
-    cached = _load_cache(cfg)
+    lookback_days = int(getattr(cfg, "PORTFOLIO_LOOKBACK_DAYS", 252))
+    min_observations = int(getattr(
+        cfg, "PORTFOLIO_MIN_RETURN_OBSERVATIONS", 60
+    ))
+    _validate_return_window(lookback_days, min_observations)
+
+    cached = _load_cache(cfg, lookback_days, min_observations)
     if cached and not force_monthly_mail:
         print(f"    ✅ キャッシュ使用（総時価: {cached.get('current',{}).get('total_value_jpy',0):,.0f}円）")
         return cached
@@ -618,7 +682,9 @@ def run_portfolio_optimizer(
         return {"skipped": True, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
     print(f"    対象: {len(holdings)}銘柄 / 価格・リターン取得中...")
-    price_data = fetch_portfolio_data(holdings)
+    price_data = fetch_portfolio_data(
+        holdings, lookback_days, min_observations
+    )
 
     valid = [h for h in holdings if h["ticker"] in price_data]
     if len(valid) < 2:
@@ -661,6 +727,8 @@ def run_portfolio_optimizer(
         "min_variance": opt.get("min_variance"),
         "equal_weight": opt.get("equal_weight"),
         "rebalance":    rebalance,
+        "lookback_days": lookback_days,
+        "min_return_observations": min_observations,
         "timestamp":    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
     result["report_md"]   = format_optimizer_md(result)

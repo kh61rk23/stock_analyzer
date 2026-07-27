@@ -91,6 +91,60 @@ def apply_casino_constraint(weights: dict, total_assets: float,
     return alloc
 
 
+def calc_profit_factor(rets: list, months: int = 6) -> float | None:
+    """直近 months ヶ月の月次リターンから Profit Factor を算出する。
+
+    $PF = \\frac{\\sum |利益月|}{\\sum |損失月|}$
+
+    2026-07-25 バッチ6で実装。従来 _load_paper_returns() が PF を None 固定で
+    返しており、cull_check() が常に False → **淘汰判定が一度も働かなかった**。
+    config.CULL_MONTHS（観測月数）もそのため未参照だった。
+
+    Returns:
+        PF / 損失月が無く利益がある場合は None（＝淘汰対象外・判定不要）
+        データ不足も None
+    """
+    if not rets:
+        return None
+    window = rets[-months:] if months and months > 0 else list(rets)
+    if not window:
+        return None
+    gains = sum(r for r in window if r > 0)
+    losses = -sum(r for r in window if r < 0)
+    if losses <= 0:
+        # 損失月なし。負けていないので淘汰判定にかける必要がない。
+        return None
+    return round(gains / losses, 4)
+
+
+def bootstrap_p_value(rets: list, months: int = 6,
+                      n_iter: int = 1000, seed: int = 42) -> float | None:
+    """月次リターンの平均が 0 以下である確率をブートストラップで推定する。
+
+    帰無仮説「平均リターン ≤ 0」に対する p 値の近似。
+    小さいほど「勝ちが本物」、大きいほど「偶然の勝ち／実際は負け」。
+
+    2026-07-25 バッチ6で実装（従来は None 固定）。
+    再現性のため seed 固定。cull_check が p > CULL_P_TH で淘汰する。
+
+    Returns: 0.0〜1.0 / データ不足は None
+    """
+    import random
+    if not rets:
+        return None
+    window = rets[-months:] if months and months > 0 else list(rets)
+    n = len(window)
+    if n < 2:
+        return None
+    rng = random.Random(seed)
+    worse = 0
+    for _ in range(n_iter):
+        sample = [window[rng.randrange(n)] for _ in range(n)]
+        if (sum(sample) / n) <= 0:
+            worse += 1
+    return round(worse / n_iter, 4)
+
+
 def cull_check(pf: float | None, bootstrap_p: float | None,
                pf_th: float = 1.0, p_th: float = 0.5) -> bool:
     """淘汰判定: PF<1.0 かつ bootstrap p>0.5 → True（retired提案）。"""
@@ -161,9 +215,12 @@ def _load_paper_returns(cfg) -> tuple[dict, dict, dict]:
                 if eqs[i-1]]
         if rets:
             returns[sid] = rets
-        # PF/p は簡易（win/loss比・未算出は None）
-        pf[sid] = None
-        pval[sid] = None
+        # 2026-07-25 バッチ6: PF / bootstrap p を実際に算出する。
+        # 従来は None 固定で cull_check() が常に False を返し、
+        # 淘汰判定（S11の中核機能）が一度も働いていなかった。
+        _months = int(getattr(cfg, "CULL_MONTHS", 6))
+        pf[sid] = calc_profit_factor(rets, _months)
+        pval[sid] = bootstrap_p_value(rets, _months)
     return returns, pf, pval
 
 
@@ -257,7 +314,8 @@ def main(argv: list[str] | None = None):
     budget = _casino_budget(cfg, total)
     plan = build_allocation(returns, pf, pval, total, budget, cfg)
     md = build_report(plan, yyyymm)
-    out = REPO / "insights" / f"allocation_proposal_{yyyymm}.md"
+    insight_dir = Path(getattr(cfg, "INSIGHT_DIR", REPO / "stock_data" / "insights"))
+    out = insight_dir / f"allocation_proposal_{yyyymm}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(md, encoding="utf-8")
     print(f"✅ 資金配分提案出力: {out}（{plan['reason']}）")

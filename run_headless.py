@@ -46,6 +46,7 @@ def apply_env_overrides(cfg):
         "ALERT_LINE_USER_ID":         "ALERT_LINE_USER_ID",
         "EDINET_API_KEY":             "EDINET_API_KEY",
         "EDINETDB_API_KEY":           "EDINETDB_API_KEY",
+        "FUDOSAN_API_KEY":            "FUDOSAN_API_KEY",
         "POLICY_FRED_API_KEY":        "POLICY_FRED_API_KEY",
         "ANTHROPIC_API_KEY":          "ANTHROPIC_API_KEY",
         "SEC_USER_AGENT":             "SEC_USER_AGENT",

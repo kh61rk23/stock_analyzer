@@ -28,6 +28,13 @@ REPO = Path(__file__).resolve().parent
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B4_SIGNAL_CULLING_REPORT_FWD_DAYS': 'FWD_DAYS',
+    'B6_SIGNAL_CULLING_REPORT_T_PROMOTE': 'T_PROMOTE',
+}
+
 FWD_DAYS = 20          # 先リターンの営業日数（ML_TARGET_HORIZON_D と同値）
 N_MIN = 60             # これ未満は「判定不能」
 T_PROMOTE = 2.0        # 重み+20%提案
@@ -203,14 +210,22 @@ def main():
         import config as cfg
     except Exception:
         cfg = None
+    import config as cfg
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     try:
         from signal_aggregator import DEFAULT_WEIGHTS as weights
     except Exception:
         weights = {}
 
     panel = load_panel(cfg)
-    yyyymm = date.today().strftime("%Y%m")
-    print(f"📊 カテゴリパネル: {len(panel)}日分 / カテゴリ: {len(weights)}")
+    # 2026-07-25 B-5: レポート月を引数で指定できるようにした。
+    # monthly_runner が「前月」を渡し、monthly_strategy_review が同じ月の
+    # signal_culling_<yyyymm>.md を読む。today 固定のままだと月初実行時に
+    # 当月ラベルになり、集約側の参照とズレて常に「レポートなし」になっていた。
+    _args = [a for a in sys.argv[1:] if not a.startswith("-")]
+    yyyymm = _args[0] if _args else date.today().strftime("%Y%m")
+    print(f"📊 カテゴリパネル: {len(panel)}日分 / カテゴリ: {len(weights)}"
+          f" / 対象月: {yyyymm}")
 
     if "--dry-run" in sys.argv:
         print("（--dry-run のためここで終了）")
@@ -225,7 +240,7 @@ def main():
     judgments = build_judgments(panel, fwd, weights)
     md = render_report(judgments, weights, yyyymm, note)
 
-    out_dir = REPO / "insights"
+    out_dir = Path(getattr(cfg, "INSIGHT_DIR", REPO / "stock_data" / "insights"))
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f"signal_culling_{yyyymm}.md"
     out.write_text(md, encoding="utf-8")

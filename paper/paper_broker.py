@@ -177,6 +177,20 @@ def run_paper_trading(cfg, results: dict, price_getter=None,
     else:
         adapters = adapters_override
 
+    # ── 2026-07-25: playbook 戦略の自動編入 ────────────────────
+    # get_all_adapters() は playbooks/*.yaml（status=paper かつ side=BUY）を
+    # adapter として登録するが、PAPER_STRATEGIES に id が無いと下のループに
+    # 入らず、登録されただけで口座が一切作られない状態だった。
+    # プレイブックは「YAMLを置けば増える」のが設計意図なので、config への
+    # 追記を都度要求せず、登録済み adapter を自動で対象に加える。
+    # 明示的に外したい場合は PAPER_INCLUDE_PLAYBOOK_STRATEGIES=False にする。
+    if (adapters_override is None
+            and getattr(cfg, "PAPER_INCLUDE_PLAYBOOK_STRATEGIES", True)):
+        builtin = set(getattr(_sa, "ADAPTERS", {}))
+        for sid in adapters:
+            if sid not in builtin and sid not in strategies:
+                strategies.append(sid)
+
     accounts = load_accounts(cfg)
     pending_all = accounts.get("_pending", {})
     summary: dict = {}

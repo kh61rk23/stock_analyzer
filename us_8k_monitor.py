@@ -9,7 +9,7 @@
 #
 # 【処理フロー】
 #   1. SEC EDGAR full-text search から前日の 8-K を取得
-#   2. CIK → ticker に変換（us_cik_map.json を再利用）
+#   2. CIK → ticker に変換（sec_client.cik_map() の共通キャッシュを利用）
 #   3. ticker が us_screener 通過候補かチェック
 #   4. Item 2.02 の場合 → earnings_surprise.py の優先キューに追加
 #   5. us_fundamental_rotator の優先再取得キューに追加
@@ -44,18 +44,25 @@
 #     "timestamp":           str,
 #   }
 #
-# 【依存】requests / config.py / us_cik_map.json（US-1が生成）
+# 【依存】sec_client.py / config.py
+# 2026-07-27是正（Wave J1 / U-1c）: SEC EDGAR への HTTP 呼び出し・User-Agent・
+# CIK 解決は sec_client.py（U-1a 新設）に一本化した。CIK→ticker の逆引きは
+# 従来 us_cik_map.json（US-1/us_fundamental_rotator.py が生成）を再利用して
+# いたが、sec_client.cik_map() の共通キャッシュに切替えたため us_8k_monitor.py
+# 単独で us_fundamental_rotator の実行順に依存しなくなった。
 # ==============================================================
 
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 from datetime import datetime, timedelta, date
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlencode
+
+import sec_client
 
 
 # ==============================================================
@@ -67,6 +74,15 @@ EDGAR_ARCHIVE_URL = "https://www.sec.gov/Archives/edgar"
 SEC_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{:010d}.json"
 
 CACHE_FILE         = "us_8k_cache.json"
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B4_US_8K_MONITOR_CACHE_VALID_HOURS': 'CACHE_VALID_HOURS',
+    'B5_US_8K_MONITOR_REQUEST_TIMEOUT': 'REQUEST_TIMEOUT',
+    'B5_US_8K_MONITOR_FETCH_DELAY': 'FETCH_DELAY',
+    'B6_US_8K_MONITOR_MAX_8K_PER_DAY': 'MAX_8K_PER_DAY',
+}
+
 CACHE_VALID_HOURS  = 20    # 当日分は1日キャッシュ
 REQUEST_TIMEOUT    = 10
 FETCH_DELAY        = 0.15  # SEC レート制限（10req/s）
@@ -104,15 +120,12 @@ ITEM_PRIORITY = {
 # 2026-07-13是正（I-4同型バグ）: SECは連絡先を含まないUser-Agentを403で拒否する。
 # 旧 "stock_analyzer/1.0 (educational use)" は拒否対象だった。
 # us_fundamental_rotator / institutional_13f_monitor と同じ SEC_USER_AGENT 規約に統一。
+# 2026-07-27是正（U-1c）: 実体は sec_client.user_agent() に一本化。
+# 引数なし呼び出し時の解決順（環境変数 → import config → 固定フォールバック）は
+# sec_client.user_agent(cfg=None) と完全に同一のため、既存の回帰テスト
+# （tests/test_sec_user_agent.py）の期待値はそのまま成立する。
 def _sec_user_agent() -> str:
-    ua = os.getenv("SEC_USER_AGENT", "")
-    if ua:
-        return ua
-    try:
-        import config as _cfg
-        return getattr(_cfg, "SEC_USER_AGENT", "") or "StockAnalyzer stockanalyzer@example.com"
-    except Exception:
-        return "StockAnalyzer stockanalyzer@example.com"
+    return sec_client.user_agent()
 
 
 def _cache_path(cfg) -> Path:
@@ -161,7 +174,6 @@ def _fetch_8k_filings(target_date: str) -> list[dict]:
         [{cik, company_name, accession_number, filing_date, doc_url}, ...]
     """
     try:
-        import requests
         params = {
             "q":          '"8-K"',
             "dateRange":  "custom",
@@ -172,16 +184,11 @@ def _fetch_8k_filings(target_date: str) -> list[dict]:
             "from":       "0",
             "size":       str(MAX_8K_PER_DAY),
         }
-        resp = requests.get(
-            EDGAR_SEARCH_URL,
-            params=params,
-            headers={"User-Agent": _sec_user_agent()},
-            timeout=REQUEST_TIMEOUT,
-        )
-        if resp.status_code != 200:
+        url  = f"{EDGAR_SEARCH_URL}?{urlencode(params)}"
+        data = sec_client.get_json(url, timeout=REQUEST_TIMEOUT)
+        if not data:
             return []
 
-        data  = resp.json()
         hits  = data.get("hits", {}).get("hits", [])
         results = []
         for hit in hits:
@@ -232,17 +239,12 @@ def _fetch_8k_items(cik: int, accession_number: str) -> list[str]:
         ["2.02", "9.01", ...] 形式の Item 番号リスト
     """
     try:
-        import requests
         acc_no_dash = accession_number.replace("-", "")
         # インデックスページを取得
         idx_url = (f"https://www.sec.gov/Archives/edgar/data/{cik}/"
                    f"{acc_no_dash}/{accession_number}-index.htm")
-        resp = requests.get(
-            idx_url,
-            headers={"User-Agent": _sec_user_agent()},
-            timeout=REQUEST_TIMEOUT,
-        )
-        if resp.status_code != 200:
+        resp = sec_client.get(idx_url, accept="text/html", timeout=REQUEST_TIMEOUT)
+        if resp is None:
             return []
 
         text = resp.text
@@ -261,14 +263,23 @@ def _fetch_8k_items(cik: int, accession_number: str) -> list[str]:
 
 def _load_cik_to_ticker_map(cfg) -> dict:
     """
-    us_cik_map.json（US-1 が生成）から {cik: ticker} の逆引きマップを作る。
+    sec_client.cik_map()（{TICKER: "0000320193"} 形式・共通キャッシュ）から
+    {cik_int: ticker} の逆引きマップを作る。
+
+    2026-07-27是正（U-1c）: 従来は us_fundamental_rotator.py が書き出す
+    us_cik_map.json（{ticker: cik_int}）を直接読んでいたため、当モジュール
+    単体では実行順序に依存していた（rotator 未実行だとスキップされる）。
+    sec_client 側の共通 CIK マップに切替えたことでこの依存が解消された。
     """
-    cik_map_path = Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / "us_cik_map.json"
-    if not cik_map_path.exists():
-        return {}
     try:
-        ticker_to_cik = json.loads(cik_map_path.read_text(encoding="utf-8"))
-        return {v: k for k, v in ticker_to_cik.items() if isinstance(v, int)}
+        ticker_to_cik = sec_client.cik_map(cfg=cfg)
+        result = {}
+        for ticker, cik_str in ticker_to_cik.items():
+            try:
+                result[int(cik_str)] = ticker
+            except (TypeError, ValueError):
+                continue
+        return result
     except Exception:
         return {}
 
@@ -378,6 +389,7 @@ def run_us_8k_monitor(cfg, results: dict = None) -> dict:
     Returns:
         上記スキーマの dict
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     if not getattr(cfg, "ENABLE_US_8K_MONITOR", True):
         return {"skipped": True}
 
@@ -407,7 +419,7 @@ def run_us_8k_monitor(cfg, results: dict = None) -> dict:
     # ── Step2: CIK→Ticker マップ読み込み ─────────────────────
     cik_to_ticker = _load_cik_to_ticker_map(cfg)
     if not cik_to_ticker:
-        print("    ⚠️  us_cik_map.json がありません → US-1（us_fundamental_rotator）を先に実行してください")
+        print("    ⚠️  SEC CIKマップが取得できません（sec_client.cik_map() が空）")
         return {"skipped": True, "reason": "cik_map not found"}
 
     # ── Step3: screener 通過銘柄セット取得 ───────────────────

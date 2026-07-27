@@ -74,6 +74,12 @@ COUNTRIES = {
 }
 
 # 直近 N 年分を取得（予測値含む）
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B6_IMF_PIPELINE_FETCH_YEARS': 'FETCH_YEARS',
+}
+
 FETCH_YEARS = 3
 
 
@@ -355,6 +361,7 @@ def run_imf_pipeline(cfg) -> dict:
           "timestamp":  str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  🌍 IMFグローバルマクロパイプライン 開始...")
     t0 = datetime.now()
 

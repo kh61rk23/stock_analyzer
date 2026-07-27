@@ -48,6 +48,8 @@ from typing import Optional
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 
+from config_sync import sync_module_constants
+
 # ==============================================================
 # BLOCK 0: 定数
 # ==============================================================
@@ -137,6 +139,16 @@ _L4_MAX_ADJ         = 25.0   # SCORE_MAX_POLICY_L4_ADJ
 
 # 上院議員チャンバーボーナス
 _SENATE_CHAMBER_BONUS = 5.0
+
+_CFG_CONST_MAP = {
+    "PSS_SENATE_COMMITTEE_MULTIPLIER": "_SENATE_COMMITTEE_MULTIPLIER",
+    "PSS_HOUSE_COMMITTEE_MULTIPLIER": "_HOUSE_COMMITTEE_MULTIPLIER",
+    "PSS_VOTE_CATEGORY_MAX_BONUS": "_VOTE_CATEGORY_MAX_BONUS",
+    "PSS_L4_SCORE_THRESHOLD": "_L4_SCORE_THRESHOLD",
+    "PSS_L4_MULTIPLIER": "_L4_MULTIPLIER",
+    "PSS_SENATE_CHAMBER_BONUS": "_SENATE_CHAMBER_BONUS",
+    'B6_POLITICIAN_SIGNAL_SCORER_L4_MAX_ADJ': '_L4_MAX_ADJ',
+}
 
 
 # ==============================================================
@@ -618,6 +630,7 @@ def run_politician_signal_scorer(
           "summary":             str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("  🏛️  [politician_signal_scorer] Ph2スコアリング実行中...")
 
     if politician_results is None:

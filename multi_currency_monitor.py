@@ -164,6 +164,13 @@ CURRENCY_RULES = {
 }
 
 CACHE_FILENAME = "multi_currency_cache.json"
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B4_MULTI_CURRENCY_MONITOR_CACHE_HOURS': 'CACHE_HOURS',
+    'B6_MULTI_CURRENCY_MONITOR_SIGNAL_DELTA': 'SIGNAL_DELTA',
+}
+
 CACHE_HOURS    = 8    # 為替は8時間キャッシュ（1日3回更新）
 SIGNAL_DELTA   = 5.0  # tailwind/headwind 1件あたりの補正点
 
@@ -423,6 +430,7 @@ def run_multi_currency(cfg) -> dict:
           "timestamp":          str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  🌍 多通貨モニタリング開始...")
 
     # キャッシュ確認

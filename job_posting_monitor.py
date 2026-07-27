@@ -127,6 +127,13 @@ _DEFAULT_HEADERS = {
     "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B5_JOB_POSTING_MONITOR_REQUEST_TIMEOUT': '_REQUEST_TIMEOUT',
+    'B6_JOB_POSTING_MONITOR_REQUEST_WAIT': '_REQUEST_WAIT',
+}
+
 _REQUEST_TIMEOUT = 15   # 秒
 _REQUEST_WAIT    = 2.0  # リクエスト間の待機秒数（サーバ負荷軽減）
 
@@ -435,6 +442,7 @@ def run_job_posting_monitor(cfg, results: dict) -> dict:
           "skipped":         bool,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     if not getattr(cfg, "ENABLE_JOB_POSTING_MONITOR", True):
         print("  ⏩ 求人票モニター: スキップ（ENABLE_JOB_POSTING_MONITOR=False）")
         return {"skipped": True, "sector_boosts": {}, "surge_detected": []}

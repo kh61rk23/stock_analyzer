@@ -30,8 +30,10 @@
 #   8-K提出タイミングを submissions から検知 → ウォッチリストに動的追加
 #   鮮度管理: 取得後30日は再取得しない（財務は四半期更新）
 #
-# 【永続化】
-#   BigQuery us.fundamentals（ローカル JSON は使用しない）
+# 【キャッシュ構造】
+#   stock_data/data/us_fundamentals_db/{ticker}.json  （銘柄ごと）
+#   stock_data/data/us_fundamentals_meta.json          （管理台帳）
+#   stock_data/data/us_cik_map.json                    （ticker→CIK変換）
 #
 # 【screener との連携】
 #   us_stock_screener.py の _fetch_ticker_data() が
@@ -41,7 +43,13 @@
 #   calc_eps_accel_score_xbrl(ticker) が XBRL EPS履歴から
 #   より高精度な earnings_accel_score を算出する。
 #
-# 【依存】requests / config.py
+# 【依存】sec_client.py / config.py
+# 2026-07-27是正（Wave J1 / U-1c）: SEC EDGAR への HTTP 呼び出し・User-Agent・
+# CIK 解決（company_tickers.json）・submissions API URL 組み立ては
+# sec_client.py（U-1a 新設）に一本化した。
+# us_cik_map.json（本ファイルが生成）は us_8k_monitor.py の依存を解消した後も
+# us_sector_bridge_enhanced.py が読み手として残っているため、書き込みは
+# 従来通り維持する（詳細は load_cik_map/save_cik_map 付近のコメント参照）。
 # 【呼出】from us_fundamental_rotator import (
 #             run_us_fundamental_rotator,
 #             lookup_us_fundamentals,
@@ -53,9 +61,11 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from pathlib import Path
 from typing import Optional
+
+import sec_client
 
 
 # ==============================================================
@@ -69,10 +79,164 @@ COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL    = f"{SEC_BASE_URL}/submissions/CIK{{:010d}}.json"
 XBRL_FACTS_URL     = f"{SEC_BASE_URL}/api/xbrl/companyfacts/CIK{{:010d}}.json"
 
+DB_DIR_NAME        = "us_fundamentals_db"
+META_FILENAME      = "us_fundamentals_meta.json"
+CIK_MAP_FILENAME   = "us_cik_map.json"
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B4_US_FUNDAMENTAL_ROTATOR_CACHE_DAYS': 'CACHE_DAYS',
+    'B5_US_FUNDAMENTAL_ROTATOR_DAILY_FETCH_LIMIT': 'DAILY_FETCH_LIMIT',
+    'B5_US_FUNDAMENTAL_ROTATOR_REQUEST_DELAY': 'REQUEST_DELAY',
+    'B5_US_FUNDAMENTAL_ROTATOR_REQUEST_TIMEOUT': 'REQUEST_TIMEOUT',
+}
+
 CACHE_DAYS         = 30    # 財務データの再取得間隔（日）
 DAILY_FETCH_LIMIT  = 20    # 1日あたりの最大取得社数
 REQUEST_DELAY      = 0.12  # SEC API のレート制限対策（10req/s上限）
 REQUEST_TIMEOUT    = 15
+
+
+# ==============================================================
+# BLOCK 10: us.fundamentals BQ export (W2, 2026-07-21)
+# ==============================================================
+
+_US_FUNDAMENTALS_BQ_COLUMNS = (
+    "f_id", "ticker", "cik", "period_end", "fiscal_period", "revenue",
+    "operating_income", "net_income", "eps_diluted", "fcf", "buyback",
+    "source", "updated_at",
+)
+
+
+def _as_number(value) -> float | None:
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _fiscal_period_from_date(period: str) -> str:
+    """SEC facts に fiscal label がない場合の表示用 calendar-quarter。"""
+    parsed = date.fromisoformat(period)
+    return f"{parsed.year}Q{((parsed.month - 1) // 3) + 1}"
+
+
+def _us_fundamentals_to_bq_rows(ticker: str, data: dict) -> list[dict]:
+    """銘柄JSONの各系列を ``(ticker, period_end)`` 単位へ平坦化する純関数。"""
+    metric_sources = {
+        "revenue": "revenue_history",
+        "operating_income": "operating_income_history",
+        "net_income": "net_income_history",
+        "eps_diluted": "eps_history",
+        "fcf": "fcf_history",
+        "buyback": "buyback_history",
+    }
+    by_period: dict[str, dict] = {}
+    for column, source_key in metric_sources.items():
+        for item in data.get(source_key, []) or []:
+            if not isinstance(item, dict):
+                continue
+            period = str(item.get("period", ""))[:10]
+            try:
+                date.fromisoformat(period)
+            except ValueError:
+                continue
+            row = by_period.setdefault(period, {})
+            row[column] = _as_number(item.get("val"))
+
+    ticker = str(ticker).upper().strip()
+    if not ticker:
+        return []
+    updated_at = data.get("fetched_at") or data.get("_saved_at")
+    if not updated_at:
+        updated_at = datetime.now(timezone.utc).isoformat()
+    cik = data.get("cik")
+    statement_period = str(data.get("statement_period") or "quarterly")
+    source = {
+        "sec_xbrl": "sec_edgar",
+        "sec_edgar_bq": "sec_edgar",
+        "yahoo_finance_fallback": "yahoo_finance",
+    }.get(str(data.get("data_source") or ""), str(data.get("data_source") or "sec_edgar"))
+    rows = []
+    for period, metrics in sorted(by_period.items()):
+        row = {
+            "f_id": f"{ticker}_{period}",
+            "ticker": ticker,
+            "cik": int(cik) if cik is not None else None,
+            "period_end": period,
+            "fiscal_period": (
+                f"{date.fromisoformat(period).year}FY"
+                if statement_period == "annual"
+                else _fiscal_period_from_date(period)
+            ),
+            "source": source,
+            "updated_at": str(updated_at),
+        }
+        row.update({column: metrics.get(column) for column in metric_sources})
+        rows.append(row)
+    return rows
+
+
+def _us_fundamentals_merge_sql(table_ref: str) -> str:
+    """JSON配列パラメータを主キーMERGEするSQL。rowsは内部生成値のみを渡す。"""
+    fields = ",\n            ".join(_US_FUNDAMENTALS_BQ_COLUMNS)
+    source_fields = ",\n            ".join((
+        "JSON_VALUE(row, '$.f_id') AS f_id",
+        "JSON_VALUE(row, '$.ticker') AS ticker",
+        "SAFE_CAST(JSON_VALUE(row, '$.cik') AS INT64) AS cik",
+        "SAFE_CAST(JSON_VALUE(row, '$.period_end') AS DATE) AS period_end",
+        "JSON_VALUE(row, '$.fiscal_period') AS fiscal_period",
+        "SAFE_CAST(JSON_VALUE(row, '$.revenue') AS FLOAT64) AS revenue",
+        "SAFE_CAST(JSON_VALUE(row, '$.operating_income') AS FLOAT64) AS operating_income",
+        "SAFE_CAST(JSON_VALUE(row, '$.net_income') AS FLOAT64) AS net_income",
+        "SAFE_CAST(JSON_VALUE(row, '$.eps_diluted') AS FLOAT64) AS eps_diluted",
+        "SAFE_CAST(JSON_VALUE(row, '$.fcf') AS FLOAT64) AS fcf",
+        "SAFE_CAST(JSON_VALUE(row, '$.buyback') AS FLOAT64) AS buyback",
+        "JSON_VALUE(row, '$.source') AS source",
+        "SAFE_CAST(JSON_VALUE(row, '$.updated_at') AS TIMESTAMP) AS updated_at",
+    ))
+    update_fields = ",\n          ".join(
+        f"{column} = S.{column}" for column in _US_FUNDAMENTALS_BQ_COLUMNS if column != "f_id"
+    )
+    values = ", ".join(f"S.{column}" for column in _US_FUNDAMENTALS_BQ_COLUMNS)
+    return f"""
+        MERGE `{table_ref}` AS T
+        USING (
+          SELECT
+            {source_fields}
+          FROM UNNEST(JSON_QUERY_ARRAY(PARSE_JSON(@rows_json))) AS row
+        ) AS S
+        ON T.ticker = S.ticker AND T.period_end = S.period_end
+        WHEN MATCHED THEN UPDATE SET
+          {update_fields}
+        WHEN NOT MATCHED THEN INSERT ({fields})
+        VALUES ({values})
+    """
+
+
+def _upsert_us_fundamentals_to_bq(rows: list[dict], table_name: str) -> bool:
+    """四半期行をCI間の永続正本へ冪等書込みする。"""
+    if not rows:
+        return True
+    try:
+        if not table_name.replace("_", "").isalnum():
+            raise ValueError("invalid US fundamentals table name")
+        from google.cloud import bigquery
+        from edinet_bq_client import EDINETBQClient
+
+        bq = EDINETBQClient()
+        table_ref = f"{bq.project}.us.{table_name}"
+        config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("rows_json", "STRING", json.dumps(rows))
+            ]
+        )
+        bq.client.query(_us_fundamentals_merge_sql(table_ref), job_config=config).result()
+        return True
+    except Exception as exc:
+        print(f"    ⚠️  us.fundamentals BQ UPSERT失敗: {type(exc).__name__}: {str(exc)[:300]}")
+        return False
 
 # 取得する XBRL 財務項目の優先順（上から順に試す）
 XBRL_FACT_MAP = {
@@ -116,52 +280,143 @@ XBRL_FACT_MAP = {
 
 
 # ==============================================================
-# BLOCK 1: BigQuery persistence (BQ-only)
+# BLOCK 1: ファイル I/O
 # ==============================================================
+
+def _db_dir(cfg) -> Path:
+    return Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / DB_DIR_NAME
+
+
+def _meta_path(cfg) -> Path:
+    return Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / META_FILENAME
+
+
+def _cik_map_path(cfg) -> Path:
+    return Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / CIK_MAP_FILENAME
+
+
 def load_meta(cfg) -> dict:
-    """Read the rotational ledger from BigQuery, returning an empty ledger on outage."""
-    try:
-        from edinet_bq_client import EDINETBQClient
-        bq = EDINETBQClient()
-        frame = bq.query_to_df(f"SELECT ticker, cik, last_fetched, fetch_count, recent_8k_dates, latest_eps FROM `{bq.project}.us.fundamentals_latest`")
-        return {str(r.ticker): {"ticker": str(r.ticker), "cik": r.cik,
-                "last_fetched": str(r.last_fetched or ""), "fetch_count": int(r.fetch_count or 0),
-                "recent_8k_dates": list(r.recent_8k_dates or []), "eps_latest": r.latest_eps}
-                for r in frame.itertuples()}
-    except Exception as exc:
-        print(f"    ⚠️ BQ US ledger read failed: {str(exc)[:80]}")
-        return {}
+    """
+    管理台帳を読み込む。
+    構造:
+      {ticker: {cik, name, last_fetched, next_due, fetch_count, priority}}
+    """
+    p = _meta_path(cfg)
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
 
 
 def save_meta(cfg, meta: dict) -> None:
-    # Metadata is included in each MERGE row by save_ticker_db().
-    return None
+    p = _meta_path(cfg)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"    ⚠️  us_fundamentals_meta.json 保存失敗: {e}")
 
 
 def load_cik_map(cfg) -> dict:
+    """ticker → CIK の変換マップを読み込む。"""
+    p = _cik_map_path(cfg)
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            pass
     return {}
 
 
 def save_cik_map(cfg, cik_map: dict) -> None:
-    return None
+    p = _cik_map_path(cfg)
+    try:
+        p.write_text(json.dumps(cik_map, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"    ⚠️  us_cik_map.json 保存失敗: {e}")
+
+
+def _ticker_path(cfg, ticker: str) -> Path:
+    """個別銘柄の財務DBパスを返す。"""
+    safe = ticker.replace("/", "_").replace(".", "_")
+    return _db_dir(cfg) / f"{safe}.json"
 
 
 def save_ticker_db(cfg, ticker: str, data: dict) -> None:
+    p = _ticker_path(cfg, ticker)
     try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        data["_saved_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"    ⚠️  {ticker}.json 保存失敗: {e}")
+
+
+def _bq_rows_to_fundamentals(rows: list[dict]) -> Optional[dict]:
+    """BQの四半期行を既存screener互換の履歴dictへ戻す。"""
+    if not rows:
+        return None
+    metric_map = {
+        "revenue": "revenue_history",
+        "operating_income": "operating_income_history",
+        "net_income": "net_income_history",
+        "eps_diluted": "eps_history",
+        "fcf": "fcf_history",
+        "buyback": "buyback_history",
+    }
+    result = {history_key: [] for history_key in metric_map.values()}
+    ordered = sorted(rows, key=lambda row: str(row.get("period_end") or ""), reverse=True)
+    for row in ordered:
+        period = str(row.get("period_end") or "")[:10]
+        if not period:
+            continue
+        for column, history_key in metric_map.items():
+            value = _as_number(row.get(column))
+            if value is not None:
+                result[history_key].append({"period": period, "val": value})
+    first = ordered[0]
+    result.update({
+        "ticker": first.get("ticker"),
+        "cik": first.get("cik"),
+        "data_source": "sec_edgar_bq",
+        "fetched_at": str(first.get("updated_at") or ""),
+        "latest_eps": result["eps_history"][0]["val"] if result["eps_history"] else None,
+        "latest_revenue": result["revenue_history"][0]["val"] if result["revenue_history"] else None,
+        "latest_net_income": result["net_income_history"][0]["val"] if result["net_income_history"] else None,
+        "latest_fcf": result["fcf_history"][0]["val"] if result["fcf_history"] else None,
+    })
+    result["eps_accel_score_xbrl"] = calc_eps_accel_score_xbrl(result["eps_history"])
+    return result
+
+
+def _lookup_us_fundamentals_bq(ticker: str, table_name: str = "fundamentals") -> Optional[dict]:
+    """ローカルJSONが無いrunnerでBQ永続行を復元する（障害時はNone）。"""
+    ticker = str(ticker or "").upper().strip()
+    if not ticker or not table_name.replace("_", "").isalnum():
+        return None
+    try:
+        from google.cloud import bigquery
         from edinet_bq_client import EDINETBQClient
+
         bq = EDINETBQClient()
-        allowed = {"ticker", "cik", "eps_history", "revenue_history", "operating_income_history",
-                   "net_income_history", "fcf_history", "buyback_history", "shares_history",
-                   "recent_8k_dates", "eps_accel_score_xbrl", "latest_eps", "latest_revenue",
-                   "latest_net_income", "latest_fcf", "data_source"}
-        row = {key: value for key, value in data.items() if key in allowed}
-        row.update({"ticker": ticker, "fetched_at": datetime.now().isoformat(),
-                    "last_fetched": date.today().isoformat()})
-        errors = bq.client.insert_rows_json(f"{bq.project}.us.fundamentals", [row])
-        if errors:
-            raise RuntimeError(errors)
-    except Exception as exc:
-        raise RuntimeError(f"BQ us.fundamentals write failed: {exc}") from exc
+        sql = f"""
+        SELECT ticker, cik, period_end, revenue, operating_income, net_income,
+               eps_diluted, fcf, buyback, updated_at
+        FROM `{bq.project}.us.{table_name}`
+        WHERE ticker = @ticker AND period_end IS NOT NULL
+        ORDER BY period_end DESC
+        """
+        config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("ticker", "STRING", ticker)
+        ])
+        rows = [dict(row.items()) for row in bq.client.query(
+            sql, job_config=config
+        ).result()]
+        return _bq_rows_to_fundamentals(rows)
+    except Exception:
+        return None
 
 
 def lookup_us_fundamentals(cfg, ticker: str) -> Optional[dict]:
@@ -174,14 +429,18 @@ def lookup_us_fundamentals(cfg, ticker: str) -> Optional[dict]:
          net_income_history, fcf_history, eps_accel_score, ...}
         | None（データなし）
     """
-    try:
-        from edinet_bq_client import EDINETBQClient
-        bq = EDINETBQClient()
-        safe = str(ticker).replace("'", "")
-        frame = bq.query_to_df(f"SELECT * FROM `{bq.project}.us.fundamentals_latest` WHERE ticker = '{safe}' LIMIT 1")
-        return frame.iloc[0].to_dict() if not frame.empty else None
-    except Exception:
-        return None
+    p = _ticker_path(cfg, ticker)
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    if (getattr(cfg, "ENABLE_US_BQ_EXPORT", True)
+            and getattr(cfg, "ENABLE_US_FUNDAMENTALS_BQ", True)):
+        return _lookup_us_fundamentals_bq(
+            ticker, getattr(cfg, "US_FUNDAMENTALS_BQ_TABLE", "fundamentals")
+        )
+    return None
 
 
 def lookup_us_fundamentals_by_path(data_dir, ticker: str) -> Optional[dict]:
@@ -193,8 +452,14 @@ def lookup_us_fundamentals_by_path(data_dir, ticker: str) -> Optional[dict]:
       常時欠落していた。_ticker_path と同じレイアウト
       （<data_dir>/us_fundamentals_db/<ticker>.json）を参照する。
     """
-    class _Cfg: pass
-    return lookup_us_fundamentals(_Cfg(), ticker)
+    try:
+        safe = ticker.replace("/", "_").replace(".", "_")
+        p = Path(data_dir) / DB_DIR_NAME / f"{safe}.json"
+        if p.exists():
+            return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return _lookup_us_fundamentals_bq(ticker)
 
 
 # ==============================================================
@@ -204,43 +469,35 @@ def lookup_us_fundamentals_by_path(data_dir, ticker: str) -> Optional[dict]:
 def _sec_user_agent(cfg) -> str:
     """
     SEC EDGAR 向け User-Agent を取得する。
-    SEC は連絡先（メールアドレス等）を含まない User-Agent を 403 で拒否するため、
-    config.py の SEC_USER_AGENT（GitHub Secrets: SEC_USER_AGENT で上書き可）を使う。
-    institutional_13f_monitor.py / sec_summarizer.py / insider_monitor.py と同じ参照方法。
+    実体は sec_client.user_agent() に委譲する（2026-07-27是正 / U-1c）。
     """
-    return getattr(cfg, "SEC_USER_AGENT", "StockAnalyzer stockanalyzer@example.com")
+    return sec_client.user_agent(cfg)
 
 
-def _fetch_company_tickers(cfg) -> dict:
+def _fetch_company_tickers(cfg, force_refresh: bool = False) -> dict:
     """
     SEC の company_tickers.json を取得して ticker→CIK のマッピングを返す。
     全上場企業のCIKを一括取得できる（約15,000社）。
+
+    2026-07-27是正（U-1c）: HTTP取得・レート制限・リトライ・ディスクキャッシュは
+    sec_client.cik_map() に委譲した（US-8k監視・インサイダー監視と共通キャッシュを
+    共有する）。force_refresh=True のときは sec_client 側のキャッシュも無視して
+    必ず SEC へ再取得する（ttl_days=0 で即時期限切れ扱いにする）。
 
     Returns:
         {ticker_upper: cik_int}
     """
     try:
-        import requests
-        resp = requests.get(
-            COMPANY_TICKERS_URL,
-            headers={"User-Agent": _sec_user_agent(cfg)},
-            timeout=REQUEST_TIMEOUT,
-        )
-        if resp.status_code != 200:
-            print(f"    ⚠️  company_tickers.json 取得失敗: HTTP {resp.status_code}")
-            return {}
-        data = resp.json()
-        # 形式: {"0": {"cik_str":"0001018724","ticker":"AMZN","title":"AMAZON.COM INC"}, ...}
-        mapping = {}
-        for v in data.values():
-            t = v.get("ticker", "").upper()
-            c = v.get("cik_str", "")
-            if t and c:
-                try:
-                    mapping[t] = int(c)
-                except ValueError:
-                    pass
-        return mapping
+        mapping = sec_client.cik_map(cfg=cfg, ttl_days=(0 if force_refresh else None))
+        result: dict = {}
+        for ticker, cik_str in mapping.items():
+            try:
+                result[ticker] = int(cik_str)
+            except (TypeError, ValueError):
+                continue
+        if not result:
+            print("    ⚠️  company_tickers.json 取得失敗")
+        return result
     except Exception as e:
         print(f"    ⚠️  company_tickers.json 取得失敗: {type(e).__name__}: {str(e)[:60]}")
         return {}
@@ -251,15 +508,24 @@ def get_or_update_cik_map(cfg, force_refresh: bool = False) -> dict:
     CIKマップを取得する。
     存在しない場合 or force_refresh=True の場合はSECから取得して保存。
 
+    ★ us_cik_map.json（本ファイルが生成）: us_sector_bridge_enhanced.py が
+    引き続き直接読み込むため、書き込みは維持する（2026-07-27 U-1c 判断。
+    詳細はファイル冒頭コメント参照）。
+
     Returns:
         {ticker_upper: cik_int}
     """
+    cik_map = load_cik_map(cfg)
+    if cik_map and not force_refresh:
+        return cik_map
+
     print("    📥 SEC CIK一覧を取得中...")
-    new_map = _fetch_company_tickers(cfg)
+    new_map = _fetch_company_tickers(cfg, force_refresh=force_refresh)
     if new_map:
-        print(f"    ✅ CIKマップ取得: {len(new_map)}社（メモリのみ）")
+        save_cik_map(cfg, new_map)
+        print(f"    ✅ CIKマップ更新: {len(new_map)}社")
         return new_map
-    return {}
+    return cik_map  # 取得失敗時はキャッシュを返す
 
 
 # ==============================================================
@@ -270,42 +536,37 @@ def _fetch_submissions(cik: int, cfg) -> Optional[dict]:
     """
     submissions/{CIK}.json を取得して最新提出情報を返す。
     8-K の提出タイミング検知に使用する。
+
+    2026-07-27是正（U-1c）: 実体は sec_client.submissions() に委譲。
     """
     try:
-        import requests
-        url  = SUBMISSIONS_URL.format(cik)
-        resp = requests.get(
-            url,
-            headers={"User-Agent": _sec_user_agent(cfg)},
-            timeout=REQUEST_TIMEOUT,
-        )
-        if resp.status_code == 200:
-            return resp.json()
-        print(f"    ⚠️  submissions取得失敗 (CIK {cik}): HTTP {resp.status_code}")
+        data = sec_client.submissions(cik, cfg=cfg)
+        if data is None:
+            print(f"    ⚠️  submissions取得失敗 (CIK {cik})")
+        return data
     except Exception as e:
         print(f"    ⚠️  submissions取得失敗 (CIK {cik}): {type(e).__name__}: {str(e)[:60]}")
-    return None
+        return None
 
 
 def _fetch_xbrl_facts(cik: int, cfg) -> Optional[dict]:
     """
     XBRL companyfacts/{CIK}.json を取得する（全財務データの塊）。
     レスポンスは大きい（数MB）ため、必要項目のみ抽出する。
+
+    2026-07-27是正（U-1c）: 実体は sec_client.get_json() に委譲。
+    レスポンスが大きい（数MB）ため sec_client の既定タイムアウト（15秒）では
+    不足するケースがあり、従来通り timeout=30 を明示して現行挙動を維持する。
     """
     try:
-        import requests
         url  = XBRL_FACTS_URL.format(cik)
-        resp = requests.get(
-            url,
-            headers={"User-Agent": _sec_user_agent(cfg)},
-            timeout=30,  # XBRL は大きいので長め
-        )
-        if resp.status_code == 200:
-            return resp.json()
-        print(f"    ⚠️  XBRL facts取得失敗 (CIK {cik}): HTTP {resp.status_code}")
+        data = sec_client.get_json(url, cfg=cfg, timeout=30)
+        if data is None:
+            print(f"    ⚠️  XBRL facts取得失敗 (CIK {cik})")
+        return data
     except Exception as e:
         print(f"    ⚠️  XBRL facts取得失敗 (CIK {cik}): {type(e).__name__}: {str(e)[:60]}")
-    return None
+        return None
 
 
 def _extract_quarterly_series(
@@ -459,6 +720,108 @@ def calc_eps_accel_score_xbrl(
 
 
 # ==============================================================
+# BLOCK 4-B: SEC companyfacts非対応銘柄のYahooフォールバック
+# ==============================================================
+
+def _yahoo_statement_series(statement, labels: list[str], n_quarters: int = 12) -> list[dict]:
+    """yfinanceの計算書から最初の有効な候補行を取り出す。"""
+    if statement is None or getattr(statement, "empty", True):
+        return []
+    import math
+
+    for label in labels:
+        if label not in statement.index:
+            continue
+        result = []
+        for period, raw_value in statement.loc[label].items():
+            try:
+                value = float(raw_value)
+                if not math.isfinite(value):
+                    continue
+                period_text = period.date().isoformat() if hasattr(period, "date") else str(period)[:10]
+                date.fromisoformat(period_text)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            result.append({"period": period_text, "val": value, "form": "YF"})
+        if result:
+            return sorted(result, key=lambda item: item["period"], reverse=True)[:n_quarters]
+    return []
+
+
+def _fetch_yahoo_fundamentals(ticker: str, cik: int) -> Optional[dict]:
+    """SEC companyfactsが404のADR等をYahooの四半期／年次値で補完する。"""
+    try:
+        import yfinance as yf
+
+        value = yf.Ticker(ticker)
+        income = value.quarterly_income_stmt
+        cashflow = value.quarterly_cashflow
+        statement_period = "quarterly"
+        # 外国民間発行体のADRはSEC companyfactsだけでなくYahooの
+        # 四半期表も空の場合がある。その場合は年次確定値を保存する。
+        if getattr(income, "empty", True) and getattr(cashflow, "empty", True):
+            income = value.income_stmt
+            cashflow = value.cashflow
+            statement_period = "annual"
+
+        eps_history = _yahoo_statement_series(income, ["Diluted EPS", "Basic EPS"])
+        revenue_history = _yahoo_statement_series(income, ["Total Revenue", "Operating Revenue"])
+        oi_history = _yahoo_statement_series(income, ["Operating Income"])
+        ni_history = _yahoo_statement_series(
+            income, ["Net Income", "Net Income Common Stockholders"]
+        )
+        fcf_history = _yahoo_statement_series(cashflow, ["Free Cash Flow"], 8)
+        if not fcf_history:
+            op_cf = _yahoo_statement_series(
+                cashflow, ["Operating Cash Flow", "Total Cash From Operating Activities"], 8
+            )
+            capex = _yahoo_statement_series(cashflow, ["Capital Expenditure", "Capital Expenditures"], 8)
+            capex_by_period = {item["period"]: item["val"] for item in capex}
+            fcf_history = [
+                {
+                    "period": item["period"],
+                    "val": item["val"] - abs(capex_by_period[item["period"]]),
+                    "form": "YF",
+                }
+                for item in op_cf if item["period"] in capex_by_period
+            ]
+        buyback_history = _yahoo_statement_series(
+            cashflow, ["Repurchase Of Capital Stock"], 8
+        )
+        for item in buyback_history:
+            item["val"] = abs(item["val"])
+        shares_history = _yahoo_statement_series(
+            income, ["Diluted Average Shares", "Basic Average Shares"]
+        )
+
+        if not any((eps_history, revenue_history, oi_history, ni_history, fcf_history)):
+            return None
+        return {
+            "ticker": ticker,
+            "cik": cik,
+            "eps_history": eps_history,
+            "revenue_history": revenue_history,
+            "operating_income_history": oi_history,
+            "net_income_history": ni_history,
+            "fcf_history": fcf_history,
+            "buyback_history": buyback_history,
+            "shares_history": shares_history,
+            "recent_8k_dates": [],
+            "eps_accel_score_xbrl": calc_eps_accel_score_xbrl(eps_history),
+            "latest_eps": eps_history[0]["val"] if eps_history else None,
+            "latest_revenue": revenue_history[0]["val"] if revenue_history else None,
+            "latest_net_income": ni_history[0]["val"] if ni_history else None,
+            "latest_fcf": fcf_history[0]["val"] if fcf_history else None,
+            "data_source": "yahoo_finance_fallback",
+            "statement_period": statement_period,
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as exc:
+        print(f"    ⚠️  Yahoo財務取得失敗 ({ticker}): {type(exc).__name__}: {str(exc)[:100]}")
+        return None
+
+
+# ==============================================================
 # BLOCK 5: 1銘柄の取得処理
 # ==============================================================
 
@@ -479,7 +842,16 @@ def fetch_one_ticker(
         time.sleep(REQUEST_DELAY)
 
         if not facts_data:
-            return {"ok": False, "ticker": ticker, "error": "XBRL取得失敗"}
+            print(f"    ↪️  {ticker}: Yahoo Finance財務へフォールバック")
+            result_data = _fetch_yahoo_fundamentals(ticker, cik)
+            if not result_data:
+                return {
+                    "ok": False,
+                    "ticker": ticker,
+                    "error": "SEC XBRLおよびYahoo財務の取得失敗",
+                }
+            save_ticker_db(cfg, ticker, result_data)
+            return {"ok": True, "ticker": ticker, "data": result_data, "error": ""}
 
         # submissions 取得（8-K日程検知用）
         submissions = _fetch_submissions(cik, cfg)
@@ -720,6 +1092,7 @@ def run_us_fundamental_rotator(cfg, results: dict | None = None) -> dict:
           "skipped":         bool,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     if not getattr(cfg, "ENABLE_US_FUNDAMENTALS", True):
         return {"skipped": True}
 
@@ -801,6 +1174,8 @@ def run_us_fundamental_rotator(cfg, results: dict | None = None) -> dict:
     # ── 取得ループ ────────────────────────────────────────────
     ok_count    = 0
     error_count = 0
+    bq_rows_count = 0
+    bq_error_count = 0
 
     for i, item in enumerate(queue, 1):
         ticker   = item["ticker"]
@@ -814,6 +1189,23 @@ def run_us_fundamental_rotator(cfg, results: dict | None = None) -> dict:
         if result["ok"]:
             ok_count += 1
             data = result["data"]
+            if (getattr(cfg, "ENABLE_US_BQ_EXPORT", True)
+                    and getattr(cfg, "ENABLE_US_FUNDAMENTALS_BQ", True)):
+                rows = _us_fundamentals_to_bq_rows(ticker, data)
+                if _upsert_us_fundamentals_to_bq(
+                    rows, getattr(cfg, "US_FUNDAMENTALS_BQ_TABLE", "fundamentals")
+                ):
+                    bq_rows_count += len(rows)
+                else:
+                    bq_error_count += 1
+                    # GitHub runnerの個別JSONは永続化しないため、BQ失敗時に
+                    # 30日間fresh扱いにするとデータが消える。翌日再試行へ戻す。
+                    entry = meta.setdefault(ticker, {"ticker": ticker, "fetch_count": 0})
+                    entry.pop("last_fetched", None)
+                    entry["last_status"] = "error: bq_upsert_failed"
+                    entry["next_due"] = (
+                        date.today() + timedelta(days=1)
+                    ).strftime("%Y-%m-%d")
             eps  = data.get("latest_eps")
             accel = data.get("eps_accel_score_xbrl")
             print(
@@ -846,6 +1238,8 @@ def run_us_fundamental_rotator(cfg, results: dict | None = None) -> dict:
         "db_total":     len(meta),
         "refresh_8k":   refresh_8k,
         "elapsed_sec":  elapsed,
+        "bq_rows":      bq_rows_count,
+        "bq_error_count": bq_error_count,
         "timestamp":    t0.strftime("%Y-%m-%d %H:%M:%S"),
     }
 

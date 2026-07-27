@@ -3,3 +3,10 @@ stock_data/models/
 
 # US財務DB（CIK別財務JSONは大量ファイルのため除外）
 stock_data/data/us_fundamentals_db/
+
+# ローカル実行・OSが生成する成果物（ソースではない）
+__pycache__/
+*.py[cod]
+.pytest_cache/
+pytest_cache/
+.DS_Store

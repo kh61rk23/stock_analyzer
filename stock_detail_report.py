@@ -49,6 +49,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B5_STOCK_DETAIL_REPORT_FETCH_DELAY': 'FETCH_DELAY',
+}
+
 FETCH_DELAY = 0.25
 MAX_TICKERS = 30   # 1日あたり最大レポート生成数（処理時間制限）
 
@@ -375,6 +381,7 @@ def run_stock_detail_report(cfg, screener_result: dict, results: dict) -> dict:
     Returns:
         {"generated": int, "paths": [str,...], "timestamp": str}
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  📋 銘柄詳細レポート生成開始...")
 
     passed = [c for c in screener_result.get("candidates", []) if c.get("pass_filters")]

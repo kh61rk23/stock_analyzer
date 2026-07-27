@@ -59,12 +59,19 @@ _DECAY_LAYERS: list[tuple[int, float]] = [
     (14, 0.50),   # Layer 3: day 8-14
     (30, 0.25),   # Layer 4: day 15-30
 ]
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B4_POLICY_SIGNAL_APPLIER_DECAY_TTL_DAYS': '_DECAY_TTL_DAYS',
+    'B6_POLICY_SIGNAL_APPLIER_DEFAULT_EMERGENCY_VIX': '_DEFAULT_EMERGENCY_VIX',
+    'B6_POLICY_SIGNAL_APPLIER_DEFAULT_L4_MAX_ADJ': '_DEFAULT_L4_MAX_ADJ',
+}
+
 _DECAY_TTL_DAYS = 30   # この日数を超えたシグナルは削除
 
 # デフォルト定数（config.py BLOCK 31 で上書き可能）
 _DEFAULT_EMERGENCY_VIX = 45.0
 _DEFAULT_L4_MAX_ADJ    = 25.0
-_DEFAULT_CACHE_LAYERS  = 4
 
 
 # ==============================================================
@@ -504,6 +511,7 @@ def run_policy_signal_applier(
           "summary":             str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("  📋 [policy_signal_applier] 日次政策シグナル適用中...")
 
     if results is None:

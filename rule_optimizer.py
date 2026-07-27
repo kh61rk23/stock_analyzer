@@ -49,6 +49,9 @@ from datetime import datetime, timedelta, date
 from pathlib import Path
 from typing import Optional
 
+import finance_logic
+from config_sync import sync_module_constants
+
 # ── 定数 ──────────────────────────────────────────────────────
 WEIGHT_FILE        = "rule_weights.json"
 WEIGHT_MIN         = 0.3    # 重みの下限（完全無効化しない）
@@ -94,6 +97,23 @@ FACTOR_THRESHOLDS = {
     "ai_semiconductor_boom": {"key": "sp500", "op": "trend_up", "val": 0},
     "high_inflation":     {"key": "us10y",   "op": ">",  "val": 4.5},
     "geopolitical_risk":  {"key": "vix",     "op": ">",  "val": 28},
+}
+
+# config.py BLOCK 59 の値を実行時に取り込む。閾値の参照箇所は変更しない。
+_CFG_CONST_MAP = {
+    "RO_WEIGHT_MIN": "WEIGHT_MIN",
+    "RO_WEIGHT_MAX": "WEIGHT_MAX",
+    "RO_WEIGHT_INIT": "WEIGHT_INIT",
+    "RO_DEFAULT_SIGNAL_WEIGHTS": "DEFAULT_SIGNAL_WEIGHTS",
+    "RO_SIGNAL_WEIGHT_EMA_ALPHA": "SIGNAL_WEIGHT_EMA_ALPHA",
+    "RO_SIGNAL_WEIGHT_MIN": "SIGNAL_WEIGHT_MIN",
+    "RO_SIGNAL_WEIGHT_MAX": "SIGNAL_WEIGHT_MAX",
+    "RO_FACTOR_WEIGHT_EMA": "FACTOR_WEIGHT_EMA",
+    'B4_RULE_OPTIMIZER_LOOKBACK_WEEKS': 'LOOKBACK_WEEKS',
+    'B4_RULE_OPTIMIZER_FACTOR_LOOKBACK_DEF': 'FACTOR_LOOKBACK_DEF',
+    'B6_RULE_OPTIMIZER_EMA_ALPHA': 'EMA_ALPHA',
+    'B6_RULE_OPTIMIZER_MIN_FIRE_COUNT': 'MIN_FIRE_COUNT',
+    'B6_RULE_OPTIMIZER_CORR_SCALE': 'CORR_SCALE',
 }
 
 
@@ -241,18 +261,8 @@ def _check_factor_fired(factor: str, macro_snapshot: Optional[dict]) -> bool:
 # ==============================================================
 
 def _pearson(xs: list, ys: list) -> Optional[float]:
-    """Pearson 相関係数を純粋実装で計算する。"""
-    n = min(len(xs), len(ys))
-    if n < 3:
-        return None
-    xs = xs[:n]; ys = ys[:n]
-    mx = sum(xs) / n; my = sum(ys) / n
-    num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
-    sx  = math.sqrt(sum((x - mx) ** 2 for x in xs))
-    sy  = math.sqrt(sum((y - my) ** 2 for y in ys))
-    if sx < 1e-9 or sy < 1e-9:
-        return None
-    return round(num / (sx * sy), 4)
+    """Pearson 相関係数を純粋実装で計算する。共通実装は finance_logic.pearson（U-7）。"""
+    return finance_logic.pearson(xs, ys, min_n=3, round_digits=4)
 
 
 def calc_factor_correlations(
@@ -865,6 +875,7 @@ def run_factor_momentum_optimizer(cfg, score_history: dict) -> dict:
           "rebalanced":          bool,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("    📊 [F-2〜F-5] ファクターモメンタム最適化...")
 
     try:
@@ -1454,6 +1465,7 @@ def run_rule_optimizer(cfg, force: bool = False) -> dict:
           "contraction_detail": dict,  # 各条件の評価値
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     today = date.today()
     is_month_end = (today == (today.replace(day=1) + timedelta(days=32)).replace(day=1)
                     - timedelta(days=1))

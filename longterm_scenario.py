@@ -77,6 +77,15 @@ SCENARIO_KEYS = [
 
 # デフォルトの確率ウェイト（合計が1.0になるよう正規化）
 # config.py の SCENARIO_WEIGHTS_INIT で上書き可能
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'LS_DEFAULT_WEIGHTS': 'DEFAULT_WEIGHTS',
+    'LS_STANCE_THRESHOLDS': 'STANCE_THRESHOLDS',
+    'B6_LONGTERM_SCENARIO_LONGTERM_HOLD_STANCE_RELAX_PT': 'LONGTERM_HOLD_STANCE_RELAX_PT',
+}
+
 DEFAULT_WEIGHTS = {k: 1.0 / 9 for k in SCENARIO_KEYS}   # 均等スタート
 
 # 各シナリオ × 業種の長期スコア補正値（-25〜+25pt）
@@ -351,15 +360,66 @@ STANCE_THRESHOLDS = {
     "short_high": 60.0,   # composite_score がこれ以上 = 短期有望
 }
 
+# [P-3] 長期保有候補がいる業種で long_high を緩める幅（pt）。
+# 既定値は config.LONGTERM_HOLD_STANCE_RELAX_PT が正本（2026-07-25）。
+LONGTERM_HOLD_STANCE_RELAX_PT = 5.0
+
+
+def _count_longterm_holds_by_sector(results: dict) -> dict:
+    """業種コード → その業種の長期保有候補（[P-3]）の社数。
+
+    2026-07-25 追加。is_longterm_hold は screener が銘柄単位に付けるため、
+    業種単位のスタンス判定に渡すには集計が要る。
+    screener が未実行・候補ゼロなら空dictを返す（呼び出し側は0扱い）。
+    """
+    counts: dict = {}
+    screener = results.get("screener", {})
+    if not isinstance(screener, dict):
+        return counts
+    for c in screener.get("candidates", []) or []:
+        if not isinstance(c, dict):
+            continue
+        if not c.get("is_longterm_hold"):
+            continue
+        if not c.get("pass_filters", True):
+            continue
+        code = str(c.get("sector_code", "") or "")
+        if code:
+            counts[code] = counts.get(code, 0) + 1
+    return counts
+
 
 def determine_investment_stance(
     sector_code:           str,
     longterm_score:        float,
     composite_score:       float,
     is_longterm_hold_flag: bool = False,
+    longterm_hold_count:   int  = 0,
+    cfg = None,
 ) -> dict:
     """
     長期スコア × 短期スコアからデュアル評価を行い投資スタンスを判定する。
+
+    ★ 2026-07-25: [P-3] 長期保有候補フラグをスタンス分岐に組み込んだ。
+      従来 is_longterm_hold_flag は引数にあるだけで本体が一度も使っておらず、
+      さらに呼び出し側が業種dictから読んでいたため常に False だった（二重の不作動）。
+
+      【組み込み方】P-3 候補がその業種に存在する場合、長期側の閾値
+      （long_high）を LONGTERM_HOLD_STANCE_RELAX_PT だけ緩める。
+      理由: longterm_score は業種の10年シナリオという「マクロ・構造の見立て」だが、
+      P-3 は「自己資本60%以上×増益基調×ROE10%以上」を満たす企業が実在するという
+      **銘柄レベルの実証**である。見立てに実物の裏付けが付くなら長期側の確信を
+      1段上げてよい、という考え方。短期側（short_high）には影響させない。
+
+      効果の例（long_high=65 / relax=5 の場合）:
+        長期62pt × 短期65pt × P-3あり → trade だったものが core_hold へ
+        長期62pt × 短期50pt × P-3あり → avoid だったものが accumulate へ
+        P-3なしの業種は完全に従来どおり（挙動不変）
+
+    Args:
+        is_longterm_hold_flag: その業種に P-3 候補が存在するか
+        longterm_hold_count:   P-3 候補の社数（reason の根拠表示に使う）
+        cfg:                   config モジュール（緩和幅の正本）
 
     Returns:
         {
@@ -367,17 +427,39 @@ def determine_investment_stance(
           "label_ja":  str,
           "reason":    str,
           "icon":      str,
+          "long_high_applied": float,   # 実際に使った長期閾値
+          "longterm_hold_boost": bool,  # P-3 による緩和が効いたか
         }
     """
-    lt_high = longterm_score  >= STANCE_THRESHOLDS["long_high"]
+    long_high = float(STANCE_THRESHOLDS["long_high"])
+    relax = float(getattr(cfg, "LONGTERM_HOLD_STANCE_RELAX_PT",
+                          LONGTERM_HOLD_STANCE_RELAX_PT))
+    if is_longterm_hold_flag:
+        long_high -= relax
+
+    lt_high = longterm_score  >= long_high
     st_high = composite_score >= STANCE_THRESHOLDS["short_high"]
+
+    # 緩和がなければ長期低と判定されていたか（＝P-3が結論を動かしたか）
+    boosted = bool(
+        is_longterm_hold_flag
+        and lt_high
+        and longterm_score < float(STANCE_THRESHOLDS["long_high"])
+    )
+    # 根拠の追記。P-3 が結論を動かした時だけ理由に出す（ノイズを避ける）
+    p3_note = (f"／P-3長期保有候補{longterm_hold_count}社により長期閾値"
+               f"{relax:.0f}pt緩和" if boosted else "")
+
+    meta = {"long_high_applied": round(long_high, 1),
+            "longterm_hold_boost": boosted}
 
     if lt_high and st_high:
         return {
             "stance":   "core_hold",
             "label_ja": "🔵 コア長期保有",
-            "reason":   f"長期{longterm_score:.0f}pt × 短期{composite_score:.0f}pt → 双方有望",
+            "reason":   f"長期{longterm_score:.0f}pt × 短期{composite_score:.0f}pt → 双方有望{p3_note}",
             "icon":     "🔵",
+            **meta,
         }
     elif st_high and not lt_high:
         return {
@@ -385,13 +467,15 @@ def determine_investment_stance(
             "label_ja": "🟡 短期トレード",
             "reason":   f"短期{composite_score:.0f}pt高×長期{longterm_score:.0f}pt低 → 利食い後縮小",
             "icon":     "🟡",
+            **meta,
         }
     elif lt_high and not st_high:
         return {
             "stance":   "accumulate",
             "label_ja": "🟢 仕込みフェーズ",
-            "reason":   f"長期{longterm_score:.0f}pt高×短期{composite_score:.0f}pt低 → 下落時積み増し",
+            "reason":   f"長期{longterm_score:.0f}pt高×短期{composite_score:.0f}pt低 → 下落時積み増し{p3_note}",
             "icon":     "🟢",
+            **meta,
         }
     else:
         return {
@@ -399,6 +483,7 @@ def determine_investment_stance(
             "label_ja": "⚪ 回避",
             "reason":   f"長期{longterm_score:.0f}pt × 短期{composite_score:.0f}pt → 双方低",
             "icon":     "⚪",
+            **meta,
         }
 
 
@@ -507,6 +592,7 @@ def run_longterm_scenario(cfg, results: dict = None) -> dict:
     Returns:
         上記スキーマの dict
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     if not getattr(cfg, "ENABLE_LONGTERM_SCENARIO", True):
         return {"skipped": True}
 
@@ -534,19 +620,31 @@ def run_longterm_scenario(cfg, results: dict = None) -> dict:
     dominant_scenario = max(weights.items(), key=lambda x: x[1])[0]
 
     # ── Step6: 投資スタンス判定（短期スコアと統合）──────────
+    # ★ 2026-07-25 バッチ1: is_longterm_hold の取得元を是正。
+    #   従来は sector_results[code]["is_longterm_hold"] を読んでいたが、
+    #   このフラグ（[P-3] 片山晃モデル）は screener が **銘柄単位** に
+    #   付けるもので、業種の dict には存在しない。結果 is_lt は常に False で、
+    #   P-3 の判定結果が長期スタンスに一度も届いていなかった。
+    #   業種単位では「その業種に長期保有候補が何社いるか」で表現する。
     sector_results  = results.get("sectors", {})
+    lt_counts = _count_longterm_holds_by_sector(results)
     investment_stances = {}
     for code in sector_codes:
         lt_score = longterm_scores.get(code, 50.0)
         sec_data = sector_results.get(code, {})
         st_score = sec_data.get("composite_score", 50.0) if isinstance(sec_data, dict) else 50.0
-        is_lt    = sec_data.get("is_longterm_hold", False) if isinstance(sec_data, dict) else False
+        lt_n     = lt_counts.get(str(code), 0)
+        is_lt    = lt_n > 0
 
-        stance = determine_investment_stance(code, lt_score, st_score, is_lt)
+        stance = determine_investment_stance(
+            code, lt_score, st_score, is_lt,
+            longterm_hold_count=lt_n, cfg=cfg,
+        )
         investment_stances[code] = {
             "sector_code":      code,
             "longterm_score":   lt_score,
             "composite_score":  round(st_score, 1),
+            "longterm_hold_count": lt_n,
             **stance,
         }
 

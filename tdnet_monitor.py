@@ -244,14 +244,23 @@ def _parse_tdnet_rows(html: str, date_str: str) -> list[dict]:
 # BLOCK 3: イベント分類
 # ==============================================================
 
-def _classify_event(title: str) -> Optional[str]:
+def _classify_event(title: str, cfg=None) -> Optional[str]:
     """
     開示タイトルをキーワードマッチングで分類する。
+
+    2026-07-25 バッチ4: 監視対象カテゴリを config.TDNET_MONITOR_CATEGORIES で
+    絞り込めるようにした。従来 DETECT_PATTERNS の全カテゴリが無条件に検知され、
+    config 側の定数は誰にも読まれていなかった。
+    未設定・空なら全カテゴリを対象とする（従来どおり）。
 
     Returns:
         カテゴリ文字列 or None（対象外）
     """
+    allowed = getattr(cfg, "TDNET_MONITOR_CATEGORIES", None) if cfg else None
+    allowed = set(allowed) if allowed else None
     for category, keywords in DETECT_PATTERNS.items():
+        if allowed is not None and category not in allowed:
+            continue
         for kw in keywords:
             if kw in title:
                 return category
@@ -293,6 +302,11 @@ def _find_activist_hits(events: list[dict], cfg) -> list[dict]:
     screener_history.json の直近エントリから activist_score を参照。
     """
     threshold = getattr(cfg, "ACTIVIST_SCORE_THRESHOLD", 70.0)
+    # 2026-07-25: BLOCK M-3 の ENABLE_ACTIVIST_FILTER を配線。
+    # ACTIVIST_SCORE_THRESHOLD / ACTIVIST_CATALYST_ALERT は読まれていたのに
+    # 機能そのものの有効フラグだけが誰にも読まれていなかった。
+    if not getattr(cfg, "ENABLE_ACTIVIST_FILTER", True):
+        return []
     if not getattr(cfg, "ACTIVIST_CATALYST_ALERT", True):
         return []
 
@@ -473,7 +487,7 @@ def run_tdnet_monitor(cfg, results: dict = None) -> dict:
     # ── Step 3: イベント分類 ────────────────────────────────
     all_events: list[dict] = []
     for row in rows:
-        cat = _classify_event(row["title"])
+        cat = _classify_event(row["title"], cfg)
         if cat:
             all_events.append(_build_event(row, cat))
 

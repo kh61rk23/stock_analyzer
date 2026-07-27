@@ -82,15 +82,17 @@ from typing import Optional
 _CACHE_FILENAME = "midterm_plan_cache.json"
 _DEFAULT_TTL_DAYS = 90
 
-# 達成率ティア定義
-_ACHIEVEMENT_TIERS = {
-    "HIGH":    0.90,   # 達成率90%以上
-    "MID":     0.70,   # 70〜90%
-    "AT_RISK": 0.50,   # 50〜70%（最終2年前で未達リスク判定）
-    "MISS":    0.0,    # 50%未満
+# 軌道判定パラメータ
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'MPT_TRAJECTORY_THRESHOLDS': '_TRAJECTORY_THRESHOLDS',
+    'MPT_METRIC_WEIGHTS': '_METRIC_WEIGHTS',
+    'B6_MIDTERM_PLAN_TRACKER_DEFAULT_ACHIEVEMENT_HIGH': '_DEFAULT_ACHIEVEMENT_HIGH',
+    'B6_MIDTERM_PLAN_TRACKER_DEFAULT_ACHIEVEMENT_RISK': '_DEFAULT_ACHIEVEMENT_RISK',
 }
 
-# 軌道判定パラメータ
 _TRAJECTORY_THRESHOLDS = {
     "ahead":    1.10,  # 進捗率110%超 → 計画超過ペース
     "on_track": 0.90,  # 90〜110% → 概ねオントラック
@@ -751,6 +753,7 @@ def run_midterm_plan_tracker(cfg=None, force_refresh: bool = False) -> dict:
           "timestamp": str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  📊 中期経営計画トラッカー（Wave 7 - Step 3）実行中...")
 
     # ── キャッシュ確認 ──────────────────────────────────────────

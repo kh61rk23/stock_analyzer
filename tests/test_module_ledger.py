@@ -36,6 +36,26 @@ class TestBuildDailyLedger:
         led = ml.build_daily_ledger(tmp_cfg, logs)
         assert led["modules"]["gov"]["status"] == "success"
 
+    def test_alias_resolves_reversed_prefix(self, tmp_cfg):
+        """mode-key と記録キーがズレる場合はエイリアスで記録済みと判定する。
+
+        screener（mode-key）は stock_screener として記録されるため、
+        接頭辞ルール（mode_key + "_"）では救えず誤検出されていた（B-3）。
+        """
+        led = ml.build_daily_ledger(tmp_cfg, [_log("stock_screener", "success")])
+        assert "screener" not in led["unrecorded"]
+
+    def test_alias_does_not_mask_real_gap(self, tmp_cfg):
+        """エイリアスが無関係なモジュールの記録で穴を埋めないこと。"""
+        led = ml.build_daily_ledger(tmp_cfg, [_log("stock_screener", "success")])
+        assert {"gov", "macro", "news"} <= set(led["unrecorded"])
+
+    def test_cfg_can_override_aliases(self, tmp_cfg):
+        """cfg.LEDGER_MODE_KEY_ALIASES で追加のズレを吸収できること。"""
+        tmp_cfg.LEDGER_MODE_KEY_ALIASES = {"news": ["news_pipeline_v2"]}
+        led = ml.build_daily_ledger(tmp_cfg, [_log("news_pipeline_v2", "success")])
+        assert "news" not in led["unrecorded"]
+
 
 class TestConsecutiveFailures:
     def test_three_day_streak_alerts(self, tmp_cfg):

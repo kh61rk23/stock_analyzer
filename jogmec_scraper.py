@@ -68,6 +68,14 @@ _REQUEST_HEADERS = {
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B5_JOGMEC_SCRAPER_FETCH_TIMEOUT': '_FETCH_TIMEOUT',
+    'B5_JOGMEC_SCRAPER_RETRY_WAIT_SEC': '_RETRY_WAIT_SEC',
+    'B6_JOGMEC_SCRAPER_MAX_RETRIES': '_MAX_RETRIES',
+}
+
 _FETCH_TIMEOUT  = 25
 _MAX_RETRIES    = 3
 _RETRY_WAIT_SEC = 5
@@ -628,6 +636,7 @@ def run_jogmec_scraper(
           "timestamp":  str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     _pid = getattr(cfg, "GEO_BQ_PROJECT_ID", project_id) if cfg else project_id
     print(f"\n⛏️  jogmec_scraper: 権益情報収集開始")
     print(f"   プロジェクト: {_pid}")
@@ -729,7 +738,11 @@ def run_jogmec_scraper(
         _bq_mod = importlib.import_module("edinet_bq_client")
         _bq     = _bq_mod.EDINETBQClient()
         raw_bq  = _bq.client
-    except Exception:
+    # 2026-07-25: 一次経路（edinet_bq_client＝GitHub Actions の BQ_CREDENTIALS
+    # 経路）の失敗理由を握り潰しており、報告されるのは Colab フォールバックの
+    # 「No module named 'google.colab'」だけだった。真因（認証情報なし等）が
+    # 隠れて調査が空振りするため、両方の理由を返す。
+    except Exception as _primary_err:
         try:
             from google.cloud import bigquery as _bq_lib
             from google.colab import auth as _auth
@@ -744,7 +757,8 @@ def run_jogmec_scraper(
                 "merged":    0,
                 "sources":   sources_used,
                 "records":   all_records,
-                "error":     f"BQ Client 取得失敗: {e}",
+                "error":     (f"BQ Client 取得失敗: {_primary_err} "
+                              f"/ Colabフォールバックも失敗: {e}"),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 

@@ -78,10 +78,18 @@ from typing import Optional
 # BLOCK 1: 定数フォールバック
 # ==============================================================
 
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'DD_DEFAULT_SPIKE_THRESHOLD': '_DEFAULT_SPIKE_THRESHOLD',
+    'B6_DRIFT_DETECTOR_DEFAULT_DECAY_WEEKS': '_DEFAULT_DECAY_WEEKS',
+    'B6_DRIFT_DETECTOR_DEFAULT_HISTORY_TTL': '_DEFAULT_HISTORY_TTL',
+}
+
 _DEFAULT_SPIKE_THRESHOLD = 20.0   # 急変判定閾値（pt）
 _DEFAULT_DECAY_WEEKS     = 4      # 緩慢な劣化判定（連続低下週数）
 _DEFAULT_HISTORY_TTL     = 180    # drift_history.json TTL（日）
-_DEFAULT_HALF_LIFE       = 14     # 鮮度係数の半減期（日）
 
 
 def _get_spike_threshold(cfg) -> float:
@@ -426,6 +434,7 @@ def run_drift_detector(
           "timestamp":     str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  🔍 [drift_detector] ドリフト検出 開始...")
     t0 = datetime.now()
 

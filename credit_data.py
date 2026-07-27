@@ -58,6 +58,8 @@ from datetime import datetime, timedelta, date
 from pathlib import Path
 from typing import Optional
 
+from config_sync import sync_module_constants
+
 # ── 定数 ──────────────────────────────────────────────────────
 SQUEEZE_THRESHOLD   = 1.0    # 倍率 < 1.0 → 踏み上げ候補
 OVERHEAT_THRESHOLD  = 10.0   # 倍率 > 10.0 → 買い偏重（崩落リスク）
@@ -86,6 +88,24 @@ JPX_FALLBACK_URLS = [
 # ==============================================================
 # BLOCK 1: JPX CSV 取得
 # ==============================================================
+
+_CFG_CONST_MAP = {
+    "CREDIT_SQUEEZE_THRESH":  "SQUEEZE_THRESHOLD",
+    "CREDIT_OVERHEAT_THRESH": "OVERHEAT_THRESHOLD",
+    "CREDIT_CAUTION_THRESHOLD": "CAUTION_THRESHOLD",
+    "CREDIT_BONUS_SQUEEZE": "BONUS_SQUEEZE",
+    "CREDIT_PENALTY_OVERHEAT": "PENALTY_OVERHEAT",
+    'B4_CREDIT_DATA_CACHE_HOURS': 'CACHE_HOURS',
+}
+
+# 旧テスト・外部呼び出しとの互換名。実装本体は共通ヘルパーへ統一する。
+_CFG_THRESHOLD_MAP = _CFG_CONST_MAP
+
+
+def sync_thresholds_from_config(cfg) -> dict:
+    """互換入口: config_sync による実行時同期を行う。"""
+    return sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
+
 
 def _fetch_jpx_csv(url: str, timeout: int = 15) -> Optional[str]:
     """JPX の信用残高 CSV をテキストとして取得する。"""
@@ -336,6 +356,8 @@ def run_credit_data(cfg) -> dict:
         }
     """
     print("\n  📊 信用残高データ取得開始...")
+
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
 
     # キャッシュ確認（週次データなので7日間有効）
     cached = _load_cache(cfg)

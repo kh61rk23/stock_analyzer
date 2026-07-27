@@ -158,17 +158,22 @@ def _build_queue_rows(cfg) -> list[str]:
     sh = _load_json(Path(cfg.DATA_DIR) / "screener_history.json")
     if sh:
         try:
-            latest = sorted(sh.keys())[-1]
+            # 2026-07-25: 正本の形式は {date: [候補, ...]}（リスト）。
+            # 従来は .get("candidates") をリストに対して呼んでおり
+            # AttributeError → 下の except で握り潰され、審議キューの
+            # screener 行が常に0件だった。さらに pass_filters で絞っていたが、
+            # append_screener_history は通過銘柄だけを保存し、そのキー自体を
+            # 持たせないため、形式を直しても全件落ちる二重の誤りだった。
+            from performance_tracker import latest_candidates
+            latest, cands = latest_candidates(sh)
             cands = sorted(
-                (c for c in (sh[latest] or {}).get("candidates", [])
-                 if isinstance(c, dict) and c.get("pass_filters")),
-                key=lambda c: -float(c.get("composite_score", 0) or 0))
+                cands, key=lambda c: -float(c.get("composite_score", 0) or 0))
             for c in cands[:5]:
                 rows.append(f"| {today} | {c.get('ticker','')} "
                             f"| screener上位（{c.get('composite_score','')}点 "
                             f"{latest}） | 高 | 未着手 |")
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  ⚠️ screener行の生成に失敗: {str(e)[:80]}")
     # ドリフト（直近・業種単位の警報）
     dh = _load_json(Path(cfg.INSIGHT_DIR) / "drift" / "drift_history.json")
     if dh:
@@ -237,6 +242,12 @@ def _parse_ledger_rows(text: str) -> list[dict]:
 
 def cmd_journal(cfg) -> None:
     """台帳の「承認」済み Buy 行を investment_journal に記帳（冪等）。"""
+    # 2026-07-25: BLOCK R-3 の ENABLE_INVESTMENT_JOURNAL を配線。
+    # investment_journal.py の実装はあるのに有効フラグが誰にも読まれておらず、
+    # False にしても記帳・成績還流が止まらなかった。
+    if not getattr(cfg, "ENABLE_INVESTMENT_JOURNAL", True):
+        print("⏩ journal スキップ: ENABLE_INVESTMENT_JOURNAL=False")
+        return
     lp = _vault(cfg) / "40_判断台帳.md"
     if not lp.exists():
         print("⏩ journal スキップ: 判断台帳なし")
@@ -281,6 +292,11 @@ def cmd_journal(cfg) -> None:
 
 def cmd_feedback(cfg) -> None:
     """journal の成績を台帳の成績列へ還流。"""
+    # 2026-07-25: ENABLE_INVESTMENT_JOURNAL を配線（cmd_journal と同じ理由）。
+    # feedback は journal の内容を読むため、journal を切ったら道連れで止める。
+    if not getattr(cfg, "ENABLE_INVESTMENT_JOURNAL", True):
+        print("⏩ feedback スキップ: ENABLE_INVESTMENT_JOURNAL=False")
+        return
     lp = _vault(cfg) / "40_判断台帳.md"
     if not lp.exists():
         print("⏩ feedback スキップ: 判断台帳なし")

@@ -10,7 +10,18 @@
 #   を連続実行する。失敗時は結果ファイルに記録し、翌朝の統合ブリーフ
 #   （alert_notifier / E11）が拾えるよう stock_data/weekly_loop_status.json に残す。
 #
-# 【実行】python3 weekly_feedback_runner.py [--dry-run]
+# 【実行】python3 weekly_feedback_runner.py [--dry-run] [--if-stale]
+#   --if-stale: 前回「成功」から7日未満なら何もしない（追いつき用ガード）
+#
+# 【二重の起動経路】2026-07-25 追加
+#   本線     : launchd com.kenta.invest-weekly（毎週日曜21:00）
+#              → 司令塔シェル run_apps.sh invest-weekly → 無条件実行
+#   バックアップ: Claude予定タスク（毎週月曜10:00）→ --if-stale で実行
+#              日曜21時にMacが落ちていた回を翌日拾う。本線が走っていれば
+#              「7日未満」で自動スキップするので二重実行にならない。
+#   ※ この処理は vault（ローカルObsidian）へ書くため GitHub Actions では
+#     代替できない。バックアップも必ず Mac 側に置く必要がある。
+#
 # 【前提】Mac上でvaultへの到達可能性（obsidian_sync.py の設定に従う）
 # ==============================================================
 
@@ -30,9 +41,59 @@ STEPS = [
 
 STATUS_PATH = Path("stock_data/weekly_loop_status.json")
 
+# --if-stale で「前回成功からこの日数以上」経っていたら実行する
+from config_sync import sync_module_constants
 
-def main(dry_run: bool = False) -> int:
+_CFG_CONST_MAP = {
+    'B4_WEEKLY_FEEDBACK_RUNNER_STALE_DAYS': 'STALE_DAYS',
+}
+
+STALE_DAYS = 7
+
+
+def last_success_at(base: Path = None) -> datetime | None:
+    """前回「成功した」実行の日時。記録が無ければ None。"""
+    base = base or Path(__file__).resolve().parent
+    try:
+        st = json.loads((base / STATUS_PATH).read_text(encoding="utf-8"))
+        s = st.get("last_success") or (st.get("run_at") if st.get("ok") else None)
+        return datetime.strptime(str(s), "%Y-%m-%d %H:%M") if s else None
+    except Exception:
+        return None
+
+
+def is_stale(now: datetime = None, base: Path = None,
+             stale_days: int = STALE_DAYS) -> tuple:
+    """実行すべきか判定する。Returns: (実行するか, 理由)
+
+    launchd（日曜21:00）が本線。Macが落ちていた等で回が飛んだ場合に、
+    バックアップ経路から --if-stale で呼んで追いつくために使う。
+    前回成功の記録が無い初回は必ず実行する。
+    """
+    now = now or datetime.now()
+    last = last_success_at(base)
+    if last is None:
+        return True, "前回成功の記録なし（初回 or 未実行）"
+    elapsed = (now - last).days
+    if elapsed >= stale_days:
+        return True, f"前回成功から{elapsed}日経過（しきい値{stale_days}日）"
+    return False, f"前回成功から{elapsed}日（しきい値{stale_days}日に未達）"
+
+
+def main(dry_run: bool = False, if_stale: bool = False) -> int:
+    import config as cfg
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     base = Path(__file__).resolve().parent
+
+    # 2026-07-25: バックアップ経路（Claude予定タスク等）から頻繁に呼ばれても
+    # 二重実行しないためのガード。本線の launchd は無条件で走る。
+    if if_stale and not dry_run:
+        run, why = is_stale(base=base)
+        if not run:
+            print(f"⏩ 週次ループ: スキップ（{why}）")
+            return 0
+        print(f"🔁 週次ループを実行: {why}")
+
     status = {"run_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
               "steps": {}, "ok": True}
 
@@ -58,6 +119,15 @@ def main(dry_run: bool = False) -> int:
             status["steps"][name] = f"error: {str(e)[:120]}"
             print(f"  ❌ {name}: {e}")
 
+    # 成功した回だけ last_success を進める。失敗した回で更新すると
+    # --if-stale が「最近走った」と誤認し、追いつきが効かなくなる。
+    if status["ok"] and not dry_run:
+        status["last_success"] = status["run_at"]
+    else:
+        prev = last_success_at(base)
+        if prev:
+            status["last_success"] = prev.strftime("%Y-%m-%d %H:%M")
+
     (base / STATUS_PATH).parent.mkdir(parents=True, exist_ok=True)
     (base / STATUS_PATH).write_text(
         json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -67,4 +137,5 @@ def main(dry_run: bool = False) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(dry_run="--dry-run" in sys.argv))
+    raise SystemExit(main(dry_run="--dry-run" in sys.argv,
+                          if_stale="--if-stale" in sys.argv))

@@ -12,7 +12,7 @@
 #   本ファイルは ontology_bq_schema.py と同じパターンで us データセット + 4テーブルを
 #   冪等に作成する。
 #
-# 【役割】   dataset `us` の4テーブルを冪等に作成する
+# 【役割】   dataset `us` の5テーブルを冪等に作成する
 # 【実行】   初回のみ手動実行（ontology_bq_schema.py / edinet_bq_schema.py と同じ運用）:
 #            python3 us_bq_schema.py
 # 【注意】   IF NOT EXISTS のため再実行しても既存テーブルに影響なし。
@@ -25,6 +25,7 @@
 #   job_signal_cache        : 求人票キーワード急増シグナル（現状ローカルJSONのみ・将来のBQ移行用）
 #   executive_transitions   : 役員略歴YoY差分・外部人材登用シグナル（同上）
 #   facility_signals        : 施設着工シグナル（同上）
+#   fundamentals            : SEC EDGAR四半期財務（us_fundamental_rotator.py が主キーMERGE）
 #
 # 【作成後にやること】
 #   1. institutional_13f_monitor.py の次回実行でBQ書込が成功するか実行ログを確認
@@ -108,22 +109,34 @@ DDL = [
     """,
     """
     CREATE TABLE IF NOT EXISTS `{project}.us.fundamentals` (
-      ticker STRING NOT NULL, cik INT64, eps_history JSON, revenue_history JSON,
-      operating_income_history JSON, net_income_history JSON, fcf_history JSON,
-      buyback_history JSON, shares_history JSON, recent_8k_dates JSON,
-      eps_accel_score_xbrl FLOAT64, latest_eps FLOAT64, latest_revenue FLOAT64,
-      latest_net_income FLOAT64, latest_fcf FLOAT64, data_source STRING,
-      fetched_at TIMESTAMP, last_fetched DATE, fetch_count INT64,
-      last_status STRING
-    ) PARTITION BY last_fetched CLUSTER BY ticker
+      f_id              STRING NOT NULL OPTIONS(description='ticker + "_" + period_end の冪等主キー'),
+      ticker            STRING NOT NULL,
+      cik               INT64,
+      period_end        DATE   NOT NULL,
+      fiscal_period     STRING OPTIONS(description='例: 2025Q3'),
+      revenue           FLOAT64,
+      operating_income  FLOAT64,
+      net_income        FLOAT64,
+      eps_diluted       FLOAT64,
+      fcf               FLOAT64 OPTIONS(description='OperatingCF - Capex'),
+      buyback           FLOAT64 OPTIONS(description='PaymentsForRepurchaseOfCommonStock'),
+      source            STRING,
+      updated_at        TIMESTAMP
+    )
+    PARTITION BY period_end
+    CLUSTER BY ticker
     """,
-    """
-    CREATE OR REPLACE VIEW `{project}.us.fundamentals_latest` AS
-    SELECT * EXCEPT(rn) FROM (
-      SELECT *, ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY fetched_at DESC) AS rn
-      FROM `{project}.us.fundamentals`
-    ) WHERE rn = 1
-    """,
+    "ALTER TABLE `{project}.us.fundamentals` ADD COLUMN IF NOT EXISTS f_id STRING",
+    "ALTER TABLE `{project}.us.fundamentals` ADD COLUMN IF NOT EXISTS period_end DATE",
+    "ALTER TABLE `{project}.us.fundamentals` ADD COLUMN IF NOT EXISTS fiscal_period STRING",
+    "ALTER TABLE `{project}.us.fundamentals` ADD COLUMN IF NOT EXISTS revenue FLOAT64",
+    "ALTER TABLE `{project}.us.fundamentals` ADD COLUMN IF NOT EXISTS operating_income FLOAT64",
+    "ALTER TABLE `{project}.us.fundamentals` ADD COLUMN IF NOT EXISTS net_income FLOAT64",
+    "ALTER TABLE `{project}.us.fundamentals` ADD COLUMN IF NOT EXISTS eps_diluted FLOAT64",
+    "ALTER TABLE `{project}.us.fundamentals` ADD COLUMN IF NOT EXISTS fcf FLOAT64",
+    "ALTER TABLE `{project}.us.fundamentals` ADD COLUMN IF NOT EXISTS buyback FLOAT64",
+    "ALTER TABLE `{project}.us.fundamentals` ADD COLUMN IF NOT EXISTS source STRING",
+    "ALTER TABLE `{project}.us.fundamentals` ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP",
 ]
 
 

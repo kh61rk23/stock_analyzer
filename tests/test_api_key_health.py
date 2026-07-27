@@ -131,7 +131,24 @@ def test_run_key_health_unset_keys_do_not_crash():
     result = kh.run_key_health(_Cfg())
     entries = result["entries"]
     assert entries["EDINET_API_KEY"]["state"] == kh.STATE_UNSET
+    assert entries["FUDOSAN_API_KEY"]["state"] == kh.STATE_UNSET
     assert entries["ANTHROPIC_API_KEY"]["state"] == kh.STATE_SKIPPED
     assert entries["GOOGLE_OAUTH"]["state"] == kh.STATE_SKIPPED
     assert result["ledger_status"] == "success"  # 未設定は❌ではない
     assert result["summary"].startswith("🔑 [key_health]")
+
+
+def test_edinetdb_probe_is_dormant_when_daily_ingest_is_disabled(monkeypatch):
+    class _Cfg:
+        EDINETDB_API_KEY = "must-not-be-probed"
+        ENABLE_EDINETDB_INGEST = False
+
+    monkeypatch.setattr(
+        kh, "_probe_edinetdb", lambda _key: (_ for _ in ()).throw(AssertionError())
+    )
+
+    result = kh.run_key_health(_Cfg())
+
+    entry = result["entries"]["EDINETDB_API_KEY"]
+    assert entry["state"] == kh.STATE_SKIPPED
+    assert "BQ既存データ" in entry["message"]

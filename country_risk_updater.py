@@ -113,6 +113,18 @@ _RETRY_WAIT  = 5   # 秒
 # 数件で見切る ②取得失敗時は永続キャッシュ（gdelt_instability_cache.json）を
 # 減衰付きで代用する（BLOCK 5-2 参照）。
 _GDELT_MAX_COUNTRIES     = 15
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'CRU_GDELT_CIRCUIT_THRESHOLD': '_GDELT_CIRCUIT_THRESHOLD',
+    'B5_COUNTRY_RISK_UPDATER_FETCH_TIMEOUT': '_FETCH_TIMEOUT',
+    'B5_COUNTRY_RISK_UPDATER_RETRY_WAIT': '_RETRY_WAIT',
+    'B5_COUNTRY_RISK_UPDATER_GDELT_TOTAL_FAIL_LIMIT': '_GDELT_TOTAL_FAIL_LIMIT',
+    'B6_COUNTRY_RISK_UPDATER_MAX_RETRIES': '_MAX_RETRIES',
+    'B6_COUNTRY_RISK_UPDATER_GDELT_MAX_COUNTRIES': '_GDELT_MAX_COUNTRIES',
+}
+
 _GDELT_CIRCUIT_THRESHOLD = 3      # 連続失敗の閾値（2026-07-17: 5→3に短縮）
 _GDELT_TOTAL_FAIL_LIMIT  = 8      # 累計失敗の閾値（成功が挟まっても打ち切る）
 
@@ -939,6 +951,7 @@ def run_country_risk_update(
           "timestamp":      str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n🌐 country_risk_updater: 国別リスク日次更新開始")
 
     # cfg から project_id を取得（存在する場合）

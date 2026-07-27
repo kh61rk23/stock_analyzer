@@ -92,6 +92,15 @@ _SPILLOVER_RULES: list = [
     ("Small", "Nano",  21, 0.50),
 ]
 
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'CSS_SOURCE_SIGNAL_THRESHOLD': '_SOURCE_SIGNAL_THRESHOLD',
+    'CSS_NANO_CONTRARIAN_CONFIDENCE_MAX': '_NANO_CONTRARIAN_CONFIDENCE_MAX',
+    'B6_CROSS_SIZE_SIGNAL_JP_US_CROSS_DECAY': '_JP_US_CROSS_DECAY',
+}
+
 _SOURCE_SIGNAL_THRESHOLD = 5.0
 _JP_US_CROSS_DECAY = 0.70
 _NANO_CONTRARIAN_CONFIDENCE_MAX = 0.55
@@ -438,6 +447,7 @@ def aggregate_cross_size_score(sector_code: str, cfg=None) -> float:
 
 def run_cross_size_signal(cfg=None, force_refresh: bool = False) -> dict:
     """日次で実行される横断シグナル生成のエントリポイント"""
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  🔀 規模帯横断シグナル生成（Wave 3 & 7 統合版）実行中...")
 
     if not force_refresh:

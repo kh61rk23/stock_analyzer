@@ -50,10 +50,20 @@ from pathlib import Path
 from typing import Optional
 
 # ── 定数 ──────────────────────────────────────────────────────
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B4_ANOMALY_SEASON_LOOKBACK_YEARS': 'LOOKBACK_YEARS',
+    'B4_ANOMALY_SEASON_CACHE_HOURS': 'CACHE_HOURS',
+    'B5_ANOMALY_SEASON_FETCH_DELAY': 'FETCH_DELAY',
+    'B6_ANOMALY_SEASON_MIN_SAMPLES': 'MIN_SAMPLES',
+    'B6_ANOMALY_SEASON_P_SIGNIFICANT': 'P_SIGNIFICANT',
+    'B6_ANOMALY_SEASON_MAX_ADJUSTMENT': 'MAX_ADJUSTMENT',
+}
+
 LOOKBACK_YEARS     = 10      # 過去N年のデータを使用
 MIN_SAMPLES        = 5       # t検定に必要な最低サンプル数
 P_SIGNIFICANT      = 0.05    # 有意水準
-P_HIGHLY_SIG       = 0.01    # 高度有意水準
 MAX_ADJUSTMENT     = 8.0     # composite_score 補正の上限（±pt）
 FETCH_DELAY        = 0.3
 CACHE_FILENAME     = "anomaly_season_cache.json"
@@ -452,6 +462,7 @@ def run_anomaly_season(cfg, sector_results: Optional[dict] = None) -> dict:
     Returns:
         anomaly_season result dict
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  📅 季節アノマリー分析開始...")
 
     cached = _load_cache(cfg)

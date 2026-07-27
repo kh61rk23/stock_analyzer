@@ -123,6 +123,13 @@ _DEFAULT_HEADERS = {
     "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
     "Accept":          "text/html,application/xhtml+xml,*/*;q=0.8",
 }
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B5_FACILITY_EXPANSION_MONITOR_REQUEST_TIMEOUT': '_REQUEST_TIMEOUT',
+    'B6_FACILITY_EXPANSION_MONITOR_REQUEST_WAIT': '_REQUEST_WAIT',
+}
+
 _REQUEST_TIMEOUT = 20
 _REQUEST_WAIT    = 2.0
 
@@ -555,6 +562,7 @@ def run_facility_expansion_monitor(cfg, results: dict) -> dict:
           "skipped":           bool,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     if not getattr(cfg, "ENABLE_FACILITY_EXPANSION", True):
         print("  ⏩ 施設着工モニター: スキップ（ENABLE_FACILITY_EXPANSION=False）")
         return {"skipped": True, "sector_boosts": {}, "signal_projects": []}

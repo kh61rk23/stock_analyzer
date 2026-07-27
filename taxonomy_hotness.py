@@ -33,6 +33,18 @@ if str(REPO) not in sys.path:
 SEED_DIR = REPO / "data" / "taxonomy_seed"
 HISTORY_DAYS = 60          # 履歴保持日数
 BASELINE_DAYS = 20         # 加熱判定のベースライン日数
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'TH_SEMI_NEWS_WEIGHT': 'SEMI_NEWS_WEIGHT',
+    'TH_SEMI_POLICY_WEIGHT': 'SEMI_POLICY_WEIGHT',
+    'B4_TAXONOMY_HOTNESS_HISTORY_DAYS': 'HISTORY_DAYS',
+    'B4_TAXONOMY_HOTNESS_BASELINE_DAYS': 'BASELINE_DAYS',
+    'B6_TAXONOMY_HOTNESS_COMBINE_SEMI': 'COMBINE_SEMI',
+    'B6_TAXONOMY_HOTNESS_COMBINE_LEADING': 'COMBINE_LEADING',
+}
+
 SEMI_NEWS_WEIGHT = 0.7     # 準先行内: news（最重み・§4-3）
 SEMI_POLICY_WEIGHT = 0.3   # 準先行内: policy
 COMBINE_SEMI = 0.6         # 最終合成: 準先行（主スコア駆動）
@@ -113,13 +125,16 @@ def hotness_score(today_count: int, baseline_counts: list[int]) -> float:
 
 
 def compute_node_hotness(today_counts: dict, history: dict,
-                         today: str) -> dict:
+                         today: str, cfg=None) -> dict:
     """
     各ノードの leading/semi_leading/combined を計算する。
     today_counts: {node_id: {"leading": int, "news": int, "policy": int}}
     history:      {date: {node_id: {"leading": int, "news": int, "policy": int}}}
     """
-    past_dates = sorted(d for d in history if d < today)[-BASELINE_DAYS:]
+    # 2026-07-25 バッチ6: ベースライン日数を config から読む
+    # （従来はモジュール定数 BASELINE_DAYS のみで config 側は未参照）
+    _base_days = int(getattr(cfg, "TAXONOMY_HOTNESS_BASELINE_DAYS", BASELINE_DAYS))
+    past_dates = sorted(d for d in history if d < today)[-_base_days:]
     out = {}
     for nid, c in today_counts.items():
         base_lead = [history[d].get(nid, {}).get("leading", 0) for d in past_dates]
@@ -137,9 +152,15 @@ def compute_node_hotness(today_counts: dict, history: dict,
     return out
 
 
-def leading_only_nodes(hotness: dict, lead_th: float = 65.0,
-                       semi_th: float = 55.0) -> list:
-    """「先行だけ点灯」ノード＝まだニュース化していない仕込み候補（§4-3）。"""
+def leading_only_nodes(hotness: dict, lead_th: float = None,
+                       semi_th: float = 55.0, cfg=None) -> list:
+    """「先行だけ点灯」ノード＝まだニュース化していない仕込み候補（§4-3）。
+
+    lead_th 省略時は config.TAXONOMY_LEADING_ONLY_TH（既定65.0）を使う
+    （2026-07-25 バッチ6: 従来は既定引数の直書きのみだった）。
+    """
+    if lead_th is None:
+        lead_th = float(getattr(cfg, "TAXONOMY_LEADING_ONLY_TH", 65.0))
     return sorted(
         (nid for nid, h in hotness.items()
          if h["leading"] >= lead_th and h["semi_leading"] < semi_th),
@@ -223,6 +244,7 @@ def run_taxonomy_hotness(cfg, results: dict) -> dict:
     Returns: {"node_hotness": {...}, "sector_scores": {...},
               "leading_only": [...], "nodes": int, "skipped": bool}
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     nodes = load_verified_nodes()
     if not nodes:
         print("    ⏩ [taxonomy_hotness] 承認済みノードなし → スキップ")
@@ -248,7 +270,7 @@ def run_taxonomy_hotness(cfg, results: dict) -> dict:
             history = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             history = {}
-    hotness = compute_node_hotness(today_counts, history, today)
+    hotness = compute_node_hotness(today_counts, history, today, cfg)
     history[today] = today_counts
     for old in sorted(history)[:-HISTORY_DAYS]:
         del history[old]
@@ -274,7 +296,7 @@ def run_taxonomy_hotness(cfg, results: dict) -> dict:
     except Exception:
         sector_scores = {}
 
-    lead_only = leading_only_nodes(hotness)
+    lead_only = leading_only_nodes(hotness, cfg=cfg)
     hot_top = sorted(hotness.items(), key=lambda kv: -kv[1]["combined"])[:3]
     print(f"    ✅ [taxonomy_hotness] {len(nodes)}ノード算出 "
           f"/ 業種スコア{len(sector_scores)}件({weight_source}) / 先行のみ点灯{len(lead_only)}件"

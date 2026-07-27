@@ -56,8 +56,23 @@ CEO_SCORES_FILENAME  = "ceo_scores.json"
 SCORES_RETAIN_YEARS  = 5   # 5年分の経営者スコアを保持
 
 # 就任年数による評価制限
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'CEO_TENURE_OBSERVING_MAX': 'TENURE_OBSERVING_MAX',
+    'CEO_TENURE_FULL_MIN': 'TENURE_FULL_MIN',
+    'CEO_ACTIVIST_RENEWAL_THRESHOLD': 'ACTIVIST_RENEWAL_THRESHOLD',
+    'B4_CEO_EVALUATOR_SCORES_RETAIN_YEARS': 'SCORES_RETAIN_YEARS',
+    'B6_CEO_EVALUATOR_CAGR_EXCELLENT': 'CAGR_EXCELLENT',
+    'B6_CEO_EVALUATOR_CAGR_GOOD': 'CAGR_GOOD',
+    'B6_CEO_EVALUATOR_CAGR_NEUTRAL': 'CAGR_NEUTRAL',
+    'B6_CEO_EVALUATOR_MIDTERM_EXCELLENT': 'MIDTERM_EXCELLENT',
+    'B6_CEO_EVALUATOR_MIDTERM_GOOD': 'MIDTERM_GOOD',
+    'B6_CEO_EVALUATOR_MIDTERM_FAIR': 'MIDTERM_FAIR',
+}
+
 TENURE_OBSERVING_MAX  = 1.0   # 1年未満 → 観察中
-TENURE_PROVISIONAL_MAX = 3.0  # 3年未満 → 暫定スコア
 TENURE_FULL_MIN       = 4.0   # 4年以上 → フルスコア
 
 # 軸①の閾値
@@ -580,9 +595,15 @@ def evaluate_ceo(
         else:                  ceo_label = "🔴 要注意経営者"
 
     # ── quality_score への補正量 ──────────────────────────
-    # ceo_score 80以上: +10pt / 65〜79: +5pt / 50以下: 0pt
-    if ceo_score >= 80:      quality_bonus = 10.0
-    elif ceo_score >= 65:    quality_bonus =  5.0
+    # ceo_score 80以上: +HIGH / 65〜79: +MID / 50〜64: +2pt / 50未満: 0pt
+    # 2026-07-25 バッチ3: 補正量を config.py BLOCK I-3 から読むよう是正。
+    # 従来は 10.0 / 5.0 を直書きしており、config の CEO_QUALITY_BONUS_* を
+    # 編集しても補正量は変わらなかった（SSOT違反）。
+    # 既定値は従来の直書き値なので挙動は不変。
+    _q_high = float(getattr(cfg, "CEO_QUALITY_BONUS_HIGH", 10.0))
+    _q_mid  = float(getattr(cfg, "CEO_QUALITY_BONUS_MID",   5.0))
+    if ceo_score >= 80:      quality_bonus = _q_high
+    elif ceo_score >= 65:    quality_bonus = _q_mid
     elif ceo_score >= 50:    quality_bonus =  2.0
     elif status == "observing": quality_bonus = 0.0
     else:                    quality_bonus =  0.0
@@ -656,6 +677,7 @@ def run_ceo_evaluator(
           "timestamp":   str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  👔 経営者スコア算出 開始...")
     t0 = datetime.now()
 

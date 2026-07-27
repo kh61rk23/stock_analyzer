@@ -62,6 +62,7 @@ SCHEMA: dict[str, list[str]] = {
     "earnings_surprise": ["stock_analyzer_main"],
     "economic_cycle": ["stock_analyzer_main"],
     "edinet_db_fresh": ["cache_freshness_manager"],
+    "edinet_doc_index": ["stock_analyzer_main"],
     "edinetdb_ingest": ["stock_analyzer_main"],
     "exit_alerts": ["stock_analyzer_main"],
     "edinet_rotation": ["stock_analyzer_main"],

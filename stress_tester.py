@@ -585,6 +585,16 @@ DEFAULT_HIGH_CORR_CLUSTERS = [
 ]
 
 # 相関閾値（これ以上の相関を持つ業種ペアを同一クラスタとみなす）
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'ST_CORR_CLUSTER_THRESHOLD': 'CORR_CLUSTER_THRESHOLD',
+    'B4_STRESS_TESTER_VAR_LOOKBACK': 'VAR_LOOKBACK',
+    'B4_STRESS_TESTER_MDD_LOOKBACK': 'MDD_LOOKBACK',
+    'B5_STRESS_TESTER_FETCH_DELAY': 'FETCH_DELAY',
+}
+
 CORR_CLUSTER_THRESHOLD = 0.75
 
 
@@ -907,6 +917,7 @@ def run_stress_test(
     Returns:
         ストレステスト結果 dict
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  🛡️ ストレステスト開始...")
 
     holdings = _load_portfolio(cfg)

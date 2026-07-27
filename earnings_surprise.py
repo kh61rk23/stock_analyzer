@@ -51,6 +51,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+from config_sync import sync_module_constants
+
 # ── 定数 ──────────────────────────────────────────────────────
 FETCH_DELAY        = 0.3   # yfinance レート制限対策（秒）
 HISTORY_QUARTERS   = 4     # 取得する四半期数
@@ -60,10 +62,8 @@ CACHE_HOURS        = 24    # キャッシュ有効時間（時間）
 QUARTER_WEIGHTS    = [0.40, 0.30, 0.20, 0.10]
 
 # サプライズ閾値
-SURPRISE_LARGE_POS =  10.0   # +10%超: 大幅ポジサプライズ
 SURPRISE_POS       =   3.0   # +3%超:  ポジサプライズ
 SURPRISE_NEG       =  -3.0   # -3%未満: ネガサプライズ
-SURPRISE_LARGE_NEG = -10.0   # -10%未満: 大幅ネガサプライズ
 
 # screener ボーナス設定
 BONUS_CONSEC_POS2  =  5.0   # 2四半期連続ポジサプライズ
@@ -92,11 +92,69 @@ SURPRISE_COMBO_CONSERV_MIN  = 70.0   # I-2 conservatism_score 閾値
 SURPRISE_COMBO_NEG_ACCEL    = 30.0   # ネガティブ複合フラグ閾値
 SURPRISE_COMBO_NEG_CONSERV  = 30.0   # I-2 conservatism_score 閾値
 
-def _fetch_earnings_history_extended(ticker: str, n_quarters: int = CONSERVATISM_QUARTERS) -> list:
+_CFG_CONST_MAP = {
+    "ES_QUARTER_WEIGHTS": "QUARTER_WEIGHTS",
+    "ES_BONUS_CONSEC_POS2": "BONUS_CONSEC_POS2",
+    "ES_BONUS_CONSEC_POS1": "BONUS_CONSEC_POS1",
+    "ES_PENALTY_CONSEC_NEG2": "PENALTY_CONSEC_NEG2",
+    "ES_PENALTY_CONSEC_NEG1": "PENALTY_CONSEC_NEG1",
+    "ES_SURPRISE_COMBO_ACCEL_MIN": "SURPRISE_COMBO_ACCEL_MIN",
+    "ES_SURPRISE_COMBO_CONSERV_MIN": "SURPRISE_COMBO_CONSERV_MIN",
+    'B4_EARNINGS_SURPRISE_HISTORY_QUARTERS': 'HISTORY_QUARTERS',
+    'B4_EARNINGS_SURPRISE_CACHE_HOURS': 'CACHE_HOURS',
+    'B4_EARNINGS_SURPRISE_CONSERVATISM_QUARTERS': 'CONSERVATISM_QUARTERS',
+    'B5_EARNINGS_SURPRISE_FETCH_DELAY': 'FETCH_DELAY',
+    'B6_EARNINGS_SURPRISE_SURPRISE_POS': 'SURPRISE_POS',
+    'B6_EARNINGS_SURPRISE_CONS_HIGH_MEAN': 'CONS_HIGH_MEAN',
+    'B6_EARNINGS_SURPRISE_CONS_MID_MEAN': 'CONS_MID_MEAN',
+    'B6_EARNINGS_SURPRISE_CONS_LOW_MEAN': 'CONS_LOW_MEAN',
+    'B6_EARNINGS_SURPRISE_CONS_HIGH_STD': 'CONS_HIGH_STD',
+    'B6_EARNINGS_SURPRISE_CONS_MID_STD': 'CONS_MID_STD',
+    'B6_EARNINGS_SURPRISE_CONS_LOW_STD': 'CONS_LOW_STD',
+    'B6_EARNINGS_SURPRISE_SURPRISE_COMBO_NEG_ACCEL': 'SURPRISE_COMBO_NEG_ACCEL',
+    'B6_EARNINGS_SURPRISE_SURPRISE_COMBO_NEG_CONSERV': 'SURPRISE_COMBO_NEG_CONSERV',
+}
+
+# ── config 参照ヘルパー（2026-07-25 追加）─────────────────────
+# analyze_ticker() は cfg を引数に取らない設計のため、フラグ参照用に
+# ここで遅延ロードする。呼び出し側のシグネチャを変えずに済ませるための措置。
+_CFG_CACHE = None
+
+
+def _cfg_es():
+    """config モジュールを返す（取得できなければ None）。"""
+    global _CFG_CACHE
+    if _CFG_CACHE is None:
+        try:
+            import importlib
+            import sys as _s
+            _p = str(Path(__file__).parent)
+            if _p not in _s.path:
+                _s.path.insert(0, _p)
+            _CFG_CACHE = importlib.import_module("config")
+        except Exception:
+            _CFG_CACHE = False   # 再試行しない印
+    return _CFG_CACHE or None
+
+def _fetch_earnings_history_extended(ticker: str, n_quarters: int = None) -> list:
     """
-    [I-2] 最大8四半期の EPS 予想 vs 実績を取得する（保守度計算用）。
-    _fetch_earnings_history() と同様だが取得件数を最大8件に拡張。
+    [I-2] 直近 n_quarters 四半期の EPS 予想 vs 実績を取得する（保守度計算用）。
+    _fetch_earnings_history() と同様だが取得件数を拡張している。
+
+    n_quarters を省略すると config.py BLOCK I-2 の
+    CONSERVATISM_MIN_QUARTERS（既定8）を使う。
+
+    ★ 2026-07-25 バッチ3: 四半期数を config から読むよう是正。
+      従来はモジュール定数 CONSERVATISM_QUARTERS=8 だけが効いており、
+      config 側 CONSERVATISM_MIN_QUARTERS=4 は誰にも読まれていなかった
+      （名前も値も食い違う二重定義）。健太の指示により実装値 8 を正とし、
+      config を 8 へ揃えたうえで config を正本にした（挙動は不変）。
+      既定引数に置かず None 判定にしているのは、既定値が def 実行時に
+      固定されて config の変更が反映されなくなるのを避けるため。
     """
+    if n_quarters is None:
+        n_quarters = int(getattr(_cfg_es(), "CONSERVATISM_MIN_QUARTERS",
+                                 CONSERVATISM_QUARTERS))
     try:
         import yfinance as yf
         t    = yf.Ticker(ticker)
@@ -364,9 +422,17 @@ def analyze_ticker(ticker: str) -> Optional[dict]:
     bonus          = _calc_screener_bonus(consec_pos, consec_neg)
 
     # [I-2] 保守度スコアを同時計算（拡張履歴で）
-    history_ext    = _fetch_earnings_history_extended(ticker)
-    conserv_result = calc_conservatism_score(ticker, history_ext)
-    conserv_score  = conserv_result["conservatism_score"]
+    # 2026-07-25: BLOCK I-2 の ENABLE_CONSERVATISM_SCORE を配線。
+    # 実装はここに揃っていたのに有効フラグだけ誰にも読まれておらず、
+    # False にしても保守度の追加取得（履歴8四半期のfetch）が止まらなかった。
+    # 無効時は中立50・bonus 0 として下流の式を壊さずスキップする。
+    if not getattr(_cfg_es(), "ENABLE_CONSERVATISM_SCORE", True):
+        conserv_result = {"conservatism_score": 50.0, "skipped": True}
+        conserv_score  = 50.0
+    else:
+        history_ext    = _fetch_earnings_history_extended(ticker)
+        conserv_result = calc_conservatism_score(ticker, history_ext)
+        conserv_score  = conserv_result["conservatism_score"]
 
     # conservatism_bonus: screener_bonus に上乗せ
     if conserv_score >= 80:    conserv_bonus = 5.0
@@ -464,6 +530,7 @@ def run_earnings_surprise(cfg, tickers: Optional[list] = None) -> dict:
           "timestamp": str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  📊 決算サプライズ分析開始...")
 
     # キャッシュ確認
