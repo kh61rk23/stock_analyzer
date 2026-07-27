@@ -12,6 +12,8 @@
 # ==============================================================
 
 from __future__ import annotations
+
+from config_sync import sync_module_constants
 import json, math, time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -35,6 +37,28 @@ WEIGHT_TECHNICAL = 0.20
 # ==============================================================
 # BLOCK 1: 純粋テクニカル指標計算
 # ==============================================================
+
+
+# ── config を正本とする定数の対応表（2026-07-25 SSOT移設）──
+# config.py BLOCK 59 が正本。run_* の冒頭で一度だけ取り込む。
+# 値は移設時点の実装値と同一のため挙動は変わらない。
+_CFG_CONST_MAP = {
+    "TS_RSI_PERIOD": "RSI_PERIOD",
+    "TS_BB_PERIOD": "BB_PERIOD",
+    "TS_CACHE_HOURS": "CACHE_HOURS",
+    "TS_WEIGHT_SECTOR": "WEIGHT_SECTOR",
+    "TS_WEIGHT_VALUE": "WEIGHT_VALUE",
+    "TS_WEIGHT_QUALITY": "WEIGHT_QUALITY",
+    "TS_WEIGHT_TECHNICAL": "WEIGHT_TECHNICAL",
+    'B4_TECHNICAL_SCORER_HISTORY_PERIOD': 'HISTORY_PERIOD',
+    'B5_TECHNICAL_SCORER_FETCH_DELAY': 'FETCH_DELAY',
+    'B6_TECHNICAL_SCORER_MACD_FAST': 'MACD_FAST',
+    'B6_TECHNICAL_SCORER_MACD_SLOW': 'MACD_SLOW',
+    'B6_TECHNICAL_SCORER_MACD_SIGNAL': 'MACD_SIGNAL',
+    'B6_TECHNICAL_SCORER_BB_STD': 'BB_STD',
+    'B6_TECHNICAL_SCORER_MA_SHORT': 'MA_SHORT',
+    'B6_TECHNICAL_SCORER_MA_LONG': 'MA_LONG',
+}
 
 def _ema(values: list, period: int) -> list:
     if len(values) < period:
@@ -339,6 +363,8 @@ def get_technical_bonus(ticker: str, tech_cache: dict) -> float:
 # ==============================================================
 
 def run_technical_scorer(cfg, tickers: list) -> dict:
+    # 2026-07-25: 閾値・重みを config.py BLOCK 59 から取り込む
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print(f"\n  📈 テクニカルスコア計算中（{len(tickers)}銘柄）...")
     cached   = _load_cache(cfg)
     to_fetch = [t for t in tickers if t not in cached]

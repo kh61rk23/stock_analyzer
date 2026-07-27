@@ -24,7 +24,7 @@ import argparse
 import json
 import re
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
@@ -131,13 +131,15 @@ def _load_screener_candidates(cfg) -> list:
     sh = data_dir / "screener_history.json"
     try:
         data = json.loads(sh.read_text(encoding="utf-8"))
-        for d in sorted(data.keys(), reverse=True):
-            cands = (data[d] or {}).get("candidates", [])
-            if cands:
-                return cands
-    except Exception:
-        pass
-    return []
+    except Exception as e:
+        # 2026-07-25: ここは以前 except で全部握り潰しており、形式不一致
+        # （日付の値はlistなのに .get("candidates") を呼んでいた）による
+        # AttributeError が見えず「候補が空」としか分からなかった。
+        print(f"  ⚠️ screener_history 読込失敗: {str(e)[:80]}")
+        return []
+    from performance_tracker import latest_candidates
+    _, cands = latest_candidates(data)
+    return cands
 
 
 def _load_ledger_tickers(cfg) -> set:
@@ -197,16 +199,70 @@ def run_prep(cfg, ticker: str = "", dry_run: bool = False) -> dict:
             "prompts_path": prompts_path, "skipped": False}
 
 
+def _state_path(cfg) -> Path:
+    base = Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
+    return base / "deliberation_state.json"
+
+
+def due_for_run(cfg, today: date = None, interval_days: int = None) -> tuple:
+    """隔週判定。Returns: (走らせるか, 理由)
+
+    launchd は毎週日曜に起動する（StartCalendarInterval に隔週指定が無いため）。
+    実際に走らせるかはここで前回実行日から判定する。
+    前回記録が無い初回は必ず走らせる。
+    """
+    today = today or date.today()
+    interval = int(interval_days if interval_days is not None
+                   else getattr(cfg, "DELIBERATION_INTERVAL_DAYS", 14))
+    try:
+        st = json.loads(_state_path(cfg).read_text(encoding="utf-8"))
+        last = date.fromisoformat(str(st.get("last_run", "")))
+    except Exception:
+        return True, "前回実行の記録なし（初回）"
+    elapsed = (today - last).days
+    if elapsed >= interval:
+        return True, f"前回から{elapsed}日経過（間隔{interval}日）"
+    return False, f"前回から{elapsed}日（間隔{interval}日に未達）"
+
+
+def _record_run(cfg, today: date = None) -> None:
+    p = _state_path(cfg)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(
+            {"last_run": (today or date.today()).isoformat()},
+            ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"  ⚠️ 実行日記録に失敗: {str(e)[:60]}")
+
+
 def main():
     ap = argparse.ArgumentParser(description="B部門隔週自動審議の準備（E3）")
     ap.add_argument("--ticker", default="", help="対象銘柄（省略時は自動選定）")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--force", action="store_true",
+                    help="隔週判定を無視して実行する")
     args = ap.parse_args()
     try:
         import config as cfg
     except Exception:
         cfg = None
-    run_prep(cfg, args.ticker, args.dry_run)
+
+    # 2026-07-25: BLOCK 39 の ENABLE_INVESTMENT_DEPT を配線。
+    if not getattr(cfg, "ENABLE_INVESTMENT_DEPT", True):
+        print("⏩ 審議準備: スキップ（ENABLE_INVESTMENT_DEPT=False）")
+        return
+
+    if not args.force and not args.dry_run:
+        ok, why = due_for_run(cfg)
+        if not ok:
+            print(f"⏩ 審議準備: スキップ（{why}）— 手動実行は --force")
+            return
+        print(f"🗓️ 審議準備を実行: {why}")
+
+    result = run_prep(cfg, args.ticker, args.dry_run)
+    if not args.dry_run and not result.get("skipped"):
+        _record_run(cfg)
 
 
 if __name__ == "__main__":

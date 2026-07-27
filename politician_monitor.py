@@ -106,6 +106,16 @@ _SIZE_LABEL_MAP = {
 }
 
 # 重要委員会リスト → committee_multiplier
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'PMON_COMMITTEE_MULTIPLIER': '_COMMITTEE_MULTIPLIER',
+    'B5_POLITICIAN_MONITOR_REQUEST_TIMEOUT': '_REQUEST_TIMEOUT',
+    'B5_POLITICIAN_MONITOR_RETRY_COUNT': '_RETRY_COUNT',
+    'B5_POLITICIAN_MONITOR_RETRY_WAIT_SEC': '_RETRY_WAIT_SEC',
+}
+
 _COMMITTEE_MULTIPLIER = {
     "ways and means":            1.6,
     "financial services":        1.5,
@@ -746,6 +756,7 @@ def run_politician_monitor(cfg) -> dict:
           "timestamp":         str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     if not getattr(cfg, "ENABLE_POLITICIAN_MONITOR", True):
         print("  ⏩ 議員取引監視: スキップ（ENABLE_POLITICIAN_MONITOR=False）")
         return {"skipped": True, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}

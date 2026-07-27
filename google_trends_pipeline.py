@@ -100,6 +100,19 @@ DEFAULT_TREND_KEYWORDS: dict[str, list[str]] = {
 }
 
 # トレンドスコアの閾値
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'GTP_TREND_TAILWIND_THRESHOLD': 'TREND_TAILWIND_THRESHOLD',
+    'GTP_TREND_HEADWIND_THRESHOLD': 'TREND_HEADWIND_THRESHOLD',
+    'GTP_TREND_MOM_BOOST_THRESHOLD': 'TREND_MOM_BOOST_THRESHOLD',
+    'B4_GOOGLE_TRENDS_PIPELINE_CACHE_VALID_DAYS': 'CACHE_VALID_DAYS',
+    'B4_GOOGLE_TRENDS_PIPELINE_LOOKBACK_WEEKS': 'LOOKBACK_WEEKS',
+    'B5_GOOGLE_TRENDS_PIPELINE_FETCH_SLEEP_SEC': 'FETCH_SLEEP_SEC',
+    'B6_GOOGLE_TRENDS_PIPELINE_TREND_TAILWIND_PTS': 'TREND_TAILWIND_PTS',
+}
+
 TREND_TAILWIND_THRESHOLD  = 60   # 60以上 → 追い風
 TREND_HEADWIND_THRESHOLD  = 40   # 40未満 → 逆風
 TREND_MOM_BOOST_THRESHOLD = 0.20 # 前月比+20%超 → +3pt ブースト
@@ -241,7 +254,7 @@ def _fetch_trend_for_sector(
 # BLOCK 3: スコア正規化とシグナル判定
 # ==============================================================
 
-def _normalize_to_score(trend_score: float, mom_growth: float) -> tuple[float, str, float]:
+def _normalize_to_score(trend_score: float, mom_growth: float, cfg=None) -> tuple[float, str, float]:
     """
     Googleトレンドの生スコア（0〜100）とMoM成長率から
     業種評価用のスコアとシグナルを生成する。
@@ -260,11 +273,14 @@ def _normalize_to_score(trend_score: float, mom_growth: float) -> tuple[float, s
     final_score = round((trend_score * 0.4 + mom_score * 0.6), 1)
 
     # シグナル判定
-    if final_score >= TREND_TAILWIND_THRESHOLD or mom_growth >= TREND_MOM_BOOST_THRESHOLD:
+    # 2026-07-25 バッチ6: 前月比ブースト閾値を config.TREND_MOM_THRESHOLD から読む
+    # （従来はモジュール定数 TREND_MOM_BOOST_THRESHOLD のみが効いていた）
+    _mom_th = float(getattr(cfg, "TREND_MOM_THRESHOLD", TREND_MOM_BOOST_THRESHOLD))
+    if final_score >= TREND_TAILWIND_THRESHOLD or mom_growth >= _mom_th:
         signal  = "tailwind"
         pts_adj = TREND_TAILWIND_PTS
         # MoM20%超は追加ブースト
-        if mom_growth >= TREND_MOM_BOOST_THRESHOLD * 2:
+        if mom_growth >= _mom_th * 2:
             pts_adj += 2.0
     elif final_score < TREND_HEADWIND_THRESHOLD:
         signal  = "headwind"
@@ -444,6 +460,7 @@ def run_google_trends(cfg, results: dict = None) -> dict:
           "timestamp":        str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     if not getattr(cfg, "ENABLE_GOOGLE_TRENDS", True):
         return {"skipped": True}
 
@@ -511,7 +528,7 @@ def run_google_trends(cfg, results: dict = None) -> dict:
 
         error_count = 0   # 成功でリセット
         final_score, signal, pts_adj = _normalize_to_score(
-            raw["trend_score"], raw["mom_growth"]
+            raw["trend_score"], raw["mom_growth"], cfg
         )
         sectors_data[code] = {
             "keywords":    keywords[:3],

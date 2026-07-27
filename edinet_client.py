@@ -45,6 +45,12 @@ EDINETDB_BASE = "https://edinetdb.jp/v1"
 GOV_EDINET_BASE = "https://disclosure.edinet-fsa.go.jp/api/v2"
 
 # 1日あたりの最大APIコール数（民間EdinetDB）
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B5_EDINET_CLIENT_DAILY_BUDGET': 'DAILY_BUDGET',
+}
+
 DAILY_BUDGET = 80
 
 
@@ -470,6 +476,7 @@ def get_full_company_data(ticker: str, cfg,
             "from_cache":   bool,
           }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     db_api_key = getattr(cfg, "EDINETDB_API_KEY", "")
     cache_days  = getattr(cfg, "EDINET_CACHE_DAYS", 100)
 

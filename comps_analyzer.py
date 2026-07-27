@@ -13,14 +13,14 @@
 #   3. 対象銘柄の指標が中央値より有利かどうかをスコア化
 #
 # 【comps_score（0〜100）の計算】
-#   PER 相対スコア   (30%) : 業種中央値 PER 比
-#   PBR 相対スコア   (20%) : 業種中央値 PBR 比
-#   EV/EBITDA スコア(25%) : 業種中央値比（データある場合のみ）
-#   ROE 相対スコア   (25%) : 業種内ランク百分率
+#   PER 相対スコア   (40%) : 業種内ランク百分率
+#   PBR 相対スコア   (30%) : 業種内ランク百分率
+#   EV/EBITDA スコア(30%) : 業種内ランク百分率（データある場合のみ）
+#   ROE 相対スコア          : 診断表示のみ（quality_scoreとの二重計上を防止）
 #
 # 【screener 統合】
-#   comps_score を value_score に加算して composite_score を更新:
-#     new_value_score = value_score × 0.7 + comps_score × 0.3
+#   comps_score と DCF を一元的に value_score へ統合する。
+#   同じ候補へ再適用しても base_value_score から再計算するため二重計上しない。
 #
 # 【依存】yfinance / stock_screener.py の JP_SECTOR_TICKERS / config.py
 # ==============================================================
@@ -34,9 +34,16 @@ from pathlib import Path
 from typing import Optional
 
 FETCH_DELAY        = 0.2
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B4_COMPS_ANALYZER_CACHE_HOURS': 'CACHE_HOURS',
+    'B5_COMPS_ANALYZER_FETCH_DELAY': 'FETCH_DELAY',
+}
+
 CACHE_HOURS        = 24
 CACHE_FILENAME     = "comps_analyzer_cache.json"
-COMPS_VALUE_WEIGHT = 0.30   # value_score への影響度
+_COMPS_SCORE_VERSION = 2
 
 
 # ==============================================================
@@ -167,12 +174,12 @@ def calc_comps_score(
     if target.get("ev_ebitda") and med_ev:
         ev_score = _percentile_rank(target["ev_ebitda"], all_ev, higher_is_better=False)
 
-    # 加重平均（利用可能な指標だけで計算）
+    # 加重平均（利用可能な価値指標だけで計算）。ROE は quality_score の
+    # 主軸として既に総合点へ入るため、診断順位には残すがここでは寄与させない。
     parts = []
-    if per_score is not None: parts.append((per_score, 0.30))
-    if pbr_score is not None: parts.append((pbr_score, 0.20))
-    if roe_score is not None: parts.append((roe_score, 0.25))
-    if ev_score  is not None: parts.append((ev_score,  0.25))
+    if per_score is not None: parts.append((per_score, 0.40))
+    if pbr_score is not None: parts.append((pbr_score, 0.30))
+    if ev_score  is not None: parts.append((ev_score,  0.30))
 
     if not parts:
         return {"comps_score": 50.0, "comps_bonus": 0.0, "label": "指標不足", "n_peers": len(sector_records)}
@@ -224,6 +231,8 @@ def _load_cache(cfg) -> dict:
         if not p.exists():
             return {}
         data = json.loads(p.read_text(encoding="utf-8"))
+        if data.get("score_version") != _COMPS_SCORE_VERSION:
+            return {}
         if datetime.now() - datetime.fromisoformat(data.get("cached_at", "2000-01-01")) \
                 < timedelta(hours=CACHE_HOURS):
             return data.get("results", {})
@@ -236,6 +245,7 @@ def _save_cache(cfg, results: dict) -> None:
         p = _cache_path(cfg)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps({"cached_at": datetime.now().isoformat(),
+                                  "score_version": _COMPS_SCORE_VERSION,
                                   "results": results}, ensure_ascii=False, indent=2),
                      encoding="utf-8")
     except Exception:
@@ -244,6 +254,57 @@ def _save_cache(cfg, results: dict) -> None:
 def get_comps_bonus(ticker: str, comps_cache: dict) -> float:
     """stock_screener.py から呼び出すインターフェース。"""
     return float(comps_cache.get(ticker, {}).get("comps_bonus", 0.0))
+
+
+def integrate_valuation_score(
+    base_value_score: float,
+    comps_data: Optional[dict] = None,
+    dcf_bonus: Optional[float] = None,
+    cfg=None,
+) -> dict:
+    """既存財務・comps・DCFを一度だけ統合した value_score を返す。
+
+    comps は加算ではなく base_value_score との差分ブレンド、DCF は既存の
+    段階ボーナスとする。利用可能なソースだけを使い、合計寄与を制限する。
+    """
+    base = max(0.0, min(100.0, float(base_value_score)))
+    weight = float(getattr(cfg, "COMPS_VALUE_BLEND_WEIGHT", 0.30))
+    comps_cap = abs(float(getattr(cfg, "COMPS_VALUE_DELTA_CAP", 10.0)))
+    total_cap = abs(float(getattr(cfg, "VALUATION_TOTAL_ADJUSTMENT_CAP", 10.0)))
+    if not 0.0 <= weight <= 1.0:
+        raise ValueError("COMPS_VALUE_BLEND_WEIGHT must be between 0 and 1")
+
+    comps_delta = 0.0
+    comps_score = None
+    if isinstance(comps_data, dict) and comps_data.get("comps_score") is not None:
+        try:
+            comps_score = max(0.0, min(100.0, float(comps_data["comps_score"])))
+            comps_delta = max(-comps_cap, min(comps_cap, weight * (comps_score - base)))
+        except (TypeError, ValueError):
+            comps_score = None
+            comps_delta = 0.0
+
+    try:
+        dcf_delta = float(dcf_bonus) if dcf_bonus is not None else 0.0
+    except (TypeError, ValueError):
+        dcf_delta = 0.0
+
+    total_delta = max(-total_cap, min(total_cap, comps_delta + dcf_delta))
+    value_score = max(0.0, min(100.0, base + total_delta))
+    sources = []
+    if comps_score is not None:
+        sources.append("comps")
+    if dcf_bonus is not None:
+        sources.append("dcf")
+    return {
+        "base_value_score": round(base, 1),
+        "value_score": round(value_score, 1),
+        "comps_score": round(comps_score, 1) if comps_score is not None else None,
+        "comps_delta": round(comps_delta, 1),
+        "dcf_delta": round(dcf_delta, 1),
+        "valuation_adjustment": round(total_delta, 1),
+        "valuation_sources": sources,
+    }
 
 
 # ==============================================================
@@ -262,6 +323,7 @@ def run_comps_analyzer(cfg, screener_result: dict) -> dict:
     Returns:
         {"results": {ticker: comps_result}, "top_cheap": [...], "timestamp": str}
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  📊 同業種内比較分析（comps）開始...")
 
     cached   = _load_cache(cfg)

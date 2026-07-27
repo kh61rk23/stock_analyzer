@@ -71,6 +71,8 @@ _RAW_BQ_CACHE: Any = None
 _RISK_SCORE_CACHE: dict[str, float] = {}     # {country_code: score}
 _EXPOSURE_CACHE:   dict[str, list]  = {}     # {ticker: exposure_list}
 _CACHE_DATE: str = ""                         # キャッシュの日付（日次リセット）
+# キャッシュを張った時刻（2026-07-25: GEO_RISK_CACHE_TTL_SEC 判定用）
+_CACHE_STAMP: float = 0.0
 
 
 def _get_raw_bq(project_id: str = "stock-analyzer-edinet"):
@@ -91,14 +93,24 @@ def _get_raw_bq(project_id: str = "stock-analyzer-edinet"):
         return None
 
 
-def _reset_daily_cache() -> None:
-    """日付が変わったらキャッシュをリセットする。"""
-    global _RISK_SCORE_CACHE, _EXPOSURE_CACHE, _CACHE_DATE
+def _reset_daily_cache(cfg=None) -> None:
+    """キャッシュの有効期限を過ぎたらリセットする。
+
+    2026-07-25 バッチ5: 有効期限を config.GEO_RISK_CACHE_TTL_SEC（既定86400秒）
+    から読むよう是正。従来は「日付が変わったら」の日次リセット固定で、
+    config 側の定数は誰にも読まれていなかった。
+    既定の86400秒＝1日なので、既定値のままなら実質的な挙動は変わらない。
+    """
+    global _RISK_SCORE_CACHE, _EXPOSURE_CACHE, _CACHE_DATE, _CACHE_STAMP
+    ttl = float(getattr(cfg, "GEO_RISK_CACHE_TTL_SEC", 86400) or 86400)
+    now = time.time()
     today = date.today().isoformat()
-    if _CACHE_DATE != today:
+    # TTL 経過、または日付が変わったらリセット（どちらか早いほう）
+    if (now - _CACHE_STAMP) >= ttl or _CACHE_DATE != today:
         _RISK_SCORE_CACHE = {}
         _EXPOSURE_CACHE   = {}
         _CACHE_DATE       = today
+        _CACHE_STAMP      = now
 
 
 # ==============================================================
@@ -125,7 +137,7 @@ def _get_exposure_list(
         list of {country_code, exposure_type, exposure_strength,
                  commodity_code, composite_risk_score}
     """
-    _reset_daily_cache()
+    _reset_daily_cache(cfg)
     _pid = getattr(cfg, "GEO_BQ_PROJECT_ID", project_id) if cfg else project_id
 
     # ① 事前取得データ
@@ -231,7 +243,7 @@ def _get_risk_scores_for_countries(
     Returns:
         {country_code: composite_risk_score}
     """
-    _reset_daily_cache()
+    _reset_daily_cache(cfg)
     _pid = getattr(cfg, "GEO_BQ_PROJECT_ID", project_id) if cfg else project_id
 
     result: dict[str, float] = {}

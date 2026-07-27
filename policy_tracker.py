@@ -383,6 +383,7 @@ def run_policy_tracker(cfg) -> dict:
     政策金利変化の検知を実行して結果辞書を返す。
     失敗時は {} を返し、例外を上位に伝播しない。
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  🏦 政策金利トラッカー 開始...")
     t0 = datetime.now()
 
@@ -720,8 +721,14 @@ _PDF_KEYWORD_SECTOR_MAP: dict = {
     "エネルギー":  ["1020", "1009"],
 }
 
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'PT_L3_SOURCE_THRESHOLD': '_L3_SOURCE_THRESHOLD',
+}
+
 _L3_SOURCE_THRESHOLD  = 3    # L3 昇格に必要な裏付けソース数
-_L3_SCORE_THRESHOLD   = 1.5  # 累積 realization_score の合計閾値
 
 
 def _extract_sector_signals_from_pdf(
@@ -733,18 +740,34 @@ def _extract_sector_signals_from_pdf(
     Returns:
         {sector_code: [source_name, ...]}  ソース数の多い業種ほど信頼度高
     """
-    sector_sources: dict[str, list[str]] = {}
+    evidence = _extract_sector_evidence_from_pdf(pdf_items)
+    return {sector: list(source_scores) for sector, source_scores in evidence.items()}
+
+
+def _extract_sector_evidence_from_pdf(
+    pdf_items: list[dict],
+) -> dict[str, dict[str, float]]:
+    """業種ごとにユニークソースと最大実現度スコアを集約する。"""
+    sector_evidence: dict[str, dict[str, float]] = {}
 
     for item in pdf_items:
         text   = item.get("text", "")
-        source = item.get("source_name", "")
+        source = item.get("source_name", "") or item.get("url", "")
+        if not text or not source:
+            continue
+        try:
+            from policy_radar import _calc_realization_score
+            realization_score = float(_calc_realization_score(text, source))
+        except Exception:
+            realization_score = 0.0
         for kw, sectors in _PDF_KEYWORD_SECTOR_MAP.items():
             if kw not in text:
                 continue
             for sc in sectors:
-                sector_sources.setdefault(sc, []).append(source)
+                sources = sector_evidence.setdefault(sc, {})
+                sources[source] = max(sources.get(source, 0.0), realization_score)
 
-    return sector_sources
+    return sector_evidence
 
 
 def promote_to_medium_cache_from_pdf(
@@ -756,7 +779,9 @@ def promote_to_medium_cache_from_pdf(
     PDF テキスト解析結果から L3 自動昇格を判定・実行する。
 
     昇格条件:
-      sector_sources[sc] のソース数 >= _L3_SOURCE_THRESHOLD(3)
+      ユニークソース数 >= PT_L3_SOURCE_THRESHOLD(3)
+      AND ソース別最大 realization_score の合計
+          >= PT_L3_REALIZATION_SCORE_THRESHOLD(1.5)
 
     policy_medium_cache.json に昇格エントリを追記する。
 
@@ -766,7 +791,13 @@ def promote_to_medium_cache_from_pdf(
     if not pdf_items:
         return 0
 
-    sector_sources = _extract_sector_signals_from_pdf(pdf_items)
+    sector_evidence = _extract_sector_evidence_from_pdf(pdf_items)
+    source_threshold = int(getattr(
+        cfg, "PT_L3_SOURCE_THRESHOLD", _L3_SOURCE_THRESHOLD
+    ))
+    score_threshold = float(getattr(
+        cfg, "PT_L3_REALIZATION_SCORE_THRESHOLD", 1.5
+    ))
     promoted       = 0
     today          = datetime.now().strftime("%Y-%m-%d")
 
@@ -785,9 +816,11 @@ def promote_to_medium_cache_from_pdf(
         s.get("policy_key") for s in medium.get("signals", [])
     }
 
-    for sc, sources in sector_sources.items():
-        if len(sources) < _L3_SOURCE_THRESHOLD:
-            continue  # 裏付けソース数が閾値未満
+    for sc, source_scores in sector_evidence.items():
+        sources = sorted(source_scores)
+        total_score = sum(source_scores.values())
+        if len(sources) < source_threshold or total_score < score_threshold:
+            continue  # ソース数と実現度スコアのAND条件
 
         key = f"pdf_l3_{sc}_{today}"
         if key in existing_keys:
@@ -802,15 +835,16 @@ def promote_to_medium_cache_from_pdf(
             "registered_at":   today,
             "source":          "policy_tracker_pdf_l3",
             "label":           f"PDF裏付け自動昇格: {sc} ({len(sources)}ソース)",
-            "source_list":     list(set(sources)),
+            "source_list":     sources,
             "cumulative_count": len(sources),
+            "cumulative_realization_score": round(total_score, 4),
         })
         existing_keys.add(key)
         promoted += 1
         print(
             f"    ⭐ [policy_tracker] L3自動昇格: "
             f"sector={sc} "
-            f"({len(sources)}ソース: {list(set(sources))[:3]}) "
+            f"({len(sources)}ソース, score={total_score:.2f}: {sources[:3]}) "
             f"→ policy_medium_cache +{boost_pt:.1f}pt"
         )
 

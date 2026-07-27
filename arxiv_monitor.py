@@ -422,6 +422,13 @@ def save_seen_papers(seen: set):
 import time as _time
 
 _SS_REQUEST_INTERVAL = 3.0   # Semantic Scholar 公開API レート制限（3秒/req）
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B5_ARXIV_MONITOR_SS_TIMEOUT': '_SS_TIMEOUT',
+    'B6_ARXIV_MONITOR_SS_REQUEST_INTERVAL': '_SS_REQUEST_INTERVAL',
+}
+
 _SS_TIMEOUT          = 15    # タイムアウト（秒）
 
 
@@ -879,6 +886,8 @@ def run_monitor(investment_threshold: int | None = None) -> dict:
           "fetch_log":              list,  # ← 新規
         }
     """
+    import config as cfg
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     threshold = investment_threshold or cfg.ARXIV_INVESTMENT_THRESHOLD
 
     print("=" * 60)

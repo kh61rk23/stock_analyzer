@@ -54,8 +54,18 @@ from typing import Optional
 
 _PROXIMITY_DAYS_DEFAULT   = [14, 30, 60]
 _PROXIMITY_SCORES_DEFAULT = [1.0, 0.6, 0.3]
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'CC_CATALYST_BONUS_MAX': '_CATALYST_BONUS_MAX',
+    'CC_TRIPLE_THRESHOLD': '_TRIPLE_THRESHOLD',
+    'B4_CATALYST_CALENDAR_HISTORY_TTL_DAYS': '_HISTORY_TTL_DAYS',
+    'B4_CATALYST_CALENDAR_TRIPLE_WINDOW_DAYS': '_TRIPLE_WINDOW_DAYS',
+    'B5_CATALYST_CALENDAR_FETCH_DELAY': '_FETCH_DELAY',
+}
+
 _CATALYST_BONUS_MAX       = 5.0
-_CALENDAR_TTL_DAYS        = 30
 _HISTORY_TTL_DAYS         = 365
 _FETCH_DELAY              = 0.5
 _TRIPLE_THRESHOLD         = 3     # 3種類以上でTriple Catalyst発動
@@ -624,6 +634,7 @@ def run_catalyst_calendar(
           "generated":         str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("  📅 [catalyst_calendar] カタリストカレンダー更新中...")
 
     if results is None:

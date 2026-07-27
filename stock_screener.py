@@ -43,6 +43,7 @@
 # 【呼出】from stock_screener import run_stock_screener
 # ==============================================================
 
+import math
 import time
 from datetime import datetime
 from pathlib import Path
@@ -257,7 +258,25 @@ def enrich_candidates_with_sector(
                     c["sector_name"] = f"JP_{sc}"
         else:
             # US株（yf_info は持っていない場合は None）
-            yf_info = c.get("_yf_info")   # _fetch_ticker_data が格納している場合
+            # ── [F-5 / U-5 調査結果 2026-07-28] ────────────────────────
+            # `_yf_info` を格納しているコードはリポジトリ内に存在しない。
+            # U-5 で market_data.fetch_quote() が生 info（`_raw_info`）を
+            # 返せるようになったが、**JP 側の _fetch_ticker_data には
+            # 格納しない**方針とした。理由:
+            #   1. 本関数の唯一の呼び出し元（stock_analyzer_main.py:3163）が
+            #      渡すのは JP スクリーナーの candidates のみで、その ticker は
+            #      すべて ".T" である。したがって `_yf_info` を読む本 else 節に
+            #      JP 銘柄が到達することはなく、格納しても効果がない。
+            #   2. candidate 辞書は L1650 付近でキーを明示列挙して組み立てて
+            #      おり、_fetch_ticker_data の返り値をそのまま使っていない。
+            #   3. それでも technical_scorer.integrate_technical_score() が
+            #      `{**data, **scores}` を丸ごと返すため、data に `_yf_info` を
+            #      足すと **テクニカルキャッシュにヒットした銘柄だけ** 生 info
+            #      （約150キー）が candidate に混入し、results["screener"]
+            #      ["candidates"] の JSON に載ってしまう（不揃いかつ肥大化）。
+            # 以上より F-5 の正しい是正は「本関数側の作り直し」であり、
+            # U-5 のスコープ外。ここでは現状維持（常に None）とする。
+            yf_info = c.get("_yf_info")   # 現状は常に None（上記参照）
             sc, label = get_us_sector_code(ticker, yf_info)
             if sc:
                 c["sector_code"] = sc
@@ -268,9 +287,17 @@ def enrich_candidates_with_sector(
 
 # [S-3] 未発見銘柄スコアの判定しきい値
 DISCOVERY_MCAP_MAX_B      = 500.0   # 時価総額500億円以下
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'SS_DISCOVERY_ANALYST_MAX': 'DISCOVERY_ANALYST_MAX',
+    'SS_DISCOVERY_VOLUME_RATIO': 'DISCOVERY_VOLUME_RATIO',
+    'B6_STOCK_SCREENER_DISCOVERY_MCAP_MAX_B': 'DISCOVERY_MCAP_MAX_B',
+}
+
 DISCOVERY_ANALYST_MAX     = 3       # アナリスト数3人未満
 DISCOVERY_VOLUME_RATIO    = 0.5     # 業種平均出来高の0.5倍以下
-DISCOVERY_SCORE_THRESHOLD = 0.80    # composite_score上位20%相当（スコア比率）
 
 # [S-2] EDINETアクルーアルのtierしきい値（Sloan 1996準拠）
 ACCRUAL_TIERS = [
@@ -292,91 +319,70 @@ def _fetch_ticker_data(ticker: str) -> Optional[dict]:
     1銘柄の財務データを yfinance で取得する。
 
     v3.0変更: numberOfAnalystOpinions（アナリスト数）を追加取得
+    [U-5] 取得と正規化は market_data.fetch_quote() に一本化した。
+          本関数は「fetch_quote の返り値を JP 従来のキー名・従来の単位へ
+          写像するだけの薄い層」であり、返り値のキー集合・値は U-5 以前と同一。
+          （副作用として US 側のリトライ＝429 指数バックオフが JP にも効く。
+            要件定義書_JP-US統合_20260726.md §7-2 に記載済みの意図的改善）
 
     Returns:
         {ticker, name, per, pbr, roe, market_cap_b, avg_volume, analyst_count}
         取得失敗時は None
     """
     try:
-        import yfinance as yf  # type: ignore
+        import sys as _sys, importlib as _imp
+        _sys.path.insert(0, str(Path(__file__).parent))
+        _md = _imp.import_module("market_data")
 
-        t    = yf.Ticker(ticker)
-        info = t.info
-
-        if not info or info.get("regularMarketPrice") is None:
+        q = _md.fetch_quote(ticker, "JP")
+        if q is None:
             return None
 
-        per        = info.get("trailingPE")
-        pbr        = info.get("priceToBook")
-        roe        = info.get("returnOnEquity")
-        market_cap = info.get("marketCap") or 0
-        name       = info.get("longName") or info.get("shortName") or ticker
-        avg_vol    = info.get("averageVolume") or info.get("averageVolume10days") or 0
-        current_price = (
-            info.get("regularMarketPrice") or 
-            info.get("currentPrice") or 
-            info.get("previousClose") or 0
-        )
-        # 在庫回転率 = 売上高 / 棚卸資産（製造業・小売業で有効）
-        revenue   = info.get("totalRevenue")
-        inventory = info.get("inventory")
-        inv_turn  = None
-        if revenue and inventory:
-            try:
-                inv_f = float(inventory)
-                rev_f = float(revenue)
-                if inv_f > 0:
-                    inv_turn = round(rev_f / inv_f, 2)
-            except (TypeError, ValueError):
-                pass
-        # [S-3] アナリストカバレッジ数
-        analyst_count = info.get("numberOfAnalystOpinions")
-        if analyst_count is not None:
-            try:
-                analyst_count = int(analyst_count)
-            except (TypeError, ValueError):
-                analyst_count = None
-
-        def _clean(v):
-            if v is None:
-                return None
-            try:
-                f = float(v)
-                return None if (f != f) else f
-            except (TypeError, ValueError):
-                return None
+        # [F-4] market_cap_b は JP=億円 / US=十億USD で **同名だが単位が違う**。
+        # 互換性維持のため単位の是正はここでは行わない（要件定義書 §3-3(a)）。
+        # 消費側で市場をまたいで比較する場合は、必ず生値
+        # market_data.fetch_quote()["market_cap_raw"] を使うこと。
+        market_cap_raw = q["market_cap_raw"]
+        inv_turn = q["inventory_turnover"]
 
         return {
             "ticker":         ticker,
-            "name":           name[:40],
-            "per":            _clean(per),
-            "pbr":            _clean(pbr),
-            "roe":            _clean(roe),
-            "market_cap_b":   round(market_cap / 1e8, 1),
-            "avg_volume":     int(avg_vol),
-            "current_price":  _clean(current_price),
+            "name":           q["name"][:40],
+            "per":            q["per"],
+            "pbr":            q["pbr"],
+            "roe":            q["roe"],
+            "market_cap_b":   round((market_cap_raw or 0) / 1e8, 1),  # 億円
+            "avg_volume":     q["avg_volume"],
+            "current_price":  q["current_price"],
             # [I-1] EPS成長率（加速度計算用）
-            "earnings_growth":  _clean(info.get("earningsGrowth")),        # 直近年率成長率
-            "earnings_qgrowth": _clean(info.get("earningsQuarterlyGrowth")), # 直近四半期成長率
-            "analyst_count":  analyst_count,   # v3.0追加
+            "earnings_growth":  q["earnings_growth"],    # 直近年率成長率
+            "earnings_qgrowth": q["earnings_qgrowth"],   # 直近四半期成長率
+            "analyst_count":  q["analyst_count"],   # v3.0追加
+            "rec_mean":       q["rec_mean"],        # [F-1/U-4] アナリスト推奨平均
+            "rec_key":        q["rec_key"],         # [F-1/U-4] 推奨キー（文字列）
+            "target_price":   q["target_price"],    # [F-1/U-4] アナリスト目標株価平均
+            "analyst_upside": q["analyst_upside"],  # [F-1/U-4] 目標株価乖離率
             # [M-3] ネットキャッシュ計算用
-            "total_cash":     _clean(info.get("totalCash")),
-            "total_debt":     _clean(info.get("totalDebt")),
-            "market_cap":     _clean(info.get("marketCap")),
-            "payout_ratio":   _clean(info.get("payoutRatio")),
-            "beta":           _clean(info.get("beta")),
+            "total_cash":     q["total_cash"],
+            "total_debt":     q["total_debt"],
+            "market_cap":     market_cap_raw,
+            "payout_ratio":   q["payout_ratio"],
+            "beta":           q["beta"],
             # [P-2] 事業モデル質スコア用フィールド
-            "gross_margin":     _clean(info.get("grossMargins")),
-            "op_margin":        _clean(info.get("operatingMargins")),
-            "net_margin":       _clean(info.get("profitMargins")),
-            "operating_cashflow": _clean(info.get("operatingCashflow")),
-            "net_income":       _clean(info.get("netIncomeToCommon")),
+            "gross_margin":     q["gross_margin"],
+            "op_margin":        q["op_margin"],
+            "net_margin":       q["net_margin"],
+            "operating_cashflow": q["operating_cashflow"],
+            "net_income":       q["net_income"],
             # [P-3] 長期保有候補フラグ用
-            "equity_ratio":     _clean(info.get("bookValue")),      # book_value_per_share
-            "debt_to_equity":   _clean(info.get("debtToEquity")),   # D/Eレシオ
-            "total_assets":     _clean(info.get("totalAssets")),
-            "stockholders_equity": _clean(info.get("stockholdersEquity")),
-            "inventory_turnover": inv_turn,
+            "equity_ratio":     q["book_value"],      # book_value_per_share
+            "debt_to_equity":   q["debt_to_equity"],  # D/Eレシオ
+            "total_assets":     q["total_assets"],
+            "stockholders_equity": q["stockholders_equity"],
+            "inventory_turnover": round(inv_turn, 2) if inv_turn is not None else None,
+            # [F-5] `_yf_info` はここでは格納しない。判断根拠は
+            #       enrich_candidates_with_sector()（本ファイル L229 付近）の
+            #       コメントを参照すること。
         }
     except Exception:
         return None
@@ -568,22 +574,36 @@ def _assign_strategy_label(candidate: dict, cfg=None) -> str:
 def _calc_longterm_hold_flag(
     data: dict,
     edinet_data: dict | None = None,
+    cfg=None,
 ) -> tuple[bool, float, list]:
     """
     片山晃モデルの「10年持てる銘柄」基準を数値化する。
 
     条件（AND 条件）:
-      ① 自己資本比率 >= 60%（財務の堅牢性）
+      ① 自己資本比率 >= LONGTERM_HOLD_EQUITY_RATIO_MIN（財務の堅牢性）
       ② EPS成長率（直近年率）> 0（増益基調）
-      ③ ROE >= 10%（資本効率が高い）
+      ③ ROE >= LONGTERM_HOLD_ROE_MIN（資本効率が高い）
       ④ アクルーアルtier != "C"（利益の質が担保されている）
 
     EDINET の連続増益データがあれば③を3期連続増益で補強する。
+
+    ★ 2026-07-25 バッチ1: 閾値を config.py BLOCK P-3 から読むよう是正。
+      従来は 0.60 / 10.0 / 3 を直書きしており、config 側の
+      LONGTERM_HOLD_* を編集しても何も変わらなかった（SSOT違反）。
+      config の値（0.45 / 0.08）は実装と食い違っていたため、
+      健太の指示により「実装側の値を正」として config を 0.60 / 0.10 へ
+      書き換えたうえで参照する。したがって判定結果は変わらない。
 
     Returns:
         (is_longterm_hold: bool, confidence: float, flags: list[str])
         confidence: 0.0〜1.0（条件充足率）
     """
+    # 既定値は従来の直書き値。config が読めない環境でも挙動を変えない。
+    _eq_min = float(getattr(cfg, "LONGTERM_HOLD_EQUITY_RATIO_MIN", 0.60))
+    # config は比率（0.10）で持ち、比較はパーセントで行うため100倍する。
+    _roe_min_pct = float(getattr(cfg, "LONGTERM_HOLD_ROE_MIN", 0.10)) * 100.0
+    _min_conditions = int(getattr(cfg, "LONGTERM_HOLD_MIN_CONDITIONS", 3))
+
     flags      = []
     conditions = []
 
@@ -599,7 +619,7 @@ def _calc_longterm_hold_flag(
             equity_ratio = 1.0 / (1.0 + de / 100.0) if de > 0 else 1.0
 
     if equity_ratio is not None:
-        if equity_ratio >= 0.60:
+        if equity_ratio >= _eq_min:
             flags.append(f"自己資本比率{equity_ratio*100:.0f}%")
             conditions.append(True)
         else:
@@ -622,7 +642,7 @@ def _calc_longterm_hold_flag(
     roe = data.get("roe")
     if roe is not None:
         roe_pct = roe * 100 if abs(roe) < 1 else roe
-        if roe_pct >= 10.0:
+        if roe_pct >= _roe_min_pct:
             flags.append(f"ROE{roe_pct:.1f}%")
             conditions.append(True)
         else:
@@ -669,7 +689,7 @@ def _calc_longterm_hold_flag(
     # 全条件が True（データなし項目は除外して判定）かつ
     # 有効条件が3件以上ある場合に長期保有候補フラグを立てる
     is_longterm = (
-        len(valid) >= 3
+        len(valid) >= _min_conditions
         and all(c for c in valid)
         and confidence >= 1.0
     )
@@ -800,51 +820,9 @@ def _calc_risk_adjusted_score(
     data:            dict,
     cfg=None,
 ) -> float:
-    """
-    FE-1: ATR基準リスク調整スコアを算出する。
-
-    yfinance の hist データが利用不可の場合は beta をボラティリティ代理変数として使用。
-    risk\\_adjusted\\_score = composite \\div PENALTY\\_HIGH\\_VOL (高ボラ時)
-    risk\\_adjusted\\_score = composite \\Times PENALTY\\_LOW\\_VOL (低ボラ/低流動性時)
-
-    Args:
-        ticker:          銘柄コード（ログ用）
-        composite_score: 元のcomposite_score
-        data:            _fetch_ticker_data() 返り値辞書
-        cfg:             config モジュール（None 可）
-
-    Returns:
-        float: risk_adjusted_score (0.0〜100.0)
-        ※ 失敗時は composite_score をそのまま返す
-    """
-    try:
-        penalty_high = float(getattr(cfg, "RISK_ADJ_PENALTY_HIGH_VOL", 1.20))
-        penalty_low  = float(getattr(cfg, "RISK_ADJ_PENALTY_LOW_VOL",  0.85))
-
-        beta = data.get("beta")
-        if beta is None:
-            # beta 不明 → 調整なし
-            return round(float(composite_score), 1)
-
-        b = float(beta)
-        # 異常値除去
-        if not (-2.0 <= b <= 5.0):
-            return round(float(composite_score), 1)
-
-        if b > 1.5:
-            # 高ボラティリティ銘柄: リスク割引
-            adjusted = composite_score / penalty_high
-        elif 0.0 < b < 0.5:
-            # 低ボラティリティ銘柄: 流動性リスクを考慮した軽微な割引
-            adjusted = composite_score * penalty_low
-        else:
-            # 通常範囲: 調整なし
-            adjusted = composite_score
-
-        return round(min(100.0, max(0.0, adjusted)), 1)
-
-    except Exception:
-        return round(float(composite_score), 1)
+    """FE-1: ATR基準リスク調整スコア。実体は screener_common へ移設（U-3）。"""
+    from screener_common import calc_risk_adjusted_score
+    return calc_risk_adjusted_score(ticker, composite_score, data, cfg)
 
 
 def _calc_revision_score(
@@ -852,46 +830,9 @@ def _calc_revision_score(
     data:   dict,
     cfg=None,
 ) -> float:
-    """
-    FE-2: アナリスト修正スコアを算出する（JP版・上限+3pt）。
-
-    直近30日のupgrade/downgrade集計が理想だが、
-    yfinance の info から取得できる rec_mean を主要代理変数として使用する。
-    revision\\_score \\in [-0.5, 0.5]（quality\\_score加算前のスコア）
-    加算値 = revision\\_score \times 6.0（JPは上限+3pt / 下限-3pt）
-
-    Returns:
-        float: quality_score への加算点（-3.0〜+3.0）
-    """
-    try:
-        window = int(getattr(cfg, "ANALYST_REVISION_WINDOW_DAYS", 30))
-        # ── rec_mean（アナリスト推奨平均）を revision proxy として使用 ──
-        # yfinance: 1.0=Strong Buy, 2.0=Buy, 3.0=Hold, 4.0=Sell, 5.0=Strong Sell
-        rec_mean = data.get("rec_mean")
-        if rec_mean is None:
-            return 0.0
-
-        r = float(rec_mean)
-        if r <= 1.5:
-            raw = 0.50   # Strong Buy
-        elif r <= 2.0:
-            raw = 0.30   # Buy
-        elif r <= 2.5:
-            raw = 0.10   # 弱いBuy
-        elif r <= 3.0:
-            raw = 0.00   # Hold
-        elif r <= 3.5:
-            raw = -0.20  # 弱いSell
-        else:
-            raw = -0.50  # Sell / Strong Sell
-
-        # JP: 上限 +3pt / 下限 -3pt
-        jp_max = float(getattr(cfg, "PEAD_TRIGGER_MIN_REVISION", 0.3)) * 10.0
-        jp_max = min(jp_max, 3.0)
-        return round(min(jp_max, max(-jp_max, raw * 6.0)), 2)
-
-    except Exception:
-        return 0.0
+    """FE-2: アナリスト修正スコア（JP版・上限+3pt）。実体は screener_common へ移設（U-3）。"""
+    from screener_common import calc_revision_score
+    return calc_revision_score(ticker, data, "JP", cfg)
 
 
 def _check_pead_trigger(
@@ -899,20 +840,9 @@ def _check_pead_trigger(
     revision_score: float,
     cfg=None,
 ) -> bool:
-    """
-    FE-2: PEAD（Post-Earnings Announcement Drift）トリガー判定。
-
-    revision_score が PEAD_TRIGGER_MIN_REVISION 以上の場合に True を返す。
-    alert_notifier.py のトリガー⑳で参照される。
-
-    Returns:
-        bool: True → PEAD シグナル発動
-    """
-    try:
-        min_rev = float(getattr(cfg, "PEAD_TRIGGER_MIN_REVISION", 0.3))
-        return float(revision_score) >= min_rev
-    except Exception:
-        return False
+    """FE-2: PEAD トリガー判定。実体は screener_common へ移設（U-3）。"""
+    from screener_common import check_pead_trigger
+    return check_pead_trigger(ticker, revision_score, cfg)
 
 # ==============================================================
 # BLOCK 2.8: Wave 3 FE-7 カタリストボーナス算出
@@ -924,22 +854,9 @@ def _calc_catalyst_bonus(
     cat_data:    dict,
     cfg=None,
 ) -> float:
-    """
-    FE-7: カタリストカレンダーからボーナス（最大 +5pt）を算出する。
-
-    cat_data は _screen_sector() のループ外で一括ロードした
-    catalyst_calendar.json の内容を渡す。
-
-    Returns:
-        float: 0.0〜5.0
-    """
-    try:
-        if not cat_data:
-            return 0.0
-        from catalyst_calendar import calc_catalyst_bonus as _cb
-        return _cb(ticker, sector_code, cat_data, cfg)
-    except Exception:
-        return 0.0
+    """FE-7: カタリストカレンダーからボーナス（最大 +5pt）。実体は screener_common へ移設（U-3）。"""
+    from screener_common import calc_catalyst_bonus
+    return calc_catalyst_bonus(ticker, sector_code, cat_data, cfg)
 
 def _calc_scores(
     data:                dict,
@@ -949,6 +866,7 @@ def _calc_scores(
     surprise_bonus:      float = 0.0,
     bq_bonus:            float = 0.0,   # ★ P-2追加（事業モデル質ボーナス）
     ceo_bonus:           float = 0.0,   # ★ I-3追加（経営者スコアボーナス）
+    cfg = None,                         # ★ 2026-07-25追加（I-1 閾値の正本参照）
 ) -> dict:
     """
     バリュースコア / クォリティスコア / 総合スコアを算出する。
@@ -1001,20 +919,30 @@ def _calc_scores(
     acc_bonus = 0.0
     eg_annual  = data.get("earnings_growth")    # 例: 0.25 = 25%
     eg_quarter = data.get("earnings_qgrowth")   # 例: 0.40 = 40%（四半期）
+    # 2026-07-25 バッチ3: 閾値を config.py BLOCK I-1 から読むよう是正。
+    # 従来は 0.30 / 0.15 / 0.05 を直書きしており、config の ACCEL_* を
+    # 編集しても加速度判定は一切変わらなかった（SSOT違反）。
+    # 既定値は従来の直書き値。config が読めない環境でも挙動は変わらない。
+    _a_su = float(getattr(cfg, "ACCEL_STRONG_UP",    0.30))
+    _a_mu = float(getattr(cfg, "ACCEL_MID_UP",       0.15))
+    _a_lu = float(getattr(cfg, "ACCEL_MILD_UP",      0.05))
+    _a_ld = float(getattr(cfg, "ACCEL_MILD_DOWN",   -0.05))
+    _a_md = float(getattr(cfg, "ACCEL_MID_DOWN",    -0.15))
+    _a_sd = float(getattr(cfg, "ACCEL_STRONG_DOWN", -0.30))
     if eg_annual is not None and eg_quarter is not None:
         # 四半期成長率（年換算）と年率成長率の差 = 加速度の近似
         # 四半期成長率を年換算: (1+q)^4 - 1 の近似として q*4 を使用
         eg_quarter_annualized = eg_quarter * 4
         acceleration = eg_quarter_annualized - eg_annual
         # 加速度をボーナスに変換（±10pt を上限）
-        if acceleration > 0.30:    acc_bonus = 10.0   # 強加速（年換算30%以上上振れ）
-        elif acceleration > 0.15:  acc_bonus =  7.0
-        elif acceleration > 0.05:  acc_bonus =  4.0
-        elif acceleration < -0.30: acc_bonus = -10.0  # 強減速
-        elif acceleration < -0.15: acc_bonus =  -7.0
-        elif acceleration < -0.05: acc_bonus =  -4.0
-    elif eg_quarter is not None and eg_quarter > 0.30:
-        # 年率データなしでも四半期成長率が30%超なら加速シグナルとして扱う
+        if acceleration > _a_su:    acc_bonus = 10.0   # 強加速（既定: 年換算30%以上上振れ）
+        elif acceleration > _a_mu:  acc_bonus =  7.0
+        elif acceleration > _a_lu:  acc_bonus =  4.0
+        elif acceleration < _a_sd:  acc_bonus = -10.0  # 強減速
+        elif acceleration < _a_md:  acc_bonus =  -7.0
+        elif acceleration < _a_ld:  acc_bonus =  -4.0
+    elif eg_quarter is not None and eg_quarter > _a_su:
+        # 年率データなしでも四半期成長率が強加速閾値を超えるなら加速シグナル扱い
         acc_bonus = 5.0
     # クォリティスコア base (0-100): ROEベース
     if roe is not None:
@@ -1189,6 +1117,7 @@ def _calc_scores(
 
     return {
         "sector_score":       round(sector_score, 1),
+        "base_value_score":   value_score,
         "value_score":        value_score,
         "quality_score":      quality_score,
         "composite_score":    composite,
@@ -1217,6 +1146,38 @@ def _calc_scores(
         "revision_score":     round(_revision_score, 2), # Wave 2 - FE-2
         "risk_adjusted_score": _risk_adj_score,        # Wave 2 - FE-1
     }
+
+
+def apply_valuation_to_candidate(
+    candidate: dict,
+    comps_data: dict | None = None,
+    dcf_bonus: float | None = None,
+    cfg=None,
+) -> dict:
+    """comps/DCFを base_value_score から冪等に再計算して候補へ反映する。"""
+    from comps_analyzer import integrate_valuation_score
+
+    base_value = candidate.get("base_value_score", candidate.get("value_score", 50.0))
+    old_value = float(candidate.get("value_score", base_value) or base_value)
+    integrated = integrate_valuation_score(base_value, comps_data, dcf_bonus, cfg)
+    new_value = integrated["value_score"]
+
+    # 現在のcompositeへ value_score の変化分だけを反映することで、
+    # catalyst/technical等の後段補正を消さず、再適用時の二重計上も防ぐ。
+    if candidate.get("technical_score") is not None:
+        value_weight = 0.25
+    else:
+        size_weights = candidate.get("size_weights", {})
+        value_weight = float(size_weights.get("value_score", 0.30))
+    composite = float(candidate.get("composite_score", 0.0))
+    candidate["composite_score"] = round(
+        max(0.0, min(100.0, composite + (new_value - old_value) * value_weight)),
+        1,
+    )
+    candidate.update(integrated)
+    candidate["comps_bonus"] = integrated["comps_delta"]
+    candidate["dcf_bonus"] = integrated["dcf_delta"]
+    return candidate
 
 # ==============================================================
 # BLOCK 2.5: [M-3] アクティビスト候補スコア計算
@@ -1390,6 +1351,32 @@ def _calc_discovery_score(
     return float(score_map.get(n, 0)), flags
 
 
+def _discovery_composite_threshold(
+    scores: list,
+    percentile: float,
+    empty_fallback: float = 70.0,
+) -> float:
+    """線形補間で composite_score の百分位境界を返す。"""
+    if not 0.0 < percentile < 1.0:
+        raise ValueError("DISCOVERY_COMPOSITE_PERCENTILE must satisfy 0 < value < 1")
+    clean = sorted(
+        float(value)
+        for value in scores
+        if value is not None and not isinstance(value, bool)
+    )
+    if not clean:
+        return float(empty_fallback)
+    if len(clean) == 1:
+        return clean[0]
+    position = (len(clean) - 1) * percentile
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return clean[lower]
+    fraction = position - lower
+    return clean[lower] + (clean[upper] - clean[lower]) * fraction
+
+
 # ==============================================================
 # BLOCK 3: 業種スクリーニング（v3.1: 決算サプライズ & EDINET統合版）
 # ==============================================================
@@ -1537,40 +1524,21 @@ def _screen_sector(sector_code: str, sector_name: str,
             surprise_bonus      = total_bonus,
             bq_bonus            = bq_bonus,    # ★ P-2追加  # type: ignore
             ceo_bonus           = ceo_bonus,     # ★ I-3追加  # type: ignore
+            cfg                 = cfg,           # ★ 2026-07-25 I-1閾値の正本
         )
-        # [5-2] comps相対バリューボーナス（value_scoreのブレンド）
-        if not _mid_light and comps_cache and ticker in comps_cache:
+        # [5-2/6-3] comps・DCFを一元統合。base_value_scoreから毎回再計算する。
+        if not _mid_light:
             try:
-                import sys as _sys, importlib as _imp
-                _sys.path.insert(0, str(Path(__file__).parent))
-                _ca_mod = _imp.import_module("comps_analyzer")  # type: ignore
-                cb = _ca_mod.get_comps_bonus(ticker, comps_cache)
-                if cb != 0:
-                    old_vs = scores.get("value_score", 50) or 50
-                    new_vs = round(old_vs * 0.7 + comps_cache[ticker].get("comps_score", 50) * 0.3, 1)
-                    scores["value_score"] = new_vs
-                    scores["comps_bonus"] = cb
-                    scores["composite_score"] = round(
-                        scores.get("sector_score", 50)    * 0.35
-                        + new_vs                          * 0.25
-                        + scores.get("quality_score", 50) * 0.20
-                        + scores.get("technical_score", 50) * 0.20, 1)
-            except Exception:
-                pass
-        # [6-3] DCFボーナス（value_scoreに直接加算）
-        if not _mid_light and dcf_cache and ticker in dcf_cache:
-            try:
-                _dcf_mod = _imp.import_module("dcf_valuation")  # type: ignore
-                db = _dcf_mod.get_dcf_bonus(ticker, dcf_cache)
-                if db != 0:
-                    scores["dcf_bonus"]   = db
-                    scores["value_score"] = round(
-                        max(0, min(100, scores.get("value_score", 50) + db)), 1)
-                    scores["composite_score"] = round(
-                        scores.get("sector_score", 50)    * 0.35
-                        + scores["value_score"]           * 0.25
-                        + scores.get("quality_score", 50) * 0.20
-                        + scores.get("technical_score", 50) * 0.20, 1)
+                _comps_data = comps_cache.get(ticker) if comps_cache else None
+                _dcf_bonus = None
+                if dcf_cache and ticker in dcf_cache:
+                    import importlib as _imp
+                    _dcf_mod = _imp.import_module("dcf_valuation")  # type: ignore
+                    _dcf_bonus = _dcf_mod.get_dcf_bonus(ticker, dcf_cache)
+                if _comps_data is not None or _dcf_bonus is not None:
+                    apply_valuation_to_candidate(
+                        scores, _comps_data, _dcf_bonus, cfg
+                    )
             except Exception:
                 pass
         # [M-3] アクティビスト候補スコア計算
@@ -1594,7 +1562,8 @@ def _screen_sector(sector_code: str, sector_name: str,
         except Exception:
             pass
         # [P-3] 長期保有候補フラグ計算
-        is_longterm, lt_confidence, lt_flags = _calc_longterm_hold_flag(data)
+        is_longterm, lt_confidence, lt_flags = _calc_longterm_hold_flag(
+            data, cfg=cfg)
         
         # [4-6] SR ボーナスを technical_score に加算
         if sr_cache and ticker in sr_cache:
@@ -1977,6 +1946,12 @@ def run_stock_screener(cfg, sector_results: dict,
                       {sector_code: "TOP"/"MID"/"BOT"}
                       省略時は全業種を "TOP" として扱う（後方互換）
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
+    discovery_percentile = float(getattr(
+        cfg, "DISCOVERY_COMPOSITE_PERCENTILE", 0.80
+    ))
+    # 外部取得やキャッシュ更新より前に不正設定を明示的に拒否する。
+    _discovery_composite_threshold([], discovery_percentile)
     sector_tier_map = sector_tier_map or {}
     """
     セクター分析結果を受け取り、個別銘柄スクリーニングを実行する。
@@ -2250,15 +2225,13 @@ def run_stock_screener(cfg, sector_results: dict,
             all_candidates.extend(_dyn_candidates)
             print(f"    ✅ 動的銘柄 {len(_dyn_candidates)}社 追加完了")
     # [S-3] discovery_score を全銘柄に付与
-    # composite_score 上位20%の閾値を計算
-    if all_comp_scores:
-        all_comp_scores_sorted = sorted(all_comp_scores)
-        top20_idx     = max(0, int(len(all_comp_scores_sorted) * 0.80) - 1)
-        score_thresh  = all_comp_scores_sorted[top20_idx]
-    else:
-        score_thresh = 70.0  # フォールバック閾値
+    # 設定された百分位の composite_score 境界を線形補間で計算する。
+    score_thresh = _discovery_composite_threshold(
+        all_comp_scores, discovery_percentile
+    )
 
-    print(f"  🔍 [S-3] discovery_score計算中（上位20%閾値: {score_thresh:.1f}点）...")
+    upper_pct = (1.0 - discovery_percentile) * 100
+    print(f"  🔍 [S-3] discovery_score計算中（上位{upper_pct:.0f}%閾値: {score_thresh:.1f}点）...")
 
     # 業種別平均出来高を算出（業種をまたいで再計算）
     from collections import defaultdict
@@ -2296,13 +2269,16 @@ def run_stock_screener(cfg, sector_results: dict,
         key=lambda x: x.get("discovery_score", 0),
         reverse=True,
     )[:10]
-    # [M-3] アクティビスト候補トップ10
+    # [M-3] アクティビスト候補トップN
+    # 2026-07-25 バッチ4: 件数を config.ACTIVIST_TOP_N から読む
+    # （従来は [:10] 直書きで config 側の定数が未参照だった）
+    _activist_n = int(getattr(cfg, "ACTIVIST_TOP_N", 10))
     activist_top = sorted(
         [c for c in all_candidates
          if c.get("is_activist_target") and c.get("pass_filters")],
         key=lambda x: x.get("activist_score", 0),
         reverse=True,
-    )[:10]
+    )[:_activist_n]
     # [M-1] ネットキャッシュリッチ候補
     net_cash_rich_top = sorted(
         [c for c in all_candidates

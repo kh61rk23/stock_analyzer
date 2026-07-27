@@ -47,7 +47,18 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+import score_history_io
+
 HEATMAP_WEEKS     = 8    # 過去N週分のヒートマップを生成
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'SSH_SCORE_TREND_WEEKS': 'SCORE_TREND_WEEKS',
+    'B4_SCREENER_SECTOR_HEATMAP_CACHE_HOURS': 'CACHE_HOURS',
+    'B6_SCREENER_SECTOR_HEATMAP_ROTATION_DELTA': 'ROTATION_DELTA',
+}
+
 SCORE_TREND_WEEKS = 13   # 3ヶ月 = 約13週
 ROTATION_DELTA    = 2    # N件以上増加 = ローテーションin
 CACHE_HOURS       = 24
@@ -72,17 +83,8 @@ def _load_screener_history(cfg) -> dict:
 
 
 def _load_score_history(cfg) -> dict:
-    for p in [
-        Path(getattr(cfg, "DATA_DIR", "stock_data/data")).parent
-        / "insights" / "score_history.json",
-        Path("stock_data/insights/score_history.json"),
-    ]:
-        if p.exists():
-            try:
-                return json.loads(p.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-    return {}
+    """公開済み関数名を維持し、完全同一だった共通I/Oへ委譲する。"""
+    return score_history_io.load_score_history(cfg)
 
 
 # ==============================================================
@@ -472,6 +474,7 @@ def run_screener_sector_heatmap(cfg) -> dict:
           "timestamp":      str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  📊 screenerセクターヒートマップ生成...")
 
     cached = _load_cache(cfg)

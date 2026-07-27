@@ -40,6 +40,15 @@ from typing import Optional
 # ==============================================================
 
 _MODULE_VERSION  = "1.0"
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B4_EMERGING_TECHNOLOGY_DETECTOR_CACHE_TTL_DAYS': '_CACHE_TTL_DAYS',
+    'B6_EMERGING_TECHNOLOGY_DETECTOR_W_CLUSTER': '_W_CLUSTER',
+    'B6_EMERGING_TECHNOLOGY_DETECTOR_W_ARXIV': '_W_ARXIV',
+    'B6_EMERGING_TECHNOLOGY_DETECTOR_W_NEWS': '_W_NEWS',
+}
+
 _CACHE_TTL_DAYS  = 14   # emerging_technology_cache.json の有効期間（日数）
 
 # 萌芽スコアの信号別ウェイト
@@ -529,6 +538,7 @@ def run_emerging_detector(cfg, results: dict) -> dict:
           "error":         str | None,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     out = {
         "success":    False,
         "theme_count": 0,

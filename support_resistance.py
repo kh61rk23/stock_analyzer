@@ -46,6 +46,8 @@
 
 from __future__ import annotations
 
+from config_sync import sync_module_constants
+
 import json
 import time
 from datetime import datetime, timedelta
@@ -79,6 +81,28 @@ CACHE_HOURS    = 24
 # ==============================================================
 # BLOCK 1: 純粋ピーク検出（scipy.signal.find_peaks 代替）
 # ==============================================================
+
+
+# ── config を正本とする定数の対応表（2026-07-25 SSOT移設）──
+# config.py BLOCK 59 が正本。run_* の冒頭で一度だけ取り込む。
+# 値は移設時点の実装値と同一のため挙動は変わらない。
+_CFG_CONST_MAP = {
+    "SR_LOOKBACK_52W": "LOOKBACK_52W",
+    "SR_LOOKBACK_VWAP": "LOOKBACK_VWAP",
+    "SR_PEAK_WINDOW": "PEAK_WINDOW",
+    "SR_BREAKOUT_THRESH": "BREAKOUT_THRESH",
+    "SR_BOTTOM_THRESH": "BOTTOM_THRESH",
+    "SR_BONUS_BREAKOUT": "BONUS_BREAKOUT",
+    "SR_BONUS_UPPER_ZONE": "BONUS_UPPER_ZONE",
+    "SR_BONUS_BOTTOM_ZONE": "BONUS_BOTTOM_ZONE",
+    "SR_BONUS_VWAP_ABOVE": "BONUS_VWAP_ABOVE",
+    "SR_PENALTY_VWAP_BELOW": "PENALTY_VWAP_BELOW",
+    "SR_BONUS_RESISTANCE_BREAK": "BONUS_RESISTANCE_BREAK",
+    "SR_CACHE_HOURS": "CACHE_HOURS",
+    'B5_SUPPORT_RESISTANCE_FETCH_DELAY': 'FETCH_DELAY',
+    'B6_SUPPORT_RESISTANCE_MIN_PEAK_DISTANCE': 'MIN_PEAK_DISTANCE',
+    'B6_SUPPORT_RESISTANCE_CLUSTER_RANGE_PCT': 'CLUSTER_RANGE_PCT',
+}
 
 def find_peaks_pure(values: list, window: int = PEAK_WINDOW,
                      min_distance: int = MIN_PEAK_DISTANCE) -> list:
@@ -384,6 +408,9 @@ def run_support_resistance(cfg, tickers: list) -> dict:
     Returns:
         {"results": {ticker: sr_result}, "top_breakout": [...], "timestamp": str}
     """
+    # 2026-07-25: 閾値・重みを config.py BLOCK 59 から取り込む
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
+
     print(f"\n  📐 サポート・レジスタンス分析開始（{len(tickers)}銘柄）...")
 
     cached   = _load_cache(cfg)

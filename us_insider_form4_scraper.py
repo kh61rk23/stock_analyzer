@@ -41,7 +41,8 @@
 #       insider_bonus = 0.0
 #
 # 【依存】
-#   urllib.request / xml.etree.ElementTree（標準ライブラリのみ・追加 pip 不要）
+#   sec_client.py（HTTP呼び出し・User-Agent・CIK解決を一本化。Wave J1 / U-1c）
+#   xml.etree.ElementTree（Form 4 XML パース。標準ライブラリ）
 #   yfinance（フォールバック用）
 #   ★ 全関数を try/except で保護。ネットワーク失敗時は bonus=0.0 を返す。
 # ==============================================================
@@ -54,28 +55,32 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+
+import sec_client
 
 # ==============================================================
 # BLOCK 0: 定数・エンドポイント
 # ==============================================================
 
 # SEC EDGAR エンドポイント
-_EDGAR_TICKERS_URL  = "https://www.sec.gov/files/company_tickers.json"
-_EDGAR_SUBMISSIONS  = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
+# 2026-07-27是正（Wave J1 / U-1c）: company_tickers.json 取得・submissions API
+# 組み立ては sec_client.cik_map() / sec_client.submissions() に一本化した。
+# 個別 Form 4 XML ドキュメントの取得のみ sec_client に汎用APIが無いため
+# 本ファイルで URL を組み立て、実際の GET は sec_client.get() を使う。
 _EDGAR_ARCHIVE      = ("https://www.sec.gov/Archives/edgar/data/"
                        "{cik}/{acc_no_slash}/{doc_name}")
 
-# HTTP ヘッダー（SEC は User-Agent 必須）
-_HEADERS = {
-    "User-Agent": "stock_analyzer research@example.com",
-    "Accept-Encoding": "gzip, deflate",
-    "Host": "data.sec.gov",
-}
-_EDGAR_HEADERS = {
-    "User-Agent": "stock_analyzer research@example.com",
-}
+# 2026-07-13是正（U-2 / F-2）由来の統一フォールバック文字列。
+# 実際の User-Agent 解決は sec_client.user_agent() に委譲済みで本定数は
+# 直接は使われないが、tests/test_sec_user_agent.py のダミーUA再混入検知
+# （機械検査）の対象文字列のため残す。
+_SEC_UA_FALLBACK = "StockAnalyzer stockanalyzer@example.com"
+
+
+def _sec_user_agent(cfg=None) -> str:
+    """sec_client.user_agent() の薄いラッパー（既存呼び出し互換のため維持）。"""
+    return sec_client.user_agent(cfg)
+
 
 # タイムアウト・リトライ設定
 _HTTP_TIMEOUT  = 15    # 秒
@@ -85,6 +90,15 @@ _MAX_FORM4_PARSE = 10  # 1銘柄あたり最大パースするForm 4 件数
 # キャッシュ設定
 _CACHE_TTL_DAYS     = 1    # insider_form4_cache.json TTL
 _TICKER_MAP_TTL     = 7    # company_tickers.json の再取得間隔（日）
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B4_US_INSIDER_FORM4_SCRAPER_WINDOW_DAYS_DEFAULT': '_WINDOW_DAYS_DEFAULT',
+    'B5_US_INSIDER_FORM4_SCRAPER_HTTP_TIMEOUT': '_HTTP_TIMEOUT',
+    'B5_US_INSIDER_FORM4_SCRAPER_FETCH_DELAY': '_FETCH_DELAY',
+    'B6_US_INSIDER_FORM4_SCRAPER_MAX_FORM4_PARSE': '_MAX_FORM4_PARSE',
+}
+
 _WINDOW_DAYS_DEFAULT = 30  # デフォルト集計ウィンドウ（日）
 
 # 役職ランク（スコアリング重み付け用）
@@ -102,44 +116,12 @@ _ROLE_WEIGHTS: dict[str, float] = {
     "officer":                   1.5,   # 一般役員
 }
 
-# モジュールレベルキャッシュ（CIK マッピング）
-_cik_map_cache: dict[str, str]  = {}  # {ticker: cik_str}
-_cik_map_date:  str             = ""   # 最終取得日
-
-
 # ==============================================================
 # BLOCK 1: HTTP ユーティリティ
 # ==============================================================
-
-def _fetch_url(
-    url:     str,
-    headers: dict = _HEADERS,
-    timeout: int  = _HTTP_TIMEOUT,
-) -> Optional[str]:
-    """
-    URL を取得して文字列で返す。失敗時は None を返す。
-    """
-    try:
-        req = Request(url, headers=headers)
-        with urlopen(req, timeout=timeout) as resp:
-            raw = resp.read()
-            try:
-                return raw.decode("utf-8")
-            except UnicodeDecodeError:
-                return raw.decode("latin-1")
-    except (HTTPError, URLError, TimeoutError):
-        return None
-    except Exception:
-        return None
-
-
-def _fetch_json(url: str, headers: dict = _HEADERS) -> Optional[dict | list]:
-    """URL から JSON を取得してデシリアライズする。"""
-    try:
-        text = _fetch_url(url, headers)
-        return json.loads(text) if text else None
-    except Exception:
-        return None
+# 2026-07-27是正（Wave J1 / U-1c）: 旧 _fetch_url / _fetch_json（urllib直叩き）
+# は削除。sec.gov への全アクセスは sec_client.get() / get_json() に一本化した
+# （個別 Form 4 XML ドキュメント取得は BLOCK 5 の _fetch_form4_xml を参照）。
 
 
 # ==============================================================
@@ -193,38 +175,20 @@ def _save_form4_cache(ticker: str, data: dict, cfg=None) -> None:
 def _load_cik_map(cfg=None) -> dict[str, str]:
     """
     SEC EDGAR の company_tickers.json から ティッカー→CIK マッピングを返す。
-    モジュールキャッシュ優先。7日以上古い場合は再取得。
+
+    2026-07-27是正（U-1c）: 実体は sec_client.cik_map() の共通ディスクキャッシュ
+    （TTL: config.py SEC_CIK_MAP_TTL_DAYS＝本ファイルの旧 _TICKER_MAP_TTL と同じ
+    7日）に置き換えた。旧実装はプロセス内メモリのみのキャッシュだったため
+    プロセスを跨ぐたびに毎回 SEC へ再取得していたが、ディスクキャッシュにより
+    プロセスを跨いでも TTL 内は再取得しなくなる。
 
     Returns:
         {"AAPL": "0000320193", "MSFT": "0000789019", ...}
     """
-    global _cik_map_cache, _cik_map_date
-
-    today = datetime.now().strftime("%Y-%m-%d")
-    cutoff = (datetime.now() - timedelta(days=_TICKER_MAP_TTL)).strftime("%Y-%m-%d")
-
-    if _cik_map_cache and _cik_map_date >= cutoff:
-        return _cik_map_cache
-
     try:
-        raw = _fetch_json(_EDGAR_TICKERS_URL, headers=_EDGAR_HEADERS)
-        if not raw or not isinstance(raw, dict):
-            return _cik_map_cache   # 旧キャッシュを返す
-
-        mapping: dict[str, str] = {}
-        for item in raw.values():
-            if isinstance(item, dict):
-                tick = str(item.get("ticker", "")).upper()
-                cik  = str(item.get("cik_str", "")).zfill(10)
-                if tick and cik:
-                    mapping[tick] = cik
-
-        _cik_map_cache = mapping
-        _cik_map_date  = today
-        return mapping
-
+        return sec_client.cik_map(cfg=cfg)
     except Exception:
-        return _cik_map_cache
+        return {}
 
 
 def _get_cik(ticker: str, cfg=None) -> Optional[str]:
@@ -235,8 +199,7 @@ def _get_cik(ticker: str, cfg=None) -> Optional[str]:
         "0000320193" 形式 | None
     """
     try:
-        mapping = _load_cik_map(cfg)
-        return mapping.get(ticker.upper().strip())
+        return sec_client.get_cik(ticker, cfg=cfg)
     except Exception:
         return None
 
@@ -268,10 +231,7 @@ def _fetch_recent_form4_filings(
     """
     try:
         cik_int = int(cik)
-        url     = _EDGAR_SUBMISSIONS.format(cik=cik_int)
-        raw     = _fetch_json(url, headers={
-            **_HEADERS, "Host": "data.sec.gov"
-        })
+        raw     = sec_client.submissions(cik_int)
         if not raw or not isinstance(raw, dict):
             return []
 
@@ -332,7 +292,8 @@ def _fetch_form4_xml(cik_int: int, accession_number: str, doc_name: str) -> Opti
             doc_name   = doc_name,
         )
         time.sleep(_FETCH_DELAY)
-        return _fetch_url(url, headers=_EDGAR_HEADERS)
+        resp = sec_client.get(url, accept="application/xml", timeout=_HTTP_TIMEOUT)
+        return resp.text if resp is not None else None
     except Exception:
         return None
 
@@ -598,7 +559,7 @@ def _score_filings(
 # BLOCK 7: yfinance フォールバック
 # ==============================================================
 
-def _calc_insider_bonus_yf(ticker: str, days: int = _WINDOW_DAYS_DEFAULT) -> float:
+def _calc_insider_bonus_yf(ticker: str, days: int | None = None) -> float:
     """
     yfinance の get_insider_transactions() を使ったフォールバック実装。
     EDGAR が取得不可の場合に使用。
@@ -607,6 +568,7 @@ def _calc_insider_bonus_yf(ticker: str, days: int = _WINDOW_DAYS_DEFAULT) -> flo
         float: insider_bonus (-5.0〜+5.0)
     """
     try:
+        days = _WINDOW_DAYS_DEFAULT if days is None else days
         import yfinance as yf
         t    = yf.Ticker(ticker)
         raw  = t.get_insider_transactions()
@@ -664,7 +626,7 @@ def _calc_insider_bonus_yf(ticker: str, days: int = _WINDOW_DAYS_DEFAULT) -> flo
 
 def fetch_form4_filings(
     ticker: str,
-    days:   int   = _WINDOW_DAYS_DEFAULT,
+    days:   int | None = None,
     cfg=None,
 ) -> list[dict]:
     """
@@ -680,6 +642,8 @@ def fetch_form4_filings(
         ※ 取得失敗時は空リスト
     """
     try:
+        sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
+        days = _WINDOW_DAYS_DEFAULT if days is None else days
         cik = _get_cik(ticker, cfg)
         if not cik:
             return []
@@ -691,7 +655,7 @@ def fetch_form4_filings(
 
 def get_insider_summary(
     ticker: str,
-    days:   int   = _WINDOW_DAYS_DEFAULT,
+    days:   int | None = None,
     cfg=None,
 ) -> dict:
     """
@@ -718,6 +682,8 @@ def get_insider_summary(
           "fetched_at":     str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
+    days = _WINDOW_DAYS_DEFAULT if days is None else days
     _default = {
         "ticker":        ticker,
         "insider_bonus": 0.0,
@@ -814,7 +780,7 @@ def get_insider_summary(
 
 def calc_insider_bonus(
     ticker: str,
-    days:   int   = _WINDOW_DAYS_DEFAULT,
+    days:   int | None = None,
     cfg=None,
 ) -> float:
     """
@@ -843,7 +809,7 @@ def calc_insider_bonus(
 
 def batch_calc_insider_bonuses(
     tickers:    list[str],
-    days:       int   = _WINDOW_DAYS_DEFAULT,
+    days:       int | None = None,
     cfg=None,
     max_tickers: int  = 30,
 ) -> dict[str, float]:
@@ -859,6 +825,7 @@ def batch_calc_insider_bonuses(
     Returns:
         {"AAPL": 2.5, "MSFT": 0.0, ...}
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     results: dict[str, float] = {}
     for t in tickers[:max_tickers]:
         try:

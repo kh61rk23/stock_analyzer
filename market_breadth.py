@@ -50,6 +50,8 @@
 
 from __future__ import annotations
 
+from config_sync import sync_module_constants
+
 import json
 import time
 from datetime import datetime, timedelta
@@ -103,6 +105,28 @@ SP500_FALLBACK = [
 # ==============================================================
 # BLOCK 1: 銘柄リスト収集
 # ==============================================================
+
+
+# ── config を正本とする定数の対応表（2026-07-25 SSOT移設）──
+# config.py BLOCK 59 が正本。run_* の冒頭で一度だけ取り込む。
+# 値は移設時点の実装値と同一のため挙動は変わらない。
+_CFG_CONST_MAP = {
+    "MB_SCORE_HEALTHY_THRESH": "SCORE_HEALTHY_THRESH",
+    "MB_SCORE_WEAK_THRESH": "SCORE_WEAK_THRESH",
+    "MB_SCORE_HEALTHY_BONUS": "SCORE_HEALTHY_BONUS",
+    "MB_SCORE_WEAK_PENALTY": "SCORE_WEAK_PENALTY",
+    "MB_DIVERGENCE_PENALTY": "DIVERGENCE_PENALTY",
+    "MB_WEIGHT_AD_RATIO": "WEIGHT_AD_RATIO",
+    "MB_WEIGHT_NH_RATIO": "WEIGHT_NH_RATIO",
+    "MB_WEIGHT_MA200_RATIO": "WEIGHT_MA200_RATIO",
+    "MB_WEIGHT_RSI50_RATIO": "WEIGHT_RSI50_RATIO",
+    "MB_MA200_PERIOD": "MA200_PERIOD",
+    "MB_RSI_PERIOD": "RSI_PERIOD",
+    "MB_NH_NL_PERIOD": "NH_NL_PERIOD",
+    "MB_CACHE_HOURS": "CACHE_HOURS",
+    'B4_MARKET_BREADTH_HISTORY_PERIOD': 'HISTORY_PERIOD',
+    'B6_MARKET_BREADTH_US_SAMPLE_SIZE': 'US_SAMPLE_SIZE',
+}
 
 def _collect_jp_tickers(cfg) -> list:
     """
@@ -659,6 +683,9 @@ def run_market_breadth(cfg, sector_results: Optional[dict] = None,
           "timestamp":        str,
         }
     """
+    # 2026-07-25: 閾値・重みを config.py BLOCK 59 から取り込む
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
+
     print("\n  📊 市場幅指標（マーケットブレス）計算開始...")
 
     cached = _load_cache(cfg)

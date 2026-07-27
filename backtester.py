@@ -46,6 +46,15 @@ from datetime import datetime, timedelta, date
 from pathlib import Path
 from typing import Optional
 
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B4_BACKTESTER_HOLD_DAYS': 'HOLD_DAYS',
+    'B4_BACKTESTER_LOOKBACK_DAYS': 'LOOKBACK_DAYS',
+    'B5_BACKTESTER_FETCH_DELAY': 'FETCH_DELAY',
+    'B6_BACKTESTER_MIN_RECORDS': 'MIN_RECORDS',
+}
+
 HOLD_DAYS       = 28    # ホールド期間（日）
 LOOKBACK_DAYS   = 90    # バックテスト対象期間
 MIN_RECORDS     = 10    # 統計的有意性のための最低サンプル数
@@ -503,6 +512,7 @@ def run_backtester(cfg) -> dict:
           "timestamp":       str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  📉 バックテスト実行開始...")
 
     history = load_screener_history(cfg)

@@ -79,25 +79,75 @@
 # 【生成ファイル】
 #   CACHE_DIR/sector_rotation_cache.json  TTL: 7日, 週次更新
 #
+# 【入力（実コード確認済み）】
+#   ・score_history.json（_load_score_history(cfg) が読む。候補パスは
+#     DATA_DIR/score_history.json → DATA_DIR.parent/insights/score_history.json →
+#     相対パス固定の stock_data/data/score_history.json →
+#     stock_data/insights/score_history.json の順）
+#   ・CACHE_DIR/sector_rotation_cache.json（前回キャッシュ。TTL内なら再計算せず返す。
+#     TTL切れでも「前回象限」だけは変化検出のために読み直す）
+#
 # 【依存】
 #   config.py（DATA_DIR / CACHE_DIR / JAPAN_SECTORS）
 #   score_history.json（_append_score_history が日次蓄積）
 #   ★ numpy 不使用・追加ライブラリなし
+#
+# 【消費者（grep実測。2026-07-28）】
+#   ・signal_aggregator.py:801 _apply_rotation_boost() — quadrants を読み、
+#     rising/peak/trough/falling を ±ptのブーストに変換して signal_score に加算する。
+#     これが本モジュールの正式なスコア反映経路（【役割】節に記載の設計どおり）。
+#   ・ignition_detector.py:210 build_ignition_bundle() — results["sector_rotation"] を
+#     bundle にそのままコピーする。ignition_detector.py:291 は
+#     bundle["sector_rotation"]["sectors"][code]["rotation_score"] を参照しているが、
+#     本モジュールの実際の出力キーは quadrants / sector_stats / changes / summary であり
+#     "sectors" キーも "rotation_score" フィールドも存在しない（producer/consumerキー不一致の疑い。
+#     修正は本タスクのスコープ外・ignition_detector.py は担当ファイル外のため未修正。
+#     完了報告の「疑問点」に記載）。
+#
+# 【他3モジュールとの違い】
+#   ・vs jp_us_sector_bridge.py: bridge にも detect_rotation_phase() という
+#     4象限判定があるが、本モジュールとは窓幅（8週 vs 84日/28日）・判定基準
+#     （固定閾値50 vs 動的平均比較）・出力ラベル（LEADING/WEAKENING/LAGGING/IMPROVING vs
+#     rising/peak/falling/trough）が異なる別実装。signal_aggregator が実際にスコアへ
+#     反映するのは本モジュールの results["sector_rotation"] のみ（意図的な非統合）。
+#   ・vs jp_us_sector_correlation.py: 本モジュールはJP単独の時系列トレンド判定であり、
+#     US側データとの相関計算は行わない。
+#   ・vs us_sector_bridge_enhanced.py: 本モジュールはscore_historyのみに基づく統計判定。
+#     USの決算イベントは参照しない。
+#
+# 【既知の状態（2026-07-28 時点）】
+#   象限分類自体は出力されているが、象限「変化」の検出が0件で継続している
+#   （2026-07-06・2026-07-13 台帳とも変化0件）。score_history の蓄積不足により
+#   前回キャッシュとの比較で有意な変化が検出しにくい状態が疑われる。
+#   意思決定 J-04（2026-07-27, 健太承認）は jp_us_bridge / jp_us_sector_correlation を
+#   名指しした決定だが、本タスク（U-10）の対象範囲としては同様に
+#   「score_history 蓄積待ち・削除や機能修正は今回のスコープ外」として扱う。
 # ==============================================================
 
 from __future__ import annotations
 
 import json
-import math
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+
+import finance_logic
 
 # ==============================================================
 # BLOCK 0: 定数
 # ==============================================================
 
 # 象限分類パラメータ
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B4_SECTOR_ROTATION_DETECTOR_AVG_WINDOW_DAYS': 'AVG_WINDOW_DAYS',
+    'B4_SECTOR_ROTATION_DETECTOR_TREND_WINDOW_DAYS': 'TREND_WINDOW_DAYS',
+    'B4_SECTOR_ROTATION_DETECTOR_CACHE_TTL_DAYS': 'CACHE_TTL_DAYS',
+    'B6_SECTOR_ROTATION_DETECTOR_MOMENTUM_DEADZONE': 'MOMENTUM_DEADZONE',
+    'B6_SECTOR_ROTATION_DETECTOR_MIN_DATA_POINTS': 'MIN_DATA_POINTS',
+}
+
 AVG_WINDOW_DAYS   = 84    # 長期平均の計算窓（12週 = 3ヶ月）
 TREND_WINDOW_DAYS = 28    # モメンタム計算窓（4週）
 MOMENTUM_DEADZONE = 0.02  # ±この傾き以内は「横ばい」（横ばいは直前象限を保持）
@@ -237,22 +287,8 @@ def _build_score_series(score_history: dict) -> dict[str, list[tuple[str, float]
 # ==============================================================
 
 def _calc_slope(values: list[float]) -> float:
-    """
-    N 個の値列に対して最小二乗法で線形回帰傾きを返す（1ステップあたりの変化量）。
-    正 → 上昇トレンド、負 → 下落トレンド
-    numpy 不使用。
-    """
-    n = len(values)
-    if n < 3:
-        return 0.0
-    xs = list(range(n))
-    mx = sum(xs) / n
-    my = sum(values) / n
-    num   = sum((x - mx) * (y - my) for x, y in zip(xs, values))
-    denom = sum((x - mx) ** 2 for x in xs)
-    if abs(denom) < 1e-9:
-        return 0.0
-    return round(num / denom, 6)
+    """共通実装は finance_logic.linear_slope（Batch 10）。"""
+    return finance_logic.linear_slope(values, min_n=3, round_digits=6)
 
 
 def _calc_stats(
@@ -470,6 +506,7 @@ def run_sector_rotation_detector(cfg) -> dict:
           "timestamp":    str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  🔄 業種ローテーション検出（Idea2-B）実行中...")
 
     # ── キャッシュ確認 ───────────────────────────────────────────

@@ -691,7 +691,10 @@ def run_edinet_exposure_extractor(
         _js     = importlib.import_module("jogmec_scraper")
         _bq_mod = importlib.import_module("edinet_bq_client")
         raw_bq  = _bq_mod.EDINETBQClient().client
-    except Exception:
+    # 2026-07-25: 一次経路（edinet_bq_client＝Actions の BQ_CREDENTIALS 経路）の
+    # 失敗理由を握り潰し、Colabフォールバックの「No module named 'google.colab'」
+    # だけが報告されていた。真因が隠れるため両方を返す。
+    except Exception as _primary_err:
         try:
             from google.cloud import bigquery as _bq_lib
             from google.colab import auth as _auth
@@ -710,7 +713,8 @@ def run_edinet_exposure_extractor(
                 "merged":    0,
                 "tickers":   processed,
                 "records":   all_records,
-                "error":     f"BQ Client 取得失敗: {e}",
+                "error":     (f"BQ Client 取得失敗: {_primary_err} "
+                              f"/ Colabフォールバックも失敗: {e}"),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 

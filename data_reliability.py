@@ -23,6 +23,12 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 # ── リトライ規約（BLOCK 53 で上書き可） ─────────────────────────
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B5_DATA_RELIABILITY_DEFAULT_RETRY_SCHEDULE': '_DEFAULT_RETRY_SCHEDULE',
+}
+
 _DEFAULT_RETRY_SCHEDULE = [2, 4, 8]   # 秒（指数バックオフ）
 
 
@@ -214,6 +220,7 @@ def run_data_sla_check(cfg, results: dict) -> dict:
     Returns: {"violations": [...], "checked": int, "violation_count": int}
     ※ 検査のみ（修復はしない）。E11ブリーフとMAINTENANCE_PACKETに表示。
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     sla_map: dict = dict(getattr(cfg, "DATA_SLA_DAYS", {
         "price": 2, "financials": 100, "news": 3}))
     targets: dict = dict(getattr(cfg, "DATA_SLA_TARGETS", {}))

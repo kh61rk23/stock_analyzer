@@ -27,6 +27,13 @@ from typing import Optional
 STATE_UNSET   = "unset"    # 未設定（キーが空）
 STATE_ALIVE   = "alive"    # ✅ 生存
 STATE_DEAD    = "dead"     # ❌ 失効・権限エラー
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B5_API_KEY_HEALTH_STATE_LIMITED': 'STATE_LIMITED',
+    'B5_API_KEY_HEALTH_PROBE_TIMEOUT': 'PROBE_TIMEOUT',
+}
+
 STATE_LIMITED = "limited"  # ⚠️ レート制限・quota・判定不能
 STATE_SKIPPED = "skipped"  # ⏭️ チェック対象外
 
@@ -434,6 +441,7 @@ def run_key_health(cfg) -> dict:
     戻り値: {"summary": str, "entries": {key_name: {...}},
              "counts": {...}, "ledger_status": "success"|"warn"}
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     entries: dict = {}
 
     def _run(name: str, probe_fn, key_value) -> None:

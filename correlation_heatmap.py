@@ -33,6 +33,19 @@ from typing import Optional
 # ── 定数 ──────────────────────────────────────────────────────
 LOOKBACK_DAYS     = 90    # 相関計算期間（営業日）
 MIN_DATA_POINTS   = 20    # 最低データ点数（これ未満はスキップ）
+
+import finance_logic
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'CH_HIGH_CORR_THRESH': 'HIGH_CORR_THRESH',
+    'CH_LOW_CORR_THRESH': 'LOW_CORR_THRESH',
+    'B4_CORRELATION_HEATMAP_LOOKBACK_DAYS': 'LOOKBACK_DAYS',
+    'B4_CORRELATION_HEATMAP_CACHE_HOURS': 'CACHE_HOURS',
+    'B5_CORRELATION_HEATMAP_FETCH_DELAY': 'FETCH_DELAY',
+    'B6_CORRELATION_HEATMAP_MIN_DATA_POINTS': 'MIN_DATA_POINTS',
+}
+
 HIGH_CORR_THRESH  = 0.80  # 集中リスク警告閾値
 LOW_CORR_THRESH   = -0.50 # 分散効果（ヘッジ）警告閾値
 FETCH_DELAY       = 0.25  # yfinance レート制限（秒）
@@ -162,18 +175,8 @@ def _fetch_returns(tickers: list, lookback_days: int = LOOKBACK_DAYS) -> dict:
 # ==============================================================
 
 def _pearson(xs: list, ys: list) -> Optional[float]:
-    """2リストの Pearson 相関係数（numpy 不使用）。"""
-    n = min(len(xs), len(ys))
-    if n < MIN_DATA_POINTS:
-        return None
-    xs = xs[-n:]; ys = ys[-n:]
-    mx = sum(xs) / n; my = sum(ys) / n
-    num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
-    dx  = sum((x - mx)**2 for x in xs) ** 0.5
-    dy  = sum((y - my)**2 for y in ys) ** 0.5
-    if dx < 1e-9 or dy < 1e-9:
-        return None
-    return round(num / (dx * dy), 3)
+    """2リストの Pearson 相関係数（numpy 不使用）。共通実装は finance_logic.pearson（U-7）。"""
+    return finance_logic.pearson(xs, ys, min_n=MIN_DATA_POINTS, round_digits=3)
 
 
 def calc_correlation_matrix(returns: dict) -> dict:
@@ -426,6 +429,7 @@ def run_correlation_heatmap(cfg) -> dict:
           "timestamp":     str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  📊 相関ヒートマップ計算開始...")
 
     cached = _load_cache(cfg)

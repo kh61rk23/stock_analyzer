@@ -142,6 +142,13 @@ THEME_DEFINITIONS = [
 ]
 
 # 熱量シグナルの閾値
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'TET_SIGNAL_THRESHOLDS': 'SIGNAL_THRESHOLDS',
+}
+
 SIGNAL_THRESHOLDS = {
     "hot":     70,   # 熱量スコア >= 70
     "warming": 50,   # 熱量スコア >= 50
@@ -605,6 +612,7 @@ def run_thematic_etf_tracker(cfg, arxiv_result: Optional[dict] = None) -> dict:
           "timestamp":   str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  🌡️  テーマETFトラッキング（Step C'）開始...")
     t0 = datetime.now()
 

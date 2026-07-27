@@ -77,6 +77,13 @@ _DEFAULT_ROE_BENCHMARKS: dict = {
     "BM-09": 0.08, "BM-10": 0.10, "BM-11": 0.07, "BM-12": 0.06,
 }
 
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'BMD_DEFAULT_THRESHOLDS': '_DEFAULT_THRESHOLDS',
+}
+
 _DEFAULT_THRESHOLDS: dict = {
     "recurring_revenue_ratio_min": 0.70,
     "asset_turnover_heavy_max":    0.50,
@@ -358,6 +365,7 @@ def detect_batch(
     Returns:
         入力 records に業態判定結果を追加したリスト（in-place ではなく新規）
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     results = []
     for rec in records:
         try:

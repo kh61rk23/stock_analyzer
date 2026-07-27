@@ -64,6 +64,24 @@ from typing import Optional
 
 # ── デフォルトパラメータ ─────────────────────────────────────
 ATR_PERIOD         = 14     # ATR計算期間（日）
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'PS_ATR_MULTIPLIER': 'ATR_MULTIPLIER',
+    'PS_CONVICTION_THRESHOLDS': 'CONVICTION_THRESHOLDS',
+    'PS_CONVICTION_MULTIPLIERS': 'CONVICTION_MULTIPLIERS',
+    'B4_POSITION_SIZER_ATR_PERIOD': 'ATR_PERIOD',
+    'B5_POSITION_SIZER_FETCH_DELAY': 'FETCH_DELAY',
+    'B6_POSITION_SIZER_RISK_PCT_DEFAULT': 'RISK_PCT_DEFAULT',
+    'B6_POSITION_SIZER_MIN_POSITION_PCT': 'MIN_POSITION_PCT',
+    'B6_POSITION_SIZER_MAX_POSITION_PCT': 'MAX_POSITION_PCT',
+    'B6_POSITION_SIZER_LOT_SIZE_JP': 'LOT_SIZE_JP',
+    'B6_POSITION_SIZER_CONVICTION_PCT_RANGE': 'CONVICTION_PCT_RANGE',
+    'B6_POSITION_SIZER_REGIME_SIZE_MATRIX': 'REGIME_SIZE_MATRIX',
+    'B6_POSITION_SIZER_TRADING_DAYS_V2': '_TRADING_DAYS_V2',
+}
+
 ATR_MULTIPLIER     = 2.0    # 逆指値 = 現在価格 - ATR × この倍率
 RISK_PCT_DEFAULT   = 0.01   # 1トレードあたりのリスク許容率（1%）
 MIN_POSITION_PCT   = 0.02   # 最小ポジション比率（2%）
@@ -255,7 +273,16 @@ def calc_conviction_score(candidate: dict, cfg=None) -> dict:
     conviction_score = max(0.0, min(100.0, conviction_score))
 
     # ── 確信度レベル判定 ──────────────────────────────────
-    thresholds = getattr(cfg, "CONVICTION_THRESHOLDS", CONVICTION_THRESHOLDS) if cfg else CONVICTION_THRESHOLDS
+    # 2026-07-25: BLOCK I-4 の ENABLE_CONVICTION_SIZING を配線。
+    # CONVICTION_THRESHOLDS は読まれていたのに、機能そのものの有効フラグだけが
+    # 誰にも読まれず、False にしても確信度別サイジングが効き続けていた。
+    # 無効時は全銘柄を Level3（中確信・通常扱い）に固定し、確信度による
+    # ポジション比率の増減を行わない。
+    if cfg is not None and not getattr(cfg, "ENABLE_CONVICTION_SIZING", True):
+        conviction_score = 50.0
+        thresholds = [101, 101, 0, 0]     # 常に Level3 になる閾値
+    else:
+        thresholds = getattr(cfg, "CONVICTION_THRESHOLDS", CONVICTION_THRESHOLDS) if cfg else CONVICTION_THRESHOLDS
     if   conviction_score >= thresholds[0]: level = 5   # 90以上
     elif conviction_score >= thresholds[1]: level = 4   # 75以上
     elif conviction_score >= thresholds[2]: level = 3   # 60以上
@@ -735,6 +762,7 @@ def run_position_sizer(
     Returns:
         ポジションサイジング結果 dict
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     # config からの総資産上書き
     total_assets = getattr(cfg, "TOTAL_ASSETS_JPY", total_assets_jpy)
 

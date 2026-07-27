@@ -49,6 +49,24 @@ FORECAST_YEARS    = 5       # FCF 予測期間
 FCF_GROWTH_RATE   = 0.05    # 予測期間中のFCF成長率仮定（5%）
 FETCH_DELAY       = 0.3
 CACHE_FILENAME    = "dcf_valuation_cache.json"
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B4_DCF_VALUATION_CACHE_HOURS': 'CACHE_HOURS',
+    'B5_DCF_VALUATION_FETCH_DELAY': 'FETCH_DELAY',
+    'B6_DCF_VALUATION_DEFAULT_RF_JP': 'DEFAULT_RF_JP',
+    'B6_DCF_VALUATION_DEFAULT_RF_US': 'DEFAULT_RF_US',
+    'B6_DCF_VALUATION_MARKET_RISK_PREM': 'MARKET_RISK_PREM',
+    'B6_DCF_VALUATION_DEFAULT_BETA': 'DEFAULT_BETA',
+    'B6_DCF_VALUATION_DEFAULT_GROWTH': 'DEFAULT_GROWTH',
+    'B6_DCF_VALUATION_FORECAST_YEARS': 'FORECAST_YEARS',
+    'B6_DCF_VALUATION_FCF_GROWTH_RATE': 'FCF_GROWTH_RATE',
+    'B6_DCF_VALUATION_WACC_RANGE': 'WACC_RANGE',
+    'B6_DCF_VALUATION_GROWTH_RANGE': 'GROWTH_RANGE',
+    'B6_DCF_VALUATION_DCF_LARGE_DISCOUNT': 'DCF_LARGE_DISCOUNT',
+    'B6_DCF_VALUATION_DCF_SMALL_DISCOUNT': 'DCF_SMALL_DISCOUNT',
+}
+
 CACHE_HOURS       = 24 * 7  # 週次（財務データは変化が緩やか）
 
 # 感応度分析のWACC/g グリッド
@@ -446,6 +464,7 @@ def run_dcf_valuation(cfg, tickers: list) -> dict:
     Returns:
         {"results": {ticker: dcf_result}, "top_undervalued": [...], "timestamp": str}
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print(f"\n  📐 DCF理論株価計算開始（{len(tickers)}銘柄）...")
 
     cached   = _load_cache(cfg)

@@ -43,7 +43,13 @@
 #   calc_eps_accel_score_xbrl(ticker) が XBRL EPS履歴から
 #   より高精度な earnings_accel_score を算出する。
 #
-# 【依存】requests / config.py
+# 【依存】sec_client.py / config.py
+# 2026-07-27是正（Wave J1 / U-1c）: SEC EDGAR への HTTP 呼び出し・User-Agent・
+# CIK 解決（company_tickers.json）・submissions API URL 組み立ては
+# sec_client.py（U-1a 新設）に一本化した。
+# us_cik_map.json（本ファイルが生成）は us_8k_monitor.py の依存を解消した後も
+# us_sector_bridge_enhanced.py が読み手として残っているため、書き込みは
+# 従来通り維持する（詳細は load_cik_map/save_cik_map 付近のコメント参照）。
 # 【呼出】from us_fundamental_rotator import (
 #             run_us_fundamental_rotator,
 #             lookup_us_fundamentals,
@@ -58,6 +64,8 @@ import time
 from datetime import datetime, timedelta, date, timezone
 from pathlib import Path
 from typing import Optional
+
+import sec_client
 
 
 # ==============================================================
@@ -74,6 +82,15 @@ XBRL_FACTS_URL     = f"{SEC_BASE_URL}/api/xbrl/companyfacts/CIK{{:010d}}.json"
 DB_DIR_NAME        = "us_fundamentals_db"
 META_FILENAME      = "us_fundamentals_meta.json"
 CIK_MAP_FILENAME   = "us_cik_map.json"
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B4_US_FUNDAMENTAL_ROTATOR_CACHE_DAYS': 'CACHE_DAYS',
+    'B5_US_FUNDAMENTAL_ROTATOR_DAILY_FETCH_LIMIT': 'DAILY_FETCH_LIMIT',
+    'B5_US_FUNDAMENTAL_ROTATOR_REQUEST_DELAY': 'REQUEST_DELAY',
+    'B5_US_FUNDAMENTAL_ROTATOR_REQUEST_TIMEOUT': 'REQUEST_TIMEOUT',
+}
 
 CACHE_DAYS         = 30    # 財務データの再取得間隔（日）
 DAILY_FETCH_LIMIT  = 20    # 1日あたりの最大取得社数
@@ -452,43 +469,35 @@ def lookup_us_fundamentals_by_path(data_dir, ticker: str) -> Optional[dict]:
 def _sec_user_agent(cfg) -> str:
     """
     SEC EDGAR 向け User-Agent を取得する。
-    SEC は連絡先（メールアドレス等）を含まない User-Agent を 403 で拒否するため、
-    config.py の SEC_USER_AGENT（GitHub Secrets: SEC_USER_AGENT で上書き可）を使う。
-    institutional_13f_monitor.py / sec_summarizer.py / insider_monitor.py と同じ参照方法。
+    実体は sec_client.user_agent() に委譲する（2026-07-27是正 / U-1c）。
     """
-    return getattr(cfg, "SEC_USER_AGENT", "StockAnalyzer stockanalyzer@example.com")
+    return sec_client.user_agent(cfg)
 
 
-def _fetch_company_tickers(cfg) -> dict:
+def _fetch_company_tickers(cfg, force_refresh: bool = False) -> dict:
     """
     SEC の company_tickers.json を取得して ticker→CIK のマッピングを返す。
     全上場企業のCIKを一括取得できる（約15,000社）。
+
+    2026-07-27是正（U-1c）: HTTP取得・レート制限・リトライ・ディスクキャッシュは
+    sec_client.cik_map() に委譲した（US-8k監視・インサイダー監視と共通キャッシュを
+    共有する）。force_refresh=True のときは sec_client 側のキャッシュも無視して
+    必ず SEC へ再取得する（ttl_days=0 で即時期限切れ扱いにする）。
 
     Returns:
         {ticker_upper: cik_int}
     """
     try:
-        import requests
-        resp = requests.get(
-            COMPANY_TICKERS_URL,
-            headers={"User-Agent": _sec_user_agent(cfg)},
-            timeout=REQUEST_TIMEOUT,
-        )
-        if resp.status_code != 200:
-            print(f"    ⚠️  company_tickers.json 取得失敗: HTTP {resp.status_code}")
-            return {}
-        data = resp.json()
-        # 形式: {"0": {"cik_str":"0001018724","ticker":"AMZN","title":"AMAZON.COM INC"}, ...}
-        mapping = {}
-        for v in data.values():
-            t = v.get("ticker", "").upper()
-            c = v.get("cik_str", "")
-            if t and c:
-                try:
-                    mapping[t] = int(c)
-                except ValueError:
-                    pass
-        return mapping
+        mapping = sec_client.cik_map(cfg=cfg, ttl_days=(0 if force_refresh else None))
+        result: dict = {}
+        for ticker, cik_str in mapping.items():
+            try:
+                result[ticker] = int(cik_str)
+            except (TypeError, ValueError):
+                continue
+        if not result:
+            print("    ⚠️  company_tickers.json 取得失敗")
+        return result
     except Exception as e:
         print(f"    ⚠️  company_tickers.json 取得失敗: {type(e).__name__}: {str(e)[:60]}")
         return {}
@@ -499,6 +508,10 @@ def get_or_update_cik_map(cfg, force_refresh: bool = False) -> dict:
     CIKマップを取得する。
     存在しない場合 or force_refresh=True の場合はSECから取得して保存。
 
+    ★ us_cik_map.json（本ファイルが生成）: us_sector_bridge_enhanced.py が
+    引き続き直接読み込むため、書き込みは維持する（2026-07-27 U-1c 判断。
+    詳細はファイル冒頭コメント参照）。
+
     Returns:
         {ticker_upper: cik_int}
     """
@@ -507,7 +520,7 @@ def get_or_update_cik_map(cfg, force_refresh: bool = False) -> dict:
         return cik_map
 
     print("    📥 SEC CIK一覧を取得中...")
-    new_map = _fetch_company_tickers(cfg)
+    new_map = _fetch_company_tickers(cfg, force_refresh=force_refresh)
     if new_map:
         save_cik_map(cfg, new_map)
         print(f"    ✅ CIKマップ更新: {len(new_map)}社")
@@ -523,42 +536,37 @@ def _fetch_submissions(cik: int, cfg) -> Optional[dict]:
     """
     submissions/{CIK}.json を取得して最新提出情報を返す。
     8-K の提出タイミング検知に使用する。
+
+    2026-07-27是正（U-1c）: 実体は sec_client.submissions() に委譲。
     """
     try:
-        import requests
-        url  = SUBMISSIONS_URL.format(cik)
-        resp = requests.get(
-            url,
-            headers={"User-Agent": _sec_user_agent(cfg)},
-            timeout=REQUEST_TIMEOUT,
-        )
-        if resp.status_code == 200:
-            return resp.json()
-        print(f"    ⚠️  submissions取得失敗 (CIK {cik}): HTTP {resp.status_code}")
+        data = sec_client.submissions(cik, cfg=cfg)
+        if data is None:
+            print(f"    ⚠️  submissions取得失敗 (CIK {cik})")
+        return data
     except Exception as e:
         print(f"    ⚠️  submissions取得失敗 (CIK {cik}): {type(e).__name__}: {str(e)[:60]}")
-    return None
+        return None
 
 
 def _fetch_xbrl_facts(cik: int, cfg) -> Optional[dict]:
     """
     XBRL companyfacts/{CIK}.json を取得する（全財務データの塊）。
     レスポンスは大きい（数MB）ため、必要項目のみ抽出する。
+
+    2026-07-27是正（U-1c）: 実体は sec_client.get_json() に委譲。
+    レスポンスが大きい（数MB）ため sec_client の既定タイムアウト（15秒）では
+    不足するケースがあり、従来通り timeout=30 を明示して現行挙動を維持する。
     """
     try:
-        import requests
         url  = XBRL_FACTS_URL.format(cik)
-        resp = requests.get(
-            url,
-            headers={"User-Agent": _sec_user_agent(cfg)},
-            timeout=30,  # XBRL は大きいので長め
-        )
-        if resp.status_code == 200:
-            return resp.json()
-        print(f"    ⚠️  XBRL facts取得失敗 (CIK {cik}): HTTP {resp.status_code}")
+        data = sec_client.get_json(url, cfg=cfg, timeout=30)
+        if data is None:
+            print(f"    ⚠️  XBRL facts取得失敗 (CIK {cik})")
+        return data
     except Exception as e:
         print(f"    ⚠️  XBRL facts取得失敗 (CIK {cik}): {type(e).__name__}: {str(e)[:60]}")
-    return None
+        return None
 
 
 def _extract_quarterly_series(
@@ -1084,6 +1092,7 @@ def run_us_fundamental_rotator(cfg, results: dict | None = None) -> dict:
           "skipped":         bool,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     if not getattr(cfg, "ENABLE_US_FUNDAMENTALS", True):
         return {"skipped": True}
 

@@ -61,6 +61,21 @@ from typing import Optional
 # ==============================================================
 
 _CACHE_TTL_DAYS        = 60    # pead_candidates.json TTL（日）= PEAD_MAX_HOLDING_DAYS_JP
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'PM_PEAD_SCORE_ALERT': '_PEAD_SCORE_ALERT',
+    'PM_PEAD_VOLUME_MIN': '_PEAD_VOLUME_MIN',
+    'PM_MIN_SURPRISE_BONUS': '_MIN_SURPRISE_BONUS',
+    'B4_PEAD_MONITOR_CACHE_TTL_DAYS': '_CACHE_TTL_DAYS',
+    'B4_PEAD_MONITOR_VOLUME_WINDOW_DAYS': '_VOLUME_WINDOW_DAYS',
+    'B4_PEAD_MONITOR_PRICE_DRIFT_WINDOW': '_PRICE_DRIFT_WINDOW',
+    'B5_PEAD_MONITOR_FETCH_DELAY': '_FETCH_DELAY',
+    'B6_PEAD_MONITOR_PEAD_DECAY_DAILY': '_PEAD_DECAY_DAILY',
+    'B6_PEAD_MONITOR_MAX_CANDIDATES': '_MAX_CANDIDATES',
+}
+
 _PEAD_SCORE_ALERT      = 5.0   # アラート閾値（config BLOCK 32 で上書き可能）
 _PEAD_DECAY_DAILY      = 0.85  # 日次減衰係数
 _PEAD_VOLUME_MIN       = 1.5   # 出来高倍率アラート閾値
@@ -71,7 +86,6 @@ _MAX_CANDIDATES        = 200   # キャッシュ最大保持件数
 
 # 最小サプライズ閾値（これ未満はPEAD候補としない）
 _MIN_SURPRISE_BONUS    = 0.5   # surprise_bonus の絶対値
-_MIN_REVISION_SCORE    = 0.15  # revision_score の絶対値
 
 
 # ==============================================================
@@ -647,6 +661,7 @@ def run_pead_monitor(
           "generated":           str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("  📊 [pead_monitor] PEAD日次監視実行中...")
 
     if results is None:

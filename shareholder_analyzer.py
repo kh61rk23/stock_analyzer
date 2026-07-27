@@ -60,6 +60,18 @@ SHAREHOLDER_HISTORY_FILE = "shareholder_history.json"
 HISTORY_RETAIN_QUARTERS  = 8   # 2年分を保持
 
 # 機関保有比率の閾値
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'SHA_INST_HIGH_THRESHOLD': 'INST_HIGH_THRESHOLD',
+    'SHA_INST_LOW_THRESHOLD': 'INST_LOW_THRESHOLD',
+    'B4_SHAREHOLDER_ANALYZER_HISTORY_RETAIN_QUARTERS': 'HISTORY_RETAIN_QUARTERS',
+    'B6_SHAREHOLDER_ANALYZER_FOREIGN_SPIKE_PCT': 'FOREIGN_SPIKE_PCT',
+    'B6_SHAREHOLDER_ANALYZER_FOREIGN_SURGE_PCT': 'FOREIGN_SURGE_PCT',
+    'B6_SHAREHOLDER_ANALYZER_ACTIVIST_HOLDINGS_PCT': 'ACTIVIST_HOLDINGS_PCT',
+}
+
 INST_HIGH_THRESHOLD = 70.0   # 70%超 → 発見済み（α取得困難）
 INST_LOW_THRESHOLD  = 20.0   # 20%未満 → 情報優位高
 
@@ -153,6 +165,7 @@ def _axis1_institutional_coverage(institutional_pct: Optional[float]) -> tuple[f
 def _axis2_foreign_trend(
     foreign_pct: Optional[float],
     history: list,
+    cfg = None,
 ) -> tuple[float, str, bool, bool]:
     """
     軸②: 外国人持株比率のトレンド
@@ -180,12 +193,17 @@ def _axis2_foreign_trend(
         if prev_foreign is not None:
             yoy_change = foreign_pct - prev_foreign
 
+    # 2026-07-25 バッチ4: 発見フェーズの閾値を config.py BLOCK P-4 の
+    # FOREIGN_INVESTOR_SPIKE_PCT から読む。従来はモジュール定数
+    # FOREIGN_SPIKE_PCT=3.0 のみが効き、config 側（同義・同値）は未参照だった。
+    _spike_pct = float(getattr(cfg, "FOREIGN_INVESTOR_SPIKE_PCT",
+                               FOREIGN_SPIKE_PCT))
     if yoy_change is not None:
         if yoy_change >= FOREIGN_SURGE_PCT:
             score = 25.0
             label = f"外国人{foreign_pct:.0f}%（前年比+{yoy_change:.1f}%→急増）"
             foreign_spike_alert = True
-        elif yoy_change >= FOREIGN_SPIKE_PCT:
+        elif yoy_change >= _spike_pct:
             score = 22.0
             label = f"外国人{foreign_pct:.0f}%（前年比+{yoy_change:.1f}%→発見フェーズ）"
         elif yoy_change >= 1.0:
@@ -366,7 +384,7 @@ def analyze_shareholder(
     # 4軸スコア計算
     axis1_score, axis1_label = _axis1_institutional_coverage(inst_pct)
     axis2_score, axis2_label, foreign_spike_alert, _ = _axis2_foreign_trend(
-        foreign_pct, history_records
+        foreign_pct, history_records, cfg
     )
     axis3_score, axis3_label, policy_trend = _axis3_policy_share_trend(
         top10, history_records
@@ -461,6 +479,7 @@ def run_shareholder_analyzer(cfg, edinet_db: dict, tickers: list = None) -> dict
           "timestamp":         str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  👥 株主構成分析 開始...")
     t0 = datetime.now()
 
@@ -509,8 +528,27 @@ def run_shareholder_analyzer(cfg, edinet_db: dict, tickers: list = None) -> dict
           f"| 情報優位{len(info_advantage)}"
           + (f" | ⚡アクティビスト{len(activist_entries)}!" if activist_entries else ""))
 
+    # [P-4] shareholder_score 上位N（2026-07-25 バッチ4で追加）
+    # config.SHAREHOLDER_SCORE_TOP_N は「上位N件を出す」ための定数として
+    # 定義されていたのに、スコア順のランキング自体が実装されておらず
+    # 誰にも読まれていなかった。既存3リスト（外国人急増／アクティビスト／
+    # 情報優位）はフラグでの分類で、スコア順の一覧は別物のため追加する。
+    _top_n = int(getattr(cfg, "SHAREHOLDER_SCORE_TOP_N", 10))
+    top_scored = [
+        {"ticker": t,
+         "shareholder_score": r.get("shareholder_score", 0.0),
+         "institutional_pct": r.get("institutional_pct"),
+         "foreign_pct":       r.get("foreign_pct")}
+        for t, r in sorted(
+            results.items(),
+            key=lambda kv: kv[1].get("shareholder_score", 0.0) or 0.0,
+            reverse=True,
+        )[:_top_n]
+    ]
+
     return {
         "results":           results,
+        "top_scored":        top_scored,
         "foreign_spike":     foreign_spike,
         "activist_entries":  activist_entries,
         "info_advantage":    info_advantage,

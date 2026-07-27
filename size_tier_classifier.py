@@ -38,6 +38,8 @@
 #   business_model_detector.py（業態判定）
 #   config.py（BLOCK 25 定数）
 #   stock_data: results["screener"] / results["us_screener"]（JP/US候補）
+#   ※ 上記2つが入力のため、main では stock_screener / us_stock_screener の
+#     **実行後**に呼ぶこと（2026-07-27 X-1 で sector 直後から移設）。
 # ==============================================================
 
 from __future__ import annotations
@@ -51,6 +53,14 @@ from typing import Optional
 # ==============================================================
 # BLOCK 0: デフォルト定数（config.py が読めない場合のフォールバック）
 # ==============================================================
+
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'STC_DEFAULT_THRESHOLDS_JP': '_DEFAULT_THRESHOLDS_JP',
+    'STC_DEFAULT_THRESHOLDS_US': '_DEFAULT_THRESHOLDS_US',
+}
 
 _DEFAULT_THRESHOLDS_JP: dict = {
     "Large": 10_000,
@@ -373,10 +383,31 @@ def _cache_path(cfg) -> Path:
     return d / CACHE_FILENAME
 
 
+def is_empty_master(data: Optional[dict]) -> bool:
+    """
+    マスターが実質的に空（JP/US いずれにも銘柄が無い）かを判定する。
+
+    ★ 2026-07-27 X-1: TTL 内であっても中身が空のマスターを返すと、
+      次回更新までの最大 SIZE_TIER_CACHE_TTL_DAYS 日間、全下流
+      （size_decay_manager / independence_score_calculator /
+        signal_aggregator / us_stock_screener）が
+      size_tier 未解決のまま既定値で動き続ける。
+      空は「有効なキャッシュ」ではなく「未生成」として扱う。
+    """
+    try:
+        if not data:
+            return True
+        jp = data.get("jp") or {}
+        us = data.get("us") or {}
+        return not jp and not us
+    except Exception:
+        return True
+
+
 def _load_master(cfg) -> Optional[dict]:
     """
-    TTL 内の size_tier_master.json を返す。
-    失効または未存在の場合は None。
+    TTL 内かつ中身が空でない size_tier_master.json を返す。
+    失効・未存在・空マスターの場合は None（＝再構築させる）。
     """
     try:
         p = _cache_path(cfg)
@@ -389,6 +420,8 @@ def _load_master(cfg) -> Optional[dict]:
             age = (datetime.now() -
                    datetime.strptime(last_updated, "%Y-%m-%d")).days
             if age < ttl_days:
+                if is_empty_master(data):
+                    return None
                 return data
     except Exception:
         pass
@@ -396,7 +429,14 @@ def _load_master(cfg) -> Optional[dict]:
 
 
 def _save_master(cfg, data: dict) -> None:
+    """
+    マスターを保存する。空マスターは保存しない
+    （★ 2026-07-27 X-1: 既存の有効なマスターを空で上書きさせないため）。
+    """
     try:
+        if is_empty_master(data):
+            print("    ⚠️  [size_tier] 空マスターのため保存をスキップ")
+            return
         data["last_updated"] = datetime.now().strftime("%Y-%m-%d")
         p = _cache_path(cfg)
         p.write_text(
@@ -428,8 +468,14 @@ def _collect_jp_candidates(results: dict) -> list[dict]:
                     "ticker":       str(c.get("ticker", c.get("code", ""))),
                     "name":         str(c.get("name", "")),
                     "market_cap_b": _safe_float(c.get("market_cap_b")),
-                    "last_price":   _safe_float(c.get("last_price",
-                                    c.get("price"))),
+                    # ★ 2026-07-27 X-1: stock_screener が出すのは
+                    #   "current_price"（stock_screener.py:1765）であり
+                    #   "last_price"/"price" は存在しない。従来は常に None となり
+                    #   penny_flag が恒常 False、liquidity_rank も時価総額
+                    #   フォールバックにしか入らなかった。
+                    "last_price":   _safe_float(
+                        c.get("last_price",
+                              c.get("current_price", c.get("price")))),
                     "avg_volume":   _safe_float(c.get("avg_volume")),
                     "sector_code":  str(c.get("sector_code", "")),
                     "roe":          _safe_float(c.get("roe")),
@@ -461,16 +507,23 @@ def _collect_us_candidates(results: dict) -> list[dict]:
         out = []
         for c in passed:
             try:
-                # US: market_cap は raw USD（billions に変換）
+                # US: market_cap は raw USD → 億USD（1e8）へ換算する。
+                # ★ 2026-07-27 X-1: 従来は 1e9（十億USD）で割っていたため、
+                #   SSOT の SIZE_TIER_THRESHOLDS_US（単位=億USD, config BLOCK 25）
+                #   と 10 倍ずれ、US 銘柄が一律 1 ティア以上小さく分類されていた。
+                #   size_decay_manager.classify_size_tier() も raw/1e8 で
+                #   同じ閾値を引いており、そちらが正。
                 mcap_raw = _safe_float(c.get("market_cap"))
-                mcap_b   = round(mcap_raw / 1e9, 2) if mcap_raw else None
+                mcap_b   = round(mcap_raw / 1e8, 2) if mcap_raw else None
 
                 out.append({
                     "ticker":       str(c.get("ticker", "")),
                     "name":         str(c.get("name", "")),
-                    "market_cap_b": mcap_b,     # 億USD換算
-                    "last_price":   _safe_float(c.get("last_price",
-                                    c.get("price"))),
+                    "market_cap_b": mcap_b,     # 億USD
+                    # us_stock_screener も "current_price"（同 L330）
+                    "last_price":   _safe_float(
+                        c.get("last_price",
+                              c.get("current_price", c.get("price")))),
                     "avg_volume":   _safe_float(c.get("avg_volume")),
                     "sector_code":  str(c.get("sector_code",
                                     c.get("sector", ""))),
@@ -699,7 +752,8 @@ def build_size_tier_master(
             master_us[ticker] = {
                 "ticker":          ticker,
                 "name":            c.get("name", ""),
-                "market_cap_usd_b": round(mcap_b, 2) if mcap_b else None,
+                # 単位: 億USD（旧 market_cap_usd_b は十億USD表記で実値と不一致だった）
+                "market_cap_usd_oku": round(mcap_b, 2) if mcap_b else None,
                 "size_tier":       tier,
                 "liquidity_rank":  liq_rank,
                 "business_model":  bm_type,
@@ -759,10 +813,16 @@ def build_size_tier_master(
 def run_size_tier_classifier(cfg, results: dict = None) -> dict:
     """
     stock_analyzer_main.py の WEEKLY_MODULES から呼ばれるエントリポイント。
-    sector 実行の直後に実行する。
+
+    ★ 実行位置の制約（2026-07-27 X-1）:
+      本モジュールは results["screener"]（stock_screener）と
+      results["us_screener"]（us_stock_screener）を入力とするため、
+      **両スクリーナーの実行後**に呼ぶこと。
+      2026-07-27 以前は sector 直後（両スクリーナーより前）に配線されており、
+      results が空のまま毎回 0 銘柄で終了していた。
 
     処理フロー:
-      1. キャッシュ有効（TTL内） → キャッシュ返却
+      1. キャッシュ有効（TTL内かつ非空） → キャッシュ返却
       2. results から JP/US 候補を収集
       3. build_size_tier_master() でマスター構築
       4. size_tier_master.json に保存
@@ -776,6 +836,7 @@ def run_size_tier_classifier(cfg, results: dict = None) -> dict:
           "timestamp": str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  📊 規模分類マスター生成（Wave 0 Size Ph1）実行中...")
 
     # ── キャッシュ確認 ───────────────────────────────────────────
@@ -807,11 +868,20 @@ def run_size_tier_classifier(cfg, results: dict = None) -> dict:
     )
 
     if not candidates_jp and not candidates_us:
-        print("    ⚠️  候補銘柄がありません → スキップ")
+        # ★ 2026-07-27 X-1: ここは「成功」ではない。
+        #   results["screener"] / results["us_screener"] が未生成のまま
+        #   呼ばれると必ずこの経路に落ちるため、呼び出し側（main）が
+        #   台帳へ skipped として記録できるようフラグを返す。
+        print(
+            "    ⚠️  候補銘柄がありません → スキップ"
+            "（results['screener'] / results['us_screener'] 未生成の可能性）"
+        )
         return {
             "master":    {},
             "stats":     {},
             "cached":    False,
+            "skipped":   True,
+            "reason":    "no_candidates（screener/us_screener の結果が空）",
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
 
@@ -828,6 +898,21 @@ def run_size_tier_classifier(cfg, results: dict = None) -> dict:
     master = build_size_tier_master(
         candidates_jp, candidates_us, cfg, existing
     )
+
+    # 候補はあったのに 1 件も登録できなかった場合も success にはしない
+    if is_empty_master(master):
+        print("    ⚠️  マスターが空のまま構築されました → スキップ")
+        return {
+            "master":    {},
+            "stats":     {},
+            "cached":    False,
+            "skipped":   True,
+            "reason":    (
+                f"empty_master（候補 JP={len(candidates_jp)} / "
+                f"US={len(candidates_us)} を分類できず）"
+            ),
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
 
     # ── 保存 ─────────────────────────────────────────────────────
     _save_master(cfg, master)

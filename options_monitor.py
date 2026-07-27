@@ -51,6 +51,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+from config_sync import sync_module_constants
+
 # ── 定数 ──────────────────────────────────────────────────────
 # 対象ティッカー
 OPTIONS_TICKERS = {
@@ -67,8 +69,6 @@ PCR_GREED_THRESH = 0.6  # この値未満 → 楽観過多（天井注意）
 
 # VIX しきい値
 VIX_EXTREME_FEAR  = 30  # 極度の恐怖
-VIX_FEAR          = 20  # 恐怖
-VIX_CALM          = 15  # 落ち着き（楽観注意）
 
 CACHE_FILENAME  = "options_monitor_cache.json"
 CACHE_HOURS     = 4     # オプションデータは4時間キャッシュ（日中変動が大きい）
@@ -99,6 +99,19 @@ FEAR_TAILWIND_SECTORS  = ["1008", "1020", "1004"]   # 医薬・電力・食料�
 FEAR_HEADWIND_SECTORS  = ["1016", "1017", "1022"]   # 電気機器・自動車・海運（景気敏感）
 GREED_TAILWIND_SECTORS = ["1016", "1017", "1025"]   # 景気敏感・情報
 GREED_HEADWIND_SECTORS = ["1008", "1020"]            # ディフェンシブ（相対劣後）
+
+_CFG_CONST_MAP = {
+    "OM_PCR_FEAR_THRESH": "PCR_FEAR_THRESH",
+    "OM_PCR_GREED_THRESH": "PCR_GREED_THRESH",
+    "OM_TERM_CONTANGO_RATIO": "TERM_CONTANGO_RATIO",
+    "OM_TERM_BACKWD_RATIO": "TERM_BACKWD_RATIO",
+    "OM_TERM_SCORE_WEIGHT": "TERM_SCORE_WEIGHT",
+    'B4_OPTIONS_MONITOR_CACHE_HOURS': 'CACHE_HOURS',
+    'B5_OPTIONS_MONITOR_FETCH_DELAY': 'FETCH_DELAY',
+    'B6_OPTIONS_MONITOR_VIX_EXTREME_FEAR': 'VIX_EXTREME_FEAR',
+    'B6_OPTIONS_MONITOR_SKEW_EXTREME': 'SKEW_EXTREME',
+    'B6_OPTIONS_MONITOR_SKEW_ELEVATED': 'SKEW_ELEVATED',
+}
 
 
 # ==============================================================
@@ -735,6 +748,7 @@ def run_options_monitor(cfg, sector_results: Optional[dict] = None) -> dict:
           "timestamp":    str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  📊 オプション市場センチメント分析開始...")
 
     cached = _load_cache(cfg)
@@ -747,9 +761,16 @@ def run_options_monitor(cfg, sector_results: Optional[dict] = None) -> dict:
     print("    VIX / VVIX 取得中...")
     vix_data = _fetch_vix_data()
     # ── [Phase US-4] VIX term structure & SKEW ───────────────
-    print("    VIX term structure / SKEW 取得中...")
-    ts_data   = _fetch_vix_term_structure()
-    skew_data = _fetch_skew_index()
+    # 2026-07-25: BLOCK US-4 の3フラグ（ENABLE_VIX_TERM_STRUCTURE /
+    # ENABLE_SKEW_INDEX / ENABLE_IV_SPIKE_DETECT）を配線。実装は揃っていたのに
+    # 有効フラグが誰にも読まれず、False にしても外部取得が止まらなかった。
+    # 無効時は空dictを入れる（下流は .get() で読むため式は壊れない）。
+    _ts_on   = getattr(cfg, "ENABLE_VIX_TERM_STRUCTURE", True)
+    _skew_on = getattr(cfg, "ENABLE_SKEW_INDEX", True)
+    if _ts_on or _skew_on:
+        print("    VIX term structure / SKEW 取得中...")
+    ts_data   = _fetch_vix_term_structure() if _ts_on else {}
+    skew_data = _fetch_skew_index() if _skew_on else {}
     vix_data["term_structure"] = ts_data
     vix_data["skew"]           = skew_data
 
@@ -805,9 +826,15 @@ def run_options_monitor(cfg, sector_results: Optional[dict] = None) -> dict:
         us_tickers = []
         if isinstance(sector_results, dict) and "_us_screener_tickers" in sector_results:
             us_tickers = sector_results["_us_screener_tickers"][:10]
-        if us_tickers:
+        if us_tickers and getattr(cfg, "ENABLE_IV_SPIKE_DETECT", True):
             print(f"    IV急騰チェック: {len(us_tickers)}銘柄...")
-            iv_spikes = detect_iv_spikes(us_tickers)
+            # 閾値も config を正本にする（従来はモジュール定数が既定値を
+            # 固定しており、config.IV_SPIKE_THRESHOLD が効かなかった）。
+            iv_spikes = detect_iv_spikes(
+                us_tickers,
+                threshold=int(getattr(cfg, "IV_SPIKE_THRESHOLD",
+                                      IV_SPIKE_THRESHOLD)),
+            )
             if iv_spikes:
                 print(f"    ⚡ IV急騰銘柄: {[s['ticker'] for s in iv_spikes[:3]]}")
 

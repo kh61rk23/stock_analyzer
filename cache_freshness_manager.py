@@ -69,6 +69,15 @@ DEFAULT_HALF_LIFE_HOURS: dict[str, float] = {
 }
 
 # freshness がこれ未満で強制再取得フラグを立てる
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'CFM_STALE_THRESHOLD': 'STALE_THRESHOLD',
+    'CFM_IGNORE_THRESHOLD': 'IGNORE_THRESHOLD',
+    'B4_CACHE_FRESHNESS_MANAGER_DEFAULT_HALF_LIFE_HOURS': 'DEFAULT_HALF_LIFE_HOURS',
+}
+
 STALE_THRESHOLD  = 0.30   # ≈ 経過時間 > 半減期 × 1.74
 
 # freshness がこれ未満でスコアをゼロ重みにする（信頼しない）
@@ -474,6 +483,7 @@ def run_cache_freshness_manager(cfg, results: dict | None = None) -> dict:
           "timestamp":        str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     if not getattr(cfg, "ENABLE_CACHE_FRESHNESS", True):
         return {"skipped": True}
 

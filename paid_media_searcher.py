@@ -102,6 +102,12 @@ PAID_MEDIA_SOURCES = [
 
 # 403/429 の累計検出数（この実行内）。上限到達で以降のCSE呼出を打ち切る。
 _CSE_DEAD_COUNT = 0
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B5_PAID_MEDIA_SEARCHER_CSE_DEAD_LIMIT': '_CSE_DEAD_LIMIT',
+}
+
 _CSE_DEAD_LIMIT = 3
 
 def _search_gcse(api_key: str, cse_id: str, site: str,
@@ -197,6 +203,7 @@ def fetch_paid_media_articles(cfg) -> list:
         [Article, ...]  ※ matched_sectors / importance_score は未付与
                          news_pipeline.py の match_sectors() で付与される
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     api_key = getattr(cfg, "GOOGLE_CSE_API_KEY", "")
     cse_id  = getattr(cfg, "GOOGLE_CSE_ID", "")
     enabled = getattr(cfg, "ENABLE_PAID_MEDIA_SEARCH", True)

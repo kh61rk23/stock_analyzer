@@ -42,6 +42,29 @@ from typing import Optional
 
 _LATEST_FILENAME = "module_ledger_latest.json"
 
+# ── mode-key → 実際に logger.add() で使われる記録キー（2026-07-25 B-3）──
+# DAILY_MODULES の mode-key と記録キーが一致せず、かつ接頭辞派生でもない
+# ケースは、接頭辞ルールでは救えず「記録なし」に誤検出されていた。
+#   key_health → api_key_health（記録側が前に付く＝接頭辞が逆）
+#   screener   → stock_screener（同上）
+# 新しいステージを追加して mode-key と記録キーがズレる場合はここに追記する。
+# cfg.LEDGER_MODE_KEY_ALIASES を定義すればマージ上書きできる。
+_DEFAULT_MODE_KEY_ALIASES: dict = {
+    "key_health":       ["api_key_health"],
+    "screener":         ["stock_screener"],
+    "excel_export":     ["excel_export", "correlation_heatmap"],
+    "ml_meta":          ["ml_meta_dataset", "ml_meta_correction"],
+    "us_sector_bridge": ["us_sector_bridge"],
+}
+
+
+def _mode_key_aliases(cfg) -> dict:
+    """mode-key → 記録キー候補。cfg 側の定義で上書きマージする。"""
+    aliases = dict(_DEFAULT_MODE_KEY_ALIASES)
+    for k, v in (getattr(cfg, "LEDGER_MODE_KEY_ALIASES", None) or {}).items():
+        aliases[k] = list(v)
+    return aliases
+
 
 def _log_dir(cfg) -> Path:
     d = Path(getattr(cfg, "LOG_DIR", "stock_data/logs"))
@@ -110,10 +133,15 @@ def build_daily_ledger(cfg, logs: list, date_str: str = None) -> dict:
     #   （"policy" を "policy_radar" の記録で誤って満たさないため）。
     registered = list(getattr(cfg, "DAILY_MODULES", []) or [])
     registered_set = set(registered)
+    aliases = _mode_key_aliases(cfg)
 
     def _is_recorded(mode_key: str) -> bool:
         if mode_key in modules:
             return True
+        # ① 明示エイリアス（接頭辞ルールで救えないズレ・2026-07-25 B-3）
+        for alias in aliases.get(mode_key, ()):
+            if alias in modules:
+                return True
         prefix = mode_key + "_"
         for rec in modules:
             if rec in registered_set:

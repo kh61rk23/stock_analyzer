@@ -76,6 +76,37 @@ DEFAULT_WEIGHTS = {
 # 重み合計検証:
 # 0.21+0.13+0.15+0.10+0.08+0.03+0.03+0.01+0.01+0.04+0.04+0.02+0.01+0.04+0.01+0.01+0.01+0.01+0.01+0.01+0.01+0.01+0.02 = 1.00
 
+
+def sync_default_weights_from_config(cfg) -> dict:
+    """config.SIGNAL_WEIGHTS を DEFAULT_WEIGHTS へ取り込む（2026-07-25 バッチ6）。
+
+    【背景】config 側は9カテゴリの古い版のまま放置され、実装（23カテゴリ）と
+    完全に乖離していた。誰も config を読んでいなかったため気づけなかった。
+    実装値を config へ写したうえで、config を正本として読み込む。
+
+    Returns: 実際に採用した重み（＝更新後の DEFAULT_WEIGHTS）
+
+    安全弁: config 側が空・非dict・合計が1.00から大きく外れる場合は
+    取り込まずモジュール既定値を保つ。重みはスコアの根幹なので、
+    設定ミスで全銘柄のスコアが壊れる事故を防ぐ。
+    """
+    global DEFAULT_WEIGHTS
+    w = getattr(cfg, "SIGNAL_WEIGHTS", None) if cfg is not None else None
+    if not isinstance(w, dict) or not w:
+        return DEFAULT_WEIGHTS
+    try:
+        total = sum(float(v) for v in w.values())
+    except (TypeError, ValueError):
+        print("  ⚠️  signal_aggregator: SIGNAL_WEIGHTS に数値でない値 → 既定値を使用")
+        return DEFAULT_WEIGHTS
+    if abs(total - 1.0) > 0.01:
+        print(f"  ⚠️  signal_aggregator: SIGNAL_WEIGHTS の合計が {total:.4f}"
+              f"（1.00±0.01 の範囲外）→ 既定値を使用")
+        return DEFAULT_WEIGHTS
+    DEFAULT_WEIGHTS = {k: float(v) for k, v in w.items()}
+    return DEFAULT_WEIGHTS
+
+
 # ── 重み合計バリデーション（合計 ≠ 1.00 なら起動時に警告） ──────
 _WEIGHT_SUM = round(sum(DEFAULT_WEIGHTS.values()), 10)
 assert abs(_WEIGHT_SUM - 1.0) < 1e-9, (
@@ -1346,9 +1377,14 @@ def calc_total_signal_score(results: dict, cfg) -> dict:
         momentum_score = 50.0
 
     # earnings_acceleration: screener通過銘柄のacc_bonus平均
+    # 2026-07-25: BLOCK I-1 の ENABLE_EARNINGS_ACCELERATION を配線。
+    # 有効フラグが誰にも読まれておらず、False にしても EPS加速度が
+    # シグナルに乗り続ける状態だった。無効時は中立50（＝寄与なし）。
     screener = results.get("screener", {})
     cands    = [c for c in screener.get("candidates", []) if c.get("pass_filters")]
-    if cands:
+    # cfg は本関数の引数（None でも getattr の既定値 True で通る）
+    _accel_on = bool(getattr(cfg, "ENABLE_EARNINGS_ACCELERATION", True))
+    if cands and _accel_on:
         acc_scores = [(c.get("acc_bonus", 0) or 0) for c in cands]
         # acc_bonus は -10〜+10 → 0〜100に正規化
         earnings_acceleration = 50.0 + (sum(acc_scores) / len(acc_scores)) * 5
@@ -1382,6 +1418,9 @@ def calc_total_signal_score(results: dict, cfg) -> dict:
     # ENABLE_GEO_SIGNAL=False または BQデータ未蓄積時は None → 重み計算から除外。
     # ★ try/except 保護: geo_signal 未接続時も total_signal_score に影響しない
     geo_signal_score: float | None = None
+    # config は下の try 内で import する。失敗しても重み既定値を引けるよう
+    # ここで None に初期化しておく（2026-07-25）。
+    _cfg_tss = None
     try:
         import importlib as _imp_tss, sys as _sys_tss
         from pathlib import Path as _pl_tss
@@ -1425,8 +1464,12 @@ def calc_total_signal_score(results: dict, cfg) -> dict:
     w_tech     = ro_weights.get("technical_weight",        0.10)
     w_activist = ro_weights.get("activist_weight",         0.10)
     # Wave 6 - G-X: geo_signal ウェイト（ENABLE_GEO_SIGNAL=False 時は 0.0）
+    # 2026-07-25: 既定値を config.GEO_SIGNAL_WEIGHT から読むように是正。
+    # 従来は 0.04 をここに直書きしており、config 側の定数が誰にも
+    # 読まれず「変えても効かない」状態だった（SSOT違反）。
+    _w_geo_default = float(getattr(_cfg_tss, "GEO_SIGNAL_WEIGHT", 0.04) or 0.04)
     w_geo      = (
-        ro_weights.get("geo_signal_weight", 0.04)
+        ro_weights.get("geo_signal_weight", _w_geo_default)
         if geo_signal_score is not None
         else 0.0
     )
@@ -1579,6 +1622,12 @@ def run_signal_aggregator(cfg, results: dict) -> dict:
         }
     """
     print("\n  🎯 シグナルアグリゲーター実行中...")
+
+    # 2026-07-25 バッチ6: 初期重みを config.SIGNAL_WEIGHTS から取り込む。
+    # 従来 config 側は9カテゴリの古い版で誰にも読まれず、実装の23カテゴリ版
+    # だけが効いていた（SSOT違反）。合計が1.00から外れる等の異常時は
+    # 取り込まず既定値を保つ（重みはスコアの根幹のため）。
+    sync_default_weights_from_config(cfg)
 
     # rule_optimizerの重みがあれば使用
     weights = dict(DEFAULT_WEIGHTS)

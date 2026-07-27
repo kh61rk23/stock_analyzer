@@ -188,6 +188,29 @@ def audit() -> int:
                 problems.append(
                     f"ENABLEフラグ未定義（getattrデフォルト動作）: {f} (L{s['order']})")
 
+    # ④ Wave 7 の宣言された実行順と、実コードの実行順の整合（2026-07-25 バッチ5）
+    #    WAVE7_DAILY_MODULE_ORDER / WAVE7_WEEKLY_MODULE_ORDER は
+    #    「この順で回す」という宣言だが、誰も読んでおらず、実際の実行順は
+    #    stock_analyzer_main のコード順（= registry の order）で決まっていた。
+    #    宣言と実装がズレたまま気づけない状態だったため、ここで突き合わせる。
+    #    registry の order は AST の行番号ベースなので、実行順の代理として使える。
+    _order_of = {}
+    for s in new["stages"]:
+        for m in s["modules"]:
+            _order_of.setdefault(m, s["order"])
+    for _decl_name in ("WAVE7_DAILY_MODULE_ORDER", "WAVE7_WEEKLY_MODULE_ORDER"):
+        declared = list(getattr(cfg, _decl_name, []) or [])
+        present = [m for m in declared if m in _order_of]
+        missing = [m for m in declared if m not in _order_of]
+        for m in missing:
+            problems.append(
+                f"{_decl_name} に宣言されているがパイプライン未配線: {m}")
+        actual = sorted(present, key=lambda m: _order_of[m])
+        if present and actual != present:
+            problems.append(
+                f"{_decl_name} の宣言順と実コードの実行順が不一致: "
+                f"宣言={present} / 実際={actual}")
+
     print(f"パイプライン監査: ステージ{new['stage_count']} / 問題{len(problems)}件")
     for p in problems[:30]:
         print(f"  ⚠️  {p}")

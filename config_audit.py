@@ -150,6 +150,97 @@ def check_d_missing_cfg_attrs(cfg_names: set, env_injected: set) -> list:
     return findings
 
 
+# E: 未参照でも正当な定数（理由を必ず添えること）
+# ここに足す前に「本当に誰も読まないのか」を確認する。安易に足すと検査が死ぬ。
+UNREFERENCED_ALLOWLIST = {
+    # 旧名を残すための明示エイリアス。実体は ENABLE_FUDOSAN_INGEST 側が読まれる。
+    "ENABLE_FUDOSANDB_INGEST",
+    # ↓ 実装が存在せずフラグだけ先行しているもの（2026-07-25 確認）。
+    #   config.py 側に「未実装」と明記済み。実装したら本リストから外すこと。
+    "ENABLE_TREASURY_DATA",      # treasury_debt の取得処理が無い（読み手だけ）
+    "ENABLE_GEO_SCORE_PERSIST",  # analytics.company_scores への書込処理が無い
+    # 退役機能の墓標。2026-07-22 のDB統合で legacy 業種別REST取得を廃止し、
+    # 実装ごと削除した。False 固定であることを
+    # tests/test_db_integration_refit.py が保証している（復活防止）。
+    "ENABLE_EDINET",
+    # ↓ 消費者が .py ではないため検査Eの走査に掛からないもの（2026-07-25）
+    #   Streamlit のポートは起動時 --server.port で渡すしかないため、
+    #   setup/権益レビューUI起動.command が唯一の消費者。
+    "EXPOSURE_REVIEW_UI_PORT",
+    # ↓ 実装が存在しないフラグ（config 側に「未実装」と明記済み・2026-07-25）
+    "GARCH_ENABLED",                # GARCH ボラ推定は未実装（ARCH未導入）
+    "IGNITION_CATEGORY_D_ENABLED",  # ignition_detector にカテゴリD抽出が無い
+}
+
+# 走査から外すディレクトリ
+# tests/ を外すのは、テストからの参照で「本番で使われている」ように
+# 見えてしまうのを防ぐため（2026-07-25）。テストだけが読む定数は
+# 本番未使用であり、検査Eはそれを検出できなければ意味がない。
+_SKIP_DIRS = {"__pycache__", ".git", ".pytest_cache", "pytest_cache",
+              "03_bk", "tests"}
+
+
+def _iter_py_files():
+    """リポジトリ配下の全 .py（サブディレクトリ含む）。"""
+    for p in sorted(REPO_ROOT.rglob("*.py")):
+        if any(part in _SKIP_DIRS for part in p.parts):
+            continue
+        yield p
+
+
+def check_e_unreferenced_constants(tree: ast.Module, src: str) -> list:
+    """E: config.py で定義されたが、どこからも読まれていない定数の検出。
+
+    【なぜ要るか】2026-07-25 の棚卸しで、config.py の752定数のうち104個が
+    実装から一度も参照されていないことが判明した。とくに ENABLE_* は
+    「True にしたのに動かない」「False にしたのに止まらない」を生む。
+    実害例: ENABLE_MIDTERM_TRACKER=True と ENABLE_MIDTERM_PLAN_TRACKER=False
+    が同居し、実装が読むのは後者だけだった（二重フラグの罠）。
+
+    【検出方法】定数名を単語境界で全 .py から探す。文字列リテラルも拾うので
+    getattr(cfg, "NAME") 形式も参照済みとみなす。
+    【限界】getattr(cfg, f"ENABLE_{x}") のような動的組み立ては追えない。
+    その形式を使う場合は UNREFERENCED_ALLOWLIST に登録すること。
+    """
+    consts = []
+    for node in tree.body:
+        target = None
+        if isinstance(node, ast.Assign) and node.targets:
+            target = node.targets[0]
+        elif isinstance(node, ast.AnnAssign):
+            target = node.target
+        if isinstance(target, ast.Name) and target.id.isupper():
+            consts.append((target.id, node.lineno))
+
+    # config.py 以外の全ソースを連結して1回だけ検索する（定数×ファイル数の
+    # 総当たりだと数十秒かかるため）
+    blob_parts = []
+    for p in _iter_py_files():
+        if p.name in ("config.py", "config_audit.py"):
+            continue
+        try:
+            blob_parts.append(p.read_text(encoding="utf-8", errors="replace"))
+        except Exception:
+            continue
+    blob = "\n".join(blob_parts)
+
+    findings = []
+    for name, lineno in consts:
+        if name in UNREFERENCED_ALLOWLIST:
+            continue
+        pat = re.compile(r"\b" + re.escape(name) + r"\b")
+        if pat.search(blob):
+            continue
+        # config.py 内での自己参照（他の定数の計算に使う等）があれば生きている
+        if len(pat.findall(src)) > 1:
+            continue
+        findings.append({"name": name, "line": lineno,
+                         "is_flag": name.startswith("ENABLE_")})
+    # 挙動フラグを先頭に寄せる（読み手が最初に見るべきもの）
+    findings.sort(key=lambda f: (not f["is_flag"], f["line"]))
+    return findings
+
+
 def main() -> int:
     src = CONFIG_PATH.read_text(encoding="utf-8")
     tree = ast.parse(src)
@@ -166,6 +257,7 @@ def main() -> int:
     b = check_b_block_collisions(src)
     c = check_c_hardcoded_secrets(tree, src)
     d = check_d_missing_cfg_attrs(cfg_names, env_injected)
+    e = check_e_unreferenced_constants(tree, src)
 
     critical = bool(a or c)
     lines = []
@@ -189,6 +281,19 @@ def main() -> int:
     for f in d:
         lines.append(f"  ⚠️  {f['file']}: {', '.join(f['attrs'][:8])}"
                      + (" ..." if len(f["attrs"]) > 8 else ""))
+
+    e_flags = [f for f in e if f["is_flag"]]
+    lines.append(f"\n[E] 未参照の config 定数（WARNING）: {len(e)}件"
+                 f"（うち ENABLE_* フラグ {len(e_flags)}件）")
+    if e_flags:
+        lines.append("  ── 挙動フラグ（切り替えても効かない＝実害が出やすい）──")
+        for f in e_flags:
+            lines.append(f"  ⚠️  L{f['line']}: {f['name']}")
+    e_others = [f for f in e if not f["is_flag"]]
+    if e_others:
+        lines.append(f"  ── 閾値・パラメータ {len(e_others)}件 ──")
+        for f in e_others:
+            lines.append(f"      L{f['line']}: {f['name']}")
 
     lines.append("\n" + "=" * 60)
     lines.append("✅ CRITICAL なし" if not critical

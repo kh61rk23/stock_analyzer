@@ -2888,6 +2888,21 @@ def _section_action_guide(results: dict) -> list:
             lines.append(f"- **{name}** スコア{score:.0f}点: {reason}")
         lines.append("")
 
+    # [P-3] 長期保有候補（片山晃モデル「10年持てる銘柄」）
+    # 2026-07-25 バッチ1: screener が longterm_top を生成していたのに
+    # どのレポートにも載らず、成果物が誰にも届いていなかったため追加。
+    longterm_top = screener.get("longterm_top", []) or []
+    if longterm_top:
+        lines.append("### 🌱 長期保有候補（P-3: 財務堅牢×増益×高ROE）")
+        lines.append("")
+        for c in longterm_top[:5]:
+            name  = str(c.get("name", c.get("ticker", "")))[:16]
+            score = c.get("composite_score", 0) or 0
+            lt_flags = c.get("longterm_flags", []) or []
+            ev = " / ".join(str(f) for f in lt_flags[:3]) if lt_flags else "条件充足"
+            lines.append(f"- **{name}** スコア{score:.0f}点: {ev}")
+        lines.append("")
+
     # 警戒: スコア低い業種
     sorted_sec = sorted(
         [(k, v) for k, v in sector_results.items() if isinstance(v, dict)],

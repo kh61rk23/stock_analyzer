@@ -40,16 +40,15 @@
 
 from __future__ import annotations
 
-import json
 import re
 import time
 import uuid
 from datetime import datetime, timezone, date
 from pathlib import Path
 from typing import Any
-from urllib.request import urlopen, Request
-from urllib.error import URLError, HTTPError
 from urllib.parse import quote
+
+import sec_client
 
 # ==============================================================
 # BLOCK 1: SEC EDGAR API 定数
@@ -72,16 +71,32 @@ EDGAR_VIEWER_BASE      = (
 )
 EDGAR_DOC_BASE = "https://www.sec.gov"
 
-_REQUEST_HEADERS = {
-    "User-Agent": (
-        "StockAnalyzer Research Tool admin@stockanalyzer.example.com"
-    ),
-    "Accept": "application/json, text/html, */*",
+# 2026-07-27是正（U-2 / F-2）: SECは連絡先を含まないUser-Agentを403で拒否する。
+# us_8k_monitor.py:116-122 の _sec_user_agent() と同型（優先順: 環境変数 →
+# cfg.SEC_USER_AGENT（cfg未指定時は import config でのフォールバック取得）→ 固定文字列）。
+# U-1b: 実体は sec_client.user_agent() に統合済み。本関数は tests/test_sec_user_agent.py
+# の既存回帰テストとの互換のために薄いラッパーとして残す。
+_SEC_UA_FALLBACK = "StockAnalyzer stockanalyzer@example.com"
+
+
+def _sec_user_agent(cfg=None) -> str:
+    return sec_client.user_agent(cfg)
+
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B5_SEC_GEOGRAPHIC_EXTRACTOR_FETCH_TIMEOUT': '_FETCH_TIMEOUT',
+    'B6_SEC_GEOGRAPHIC_EXTRACTOR_MAX_RETRIES': '_MAX_RETRIES',
 }
+
+# U-1b: レート制限(旧 _SEC_RATE_LIMIT)は sec_client.get() の共通スロットル
+# （RATE_LIMIT_RPS）に、429/5xxリトライ待機(旧 _RETRY_WAIT_SEC 固定6秒)は
+# sec_client.get() の指数バックオフ（3s/6s/12s）にそれぞれ統合された。
+# _FETCH_TIMEOUT=30秒は sec_client.get() の既定15秒より長い（XBRL等の
+# 特大レスポンス向け）ため、呼び出し側で明示的に timeout=_FETCH_TIMEOUT を渡す。
 _FETCH_TIMEOUT   = 30
 _MAX_RETRIES     = 3
-_RETRY_WAIT_SEC  = 6    # SEC EDGAR は 10req/sec 制限あり
-_SEC_RATE_LIMIT  = 0.12 # 1リクエストあたりの最低待機秒数
 
 # ==============================================================
 # BLOCK 2: ティッカー→CIK 変換マスター（主要銘柄）
@@ -168,69 +183,53 @@ _SECTION_TO_EXPOSURE_TYPE = {
 }
 
 # ==============================================================
-# BLOCK 3: HTTP ユーティリティ（SEC EDGAR 専用・レート制限対応）
+# BLOCK 3: HTTP ユーティリティ（SEC EDGAR 専用・sec_client 経由）
 # ==============================================================
 
-_last_request_time: float = 0.0
-
-
-def _fetch_sec(url: str, as_json: bool = False) -> Any:
+def _fetch_sec(url: str, cfg=None, as_json: bool = False) -> Any:
     """
-    SEC EDGAR API へのリクエスト（レート制限 10req/sec を遵守）。
+    SEC EDGAR API へのリクエスト（sec_client.get()/get_json() 経由）。
+
+    レート制限・429/5xxリトライは sec_client 側の共通実装に委譲する。
+    タイムアウトのみ本ファイル独自の _FETCH_TIMEOUT（30秒。XBRL等の
+    特大レスポンス向け）を明示的に渡し、sec_client の既定15秒を上書きする。
 
     Args:
         url      : リクエスト URL
+        cfg      : config モジュール（User-Agent / レート制限等の解決に使用）
         as_json  : True の場合 JSON パースして返す
 
     Returns:
-        str（as_json=False）/ dict（as_json=True）/ None（失敗）
+        str（as_json=False）/ dict または list（as_json=True）/ None（失敗）
     """
-    global _last_request_time
-    # レート制限遵守（0.12秒以上の間隔を確保）
-    elapsed = time.time() - _last_request_time
-    if elapsed < _SEC_RATE_LIMIT:
-        time.sleep(_SEC_RATE_LIMIT - elapsed)
+    accept = "application/json, text/html, */*"
+    if as_json:
+        return sec_client.get_json(
+            url, cfg=cfg, accept=accept,
+            timeout=_FETCH_TIMEOUT, max_retries=_MAX_RETRIES,
+        )
 
-    for attempt in range(1, _MAX_RETRIES + 1):
-        try:
-            req = Request(url, headers=_REQUEST_HEADERS)
-            with urlopen(req, timeout=_FETCH_TIMEOUT) as resp:
-                raw = resp.read()
-                _last_request_time = time.time()
-                text = raw.decode("utf-8", errors="replace")
-                if as_json:
-                    return json.loads(text)
-                return text
-        except HTTPError as e:
-            if e.code == 429:
-                wait = _RETRY_WAIT_SEC * (2 ** attempt)
-                print(f"    ⚠️  SEC EDGAR 429 レート制限 → {wait}秒待機")
-                time.sleep(wait)
-            elif attempt < _MAX_RETRIES:
-                time.sleep(_RETRY_WAIT_SEC)
-            else:
-                print(f"    ⚠️  SEC fetch失敗 [{e.code}] ({url[:60]})")
-                return None
-        except (URLError, Exception) as e:
-            if attempt < _MAX_RETRIES:
-                time.sleep(_RETRY_WAIT_SEC)
-            else:
-                print(f"    ⚠️  SEC fetch例外: {str(e)[:60]}")
-                return None
-    return None
+    resp = sec_client.get(
+        url, cfg=cfg, accept=accept,
+        timeout=_FETCH_TIMEOUT, max_retries=_MAX_RETRIES,
+    )
+    if resp is None:
+        return None
+    return resp.content.decode("utf-8", errors="replace")
 
 
 # ==============================================================
 # BLOCK 4: EDGAR Submissions API（CIK → 最新 10-K ファイリング取得）
 # ==============================================================
 
-def _get_latest_10k_url(cik: str) -> tuple[str | None, str | None]:
+def _get_latest_10k_url(cik: str, cfg=None) -> tuple[str | None, str | None]:
     """
     EDGAR Submissions API から最新 10-K の
     (accession_number, primary_document_url) を取得する。
 
     Args:
         cik: CIK番号（ゼロパディング10桁）
+        cfg: config モジュール
 
     Returns:
         (accession_number, document_url) or (None, None)
@@ -239,7 +238,7 @@ def _get_latest_10k_url(cik: str) -> tuple[str | None, str | None]:
     cik_num = int(cik.lstrip("0") or "0")
     url = EDGAR_SUBMISSIONS_BASE.format(cik=cik_num)
 
-    data = _fetch_sec(url, as_json=True)
+    data = _fetch_sec(url, cfg=cfg, as_json=True)
     if not data:
         return None, None
 
@@ -272,7 +271,35 @@ def _get_latest_10k_url(cik: str) -> tuple[str | None, str | None]:
 # BLOCK 5: 10-K テキスト解析（地理セグメント抽出）
 # ==============================================================
 
-def _extract_geographic_data(text: str) -> list[dict]:
+def _narrow_to_target_sections(text: str, cfg=None) -> str:
+    """config.GEO_SEC_TARGET_SECTIONS の見出し以降に絞ったテキストを返す。
+
+    2026-07-25 バッチ5: この定数は「10-K のどのセクションを抽出対象にするか」
+    の宣言なのに、実装は全文スキャンで一度も参照していなかった。
+
+    絞り込みは**後退しない**設計にしてある:
+      - 該当見出しが1つも見つからなければ元の全文をそのまま返す
+      - 見つかった範囲の合計が短すぎる（<2000文字）場合も全文に戻す
+    これにより、見出し表記が想定と違う文書でも従来どおりの抽出結果になる。
+    """
+    sections = getattr(cfg, "GEO_SEC_TARGET_SECTIONS", None) if cfg else None
+    if not sections:
+        return text
+
+    chunks: list[str] = []
+    for name in sections:
+        for m in re.finditer(re.escape(str(name)), text, re.IGNORECASE):
+            # 見出しから 20000 文字を対象範囲とする（セクション末尾の
+            # 確実な検出は文書ごとに揺れるため、固定幅で切る）
+            chunks.append(text[m.start():m.start() + 20000])
+
+    narrowed = "\n".join(chunks)
+    if len(narrowed) < 2000:
+        return text
+    return narrowed
+
+
+def _extract_geographic_data(text: str, cfg=None) -> list[dict]:
     """
     10-K のテキストから地理別売上データを抽出する。
 
@@ -290,7 +317,9 @@ def _extract_geographic_data(text: str) -> list[dict]:
         list of {country_code, revenue_share_est, pattern_type}
     """
     results: list[dict] = []
-    text_clean = re.sub(r"\s+", " ", text)
+    # 2026-07-25 バッチ5: config.GEO_SEC_TARGET_SECTIONS で対象セクションに
+    # 絞ってからスキャンする（該当なしなら全文＝従来どおり）
+    text_clean = re.sub(r"\s+", " ", _narrow_to_target_sections(text, cfg))
 
     # ── P1: テーブル形式（国名 + 金額/比率） ────────────────────
     # パターン: 国名に続いて数値（$X.X billion/million または X%）
@@ -436,7 +465,7 @@ def _process_ticker(
                 f"https://efts.sec.gov/LATEST/search-index"
                 f"?q=%22{quote(ticker)}%22&forms=10-K"
             )
-            search_data = _fetch_sec(search_url, as_json=True)
+            search_data = _fetch_sec(search_url, cfg=cfg, as_json=True)
             if search_data:
                 hits = search_data.get("hits", {}).get("hits", [])
                 if hits:
@@ -452,13 +481,13 @@ def _process_ticker(
 
     print(f"    📄 [{ticker}] CIK={cik} → 最新10-K 取得中...")
 
-    acc_no, doc_url = _get_latest_10k_url(cik)
+    acc_no, doc_url = _get_latest_10k_url(cik, cfg=cfg)
     if not doc_url:
         print(f"    ⚠️  [{ticker}] 10-K URL 取得失敗 → スキップ")
         return []
 
     # 10-K 本文取得
-    doc_text = _fetch_sec(doc_url)
+    doc_text = _fetch_sec(doc_url, cfg=cfg)
     if not doc_text:
         print(f"    ⚠️  [{ticker}] 10-K 本文取得失敗 → スキップ")
         return []
@@ -471,7 +500,7 @@ def _process_ticker(
     print(f"    ✅ [{ticker}] 10-K 取得完了 ({len(doc_text):,}文字)")
 
     # 地理セグメントデータ抽出
-    geo_data = _extract_geographic_data(doc_text)
+    geo_data = _extract_geographic_data(doc_text, cfg)
 
     # リスク関連国抽出
     risk_section_match = re.search(
@@ -572,6 +601,7 @@ def run_sec_geographic_extractor(
           "timestamp":  str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     _pid = getattr(cfg, "GEO_BQ_PROJECT_ID", project_id) if cfg else project_id
     print(f"\n🇺🇸 sec_geographic_extractor: SEC 10-K 地理情報抽出開始")
     print(f"   プロジェクト: {_pid}")
@@ -640,7 +670,10 @@ def run_sec_geographic_extractor(
         _js     = importlib.import_module("jogmec_scraper")
         _bq_mod = importlib.import_module("edinet_bq_client")
         raw_bq  = _bq_mod.EDINETBQClient().client
-    except Exception:
+    # 2026-07-25: 一次経路（edinet_bq_client＝Actions の BQ_CREDENTIALS 経路）の
+    # 失敗理由を握り潰し、Colabフォールバックの「No module named 'google.colab'」
+    # だけが報告されていた。真因が隠れるため両方を返す。
+    except Exception as _primary_err:
         try:
             from google.cloud import bigquery as _bq_lib
             from google.colab import auth as _auth
@@ -659,7 +692,8 @@ def run_sec_geographic_extractor(
                 "merged":    0,
                 "tickers":   processed_tickers,
                 "records":   all_records,
-                "error":     f"BQ Client 取得失敗: {e}",
+                "error":     (f"BQ Client 取得失敗: {_primary_err} "
+                              f"/ Colabフォールバックも失敗: {e}"),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 

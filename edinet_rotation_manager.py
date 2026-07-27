@@ -60,14 +60,6 @@ DB_DIR_NAME   = "edinet_db"
 META_FILENAME = "meta.json"
 ANALYSIS_DIR  = "analysis"
 
-# 市場区分ごとの優先順位（数値が小さいほど先に取得）
-MARKET_PRIORITY = {
-    "Prime":    1,
-    "Standard": 2,
-    "Growth":   3,
-    "Other":    4,
-}
-
 # 東証プライム代表銘柄（sector_code → 上位銘柄リスト）
 # JAPAN_SECTORSの33業種すべてに対応。各業種5社。
 # ※ローテーション初回はこのリストから順に取得する

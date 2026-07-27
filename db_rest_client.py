@@ -17,6 +17,12 @@ import requests
 
 
 MAX_RETRIES = 2
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B5_DB_REST_CLIENT_RETRYABLE_STATUS_CODES': 'RETRYABLE_STATUS_CODES',
+}
+
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
@@ -59,6 +65,7 @@ class DBRestClient:
 
     @classmethod
     def edinetdb(cls, cfg):
+        sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
         data_dir = Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
         return cls(
             getattr(cfg, "EDINETDB_BASE_URL", "https://edinetdb.jp/v1"),

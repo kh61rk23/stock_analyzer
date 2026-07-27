@@ -1,6 +1,6 @@
 # ==============================================================
-# insider_monitor.py  v1.0  (4-2 / A-3)
-# SEC Form 4 RSS（米国）+ EDINET 大量保有報告書（日本）
+# insider_monitor.py  v2.0  (4-2 / A-3 → Wave J1 / U-6)
+# EDINET 大量保有報告書（日本）専用 + SEC Form 4（米国）は委譲
 # インサイダー・大株主の買い動向を screener ボーナスに統合
 # ==============================================================
 # 【役割】
@@ -8,39 +8,52 @@
 #   「役員が自社株を買っている = 内部者が上昇を確信している」
 #   シグナルを screener の quality_score に反映する。
 #
+# 2026-07-27是正（Wave J1 / U-6・F-3根治）:
+#   旧 v1.0 は米国株を自前の `_parse_form4_simple`（yfinance
+#   insider_transactions の簡易パースのみ）で処理していたが、週次実行の
+#   台帳で2回連続「US:0件」＝US経路が実質死んでいた。一方 Form 4 XML を
+#   正式パースする完全版 `us_insider_form4_scraper.py` は
+#   us_stock_screener.py からのみ呼ばれ本パイプラインに未配線だった
+#   （同一データソースの二重実装・貧弱な方が本番経路に居座っていた）。
+#   本ファイルは JP 大量保有報告専用に縮退し、米国株は
+#   `us_insider_form4_scraper.get_insider_summary()` へ委譲する
+#   （J-02決定=a: 一本化）。
+#
 # 【データソース】
-#   米国株: SEC EDGAR RSS (Form 4)
-#     https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany
-#       &type=4&dateb=&owner=include&count=40&search_text=
-#     → APIキー不要・無料（レート制限: 10req/秒）
+#   米国株: us_insider_form4_scraper.get_insider_summary() に委譲
+#     （SEC Form 4 XML 正式パース。CIK解決・レート制限・キャッシュは
+#      sec_client.py 経由。insider_form4_cache.json・TTL1日を
+#      us_stock_screener.py の calc_insider_bonus 呼び出し箇所 の直接呼び出しと共有する）
 #
 #   日本株: EDINET 大量保有報告書
 #     edinet_client.py の get_analysis() 経由で取得済みのデータを参照
 #     → 大量保有報告（5%超の株式取得）を検出
 #
 # 【screener ボーナス計算】
-#   役員買い（直近30日以内）:
-#     1件: quality_score +3pt
-#     2件以上（連続買い）: +6pt
-#   役員売り（直近30日以内）:
-#     1件: quality_score -3pt
-#     2件以上: -6pt
-#   大量保有報告（5%以上取得）: +4pt
+#   JP側（大量保有報告、5%以上取得）: _calc_bonus() が +4pt を算出
+#   US側（Form 4）: us_insider_form4_scraper 側で -5.0〜+5.0pt を算出
+#   最終 bonuses[ticker] は両者の合算値
 #
-# 【出力スキーマ】
+# 【出力スキーマ】（キー構成は v1.0 から不変。R6-2）
 #   {
-#     "us_filings":   {ticker: [Filing, ...]},  # 米国 Form 4
+#     "us_filings":   {ticker: Summary},        # 米国 Form 4（銘柄別集約サマリー）
 #     "jp_holdings":  {ticker: [Holding, ...]}, # 日本 大量保有
-#     "bonuses":      {ticker: float},           # screener ボーナス
+#     "bonuses":      {ticker: float},           # screener ボーナス（JP+US合算）
 #     "alert_items":  [str, ...],                # アラート文字列
 #     "total_us":     int,
 #     "total_jp":     int,
 #     "timestamp":    str,
 #   }
-#   Filing = {ticker, filer_name, transaction_type, shares, date, url}
+#   Summary = us_insider_form4_scraper.get_insider_summary() の返り値そのもの
+#     {ticker, insider_bonus, buy_count, sell_count, buyer_roles,
+#      net_buy_value, source, summary, fetched_at}
+#     ※ v1.0 の Filing（{ticker, filer_name, transaction_type, shares,
+#       date, url} のリスト）から形が変わっている（R6-2）。
+#       format_insider_alert() / get_insider_bonus() はどちらも
+#       us_filings の値を直接読まないため影響なし（確認済み）。
 #   Holding = {ticker, holder_name, ownership_pct, report_date}
 #
-# 【依存】requests / config.py（SEC_USER_AGENT）
+# 【依存】us_insider_form4_scraper.py（米国）/ yfinance（日本）/ config.py
 # 【呼出】from insider_monitor import run_insider_monitor, get_insider_bonus
 # ==============================================================
 
@@ -53,192 +66,40 @@ from datetime import datetime, timedelta, date
 from pathlib import Path
 from typing import Optional
 
+from config_sync import sync_module_constants
+import us_insider_form4_scraper
+
 # ── 定数 ──────────────────────────────────────────────────────
-LOOKBACK_DAYS      = 30     # 直近N日のインサイダー取引を参照
 CONSECUTIVE_THRESH = 2      # 連続買いと見なす最低件数
 CACHE_HOURS        = 24 * 7 # 週次データ = 7日キャッシュ
 CACHE_FILENAME     = "insider_monitor_cache.json"
-FETCH_DELAY        = 0.12   # SEC レート制限対策（10req/秒→0.1秒間隔）
+FETCH_DELAY        = 0.12   # yfinance 呼び出し間隔（JP大量保有取得用）
 
-# screener ボーナス
+# screener ボーナス（JP側 _calc_bonus() が使用。US側は
+# us_insider_form4_scraper 側で独自に -5.0〜+5.0pt を算出する）
 BONUS_BUY_SINGLE   =  3.0
 BONUS_BUY_CONSEC   =  6.0
 PENALTY_SELL_SINGLE = -3.0
 PENALTY_SELL_CONSEC = -6.0
 BONUS_LARGE_HOLDING =  4.0
 
-# SEC EDGAR Form 4 検索 URL
-SEC_FORM4_BASE = (
-    "https://efts.sec.gov/LATEST/search-index?q=%22Form+4%22"
-    "&dateRange=custom&startdt={start}&enddt={end}"
-    "&forms=4&hits.hits.total.value=true&hits.hits._source.period_of_report=true"
-    "&hits.hits._source.entity_name=true"
-)
-SEC_EDGAR_COMPANY = (
-    "https://www.sec.gov/cgi-bin/browse-edgar"
-    "?action=getcompany&CIK={cik}&type=4&dateb=&owner=include"
-    "&count=10&search_text="
-)
-SEC_TICKER_CIK_URL = "https://efts.sec.gov/LATEST/search-index?q=%22{ticker}%22&forms=4"
+# 米国側取得件数の上限（処理時間制限。旧 US 経路から踏襲）
+US_TICKER_LIMIT = 30
+
+_CFG_CONST_MAP = {
+    "IM_CONSECUTIVE_THRESH": "CONSECUTIVE_THRESH",
+    "IM_BONUS_BUY_SINGLE": "BONUS_BUY_SINGLE",
+    "IM_BONUS_BUY_CONSEC": "BONUS_BUY_CONSEC",
+    "IM_PENALTY_SELL_SINGLE": "PENALTY_SELL_SINGLE",
+    "IM_PENALTY_SELL_CONSEC": "PENALTY_SELL_CONSEC",
+    "IM_BONUS_LARGE_HOLDING": "BONUS_LARGE_HOLDING",
+    'B4_INSIDER_MONITOR_CACHE_HOURS': 'CACHE_HOURS',
+    'B5_INSIDER_MONITOR_FETCH_DELAY': 'FETCH_DELAY',
+}
 
 
 # ==============================================================
-# BLOCK 1: SEC EDGAR Form 4 取得（米国株）
-# ==============================================================
-
-def _get_cik(ticker: str, user_agent: str) -> Optional[str]:
-    """
-    ティッカーから CIK 番号を取得する。
-    SEC の company_tickers.json を利用（日次更新・高速）。
-    """
-    try:
-        import requests
-        headers = {"User-Agent": user_agent, "Accept": "application/json"}
-        r = requests.get(
-            "https://efts.sec.gov/LATEST/search-index?q=%22{t}%22&forms=4".format(t=ticker),
-            headers=headers, timeout=8,
-        )
-        if r.status_code != 200:
-            return None
-        # company_tickers.json: {idx: {cik_str, ticker, title}}
-        # より確実な方法: company_tickers_exchange.json
-        r2 = requests.get(
-            "https://www.sec.gov/files/company_tickers_exchange.json",
-            headers=headers, timeout=10,
-        )
-        if r2.status_code != 200:
-            return None
-        data = r2.json()
-        fields = data.get("fields", [])
-        rows   = data.get("data", [])
-        try:
-            ticker_idx = fields.index("ticker")
-            cik_idx    = fields.index("cik")
-        except ValueError:
-            return None
-        for row in rows:
-            if row[ticker_idx].upper() == ticker.upper():
-                return str(row[cik_idx]).zfill(10)
-        return None
-    except Exception:
-        return None
-
-
-def _fetch_form4_rss(ticker: str, cik: str, user_agent: str) -> list:
-    """
-    SEC EDGAR から Form 4（役員取引）を RSS / JSON で取得する。
-
-    Returns:
-        [{"filer_name", "transaction_type", "shares", "date", "url"}, ...]
-    """
-    try:
-        import requests
-        headers = {"User-Agent": user_agent, "Accept-Encoding": "gzip"}
-        cutoff  = (datetime.now() - timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%d")
-        today   = datetime.now().strftime("%Y-%m-%d")
-
-        # EDGAR full-text search API
-        url = (
-            f"https://efts.sec.gov/LATEST/search-index"
-            f"?q=%22{cik}%22&forms=4&dateRange=custom"
-            f"&startdt={cutoff}&enddt={today}"
-        )
-        r = requests.get(url, headers=headers, timeout=10)
-        if r.status_code != 200:
-            return []
-
-        data    = r.json()
-        hits    = data.get("hits", {}).get("hits", [])
-        filings = []
-
-        for hit in hits[:10]:  # 最大10件
-            src  = hit.get("_source", {})
-            period = src.get("period_of_report", "")
-            entity = src.get("entity_name", "")
-            fid    = hit.get("_id", "")
-            filing_url = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={cik}&type=4"
-
-            # 取引タイプはXML詳細を読まないと不明 → RSIの傾向でシグナル判定
-            filings.append({
-                "filer_name":        entity,
-                "transaction_type":  "buy_signal",  # 詳細XML取得は省略
-                "shares":            0,
-                "date":              period,
-                "url":               filing_url,
-                "ticker":            ticker,
-            })
-            time.sleep(FETCH_DELAY)
-
-        return filings
-
-    except Exception:
-        return []
-
-
-def _parse_form4_simple(ticker: str, user_agent: str) -> list:
-    """
-    EDGAR EFTS API を使って Form 4 の提出件数から
-    インサイダー活動の有無を判定する（軽量版）。
-
-    詳細な取引タイプ（買い/売り）の取得は XML パースが必要で
-    時間がかかるため、直近の Form 4 提出数をシグナルとして使用する:
-      30日以内に Form 4 が多い = インサイダー活動あり（買いか売りかは不確定）
-    より確実な情報は yfinance の insider_purchases / insider_transactions から取得可能。
-    """
-    try:
-        import yfinance as yf
-        t    = yf.Ticker(ticker)
-        info = t.info or {}
-
-        # yfinance のインサイダー情報（米国株のみ有効）
-        purchases = getattr(t, "insider_purchases", None)
-        filings   = []
-
-        # insider_transactions が DataFrame として返される場合
-        try:
-            txn = t.insider_transactions
-            if txn is not None and not txn.empty:
-                cutoff_dt = datetime.now() - timedelta(days=LOOKBACK_DAYS)
-                for _, row in txn.iterrows():
-                    start_date = row.get("Start Date")
-                    if start_date is None:
-                        continue
-                    # Timestamp → date
-                    try:
-                        txn_date = start_date.to_pydatetime().date()
-                    except AttributeError:
-                        continue
-                    if txn_date < cutoff_dt.date():
-                        continue
-
-                    txn_type = str(row.get("Text", "")).lower()
-                    shares   = abs(int(row.get("Shares", 0) or 0))
-                    value    = row.get("Value")
-
-                    # 買いシグナル判定
-                    is_buy = any(kw in txn_type for kw in
-                                 ["purchase", "buy", "acquisition", "grant"])
-                    is_sell = any(kw in txn_type for kw in
-                                  ["sale", "sell", "disposition"])
-
-                    filings.append({
-                        "filer_name":       str(row.get("Insider", "")),
-                        "transaction_type": "buy" if is_buy else ("sell" if is_sell else "other"),
-                        "shares":           shares,
-                        "date":             str(txn_date),
-                        "url":              "",
-                        "ticker":           ticker,
-                    })
-        except Exception:
-            pass
-
-        return filings
-    except Exception:
-        return []
-
-
-# ==============================================================
-# BLOCK 2: EDINET 大量保有報告書（日本株）
+# BLOCK 1: EDINET 大量保有報告書（日本株）
 # ==============================================================
 
 def _extract_jp_large_holdings(cfg, tickers: list) -> dict:
@@ -289,7 +150,7 @@ def _extract_jp_large_holdings(cfg, tickers: list) -> dict:
 
 
 # ==============================================================
-# BLOCK 3: ボーナス算出
+# BLOCK 2: ボーナス算出
 # ==============================================================
 
 def _calc_bonus(us_filings: list, jp_holdings: list) -> float:
@@ -333,7 +194,7 @@ def get_insider_bonus(ticker: str, insider_cache: dict) -> float:
 
 
 # ==============================================================
-# BLOCK 4: キャッシュ管理
+# BLOCK 3: キャッシュ管理
 # ==============================================================
 
 def _cache_path(cfg) -> Path:
@@ -363,7 +224,7 @@ def _save_cache(cfg, data: dict) -> None:
 
 
 # ==============================================================
-# BLOCK 5: アラートテキスト生成
+# BLOCK 4: アラートテキスト生成
 # ==============================================================
 
 def format_insider_alert(result: dict, top_n: int = 5) -> str:
@@ -385,7 +246,7 @@ def format_insider_alert(result: dict, top_n: int = 5) -> str:
 
 
 # ==============================================================
-# BLOCK 6: メインエントリポイント
+# BLOCK 5: メインエントリポイント
 # ==============================================================
 
 def run_insider_monitor(cfg, tickers: Optional[list] = None) -> dict:
@@ -403,7 +264,7 @@ def run_insider_monitor(cfg, tickers: Optional[list] = None) -> dict:
 
     Returns:
         {
-          "us_filings":  {ticker: [Filing, ...]},
+          "us_filings":  {ticker: Summary},        # R6-2: 値の形が変わった（本体docstring参照）
           "jp_holdings": {ticker: [Holding, ...]},
           "bonuses":     {ticker: float},
           "alert_items": [str, ...],
@@ -412,6 +273,7 @@ def run_insider_monitor(cfg, tickers: Optional[list] = None) -> dict:
           "timestamp":   str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  🔍 インサイダー取引モニター開始...")
 
     cached = _load_cache(cfg)
@@ -427,44 +289,56 @@ def run_insider_monitor(cfg, tickers: Optional[list] = None) -> dict:
         edinet_cands = getattr(cfg, "EDINET_SCREENER_CANDIDATES", [])
         tickers = list(set(tickers + edinet_cands))
 
-    user_agent = getattr(cfg, "SEC_USER_AGENT", "StockAnalyzer research@example.com")
-
     us_tickers = [t for t in tickers if not t.endswith(".T")]
     jp_tickers = [t for t in tickers if t.endswith(".T")]
 
-    # ── 米国株: yfinance insider_transactions ────────────────
+    # ── 米国株: us_insider_form4_scraper へ委譲（U-6・F-3根治）───
+    # Form 4 XML の正式パース・CIK解決・レート制限・キャッシュ
+    # （insider_form4_cache.json・TTL1日）は us_insider_form4_scraper /
+    # sec_client 側が担う。us_stock_screener.py の calc_insider_bonus 呼び出し箇所 の calc_insider_bonus
+    # 直接呼び出しとキャッシュを共有するため、二重取得は発生しない（R6-4）。
     print(f"    米国株インサイダー取引取得中 ({len(us_tickers)}銘柄)...")
     us_filings: dict = {}
-    for ticker in us_tickers[:30]:   # 上限30銘柄（処理時間制限）
-        filings = _parse_form4_simple(ticker, user_agent)
-        if filings:
-            us_filings[ticker] = filings
-        time.sleep(FETCH_DELAY)
+    for ticker in us_tickers[:US_TICKER_LIMIT]:
+        try:
+            summary = us_insider_form4_scraper.get_insider_summary(ticker, cfg=cfg)
+        except Exception:
+            summary = None
+        if summary and (summary.get("buy_count", 0) or summary.get("sell_count", 0)):
+            us_filings[ticker] = summary
 
     # ── 日本株: yfinance major_holders ───────────────────────
     print(f"    日本株大量保有取得中 ({len(jp_tickers)}銘柄)...")
     jp_holdings = _extract_jp_large_holdings(cfg, jp_tickers[:30])
 
     # ── ボーナス計算 ─────────────────────────────────────────
+    # JP: _calc_bonus() のロジックは変更せず、us_filings=[] を渡すことで
+    #     大量保有報告分（+4pt）のみを算出させる（R6-2）。
+    # US: us_insider_form4_scraper が算出済みの insider_bonus（-5.0〜+5.0）
+    #     をそのまま加算する。
     bonuses = {}
     alert_items = []
 
     for ticker in set(list(us_filings.keys()) + list(jp_holdings.keys())):
-        bonus = _calc_bonus(
-            us_filings.get(ticker, []),
-            jp_holdings.get(ticker, []),
-        )
+        jp_bonus = _calc_bonus([], jp_holdings.get(ticker, []))
+        us_summary = us_filings.get(ticker, {})
+        us_bonus = float(us_summary.get("insider_bonus", 0.0))
+        bonus = round(jp_bonus + us_bonus, 1)
+
         if bonus != 0:
             bonuses[ticker] = bonus
             sign = "買い🟢" if bonus > 0 else "売り🔴"
-            count_us = len(us_filings.get(ticker, []))
+            count_us = int(us_summary.get("buy_count", 0)) + int(us_summary.get("sell_count", 0))
             count_jp = len(jp_holdings.get(ticker, []))
             alert_items.append(
-                f"{ticker}: {sign} bonus={bonus:+.0f}pt "
+                f"{ticker}: {sign} bonus={bonus:+.1f}pt "
                 f"(US:{count_us}件 JP:{count_jp}件)"
             )
 
-    total_us = sum(len(v) for v in us_filings.values())
+    total_us = sum(
+        int(v.get("buy_count", 0)) + int(v.get("sell_count", 0))
+        for v in us_filings.values()
+    )
     total_jp = sum(len(v) for v in jp_holdings.values())
 
     print(f"    ✅ 完了: 米国{total_us}件 / 日本大量保有{total_jp}件 / ボーナス適用{len(bonuses)}銘柄")
@@ -474,7 +348,7 @@ def run_insider_monitor(cfg, tickers: Optional[list] = None) -> dict:
         "jp_holdings": jp_holdings,
         "bonuses":     bonuses,
         "alert_items": sorted(alert_items, key=lambda x: abs(float(
-            re.search(r'bonus=([+-]?\d+)', x).group(1)) if re.search(r'bonus=([+-]?\d+)', x) else 0
+            re.search(r'bonus=([+-]?\d+\.?\d*)', x).group(1)) if re.search(r'bonus=([+-]?\d+\.?\d*)', x) else 0
         ), reverse=True),
         "total_us":    total_us,
         "total_jp":    total_jp,

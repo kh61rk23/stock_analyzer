@@ -54,6 +54,15 @@ from typing import Optional
 # BLOCK 1: 定数フォールバック
 # ==============================================================
 
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'CM_DEFAULT_STAGE_MULTIPLIER': '_DEFAULT_STAGE_MULTIPLIER',
+    'B4_CONGRESS_MONITOR_DEFAULT_CACHE_TTL_MONTHS': '_DEFAULT_CACHE_TTL_MONTHS',
+    'B6_CONGRESS_MONITOR_DEFAULT_L4_MAX_ADJ': '_DEFAULT_L4_MAX_ADJ',
+}
+
 _DEFAULT_STAGE_MULTIPLIER = {
     "introduced":  0.20,
     "committee":   0.40,
@@ -463,6 +472,7 @@ def run_congress_monitor(cfg, results: Optional[dict] = None) -> dict:
     Returns:
         run_congress_monitor の出力スキーマ参照
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  🏛️  [congress_monitor] 議会法案追跡 開始...")
     t0 = datetime.now()
 

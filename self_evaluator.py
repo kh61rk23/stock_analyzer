@@ -67,6 +67,8 @@ from datetime import datetime, timedelta, date
 from pathlib import Path
 from typing import Optional
 
+import score_history_io
+
 HOLD_DAYS        = 28     # ホールド期間
 LOOKBACK_WEEKS   = 8      # 直近N週分を分析
 MIN_SAMPLES      = 5      # 統計的有意性の最低サンプル数
@@ -78,8 +80,20 @@ MAX_LOG_ENTRIES  = 52     # 1年分保持
 # ── Wave 7 追加定数（Pearl バックテスト）──────────────────────────
 PEARL_BACKTEST_FILENAME  = "pearl_backtest_log.json"
 PEARL_BACKTEST_MAX_ENTRY = 52           # 1年分保持
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'SE_PEARL_HIT_ALPHA_THRESHOLD': 'PEARL_HIT_ALPHA_THRESHOLD',
+    'B4_SELF_EVALUATOR_HOLD_DAYS': 'HOLD_DAYS',
+    'B4_SELF_EVALUATOR_LOOKBACK_WEEKS': 'LOOKBACK_WEEKS',
+    'B5_SELF_EVALUATOR_FETCH_DELAY': 'FETCH_DELAY',
+    'B6_SELF_EVALUATOR_MIN_SAMPLES': 'MIN_SAMPLES',
+    'B6_SELF_EVALUATOR_MAX_LOG_ENTRIES': 'MAX_LOG_ENTRIES',
+    'B6_SELF_EVALUATOR_PEARL_BACKTEST_MAX_ENTRY': 'PEARL_BACKTEST_MAX_ENTRY',
+}
+
 PEARL_HIT_ALPHA_THRESHOLD = 3.0        # 的中とみなすα（%）
-PEARL_HOLD_DAYS           = 28         # Pearlのホールド期間（通常と同じ）
 PEARL_TRACK_TIERS = ["SS", "S", "A"]   # 追跡対象 Pearl Tier
 
 # ==============================================================
@@ -100,17 +114,8 @@ def _load_screener_history(cfg) -> dict:
 
 
 def _load_score_history(cfg) -> dict:
-    for p in [
-        Path(getattr(cfg, "DATA_DIR", "stock_data/data")).parent
-        / "insights" / "score_history.json",
-        Path("stock_data/insights/score_history.json"),
-    ]:
-        if p.exists():
-            try:
-                return json.loads(p.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-    return {}
+    """公開済み関数名を維持し、完全同一だった共通I/Oへ委譲する。"""
+    return score_history_io.load_score_history(cfg)
 
 
 def _load_perf_log(cfg) -> dict:
@@ -700,6 +705,7 @@ def run_self_evaluator(cfg) -> dict:
           "timestamp":    str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  🔍 self_evaluator 実行中...")
 
     history = _load_screener_history(cfg)

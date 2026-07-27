@@ -14,11 +14,35 @@
 from __future__ import annotations
 
 
-def purged_walk_forward_splits(sorted_dates: list, n_folds: int = 5,
-                               embargo_d: int = 20, horizon_d: int = 20):
+def _cfg_default(name: str, fallback: int) -> int:
+    """config.py の値を既定として読む（2026-07-25 バッチ6）。
+
+    本モジュールの学習は Colab（ml/train_meta.ipynb）から呼ばれるため、
+    引数省略時に config を正本とする。従来は既定引数への直書きのみで、
+    config.ML_META_* は誰にも読まれていなかった。
+    """
+    try:
+        import importlib.util
+        from pathlib import Path as _P
+        spec = importlib.util.spec_from_file_location(
+            "config", str(_P(__file__).resolve().parent.parent / "config.py"))
+        cfg = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cfg)
+        return int(getattr(cfg, name, fallback))
+    except Exception:
+        return fallback
+
+
+def purged_walk_forward_splits(sorted_dates: list, n_folds: int = None,
+                               embargo_d: int = None, horizon_d: int = None):
     """
     ユニークな昇順日付リストを Walk-Forward 分割し、各 fold につき
     (train_date_set, test_date_set) を返す。
+
+    引数を省略すると config.py BLOCK 51 の値を使う（2026-07-25）:
+      n_folds   ← ML_META_CV_FOLDS（既定5）
+      embargo_d ← ML_META_EMBARGO_D（既定20・リーク防止の最重要パラメータ）
+      horizon_d ← ML_META_TARGET_HORIZON_D（既定20）
 
     - test は時系列で train より後（walk-forward）。
     - purge+embargo: test ブロックの開始位置から見て
@@ -28,6 +52,13 @@ def purged_walk_forward_splits(sorted_dates: list, n_folds: int = 5,
     sorted_dates: ["YYYY-MM-DD", ...]（昇順・重複なしを想定）
     Returns: [(set(train_dates), set(test_dates)), ...]（長さ n_folds）
     """
+    if n_folds is None:
+        n_folds = _cfg_default("ML_META_CV_FOLDS", 5)
+    if embargo_d is None:
+        embargo_d = _cfg_default("ML_META_EMBARGO_D", 20)
+    if horizon_d is None:
+        horizon_d = _cfg_default("ML_META_TARGET_HORIZON_D", 20)
+
     dates = list(sorted_dates)
     n = len(dates)
     if n_folds < 1 or n < n_folds + 1:

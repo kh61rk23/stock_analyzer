@@ -64,6 +64,17 @@ from typing import Optional
 
 SIGNAL_HISTORY_FILE  = "signal_history.json"
 ATTRIBUTION_FILE     = "alpha_attribution.json"
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'AA_IC_HIGH_THRESHOLD': 'IC_HIGH_THRESHOLD',
+    'AA_IC_MID_THRESHOLD': 'IC_MID_THRESHOLD',
+    'AA_IC_NEG_THRESHOLD': 'IC_NEG_THRESHOLD',
+    'B4_ALPHA_ATTRIBUTER_LOOKBACK_WEEKS': 'LOOKBACK_WEEKS',
+    'B6_ALPHA_ATTRIBUTER_MIN_FIRE_COUNT': 'MIN_FIRE_COUNT',
+}
+
 IC_HIGH_THRESHOLD    = 0.10   # IC > 0.10: 優秀
 IC_MID_THRESHOLD     = 0.05   # IC > 0.05: 有意
 IC_NEG_THRESHOLD     = 0.00   # IC < 0: 逆効果
@@ -402,16 +413,23 @@ def calc_signal_attribution(cfg) -> dict:
     # 共通する週のみ分析対象
     common_weeks = sorted(set(weekly_alpha.keys()) & set(signal_history.keys()))
 
-    # 直近 LOOKBACK_WEEKS 週に限定
-    common_weeks = common_weeks[-LOOKBACK_WEEKS:]
+    # 2026-07-25 バッチ4: 分析期間と最低発動回数を config.py BLOCK GAP-8 から読む。
+    # 従来はモジュール定数 LOOKBACK_WEEKS=26 / MIN_FIRE_COUNT=3 のみが効いており、
+    # config の ATTRIBUTION_LOOKBACK_W / ATTRIBUTION_MIN_FIRE は同義・同値なのに
+    # 誰にも読まれていなかった（SSOT違反）。既定値は従来値のため挙動不変。
+    _lookback = int(getattr(cfg, "ATTRIBUTION_LOOKBACK_W", LOOKBACK_WEEKS))
+    _min_fire = int(getattr(cfg, "ATTRIBUTION_MIN_FIRE", MIN_FIRE_COUNT))
 
-    if len(common_weeks) < MIN_FIRE_COUNT:
+    # 直近 _lookback 週に限定
+    common_weeks = common_weeks[-_lookback:]
+
+    if len(common_weeks) < _min_fire:
         return {
             "signals":      {},
             "top_signals":  [],
             "weak_signals": [],
             "period_weeks": len(common_weeks),
-            "note":         f"共通週が不足（{len(common_weeks)}週 < {MIN_FIRE_COUNT}週）",
+            "note":         f"共通週が不足（{len(common_weeks)}週 < {_min_fire}週）",
             "timestamp":    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
 
@@ -450,7 +468,7 @@ def calc_signal_attribution(cfg) -> dict:
                 notfired_alphas.append(float(alpha))
 
         fire_count = sum(1 for x in x_fired if x > 0)
-        if fire_count < MIN_FIRE_COUNT:
+        if fire_count < _min_fire:
             continue   # 発動回数が少なすぎる
 
         ic_binary = _pearson_ic(x_fired, y_alpha)    # 発動0/1 × リターン
@@ -618,6 +636,7 @@ def run_alpha_attributer(cfg, results: dict | None = None) -> dict:
     Returns:
         {"recorded": bool, "calculated": bool, "attribution": dict}
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     if not getattr(cfg, "ENABLE_ALPHA_ATTRIBUTION", True):
         return {"skipped": True}
 
@@ -760,21 +779,28 @@ def update_ic_tracker(cfg, attribution: dict) -> dict:
         ic_valid = [v for v in ic_series if v is not None]
         weekly_ic_history[sig] = ic_valid
 
-    # 安定有効シグナル（直近12週でIC >= 0 が80%以上）
+    # 安定有効シグナル（直近12週で IC >= 0 だった週の比率が閾値以上）
+    # 2026-07-25 バッチ4: 閾値を config.py BLOCK A-1 から読むよう是正。
+    # 従来は 0.80 と 3 を直書きしており、config の IC_STABLE_MIN_RATE /
+    # IC_REVIEW_CONSECUTIVE_NEG は誰にも読まれていなかった（SSOT違反）。
+    # 既定値は従来の直書き値なので判定結果は変わらない。
+    _stable_rate = float(getattr(cfg, "IC_STABLE_MIN_RATE", 0.80))
+    _neg_weeks   = int(getattr(cfg, "IC_REVIEW_CONSECUTIVE_NEG", 3))
     stable_signals = []
     review_signals = []
     for sig, ic_series in weekly_ic_history.items():
-        if len(ic_series) < 3:
+        # 判定に足る週数が無いものは対象外（見直し窓と同じ週数を最低要件とする）
+        if len(ic_series) < _neg_weeks:
             continue
         pos_count = sum(1 for v in ic_series if v >= 0)
         pos_rate  = pos_count / len(ic_series)
 
-        # 最後の3週間が全て負 → 見直し推奨
-        last3_neg = (len(ic_series) >= 3 and all(v < 0 for v in ic_series[-3:]))
+        # 直近 _neg_weeks 週が全て負 → 見直し推奨
+        last_neg = all(v < 0 for v in ic_series[-_neg_weeks:])
 
-        if pos_rate >= 0.80:
+        if pos_rate >= _stable_rate:
             stable_signals.append(sig)
-        if last3_neg:
+        if last_neg:
             review_signals.append(sig)
 
     # rule_optimizer への推薦文

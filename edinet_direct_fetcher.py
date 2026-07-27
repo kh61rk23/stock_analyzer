@@ -37,8 +37,13 @@ from config import (
 # ============================================================
 # 2026-07-12是正: 実在しないホスト disclosure.edinet-api.go.jp → 正ホストへ統一
 EDINET_BASE   = "https://disclosure.edinet-fsa.go.jp/api/v2"
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B6_EDINET_DIRECT_FETCHER_XBRL_TYPE': 'XBRL_TYPE',
+}
+
 XBRL_TYPE     = 5   # type=5: XBRL ZIP
-HTML_TYPE     = 1   # type=1: HTML（E4 テキスト分析用。E1 では未使用）
 
 # 文脈参照 ID のキーワード（当期連結優先 → 単体にフォールバック）
 # EDINET XBRL の contextRef 命名規則に基づく優先順位
@@ -413,6 +418,8 @@ def fetch_and_store_one(doc_meta: dict, bq_client: EDINETBQClient) -> bool:
 
 def run_fetcher(daily_limit: int = 33) -> dict:
     # D-①-1: retained only for historical recovery; active runs must use EdinetDB.
+    import config as cfg
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     try:
         import config
         if not getattr(config, "ENABLE_EDINET_DIRECT_FETCH", False):

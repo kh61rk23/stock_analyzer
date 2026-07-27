@@ -67,6 +67,18 @@ CACHE_HOURS        = 24   # 日次キャッシュ（権利日は毎日変わら�
 CACHE_FILENAME     = "dividend_calendar_cache.json"
 
 # screener ボーナス
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'DC_BONUS_UPCOMING_30D': 'BONUS_UPCOMING_30D',
+    'DC_PENALTY_POST_EX': 'PENALTY_POST_EX',
+    'B4_DIVIDEND_CALENDAR_ALERT_WINDOW_DAYS': 'ALERT_WINDOW_DAYS',
+    'B4_DIVIDEND_CALENDAR_URGENT_WINDOW_DAYS': 'URGENT_WINDOW_DAYS',
+    'B4_DIVIDEND_CALENDAR_CACHE_HOURS': 'CACHE_HOURS',
+    'B5_DIVIDEND_CALENDAR_FETCH_DELAY': 'FETCH_DELAY',
+}
+
 BONUS_UPCOMING_30D   =  3.0   # 30日以内権利確定
 PENALTY_POST_EX      = -2.0   # 権利落ち直後（-5〜0日）
 
@@ -370,6 +382,7 @@ def run_dividend_calendar(cfg, send_gmail_if_urgent: bool = True) -> dict:
     Returns:
         dividend calendar result dict
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  📅 配当カレンダー取得開始...")
 
     cached = _load_cache(cfg)

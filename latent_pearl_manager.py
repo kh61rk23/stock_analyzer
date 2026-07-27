@@ -118,6 +118,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from config_sync import sync_module_constants
+
 # ==============================================================
 # BLOCK 0: デフォルト定数
 # ==============================================================
@@ -144,6 +146,16 @@ _CONDITION_D_MIDTERM_MIN  = 80.0
 
 # クロスシグナル強度の正規化上限（10.0 → 100pt に換算）
 _CROSS_SIGNAL_NORM_MAX = 10.0
+
+_CFG_CONST_MAP = {
+    "LATENT_PEARL_SCORE_WEIGHTS": "_LATENT_SCORE_WEIGHTS",
+    "LATENT_PEARL_PROMOTION_THRESHOLD": "_PROMOTION_THRESHOLD",
+    "LATENT_PEARL_CONDITION_A_INDEP_MIN": "_CONDITION_A_INDEP_MIN",
+    "LATENT_PEARL_CONDITION_A_CATALYST_MIN": "_CONDITION_A_CATALYST_MIN",
+    "LATENT_PEARL_CONDITION_B_STRENGTH_MIN": "_CONDITION_B_STRENGTH_MIN",
+    "LATENT_PEARL_CONDITION_D_MIDTERM_MIN": "_CONDITION_D_MIDTERM_MIN",
+    "LATENT_PEARL_CROSS_SIGNAL_NORM_MAX": "_CROSS_SIGNAL_NORM_MAX",
+}
 
 
 # ==============================================================
@@ -367,6 +379,7 @@ def _calc_latent_pearl_score(
     catalyst_score: float,
     midterm_score: float,
     conditions: list,
+    cfg=None,
 ) -> float:
     """
     潜伏Pearlスコアを計算する。
@@ -382,7 +395,9 @@ def _calc_latent_pearl_score(
         float 0.0 ~ 100.0
     """
     try:
-        w = _LATENT_SCORE_WEIGHTS
+        # 単体利用時に渡された cfg も尊重する。通常経路では run_* 冒頭の
+        # config_sync により _LATENT_SCORE_WEIGHTS と同値になっている。
+        w = getattr(cfg, "LATENT_PEARL_SCORE_WEIGHTS", None) or _LATENT_SCORE_WEIGHTS
 
         cross_norm   = (cross_strength / _CROSS_SIGNAL_NORM_MAX) * 100.0
         cat_norm     = (catalyst_score / 10.0) * 100.0
@@ -633,6 +648,7 @@ def run_latent_pearl_manager(cfg=None, force_refresh: bool = False) -> dict:
           "timestamp":     str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  💎 潜伏銘柄管理（Wave 7 - Step 8）実行中...")
 
     # ── キャッシュ確認 ──────────────────────────────────────────
@@ -694,7 +710,7 @@ def run_latent_pearl_manager(cfg=None, force_refresh: bool = False) -> dict:
             # ── 潜伏Pearlスコア計算 ───────────────────────────
             lp_score = _calc_latent_pearl_score(
                 indep_score, cross_strength, catalyst_score,
-                midterm_score, conditions,
+                midterm_score, conditions, cfg,
             )
 
             # ── 昇格判定 ──────────────────────────────────────

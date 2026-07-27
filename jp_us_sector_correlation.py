@@ -9,7 +9,7 @@
 #   相関 |r| >= 0.7 のペアを "significant_pairs" として抽出し、
 #   weekly_report_generator が「JP×US相関マトリクス」セクションで参照する。
 #
-# 【データソース】
+# 【入力（データソース）】
 #   ・JP スコア : DATA_DIR/score_history.json
 #                 形式: {"YYYY-MM-DD": {"1001": {"score": float, ...}, ...}}
 #   ・US 価格   : yfinance（US セクターETF 11銘柄）
@@ -54,13 +54,39 @@
 #   score_history.json（既存モジュールが日次蓄積）
 #   yfinance（US ETF価格取得）
 #   ★ numpy 不使用・標準ライブラリのみで計算
+#
+# 【消費者（grep実測。2026-07-28）】
+#   ・weekly_report_generator.py:1727 _section_jp_us_correlation() のみ。
+#     significant_pairs / stats を読み「JP×US相関マトリクス（直近60日）」
+#     セクションを生成する。スコア補正には一切使われない（レポート表示専用）。
+#
+# 【他3モジュールとの違い（jp_us_sector_bridge と特に紛らわしいので30秒で分かるように）】
+#   ・vs jp_us_sector_bridge.py: 名前が似ているが別物。
+#     本モジュール = 「日次」データで「同時（ラグ0）」の60日ローリング相関を算出し、
+#     weekly_report に表示するだけ（composite_score には触れない・受動的）。
+#     jp_us_sector_bridge.py = 「週次」スコアで「1週先行（ラグ1）」の相関を算出し、
+#     有意なものは signal_aggregator 経由で composite_score を実際に±pt補正する
+#     （能動的）。判定粒度（日次 vs 週次）とラグ（同時 vs 先行）と
+#     用途（レポート表示のみ vs スコア補正）の3点が異なる。
+#   ・vs sector_rotation_detector.py: 本モジュールは2系列（JP×US）の相関を見るが、
+#     rotation_detector は1系列（JPスコア単体）のトレンド象限を見る。比較対象が違う。
+#   ・vs us_sector_bridge_enhanced.py: 本モジュールは価格・スコアの統計的相関。
+#     us_sector_bridge_enhanced.py はSICコード分類によるルールベースの
+#     イベント（8-K決算）伝播で、算出方法が全く異なる。
+#
+# 【既知の状態（2026-07-28 時点）】
+#   有意ペア0件が継続している（2026-07-06: データ26日 / 2026-07-13: データ33日、
+#   いずれも有意ペア0件）。MIN_DATA_POINTS=20 は満たしていても、
+#   LOOKBACK_DAYS=60 の設計に対してデータ蓄積が追いついていないため、
+#   安定した有意相関が出にくい状態が続いている。
+#   意思決定 J-04（2026-07-27, 健太承認）= a: score_history が60日蓄積されるまで
+#   存廃判断を保留。本ファイルは今回の U-10 で削除・無効化はしない。
 # ==============================================================
 
 from __future__ import annotations
 
 import json
 import math
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -69,6 +95,18 @@ from typing import Optional
 # ==============================================================
 # BLOCK 0: 定数
 # ==============================================================
+
+
+import finance_logic
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'JUSC_CORR_THRESHOLD': 'CORR_THRESHOLD',
+    'B4_JP_US_SECTOR_CORRELATION_LOOKBACK_DAYS': 'LOOKBACK_DAYS',
+    'B4_JP_US_SECTOR_CORRELATION_FETCH_BUFFER_DAYS': 'FETCH_BUFFER_DAYS',
+    'B4_JP_US_SECTOR_CORRELATION_CACHE_TTL_DAYS': 'CACHE_TTL_DAYS',
+    'B6_JP_US_SECTOR_CORRELATION_MIN_DATA_POINTS': 'MIN_DATA_POINTS',
+}
 
 CORR_THRESHOLD   = 0.70   # 有意とみなす相関係数の絶対値
 LOOKBACK_DAYS    = 60     # 相関計算ウィンドウ（日）
@@ -380,38 +418,13 @@ def _score_deltas(filled: dict[str, float]) -> dict[str, float]:
 # ==============================================================
 
 def _pearson(xs: list[float], ys: list[float]) -> Optional[float]:
-    """ピアソン相関係数を算出する。numpy 不使用。"""
-    n = min(len(xs), len(ys))
-    if n < MIN_DATA_POINTS:
-        return None
-    xs = xs[:n]
-    ys = ys[:n]
-    mx = sum(xs) / n
-    my = sum(ys) / n
-    num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
-    sx  = math.sqrt(sum((x - mx) ** 2 for x in xs))
-    sy  = math.sqrt(sum((y - my) ** 2 for y in ys))
-    if sx < 1e-9 or sy < 1e-9:
-        return None
-    return round(num / (sx * sy), 4)
+    """ピアソン相関係数を算出する。共通実装は finance_logic.pearson（U-7）。"""
+    return finance_logic.pearson(xs, ys, min_n=MIN_DATA_POINTS, round_digits=4)
 
 
 def _calc_trend(values: list[float]) -> float:
-    """
-    直近 N 個の値を線形回帰して傾き（1ステップあたりの変化量）を返す。
-    正 → 上昇トレンド、負 → 下落トレンド
-    """
-    n = len(values)
-    if n < 3:
-        return 0.0
-    xs = list(range(n))
-    mx = sum(xs) / n
-    my = sum(values) / n
-    num = sum((x - mx) * (y - my) for x, y in zip(xs, values))
-    denom = sum((x - mx) ** 2 for x in xs)
-    if denom < 1e-9:
-        return 0.0
-    return round(num / denom, 6)
+    """共通実装は finance_logic.linear_slope（Batch 10）。"""
+    return finance_logic.linear_slope(values, min_n=3, round_digits=6)
 
 
 def _rolling_corr_60d(
@@ -501,6 +514,7 @@ def run_jp_us_sector_correlation(cfg) -> dict:
           "timestamp":          str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  📊 JP×US相関分析（Idea2-A）実行中...")
 
     # ── キャッシュ確認 ───────────────────────────────────────────

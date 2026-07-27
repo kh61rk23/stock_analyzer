@@ -53,42 +53,36 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import sec_client
+
 
 # ==============================================================
 # BLOCK 1: SEC EDGAR 10-K テキスト取得（米国株）
 # ==============================================================
 
-def _get_cik_from_ticker(ticker: str, user_agent: str) -> Optional[str]:
+def _get_cik_from_ticker(ticker: str, cfg) -> Optional[str]:
     """
-    SEC EDGAR の ticker→CIK マッピングを取得する。
+    SEC EDGAR の ticker→CIK マッピングを取得する（sec_client 経由）。
     https://www.sec.gov/files/company_tickers.json
+
+    挙動注記: sec_client.get_cik() は company_tickers.json を
+    CIK_MAP_TTL_DAYS 日キャッシュする。旧実装は都度取得だったため、
+    キャッシュ有りに変わる（改善／U-1a 申し送り）。
     """
     try:
-        import requests
-        url  = "https://www.sec.gov/files/company_tickers.json"
-        resp = requests.get(url, headers={"User-Agent": user_agent}, timeout=15)
-        if resp.status_code != 200:
-            return None
-        data = resp.json()
-        for entry in data.values():
-            if entry.get("ticker", "").upper() == ticker.upper():
-                return str(entry["cik_str"]).zfill(10)
+        return sec_client.get_cik(ticker, cfg=cfg)
     except Exception:
-        pass
-    return None
+        return None
 
 
-def _get_latest_10k_accession(cik: str, user_agent: str) -> Optional[str]:
+def _get_latest_10k_accession(cik: str, cfg) -> Optional[str]:
     """
     最新の 10-K の accession number を返す。
     """
     try:
-        import requests
-        url  = f"https://data.sec.gov/submissions/CIK{cik}.json"
-        resp = requests.get(url, headers={"User-Agent": user_agent}, timeout=15)
-        if resp.status_code != 200:
+        data = sec_client.submissions(cik, cfg=cfg)
+        if not data:
             return None
-        data   = resp.json()
         filings = data.get("filings", {}).get("recent", {})
         forms  = filings.get("form", [])
         accns  = filings.get("accessionNumber", [])
@@ -100,8 +94,7 @@ def _get_latest_10k_accession(cik: str, user_agent: str) -> Optional[str]:
     return None
 
 
-def _extract_10k_sections(cik: str, accession: str,
-                           user_agent: str) -> Optional[dict]:
+def _extract_10k_sections(cik: str, accession: str, cfg) -> Optional[dict]:
     """
     10-K の Item 1 (Business) / Item 1A (Risk Factors) /
     Item 7 (MD&A) を取得して最大3000文字に圧縮する。
@@ -109,8 +102,6 @@ def _extract_10k_sections(cik: str, accession: str,
     SEC EDGAR の viewer API を使って HTM ファイルを取得する。
     """
     try:
-        import requests
-
         # Filing インデックスを取得
         cik_plain = str(int(cik))
         acc_dash  = f"{accession[:10]}-{accession[10:12]}-{accession[12:]}"
@@ -118,9 +109,9 @@ def _extract_10k_sections(cik: str, accession: str,
             f"https://www.sec.gov/Archives/edgar/data/"
             f"{cik_plain}/{accession}/{acc_dash}-index.json"
         )
-        resp = requests.get(idx_url, headers={"User-Agent": user_agent},
-                            timeout=15)
-        if resp.status_code != 200:
+        resp = sec_client.get(idx_url, cfg=cfg, accept="application/json",
+                               timeout=15)
+        if resp is None or resp.status_code != 200:
             # .htm 形式で直接試行
             return None
         files  = resp.json().get("directory", {}).get("item", [])
@@ -144,9 +135,9 @@ def _extract_10k_sections(cik: str, accession: str,
             f"https://www.sec.gov/Archives/edgar/data/"
             f"{cik_plain}/{accession}/{main_file}"
         )
-        doc_resp = requests.get(doc_url, headers={"User-Agent": user_agent},
-                                timeout=30)
-        if doc_resp.status_code != 200:
+        doc_resp = sec_client.get(doc_url, cfg=cfg, accept="text/html",
+                                   timeout=30)
+        if doc_resp is None or doc_resp.status_code != 200:
             return None
 
         text = doc_resp.text
@@ -193,22 +184,19 @@ def fetch_10k_text(ticker: str, cfg) -> Optional[dict]:
         {"business": str, "risk": str, "mda": str, "url": str}
         失敗時は None
     """
-    user_agent = getattr(cfg, "SEC_USER_AGENT",
-                         "StockAnalyzer stockanalyzer@example.com")
-
     print(f"    🔍 SEC 10-K 取得中: {ticker}")
 
-    cik = _get_cik_from_ticker(ticker, user_agent)
+    cik = _get_cik_from_ticker(ticker, cfg)
     if not cik:
         print(f"    ⚠️  CIK 未発見: {ticker}")
         return None
 
-    accession = _get_latest_10k_accession(cik, user_agent)
+    accession = _get_latest_10k_accession(cik, cfg)
     if not accession:
         print(f"    ⚠️  10-K アクセッション未発見: {ticker}")
         return None
 
-    sections = _extract_10k_sections(cik, accession, user_agent)
+    sections = _extract_10k_sections(cik, accession, cfg)
     if not sections:
         print(f"    ⚠️  10-K セクション取得失敗: {ticker}")
         return None

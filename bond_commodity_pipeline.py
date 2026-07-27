@@ -279,6 +279,13 @@ YIELD_FALLBACK_TICKERS: dict = {
 }
 
 # リセッション確率スコアの重みパラメータ
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'BCP_RECESSION_WEIGHTS': 'RECESSION_WEIGHTS',
+}
+
 RECESSION_WEIGHTS = {
     "inversion_2y10y":   40,  # 10Y-2Y逆転: 最も信頼度が高い指標
     "inversion_3m10y":   30,  # 10Y-3M逆転: FRBが重視
@@ -286,8 +293,10 @@ RECESSION_WEIGHTS = {
     "yield_drop_speed":  10,  # 長期金利の急低下（パニック的）
 }
 
-# コモディティデータキャッシュ（1日保持）
-COMMODITY_CACHE_DAYS = 1
+# COMMODITY_CACHE_DAYS は削除（2026-07-25 バッチ2）。
+# キャッシュ処理そのものが未実装で、この定数を読むコードは存在しなかった。
+# config.py 側の BOND_COMMODITY_CACHE_DAYS も同時に削除している。
+# 実装する場合は config を正本にすること（モジュール側に定数を作らない）。
 
 # ==============================================================
 # BLOCK 3: FRED API 債券データ取得
@@ -1090,6 +1099,7 @@ def run_bond_commodity_pipeline(cfg, logger=None) -> dict:
           "json_path":       str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     if logger is None:
         logger = _SimpleLogger()
 

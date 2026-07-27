@@ -120,6 +120,12 @@ FED_ADJ_TABLE = [
     (0,  40, -8.0,  "利上げ確率高（引き締めバイアス）"),
     (0,  20, -4.0,  "利上げ確率中（やや引き締め）"),
 ]
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B4_FED_CALENDAR_FETCHER_BOJ_PROXIMITY_DAYS': 'BOJ_PROXIMITY_DAYS',
+}
+
 BOJ_PROXIMITY_DAYS = 7   # 会合7日以内
 BOJ_PROXIMITY_ADJ  = -2.0  # 会合接近による不確実性ペナルティ
 
@@ -479,6 +485,7 @@ def run_fed_calendar(cfg) -> dict:
           "generated_at":     str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  📅 FEDカレンダー取得中...")
 
     cache_path = Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / "fed_calendar_cache.json"

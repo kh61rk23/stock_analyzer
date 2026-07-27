@@ -106,13 +106,15 @@ def collect_screener(cfg, ticker: str) -> list[str]:
     if data is None:
         return lines + _no_data("screener_history", p)
     try:
-        # {date: {...candidates:[...]}} 形式を新しい日付から探索
+        # 2026-07-25: 正本の形式は {date: [候補, ...]}（リスト）。
+        # 従来は {date: {"candidates": [...]}} の辞書形式だけを見ており、
+        # isinstance(day, dict) が False になって候補を一切走査できず、
+        # パケット①が常に「データなし」になっていた。
+        from performance_tracker import normalize_history_entry
         entry, found_date = None, None
         for d in sorted(data.keys(), reverse=True):
-            day = data[d] or {}
-            cands = day.get("candidates", []) if isinstance(day, dict) else []
-            for c in cands:
-                if isinstance(c, dict) and str(c.get("ticker", "")) == ticker:
+            for c in normalize_history_entry(data[d]):
+                if str(c.get("ticker", "")) == ticker:
                     entry, found_date = c, d
                     break
             if entry:
@@ -540,6 +542,10 @@ def build_packet(cfg, ticker: str) -> str:
 
 def export(ticker: str, vault: str = "") -> Path:
     cfg = _load_config()
+    # 2026-07-25: BLOCK 39 の ENABLE_INVESTMENT_DEPT を配線。定義だけあって
+    # 誰も読んでおらず、False にしても投資部連携が止まらない状態だった。
+    if not getattr(cfg, "ENABLE_INVESTMENT_DEPT", True):
+        raise SystemExit("⏩ 投資部連携は無効（config.py ENABLE_INVESTMENT_DEPT=False）")
     vault_dir = Path(vault or getattr(cfg, "INVESTMENT_DEPT_VAULT_DIR", ""))
     if not str(vault_dir) or not vault_dir.exists():
         raise SystemExit(f"❌ vault が見つかりません: {vault_dir}\n"

@@ -60,8 +60,15 @@ def calc_tax_harvest(positions: list, realized_gain_ytd: float,
 
 
 def nisa_recommendation(order_hold_months: int, nisa_remaining: float,
-                        order_value: float, min_months: int = 12) -> str:
+                        order_value: float, min_months: int = None,
+                        cfg=None) -> str:
+    # 2026-07-25 バッチ6: 想定保有下限を config.NISA_LONG_HOLD_MONTHS から読む
+    # （従来は既定引数12の直書きで config 側が未参照だった）。
+    # 既定引数に置かず None 判定にしているのは、def 実行時に値が固定されて
+    # config の変更が反映されなくなるのを避けるため。
     """新規買い注文への口座区分推奨1行。"""
+    if min_months is None:
+        min_months = int(getattr(cfg, "NISA_LONG_HOLD_MONTHS", 12))
     if nisa_remaining >= order_value and order_hold_months >= min_months:
         return "NISA推奨（成長投資枠残あり・想定保有>1年＝非課税メリット大）"
     if nisa_remaining < order_value:

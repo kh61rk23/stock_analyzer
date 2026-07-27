@@ -39,6 +39,14 @@ from typing import Optional
 # ==============================================================
 
 # 業種ごとの合計補正上限（全ソース合算）
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'SD_SCORE_MAX_TOTAL_ADJ_POS': 'SCORE_MAX_TOTAL_ADJ_POS',
+    'SD_SCORE_MAX_TOTAL_ADJ_NEG': 'SCORE_MAX_TOTAL_ADJ_NEG',
+}
+
 SCORE_MAX_TOTAL_ADJ_POS = 20.0   # +方向の上限
 SCORE_MAX_TOTAL_ADJ_NEG = -20.0  # -方向の下限
 
@@ -364,6 +372,7 @@ def run_signal_dedup(
     Returns:
         (updated_sector_results, dedup_info_dict)
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     if not getattr(cfg, "ENABLE_SIGNAL_DEDUP", True) if cfg else True:
         pass
 

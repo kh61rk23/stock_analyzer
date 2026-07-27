@@ -47,7 +47,6 @@ from pathlib import Path
 from urllib.parse import quote
 
 UNIVERSE_DIR = Path("data/custom_universe")
-WAIT_SEC = 0.5   # yfinanceレート保護
 DEAD_RATIO_GUARD = 0.5   # 全体デッド率がこれを超えたら計測異常として apply 拒否
 CANDIDATE_RATIO_GUARD = 0.10  # 第1パス候補が多過ぎる場合はYahoo側障害を疑う
 CONFIRM_WORKERS = 4      # chart APIの再確認は低並列。429はunknownとして残置する。

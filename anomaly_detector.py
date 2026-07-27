@@ -32,6 +32,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+from config_sync import sync_module_constants
+
 
 # ==============================================================
 # BLOCK 1: 定数・閾値定義
@@ -63,10 +65,37 @@ MIN_DATA_POINTS    = 20     # 統計計算に必要な最小データ点数
 # ── スコア異常閾値（業種 composite_score）────────────────────
 SCORE_TOP_THRESHOLD    = 75.0   # この値以上 = 強い上昇シグナル
 SCORE_BOTTOM_THRESHOLD = 30.0   # この値以下 = 強い下落シグナル
-SCORE_CHANGE_THRESHOLD = 15.0   # 前日比でこの値以上変化 = 急変シグナル
 
 # ── レポート出力最大件数 ─────────────────────────────────────
 MAX_REPORT_ITEMS = 20   # レポートに記載する異常銘柄の上限
+
+
+# config.py の ANOMALY_* を実行時に取り込む。検知関数群の参照は変更しない。
+_CFG_CONST_MAP = {
+    "ANOMALY_Z_HIGH":              "Z_THRESHOLD_HIGH",
+    "ANOMALY_Z_MEDIUM":            "Z_THRESHOLD_MEDIUM",
+    "ANOMALY_IQR_MULTIPLIER":      "IQR_MULTIPLIER",
+    "ANOMALY_VOLUME_SPIKE_RATIO":  "VOLUME_SPIKE_RATIO",
+    "ANOMALY_PRICE_CHANGE_HIGH":   "PRICE_CHANGE_HIGH",
+    "ANOMALY_PRICE_CHANGE_MEDIUM": "PRICE_CHANGE_MEDIUM",
+    "ANOMALY_SCORE_TOP":           "SCORE_TOP_THRESHOLD",
+    "ANOMALY_SCORE_BOTTOM":        "SCORE_BOTTOM_THRESHOLD",
+    'B4_ANOMALY_DETECTOR_VOLUME_LOOKBACK': 'VOLUME_LOOKBACK',
+    'B4_ANOMALY_DETECTOR_HISTORY_PERIOD': 'HISTORY_PERIOD',
+    'B6_ANOMALY_DETECTOR_MIN_DATA_POINTS': 'MIN_DATA_POINTS',
+}
+
+# 旧テスト・外部呼び出しとの互換名。数値閾値のみを公開し、期間・文字列設定は
+# 共通の _CFG_CONST_MAP から取り込む。
+_CFG_THRESHOLD_MAP = {
+    key: value for key, value in _CFG_CONST_MAP.items()
+    if not key.startswith("B4_")
+}
+
+
+def sync_thresholds_from_config(cfg) -> dict:
+    """互換入口: config_sync による実行時同期を行う。"""
+    return sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
 
 # 異常重要度ラベル
 SEVERITY_ICON = {
@@ -523,6 +552,161 @@ def detect_score_anomalies(results: dict) -> list:
 
 
 # ==============================================================
+# BLOCK 4-B: スコア履歴の直近差分による急変アラート
+# ==============================================================
+
+_SCORE_JUMP_STATE_FILENAME = "score_jump_notified.json"
+
+
+def _score_jump_state_path(cfg) -> Path:
+    return Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / _SCORE_JUMP_STATE_FILENAME
+
+
+def _load_score_jump_notified(cfg) -> set[str]:
+    """通知済み比較キーを読み込む。欠損・破損時は空集合で継続する。"""
+    try:
+        data = json.loads(_score_jump_state_path(cfg).read_text(encoding="utf-8"))
+        values = data.get("notified", []) if isinstance(data, dict) else []
+        return {str(v) for v in values if isinstance(v, str)}
+    except Exception:
+        return set()
+
+
+def mark_score_jumps_notified(cfg, alerts: list[dict]) -> None:
+    """少なくとも1チャネルへ送信できた急変比較を永続状態へ記録する。"""
+    keys = {
+        str(item.get("dedup_key"))
+        for item in alerts
+        if isinstance(item, dict) and item.get("dedup_key")
+    }
+    if not keys:
+        return
+    try:
+        path = _score_jump_state_path(cfg)
+        notified = _load_score_jump_notified(cfg) | keys
+        # 日次運用で十分な余裕を持たせつつ、状態ファイルの無制限成長を防ぐ。
+        kept = sorted(notified)[-2000:]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {"notified": kept, "updated_at": datetime.now().isoformat()},
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except Exception:
+        # 通知自体を状態保存失敗で失敗扱いにしない。
+        return
+
+
+def detect_score_jumps(cfg, results: dict, now: Optional[datetime] = None) -> dict:
+    """当日実行値と当日より前の直近履歴を比較して急変候補を返す。
+
+    履歴欠損・JSON破損・業種ごとの値欠損はすべて fail-soft とし、
+    ``status`` と ``reason`` で非検知理由を呼び出し側へ伝える。
+    """
+    threshold = float(getattr(cfg, "ALERT_SCORE_JUMP_THRESHOLD", 15.0))
+    current_dt = now or datetime.now()
+    current_date = current_dt.strftime("%Y-%m-%d")
+    base = {
+        "alerts": [],
+        "suppressed_count": 0,
+        "threshold": threshold,
+        "current_date": current_date,
+        "previous_date": None,
+        "status": "skipped",
+        "reason": "",
+    }
+
+    if not getattr(cfg, "ALERT_ON_SCORE_JUMP", True):
+        return {**base, "status": "disabled", "reason": "ALERT_ON_SCORE_JUMP=False"}
+    if threshold <= 0:
+        return {**base, "status": "invalid_config", "reason": "threshold must be positive"}
+
+    sectors = results.get("sectors", {}) if isinstance(results, dict) else {}
+    if not isinstance(sectors, dict) or not sectors:
+        return {**base, "reason": "current sector scores missing"}
+
+    history_path = Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / "score_history.json"
+    if not history_path.exists():
+        return {**base, "reason": "score_history missing"}
+    try:
+        history = json.loads(history_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {**base, "reason": "score_history invalid"}
+    if not isinstance(history, dict):
+        return {**base, "reason": "score_history is not an object"}
+
+    previous_dates = []
+    for key, value in history.items():
+        if not isinstance(key, str) or not isinstance(value, dict):
+            continue
+        try:
+            parsed = datetime.strptime(key, "%Y-%m-%d")
+        except ValueError:
+            continue
+        if parsed.date() < current_dt.date():
+            previous_dates.append(key)
+    if not previous_dates:
+        return {**base, "reason": "previous history missing"}
+
+    previous_date = max(previous_dates)
+    previous = history[previous_date]
+    notified = _load_score_jump_notified(cfg)
+    alerts = []
+    suppressed = 0
+
+    for code, current in sectors.items():
+        if not isinstance(current, dict):
+            continue
+        previous_raw = previous.get(code)
+        if previous_raw is None:
+            previous_raw = previous.get(str(code))
+        try:
+            current_score = float(current.get("composite_score"))
+            previous_score = float(
+                previous_raw.get("score") if isinstance(previous_raw, dict) else previous_raw
+            )
+        except (TypeError, ValueError, AttributeError):
+            continue
+
+        diff = current_score - previous_score
+        if abs(diff) < threshold:
+            continue
+        previous_rounded = round(previous_score, 1)
+        current_rounded = round(current_score, 1)
+        dedup_key = (
+            f"{previous_date}|{current_date}|{code}|"
+            f"{previous_rounded:.1f}|{current_rounded:.1f}"
+        )
+        if dedup_key in notified:
+            suppressed += 1
+            continue
+        alerts.append({
+            "sector_code": str(code),
+            "sector_name": current.get("sector_name_ja", str(code)),
+            "previous_date": previous_date,
+            "current_date": current_date,
+            "previous_score": previous_rounded,
+            "current_score": current_rounded,
+            "diff": round(diff, 1),
+            "severity": "high" if abs(diff) >= 20.0 else "medium",
+            "dedup_key": dedup_key,
+        })
+
+    alerts.sort(key=lambda item: abs(item["diff"]), reverse=True)
+    return {
+        **base,
+        "alerts": alerts,
+        "suppressed_count": suppressed,
+        "previous_date": previous_date,
+        "status": "ok",
+        "reason": "",
+    }
+
+
+# ==============================================================
 # BLOCK 5: 全銘柄スキャン
 # ==============================================================
 
@@ -542,6 +726,9 @@ def run_anomaly_scan(cfg, results: dict) -> dict:
         "targets":            dict,    # スキャン対象ティッカー情報
       }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
+    score_jump_result = detect_score_jumps(cfg, results)
+
     # 対象ティッカーの収集
     targets = _collect_target_tickers(cfg)
     tickers_list = list(targets.keys())
@@ -552,6 +739,8 @@ def run_anomaly_scan(cfg, results: dict) -> dict:
             "combined_anomalies": [], "score_anomalies": [],
             "all_anomalies": [], "scan_count": 0,
             "anomaly_count": 0, "targets": {},
+            "score_jump_result": score_jump_result,
+            "score_jump_alerts": score_jump_result["alerts"],
         }
 
     # 価格・出来高データ取得
@@ -630,6 +819,8 @@ def run_anomaly_scan(cfg, results: dict) -> dict:
         "scan_count":         len(hist_data),
         "anomaly_count":      total_anomalies,
         "targets":            targets,
+        "score_jump_result":  score_jump_result,
+        "score_jump_alerts":  score_jump_result["alerts"],
     }
 
 
@@ -644,6 +835,7 @@ def generate_anomaly_report(scan_result: dict, today_str: str) -> str:
     price_a  = scan_result.get("price_anomalies",   [])
     volume_a = scan_result.get("volume_anomalies",  [])
     score_a  = scan_result.get("score_anomalies",   [])
+    score_jumps = scan_result.get("score_jump_alerts", [])
     total    = scan_result.get("anomaly_count", 0)
     scanned  = scan_result.get("scan_count", 0)
 
@@ -661,6 +853,24 @@ def generate_anomaly_report(scan_result: dict, today_str: str) -> str:
         "---",
         "",
     ]
+
+    if score_jumps:
+        lines += [
+            "## ⚡ セクタースコア急変",
+            "",
+            "| 業種 | 前回 | 直近 | 差分 | 重要度 |",
+            "|------|------|------|------|-------|",
+        ]
+        for item in score_jumps:
+            icon = "📈" if item["diff"] > 0 else "📉"
+            lines.append(
+                f"| {item['sector_name']} ({item['sector_code']}) "
+                f"| {item['previous_score']:.1f} ({item['previous_date']}) "
+                f"| {item['current_score']:.1f} ({item['current_date']}) "
+                f"| {icon} {item['diff']:+.1f}pt "
+                f"| {item['severity'].upper()} |"
+            )
+        lines.append("")
 
     # ── 複合異常（最重要）───────────────────────────────────
     if combined:
@@ -837,6 +1047,7 @@ def run_anomaly_detector(cfg, results: dict, logger=None) -> dict:
           "price_anomalies":    [dict],
           "volume_anomalies":   [dict],
           "score_anomalies":    [dict],
+          "score_jump_alerts":  [dict],
           "all_anomalies":      [dict],  # ソート済み全件（上限 MAX_REPORT_ITEMS）
           "anomaly_count":      int,
           "scan_count":         int,
@@ -853,6 +1064,7 @@ def run_anomaly_detector(cfg, results: dict, logger=None) -> dict:
 
     # ── Step 1: スキャン実行 ─────────────────────────────────
     print("  [1/3] 銘柄スキャン...")
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     try:
         scan_result = run_anomaly_scan(cfg, results)
         ac = scan_result.get("anomaly_count", 0)
@@ -870,6 +1082,7 @@ def run_anomaly_detector(cfg, results: dict, logger=None) -> dict:
         return {
             "combined_anomalies": [], "price_anomalies": [],
             "volume_anomalies": [], "score_anomalies": [],
+            "score_jump_alerts": [],
             "all_anomalies": [], "anomaly_count": 0,
             "scan_count": 0, "md_path": "", "json_path": "",
         }

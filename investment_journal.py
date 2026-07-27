@@ -41,6 +41,12 @@ from typing import Optional
 # ==============================================================
 
 JOURNAL_FILENAME    = "investment_journal.json"
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B6_INVESTMENT_JOURNAL_AUTO_EXIT_WEEKS_DEF': 'AUTO_EXIT_WEEKS_DEF',
+}
+
 AUTO_EXIT_WEEKS_DEF = 12   # cfg.JOURNAL_AUTO_EXIT_WEEKS のデフォルト
 
 
@@ -567,6 +573,7 @@ def run_investment_journal(cfg, screener_result: dict = None,
           "timestamp":        str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  📔 投資ジャーナル 更新中...")
 
     created = 0

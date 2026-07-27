@@ -61,6 +61,12 @@ class TestFeedback:
 
 class TestQueue:
     def test_pass_filters_only_and_idempotent(self, tmp_cfg):
+        """旧来の辞書形式＋pass_filters 明示。後方互換として維持する。
+
+        ※ この形式は実データではない（下の test_real_list_shape 参照）。
+        本テストが実データと違う形を固定していたため、リスト形式を読めない
+        バグが2026-07-25まで検出されなかった。
+        """
         (tmp_cfg.DATA_DIR / "screener_history.json").write_text(json.dumps({
             "2026-06-11": {"candidates": [
                 {"ticker": "7203.T", "composite_score": 82.5,
@@ -77,3 +83,24 @@ class TestQueue:
         assert q.count("AUTO-QUEUE:BEGIN") == 1   # 冪等
         assert "7203.T" in q and "9999.T" not in q
         assert "手動" in q                          # 手動行温存
+
+    def test_real_list_shape_populates_queue(self, tmp_cfg):
+        """実データ形式（日付の値がリスト・pass_filtersキーなし）で
+        審議キューが埋まること。
+
+        append_screener_history は通過銘柄だけを保存し pass_filters を
+        残さない。この形式が読めず審議キューが常に0件だった回帰を防ぐ。
+        """
+        (tmp_cfg.DATA_DIR / "screener_history.json").write_text(json.dumps({
+            "2026-07-22": [
+                {"ticker": "6674.T", "composite_score": 89.3},
+                {"ticker": "6504.T", "composite_score": 88.1}]}),
+            encoding="utf-8")
+        qp = _vault(tmp_cfg) / "15_審議キュー.md"
+        qp.write_text("# 審議キュー\n", encoding="utf-8")
+        osync.cmd_queue(tmp_cfg)
+        q = qp.read_text(encoding="utf-8")
+        assert "6674.T" in q, "実データ形式で審議キューが空になっている"
+        assert "6504.T" in q
+        # スコア降順で並ぶこと
+        assert q.index("6674.T") < q.index("6504.T")

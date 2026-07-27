@@ -37,6 +37,18 @@ from typing import Optional
 _CACHE_SCHEMA_VERSION = "1.0"
 
 # YoY 差分の重み（risk セクションのネガティブ化を最重視）
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'TXS_YOY_SECTION_WEIGHTS': '_YOY_SECTION_WEIGHTS',
+    'TXS_CATEGORY_MAX_PENALTY': '_CATEGORY_MAX_PENALTY',
+    'TXS_KEYWORD_UNIT_PENALTY': '_KEYWORD_UNIT_PENALTY',
+    'TXS_CATALYST_SCORE_MAX': '_CATALYST_SCORE_MAX',
+    'TXS_CATALYST_SUPPLY_THRESHOLD': '_CATALYST_SUPPLY_THRESHOLD',
+    'B6_TEXT_SIGNAL_YOY_SCALE_FACTOR': '_YOY_SCALE_FACTOR',
+}
+
 _YOY_SECTION_WEIGHTS: dict[str, float] = {
     "risk":       1.0,
     "business":   0.4,
@@ -650,6 +662,7 @@ def batch_calc_text_risk_bonus(
     Returns:
         {securities_code: bonus_float}
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     if not getattr(cfg, "ENABLE_TEXT_SIGNAL", True):
         return {}
 

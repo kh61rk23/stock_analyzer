@@ -112,6 +112,40 @@ class TestEventSourcing:
                [h["equity"] for h in current["equity_history"]]
 
 
+class TestPlaybookStrategyInclusion:
+    """playbooks/*.yaml 由来の戦略が仮想口座を持つこと（2026-07-25）。
+
+    adapter は登録されるのに PAPER_STRATEGIES に id が無く、口座が一切
+    作られないまま空回りしていた回帰を防ぐ。
+    """
+
+    def test_playbook_adapters_get_accounts(self, tmp_path):
+        cfg = PaperCfg(tmp_path)
+        cfg.PAPER_STRATEGIES = ["screener_topN"]
+        cfg.ENABLE_EVENT_STRATEGY = True
+        run_paper_trading(cfg, {}, fixed_price({}), today="2026-07-06")
+        accounts = load_accounts(cfg)
+        # 組込＋playbook（status=paper かつ side=BUY の3本）が口座を持つ
+        assert "screener_topN" in accounts
+        assert "pead_long_v1" in accounts, "playbook戦略の口座が作られていない"
+
+    def test_short_playbook_excluded(self, tmp_path):
+        """ショート系プレイブックは口座を持たない（B部門鉄則8: ショート禁止）。"""
+        cfg = PaperCfg(tmp_path)
+        cfg.PAPER_STRATEGIES = ["screener_topN"]
+        cfg.ENABLE_EVENT_STRATEGY = True
+        run_paper_trading(cfg, {}, fixed_price({}), today="2026-07-06")
+        assert "us8k_ceo_change_short_watch" not in load_accounts(cfg)
+
+    def test_opt_out_flag(self, tmp_path):
+        cfg = PaperCfg(tmp_path)
+        cfg.PAPER_STRATEGIES = ["screener_topN"]
+        cfg.ENABLE_EVENT_STRATEGY = True
+        cfg.PAPER_INCLUDE_PLAYBOOK_STRATEGIES = False
+        run_paper_trading(cfg, {}, fixed_price({}), today="2026-07-06")
+        assert "pead_long_v1" not in load_accounts(cfg)
+
+
 class TestAdapters:
     def _account(self):
         return {"cash": 1_000_000, "positions": {}, "equity_history": [],

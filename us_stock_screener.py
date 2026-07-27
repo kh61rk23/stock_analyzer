@@ -239,151 +239,109 @@ def _fetch_one(entry: dict, max_retries: int = 3) -> Optional[dict]:
     1銘柄のyfinanceデータを取得する。
     429エラー時は指数バックオフでリトライ。
 
+    [U-5] 取得・正規化・リトライは market_data.fetch_quote() へ移した。
+          本関数は「fetch_quote の返り値を US 従来のキー名へ写像し、
+          entry 由来のフィールドと XBRL 補完を足すだけの薄い層」であり、
+          返り値のキー集合・値は U-5 以前と同一。
+
     Returns:
         dict（取得成功） or None（失敗）
     """
     ticker = entry["ticker"]
 
-    for attempt in range(max_retries):
+    try:
+        import sys as _sys, importlib as _imp
+        _sys.path.insert(0, str(Path(__file__).parent))
+        _md = _imp.import_module("market_data")
+
+        # リトライ（429 → 3s/6s/12s、その他 → 2s）は fetch_quote 側に集約済み
+        q = _md.fetch_quote(ticker, "US", max_retries=max_retries)
+        if q is None:
+            return None
+
+        raw = q["_raw_info"]
+
+        # [F-4] market_cap_b は JP=億円 / US=十億USD で **同名だが単位が違う**。
+        # 互換性維持のため単位の是正はここでは行わない（要件定義書 §3-3(a)）。
+        # 消費側で市場をまたいで比較する場合は、必ず生値
+        # market_data.fetch_quote()["market_cap_raw"] を使うこと。
+        market_cap = q["market_cap_raw"]
+
+        # ── [Phase US-1] XBRL財務データで補完 ──────────────────
+        _xbrl_accel = None
+        _xbrl_fcf   = None
         try:
-            import yfinance as yf
-            info = yf.Ticker(ticker).info or {}
+            _ufr      = _imp.import_module("us_fundamental_rotator")
+            xbrl_data = _ufr.lookup_us_fundamentals_by_path(
+                Path(__file__).parent / "stock_data" / "data", ticker
+            )
+            if xbrl_data:
+                _xbrl_accel = xbrl_data.get("eps_accel_score_xbrl")
+                _xbrl_fcf   = xbrl_data.get("latest_fcf")
+        except Exception:
+            pass
 
-            # 有効な銘柄かチェック（価格データがなければスキップ）
-            price = (info.get("regularMarketPrice")
-                     or info.get("currentPrice")
-                     or info.get("previousClose"))
-            if not price:
-                return None
+        return {
+            "ticker":           ticker,
+            "name":             q["short_name"],
+            "sector":           q["sector"],
+            "industry":         q["industry"],
+            "category":         entry["category"],
+            "business_model":   entry["business_model"],
+            "in_sp500":         entry["in_sp500"],
+            "fetch_ok":         True,
 
-            def _get(key: str) -> Optional[float]:
-                v = info.get(key)
-                try:
-                    return float(v) if v is not None else None
-                except (TypeError, ValueError):
-                    return None
+            # 株価・規模
+            "current_price":    q["current_price"],
+            "market_cap":       market_cap,
+            "market_cap_b":     market_cap / 1e9 if market_cap else None,  # 十億USD
 
-            # 各指標取得
-            market_cap = _get("marketCap")
-            per        = _get("trailingPE")
-            pbr        = _get("priceToBook")
-            roe        = _get("returnOnEquity")
-            roa        = _get("returnOnAssets")
-            op_margin  = _get("operatingMargins")
-            rev_growth = _get("revenueGrowth")
-            de_ratio   = _get("debtToEquity")
-            fcf        = _get("freeCashflow")
-            op_cf      = _get("operatingCashflow")
-            net_income = _get("netIncomeToCommon")
-            total_assets = _get("totalAssets")
-            rec_mean   = _get("recommendationMean")
-            rec_key    = info.get("recommendationKey", "")
-            target_mean = _get("targetMeanPrice")
-            analyst_cnt = info.get("numberOfAnalystOpinions")
-            div_yield  = _get("dividendYield")
-            beta       = _get("beta")
-            week52_chg = _get("52WeekChange")
-            gross_margin = _get("grossMargins")
-            ebitda_margin = _get("ebitdaMargins")
-            revenue    = _get("totalRevenue")
-            earnings_growth = _get("earningsGrowth")
+            # バリュエーション
+            "per":              q["per"],
+            "pbr":              q["pbr"],
+            "div_yield":        q["div_yield"],
 
-            # アナリスト目標株価乖離率
-            analyst_upside = None
-            if target_mean and price and price > 0:
-                analyst_upside = (target_mean - price) / price
+            # 収益性
+            "roe":              q["roe"],
+            "roa":              q["roa"],
+            "op_margin":        q["op_margin"],
+            "gross_margin":     q["gross_margin"],
+            "ebitda_margin":    q["ebitda_margin"],
 
-            # アクルーアル比率
-            accrual_ratio = None
-            if net_income is not None and op_cf is not None \
-                    and total_assets and total_assets > 0:
-                accrual_ratio = (net_income - op_cf) / total_assets
+            # 成長率
+            "revenue_growth":   q["revenue_growth"],
+            "earnings_growth":  q["earnings_growth"],
 
-            # ── [Phase US-1] XBRL財務データで補完 ──────────────────
-            _xbrl_accel = None
-            _xbrl_fcf   = None
-            try:
-                import sys as _sys, importlib as _imp
-                _sys.path.insert(0, str(Path(__file__).parent))
-                _ufr      = _imp.import_module("us_fundamental_rotator")
-                xbrl_data = _ufr.lookup_us_fundamentals_by_path(
-                    Path(__file__).parent / "stock_data" / "data", ticker
-                )
-                if xbrl_data:
-                    _xbrl_accel = xbrl_data.get("eps_accel_score_xbrl")
-                    _xbrl_fcf   = xbrl_data.get("latest_fcf")
-            except Exception:
-                pass
+            # 財務健全性
+            "debt_to_equity":   q["debt_to_equity"],
+            "free_cashflow":    q["free_cashflow"],
+            "operating_cashflow": q["operating_cashflow"],
+            "total_revenue":    q["total_revenue"],
 
-            return {
-                "ticker":           ticker,
-                "name":             (info.get("shortName")
-                                     or info.get("longName") or ticker),
-                "sector":           info.get("sector", ""),
-                "industry":         info.get("industry", ""),
-                "category":         entry["category"],
-                "business_model":   entry["business_model"],
-                "in_sp500":         entry["in_sp500"],
-                "fetch_ok":         True,
+            # アクルーアル
+            "accrual_ratio":    q["accrual_ratio"],
 
-                # 株価・規模
-                "current_price":    price,
-                "market_cap":       market_cap,
-                "market_cap_b":     market_cap / 1e9 if market_cap else None,
+            # アナリスト
+            "rec_mean":         q["rec_mean"],
+            # rec_key / analyst_count は従来値を1ビットも変えないために生 info
+            # から取る（q["rec_key"] は None を "" へ、q["analyst_count"] は
+            # int へ正規化しており、US 従来挙動＝素通しと食い違うため）。
+            "rec_key":          raw.get("recommendationKey", ""),
+            "analyst_upside":   q["analyst_upside"],
+            "analyst_count":    raw.get("numberOfAnalystOpinions"),
+            "target_price":     q["target_price"],
 
-                # バリュエーション
-                "per":              per,
-                "pbr":              pbr,
-                "div_yield":        div_yield,
+            # テクニカル
+            "week52_change":    q["week52_change"],
+            "beta":             q["beta"],
 
-                # 収益性
-                "roe":              roe,
-                "roa":              roa,
-                "op_margin":        op_margin,
-                "gross_margin":     gross_margin,
-                "ebitda_margin":    ebitda_margin,
+            # [Phase US-1] XBRL財務補完（取得失敗時はNone）
+            "eps_accel_score_xbrl": _xbrl_accel,
+            "latest_fcf_xbrl":      _xbrl_fcf,
+        }
 
-                # 成長率
-                "revenue_growth":   rev_growth,
-                "earnings_growth":  earnings_growth,
-
-                # 財務健全性
-                "debt_to_equity":   de_ratio,
-                "free_cashflow":    fcf,
-                "operating_cashflow": op_cf,
-                "total_revenue":    revenue,
-
-                # アクルーアル
-                "accrual_ratio":    accrual_ratio,
-
-                # アナリスト
-                "rec_mean":         rec_mean,
-                "rec_key":          rec_key,
-                "analyst_upside":   analyst_upside,
-                "analyst_count":    analyst_cnt,
-                "target_price":     target_mean,
-
-                # テクニカル
-                "week52_change":    week52_chg,
-                "beta":             beta,
-
-                # [Phase US-1] XBRL財務補完（取得失敗時はNone）
-                "eps_accel_score_xbrl": _xbrl_accel,
-                "latest_fcf_xbrl":      _xbrl_fcf,
-            }
-
-        except Exception as e:
-            err_str = str(e).lower()
-            # 429 レート制限：指数バックオフ
-            if "429" in err_str or "too many" in err_str:
-                wait = (2 ** attempt) * 3  # 3s, 6s, 12s
-                time.sleep(wait)
-            elif attempt < max_retries - 1:
-                time.sleep(2)
-            else:
-                return None
-
-    return None
+    except Exception:
+        return None
 
 
 # ==============================================================
@@ -431,17 +389,9 @@ def _calc_catalyst_bonus_us(
     cat_data: dict,
     cfg=None,
 ) -> float:
-    """
-    FE-7: US株版カタリストボーナス（最大 +5pt）。
-    GICS セクターコード（"US_45" 等）を sector_code として渡す。
-    """
-    try:
-        if not cat_data:
-            return 0.0
-        from catalyst_calendar import calc_catalyst_bonus as _cb
-        return _cb(ticker, gics, cat_data, cfg)
-    except Exception:
-        return 0.0
+    """FE-7: US株版カタリストボーナス（最大 +5pt）。実体は screener_common へ移設（U-3）。"""
+    from screener_common import calc_catalyst_bonus
+    return calc_catalyst_bonus(ticker, gics, cat_data, cfg)
 
 # ==============================================================
 # BLOCK 5: スクリーニングフィルター
@@ -519,36 +469,9 @@ def _calc_risk_adjusted_score_us(
     c:               dict,
     cfg=None,
 ) -> float:
-    """
-    FE-1: US株版 ATR基準リスク調整スコア。
-    beta をボラティリティ代理変数として使用する（JP版と同一ロジック）。
-
-    Returns:
-        float: risk_adjusted_score (0.0〜100.0)
-    """
-    try:
-        penalty_high = float(getattr(cfg, "RISK_ADJ_PENALTY_HIGH_VOL", 1.20))
-        penalty_low  = float(getattr(cfg, "RISK_ADJ_PENALTY_LOW_VOL",  0.85))
-
-        beta = c.get("beta")
-        if beta is None:
-            return round(float(composite_score), 1)
-
-        b = float(beta)
-        if not (-2.0 <= b <= 5.0):
-            return round(float(composite_score), 1)
-
-        if b > 1.5:
-            adjusted = composite_score / penalty_high
-        elif 0.0 < b < 0.5:
-            adjusted = composite_score * penalty_low
-        else:
-            adjusted = composite_score
-
-        return round(min(100.0, max(0.0, adjusted)), 1)
-
-    except Exception:
-        return round(float(composite_score), 1)
+    """FE-1: US株版 ATR基準リスク調整スコア。実体は screener_common へ移設（U-3）。"""
+    from screener_common import calc_risk_adjusted_score
+    return calc_risk_adjusted_score(ticker, composite_score, c, cfg)
 
 
 def _calc_revision_score_us(
@@ -556,39 +479,9 @@ def _calc_revision_score_us(
     c:      dict,
     cfg=None,
 ) -> float:
-    """
-    FE-2: US株版アナリスト修正スコア（上限+5pt）。
-
-    JP版と同一の rec_mean ロジックだが、
-    US市場はアナリスト影響力が高いため上限を+5ptに拡張。
-
-    Returns:
-        float: quality_score への加算点（-5.0〜+5.0）
-    """
-    try:
-        rec = c.get("rec_mean")
-        if rec is None:
-            return 0.0
-
-        r = float(rec)
-        if r <= 1.5:
-            raw = 0.50
-        elif r <= 2.0:
-            raw = 0.30
-        elif r <= 2.5:
-            raw = 0.10
-        elif r <= 3.0:
-            raw = 0.00
-        elif r <= 3.5:
-            raw = -0.20
-        else:
-            raw = -0.50
-
-        # US: 上限 +5pt / 下限 -5pt（JP の +3pt より大きい）
-        return round(min(5.0, max(-5.0, raw * 10.0)), 2)
-
-    except Exception:
-        return 0.0
+    """FE-2: US株版アナリスト修正スコア（上限+5pt）。実体は screener_common へ移設（U-3）。"""
+    from screener_common import calc_revision_score
+    return calc_revision_score(ticker, c, "US", cfg)
 
 
 def _check_pead_trigger_us(
@@ -596,12 +489,9 @@ def _check_pead_trigger_us(
     revision_score: float,
     cfg=None,
 ) -> bool:
-    """FE-2: US株版 PEAD トリガー判定。"""
-    try:
-        min_rev = float(getattr(cfg, "PEAD_TRIGGER_MIN_REVISION", 0.3))
-        return float(revision_score) >= min_rev
-    except Exception:
-        return False
+    """FE-2: US株版 PEAD トリガー判定。実体は screener_common へ移設（U-3）。"""
+    from screener_common import check_pead_trigger
+    return check_pead_trigger(ticker, revision_score, cfg)
 
 # ==============================================================
 # BLOCK 6: 複合スコア計算（US株版）

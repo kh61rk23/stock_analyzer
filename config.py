@@ -1318,7 +1318,10 @@ RE_BONUS_MIN: float = -2.0
 RE_BONUS_MAX: float = 3.0
 FUDOSANDB_BASE_URL: str = FUDOSAN_BASE_URL  # 後方互換
 FUDOSANDB_DAILY_BUDGET: int = FUDOSAN_DAILY_BUDGET  # 後方互換
-FUDOSANDB_P1_TICKERS: list = []
+# FUDOSANDB_P1_TICKERS は廃止（2026-07-25 バッチ6）。
+# 空リストのまま実装からも一度も参照されておらず、後方互換エイリアス群
+# （FUDOSANDB_BASE_URL / FUDOSANDB_DAILY_BUDGET）に紛れて残っていた旧名の残骸。
+# 対象銘柄の選定は fudosan_ingestor が保有銘柄・screener候補から動的に行う。
 
 # ==============================================================
 # BLOCK 9: タイムライン設定（3-A）
@@ -1524,6 +1527,14 @@ DAILY_MODULES = [
     "pead_monitor",                # Wave 3 - FE-5（screener直後・日次）
     "ml_meta",                     # Wave R5-1 - S7 ML特徴量スナップショット（日次蓄積）
     "score_calculator",            # Wave R5-2 Phase A - E10 JP/US共通スコア
+    # ★ 2026-07-25 バッチ5: size_decay_manager / cross_size_signal は
+    #   stock_analyzer_main が _in_mode("size_tier") でゲートしているのに、
+    #   "size_tier" が DAILY にも WEEKLY にも無く（実在するのは
+    #   "size_tier_classifier"）、ENABLE を True にしても daily/weekly では
+    #   永久に実行されない状態だった（all モードでのみ動く）。
+    #   コード側コメント「[Wave 7 - DAILY]」と WAVE7_DAILY_MODULE_ORDER の
+    #   宣言どおり日次で回すため、mode-key を登録する。
+    "size_tier",                   # Wave 7: 規模別減衰管理 + 規模帯横断シグナル
 ]
 
 # ── ウィークリーサイクル（月曜朝に追加実行）───────────────────
@@ -1617,10 +1628,16 @@ ALERT_ANOMALY_MIN_SEVERITY:  str   = "high"  # "medium" | "high" | "critical"
 
 # このファイルは GitHub リポジトリ直下に置けば自動検出される
 # （GitHub Actions = ③ / Colab直接実行 = ① or ② の順で探す）
-BOND_COMMODITY_CACHE_DAYS: int = 1   # コモディティデータキャッシュ保持日数
-
-# コモディティ → composite_score 補正の最大値（業種ごとの上限）
-BOND_COMMODITY_DELTA_CAP: float = 15.0
+# ── BOND_COMMODITY_CACHE_DAYS / BOND_COMMODITY_DELTA_CAP は廃止（2026-07-25 バッチ2）
+#   BOND_COMMODITY_CACHE_DAYS: bond_commodity_pipeline.py にキャッシュ処理が
+#     そもそも実装されていない（モジュール側の COMMODITY_CACHE_DAYS も定義だけで
+#     未使用）。日次1回の実行では保持1日のキャッシュに節約効果が無いため、
+#     実装せず削除した。
+#   BOND_COMMODITY_DELTA_CAP: 「コモディティ→composite_score 補正の上限」だが、
+#     現行は signal_aggregator のカテゴリI（"yield_curve" 重み0.01）として
+#     recession_score を重み付き集計する方式に置き換わっている。
+#     composite_score を別途直接補正すると同じ情報の二重計上になり、
+#     signal_dedup の重複排除原則に反するため実装せず削除した。
 
 # ==============================================================
 # BLOCK 15: Step E代替 - 事業概要フェッチャー設定
@@ -1711,18 +1728,17 @@ EDINET_SKIP_SECTORS: list = [
 ]
 
 # ==============================================================
-# BLOCK 18: stock_viewer Googleスプレッドシート連携
+# BLOCK 18: stock_viewer Googleスプレッドシート連携 —— 廃止（2026-07-25）
 # ==============================================================
-
-# viewer と共有しているスプレッドシートID
-# （viewer の サイドバー → SpreadsheetID に表示されているもの）
-VIEWER_SPREADSHEET_ID: str = "1IedVe2bSPerao6oGvhOX-nZKtQbR_M6c"  # 例: "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"
-
-# service_account.json のパス（GitHub Actionsではシークレットから生成）
-VIEWER_SERVICE_ACCOUNT_PATH: str = "service_account.json"
-
-# ウォッチリストのシート名（viewer側のシート名に合わせる）
-VIEWER_WATCHLIST_SHEET: str = "watchlist"
+# VIEWER_SPREADSHEET_ID / VIEWER_SERVICE_ACCOUNT_PATH / VIEWER_WATCHLIST_SHEET
+# を削除した。理由:
+#   - 3定数とも実装から一度も参照されていなかった（config_audit 検査E）
+#   - viewer は Streamlit 版（viewer/risk_dashboard.py）へ移行済みで、
+#     そちらは config とローカルファイルだけを読み、スプレッドシートを使わない
+#   - gspread を使うのは viewer/data_bridge.py だけだが、そちらは自前の
+#     DEFAULT_SPREADSHEET_ID を持っており、ここの定数とは無関係
+#   - 健太に確認済み: スプレッドシートは使っていない
+# 復活させる場合は viewer 側の実装とセットで再定義すること。
 
 # ==============================================================
 # BLOCK 17: 米国株スクリーニング設定
@@ -1782,17 +1798,48 @@ NOTION_DATABASE_ID:        str  = "331b571e4f7e8092b27dded753e5c3fe"     # ス�
 #   実効値は従来どおり DRIVE_BASE/obsidian_vault（挙動変更なし）。
 OBSIDIAN_VAULT_DIR: str = str(DRIVE_BASE / "obsidian_vault")
 
-# signal_aggregatorのデフォルト重み（rule_optimizerが月次で調整）
+# signal_aggregator のデフォルト重み（rule_optimizer が月次で調整）
+#
+# ★ 2026-07-25 バッチ6: 全面刷新。
+#   従来ここは **9カテゴリの古い版**（sector_score=0.30 / macro_signals=0.18 等）で、
+#   実装 signal_aggregator.DEFAULT_WEIGHTS の **23カテゴリの現行版**
+#   （sector_score=0.21 / macro_signals=0.13 等）と完全に乖離していた。
+#   Wave 6/7 で追加された14カテゴリ（geo_signal / independence_signal /
+#   taxonomy_signal 等）が config 側に1つも無く、実装だけが更新されていた。
+#   誰も読んでいなかったため、この乖離に気づく手段が無かった。
+#
+#   健太の方針「実装時の値を正」に従い、実装の現行値をここへ写した。
+#   以降は本定数が正本で、signal_aggregator が起動時に読み込む
+#   （sync_default_weights_from_config）。両者の一致は
+#   tests/test_signal_weights_ssot.py が強制する。
+#
+#   【重みの位置づけ】これは「初期値」。実運用では rule_optimizer が
+#   月次で調整した rule_weights.json の値が優先される。
+#   合計は必ず 1.00 にすること（signal_aggregator が起動時に検証する）。
 SIGNAL_WEIGHTS = {
-    "sector_score":      0.30,
-    "macro_signals":     0.18,
-    "technical_score":   0.15,
-    "market_breadth":    0.10,
-    "options_sentiment": 0.08,
-    "anomaly_season":    0.06,
-    "us_lead_signal":    0.07,
-    "etf_heat":          0.03,
-    "yield_curve":       0.03,
+    "sector_score":           0.21,   # A: composite_score（Wave R2-6でVへ0.02移譲）
+    "macro_signals":          0.13,   # B: MACRO_RULES シグナル（Wave 7調整）
+    "technical_score":        0.15,   # C: テクニカル
+    "market_breadth":         0.10,   # D: 市場幅
+    "options_sentiment":      0.08,   # E: オプション恐怖/強欲
+    "anomaly_season":         0.03,   # F: 季節アノマリー
+    "us_lead_signal":         0.03,   # G: JP×US先行シグナル（Wave 7調整）
+    "etf_heat":               0.01,   # H: テーマETF熱量（Wave 4調整）
+    "yield_curve":            0.01,   # I: イールドカーブ
+    "pearl_signal":           0.04,   # J: 光る原石スコア（Pearl Ph1）
+    "independence_signal":    0.04,   # K: Independence Score（Independence Ph1）
+    "politician_signal":      0.02,   # L: 議員取引シグナル（Wave 4調整）
+    "institutional_signal":   0.01,   # M: 機関投資家13Fシグナル（Policy Ph3）
+    "geo_signal":             0.04,   # N: 地政学×権益統合シグナル（Wave 6 - G-X）
+    "cluster_phase_bonus":    0.01,   # 技術クラスターフェーズボーナス（Wave 6 - B）
+    "hiring_signal":          0.01,   # O: 人材投資シグナル（Wave 6 - I-1）
+    "exec_transition":        0.01,   # P: 経営方針転換シグナル（Wave 6 - I-3）
+    "facility_signal":        0.01,   # Q: 設備投資シグナル（Wave 6 - I-4）
+    "standardization_signal": 0.01,   # R: 標準化動向シグナル（Wave 7）
+    "academic_signal":        0.01,   # S: 学術カンファレンスシグナル（Wave 7）
+    "midterm_signal":         0.01,   # T: 中計達成率シグナル（Wave 7）
+    "taxonomy_size_bonus":    0.01,   # U: taxonomy×size交差評価（Wave 7）
+    "taxonomy_signal":        0.02,   # V: node_hotness（Wave R2-6/T-5）
 }
 
 # ==============================================================
@@ -1835,15 +1882,38 @@ NET_CASH_RICH_THRESHOLD: float = 0.30  # ネットキャッシュ/時価総額 >
 # ==============================================================
 # BLOCK P-3: 長期保有候補フラグ設定
 # ==============================================================
-LONGTERM_HOLD_EQUITY_RATIO_MIN: float = 0.45  # 自己資本比率45%以上
-LONGTERM_HOLD_ROE_MIN:          float = 0.08  # ROE 8%以上
+# stock_screener._calc_longterm_hold_flag()（片山晃モデル「10年持てる銘柄」）
+# が参照する。is_longterm_hold は investment_journal / longterm_scenario /
+# screener の long_term_candidates が消費する。
+#
+# ★ 2026-07-25 バッチ1: ここの値は実装から一度も読まれておらず、
+#   stock_screener 側が 0.60 / 10.0 / 3 を直書きしていた。
+#   config を編集しても判定が変わらない状態だったため配線した。
+#   その際、健太の方針「実装時の値を正とする」に従い、
+#   0.45 → 0.60 / 0.08 → 0.10 へ書き換えた（＝判定結果は従来どおり）。
+#   ROE は比率で持つ（実装側で ×100 してパーセント比較する）。
+LONGTERM_HOLD_EQUITY_RATIO_MIN: float = 0.60  # 自己資本比率60%以上
+LONGTERM_HOLD_ROE_MIN:          float = 0.10  # ROE 10%以上（比率）
 LONGTERM_HOLD_MIN_CONDITIONS:   int   =  3    # 有効条件の最低充足数
+
+# [P-3 × R-5] 長期保有候補がいる業種で、長期スタンス判定の
+# long_high 閾値（既定65.0pt）をこのpt数だけ緩める（2026-07-25 追加）。
+# longterm_score は業種の10年シナリオ＝マクロの見立てだが、P-3 は
+# 「自己資本60%以上×増益基調×ROE10%以上」を満たす企業が実在するという
+# 銘柄レベルの実証。見立てに実物の裏付けが付く分だけ長期側の確信を上げる。
+# 0.0 にすれば P-3 はスタンス判定に影響しなくなる（従来挙動）。
+LONGTERM_HOLD_STANCE_RELAX_PT: float = 5.0
 
 # ==============================================================
 # BLOCK I-2: 会社予想保守度スコア設定
 # ==============================================================
 ENABLE_CONSERVATISM_SCORE: bool     = True
-CONSERVATISM_MIN_QUARTERS: int      = 4     # 最低何四半期で計算するか
+# ★ 2026-07-25 バッチ3: 4 → 8 に是正。
+#   実装（earnings_surprise.CONSERVATISM_QUARTERS）は 8 で動いており、
+#   ここの 4 は誰にも読まれていなかった（名前も値も食い違う二重定義）。
+#   健太の指示により実装値 8 を正として揃え、実装が本定数を読むよう配線した。
+#   ＝この是正で保守度スコアの計算結果は変わらない。
+CONSERVATISM_MIN_QUARTERS: int      = 8     # 保守度計算に使う四半期数
 ALERT_ON_HIGH_PROB_SURPRISE: bool   = True  # 決算サプライズ高確率候補アラート
 ALERT_ON_NEGATIVE_RISK: bool        = True  # ネガティブリスクアラート
 
@@ -1854,7 +1924,13 @@ ENABLE_CEO_EVALUATOR: bool    = True
 CEO_MIN_TENURE_YEARS: int     = 2      # 何年以上で暫定スコアを出すか
 CEO_QUALITY_BONUS_HIGH: float = 10.0   # ceo_score >= 80 → quality_score +10pt
 CEO_QUALITY_BONUS_MID:  float =  5.0   # ceo_score >= 65 → quality_score +5pt
-M_A_ROIC_THRESHOLD: float     = 0.08   # M&A のROIC基準（8%以上を成功とみなす）
+# M_A_ROIC_THRESHOLD は廃止（2026-07-25 バッチ3）。
+#   「M&A のROIC基準（8%以上を成功とみなす）」だったが、実装（軸③
+#   ceo_evaluator._axis3_capital_allocation）は ROIC ではなく
+#   **のれん減損比率**（goodwill_impairment / total_assets）を
+#   M&A成否の代理変数として採用しており、この定数を読むコードは存在しなかった。
+#   ROIC 自体は stock_detail_report.py が別途「ROIC推定」として算出・表示するが、
+#   M&A の成否判定には使っていない。設計変更の取り残しのため削除する。
 
 # ==============================================================
 # BLOCK I-4: 確信度別ポジションサイジング設定
@@ -1904,7 +1980,13 @@ ATTRIBUTION_LOOKBACK_W:   int  = 26      # 分析対象週数（半年）
 # ==============================================================
 # BLOCK I-5: 中期経営計画達成率トラッカー設定
 # ==============================================================
-ENABLE_MIDTERM_TRACKER:    bool  = True
+# ★ 2026-07-25 B-4: 有効フラグはここではなく BLOCK Wave7 の
+#   ENABLE_MIDTERM_PLAN_TRACKER が正本（midterm_plan_tracker.py /
+#   signal_aggregator.py / stock_analyzer_main.py が読むのはそちら）。
+#   ここに旧名 ENABLE_MIDTERM_TRACKER=True が残っており、正本側が False の
+#   ため「True にしたつもりで動かない」二重フラグの罠になっていた。
+#   実装から一度も読まれていなかったため旧名を削除する（挙動は不変）。
+#   フラグを切り替える場合は ENABLE_MIDTERM_PLAN_TRACKER を編集すること。
 MIDTERM_ACHIEVEMENT_HIGH:  float = 0.90   # 90%以上 → 高達成
 MIDTERM_ACHIEVEMENT_RISK:  float = 0.70   # 70%未満（最終2年前時点）→ 未達リスク
 
@@ -2004,9 +2086,20 @@ DEBT_CYCLE_EXPAND_THRESH:  int = 30  # スコア30以下 → レバレッジ拡�
 # ==============================================================
 # BLOCK A-1: IC トラッカー設定
 # ==============================================================
+# alpha_attributer.update_ic_tracker() が参照。直近12週の週次IC系列から
+# シグナルの安定性を判定する。learning_audit_log がその結果を読む。
+#
+# ★ 2026-07-25 バッチ4: 実装（alpha_attributer）が 0.80 / 3 を直書きしており、
+#   ここの2定数は誰にも読まれていなかったため配線した。値は実装と一致しており
+#   判定結果は変わらない。
 ENABLE_IC_TRACKER:         bool  = True
-IC_STABLE_MIN_RATE:        float = 0.80   # 80%以上でIC > 0 = 安定シグナル
-IC_REVIEW_CONSECUTIVE_NEG: int   =  3     # 3週連続IC < 0 で見直し推奨
+# 「直近12週のうち IC >= 0 だった週の比率」がこの値以上なら安定シグナル。
+# 例: 0.80 = 12週中10週以上でICが非負なら「安定して効いている」とみなす。
+# ICの大きさ（絶対値）ではなく“プラスであり続けた頻度”で見る点に注意。
+IC_STABLE_MIN_RATE:        float = 0.80
+# 直近この週数が連続で IC < 0 なら rule_optimizer 見直し推奨。
+# 判定に必要な最低週数も兼ねる（これ未満の系列は安定判定の対象外）。
+IC_REVIEW_CONSECUTIVE_NEG: int   =  3
 
 # ==============================================================
 # BLOCK A-2: コスト控除後リターン計算設定
@@ -2148,6 +2241,12 @@ US_MACRO_T10Y2Y_INVERT: float = 0.0      # 10Y-2Y<0 → 逆イールド（景気
 US_MACRO_ICSA_SPIKE_PCT: float = 15.0    # ICSA前月比+15%超 → 雇用悪化先行
 
 # Treasury API から国債残高を取得するか（APIキー不要）
+# ★ 2026-07-25 未実装の確認: Treasury API を叩いて treasury_debt を作る処理は
+#   どのモジュールにも存在しない。weekly_report_generator.py が
+#   us_macro["treasury_debt"] を「読む」側だけ実装済みで、書き手が無い状態。
+#   したがってこのフラグは現状どちらに倒しても効果がない。
+#   実装する場合は us_macro_pipeline.py に取得処理を追加し、その入口で
+#   このフラグを読むこと。
 ENABLE_TREASURY_DATA: bool = True
 
 # ==============================================================
@@ -2179,10 +2278,18 @@ ENABLE_US_SECTOR_BRIDGE: bool = True
 US_SECTOR_MAPPING_CACHE_DAYS: int = 30   # SICマッピングの再取得間隔
 
 # ==============================================================
-# BLOCK 問題C: EDINET × sector_tier 連携設定
+# BLOCK 問題C: EDINET × sector_tier 連携設定 —— 廃止（2026-07-25）
 # ==============================================================
-EDINET_TIER_TOP_BOOST:  int =  30   # TOP業種の優先度スコア加算
-EDINET_TIER_BOT_PENALTY: int = -20  # BOT業種の優先度スコア減算
+# EDINET_TIER_TOP_BOOST / EDINET_TIER_BOT_PENALTY を削除した。理由:
+#   - 業種tierでEDINET取得の優先度を加減点する設計だったが、
+#     edinet_rotation_manager.py は sector_tier を一度も参照しておらず、
+#     この2定数を読む実装はどこにも存在しなかった（設計だけで未実装）
+#   - legacy の業種別ローテーション自体が D-① で退役
+#     （ENABLE_EDINET_ROTATION=False）
+#   - 現行はEdinetDBを回してBQへ格納してから分析する方式に変更済みで、
+#     取得優先度は edinetdb_ingestor._priority_tickers() が
+#     「保有銘柄 → screener通過 → 業種代表」で決めており、業種tierを使わない
+#   - 健太に確認済み: 現行workflowへの影響なし
 
 # ==============================================================
 # BLOCK 問題D: 動的スクリーニング候補ビルダー設定
@@ -2321,8 +2428,11 @@ PEARL_TIER_BONUS: dict = {
     "B":   2.0,
 }
 
-# Ph1 で有効化するディメンション（D2・D5 は将来拡張用プレースホルダー）
-PEARL_ENABLED_DIMENSIONS: list = ["D1", "D3", "D4"]
+# PEARL_ENABLED_DIMENSIONS は廃止（2026-07-25 バッチ6）。
+# Ph1 で D1/D3/D4 のみ有効だった時代の名残。現行 Ph3 は D1〜D5 の5次元を
+# すべて使い（下の PEARL_DIMENSION_WEIGHTS が実際の重み）、
+# 実装 pearl_score_calculator は本定数を一度も参照していなかった。
+# 次元の有効/無効は重みを 0.0 にすることで表現する。
 
 # 各ディメンションの重み（合計 = 1.0）
 # D1: 方向性 / D3: 利益品質・M-Score proxy / D4: 発見ギャップ
@@ -2919,7 +3029,12 @@ GOV_TRADE_JOB_RULES: dict = {
 ATR_WINDOW                 = 14
 RISK_ADJ_PENALTY_LOW_VOL   = 0.85   # $risk\_adj = composite \times 0.85$ (低ボラ優遇)
 RISK_ADJ_PENALTY_HIGH_VOL  = 1.20   # $risk\_adj = composite \div 1.20$ (高ボラ割引)
-GARCH_ENABLED              = False   # True にすると ARCH ライブラリが必要
+# GARCH_ENABLED: True にすると ARCH ライブラリが必要
+# ★ 2026-07-25 未実装の確認: GARCH によるボラティリティ推定処理は
+#   どのモジュールにも存在しない（ARCH ライブラリも未導入・requirements 外）。
+#   現行のボラ調整は ATR_WINDOW ベースの RISK_ADJ_PENALTY_* が担う。
+#   実装する場合は arch を requirements に追加し、その入口で本フラグを読むこと。
+GARCH_ENABLED              = False
 
 # ── FE-2: アナリスト修正トラッカー ───────────────────────────────
 # ANALYST_REVISION_WINDOW_DAYS: upgrade/downgrade 集計ウィンドウ（日数）
@@ -2957,6 +3072,10 @@ IGNITION_MAX_SCORE_LINE_CRITICAL   = 3.5   # ≥ 3.5 かつ反復検出 → 最�
 IGNITION_CRITICAL_REPEAT_DAYS     = 14
 
 # カテゴリD（将来拡張用）
+# ★ 2026-07-25 未実装の確認: ignition_detector が持つのは
+#   _extract_category_a / _b / _c の3系統のみで、カテゴリD の抽出関数は
+#   存在しない。実装する場合は _extract_category_d を追加し、
+#   その入口で本フラグを読むこと。
 IGNITION_CATEGORY_D_ENABLED       = False
 
 # キャッシュ TTL
@@ -3721,7 +3840,18 @@ GEO_TAXONOMY_PROPAGATION: dict = {
 # 初回運用時は False で起動し、BQ に country_risk_daily / company_country_exposure
 # のデータが蓄積されてから True に切り替える。
 # True にすると base_agent.py と us_stock_screener.py が geo_impact_bonus を計算する。
-ENABLE_GEO_SIGNAL = False
+#
+# ★ 2026-07-25: False → True。
+#   これは「意図した停止」ではなく、供給側の配線漏れの結果だった。
+#   リスク側（country_risk_updater → country_risk_daily）は日次で動いていたが、
+#   権益側（jogmec / sec_geo / edinet_exposure → company_country_exposure）に
+#   呼び出しが1つも無く、join 相手が空でボーナスが常に0だったため False のまま
+#   置かれていた。供給側を geo_exposure_runner.py として配線したので有効化する。
+#
+#   有効化の安全性: exposure がまだ空の間も、aggregate_geo_signal() は
+#   データ0件で None を返し、signal_aggregator は w_geo=0.0 として
+#   既存7シグナルで再正規化する。したがってデータが溜まるまでスコアは変わらない。
+ENABLE_GEO_SIGNAL = True
 
 # geo_signal の signal_aggregator での重み（DEFAULT_WEIGHTS に追加）
 # signal_aggregator.py の DEFAULT_WEIGHTS 合計=1.00 を維持するため
@@ -3740,6 +3870,12 @@ GEO_SIGNAL_WEIGHT = 0.04   # 4%（pearl_signal の 5% から 1% 移譲相当）
 
 # geo_signal の analytics.company_scores への書き込み有効フラグ
 # True にすると run_all_tasks() 後に geo_impact_bonus を BQ に書き込む
+#
+# ★ 2026-07-25 未実装の確認: このフラグが指す「analytics.company_scores への
+#   書き込み」処理は、どのモジュールにも実装が存在しない（フラグだけが先に
+#   置かれた状態）。したがって True にしても何も起きない。
+#   geo_impact_bonus 自体は results と週次レポートに載るため、日次分析には
+#   影響しない。BQ 永続化が必要になった時点で実装すること。
 ENABLE_GEO_SCORE_PERSIST = False   # 初期は False（BQ 書き込みコスト削減）
 
 # ── Wave 6 - G-N: ALL_DIRS への Wave 6 フォルダ追加 ──────────────
@@ -4080,8 +4216,15 @@ MIDTERM_PLAN_TARGETS: dict | None = None  # 本番時は実際の中計目標を
 
 # ── Wave7-D: 規模別シグナル減衰管理（size_decay_manager.py）────
 
-# size_decay_state.json / nano_evaluation_queue.json の TTL（日）
-SIZE_DECAY_TTL_DAYS: int = 7
+# SIZE_DECAY_TTL_DAYS は廃止（2026-07-25 バッチ5）。
+#   size_decay_state.json / nano_evaluation_queue.json の「TTL」だったが、
+#   size_decay_manager にキャッシュ期限で捨てる処理は存在せず、
+#   モジュール側の _DEFAULT_TTL_DAYS=7 も定義だけで未使用だった。
+#   古さの扱いは TTL による破棄ではなく **指数減衰**に置き換わっている:
+#     calc_decay_factor() が days_elapsed から decay = e^(-λt) を計算し、
+#     古いシグナルほど連続的に効きを弱める（Tier別λは下の
+#     SIZE_DECAY_LAMBDA で制御）。
+#   TTLで一律に捨てると減衰履歴ごと失われるため、実装せず削除する。
 
 # Tier 別減衰定数 λ（$decay = e^{-\\lambda t}$）
 SIZE_DECAY_LAMBDAS: dict = {
@@ -4174,47 +4317,76 @@ WAVE7_DAILY_MODULE_ORDER: list = [
     "latent_pearl_manager",
 ]
 
-# WEEKLY_MODULES 実行順（標準化 → 学術 → 中計）
+# WEEKLY_MODULES 実行順（中計 → 学術 → 標準化）
+# ★ 2026-07-25 バッチ5: 宣言順が実コードの実行順と**完全に逆**だったため是正。
+#   この2定数は誰にも読まれておらず、宣言と実装のズレに気づけない状態だった
+#   （pipeline_registry_gen --audit に整合検査を追加して検出）。
+#   実装が正: midterm_plan_tracker は screener 段（order 3830）で走る。
+#   中計達成率は pearl_score_calculator の D3ボーナス
+#   （ENABLE_D3_MIDTERM_INTEGRATION）が参照するため screener より前に
+#   確定している必要がある。残る2本は signal_aggregator 段（5035/5056）。
 WAVE7_WEEKLY_MODULE_ORDER: list = [
-    "industry_standard_tracker",
-    "academic_conf_tracker",
     "midterm_plan_tracker",
+    "academic_conf_tracker",
+    "industry_standard_tracker",
 ]
 
 # ── Wave7-K: Feature Flag（全Wave 7モジュールのON/OFF制御）─────
+# ★ 2026-07-25 バッチ5: 健太の指示により Wave 7 を稼働させる。
+#   7モジュールとも実装・pipeline_registry への配線・テストまで揃っており、
+#   「本番確認後ONに変更」のまま放置されていただけだった。
+#   同時に size_decay_manager / cross_size_signal の mode-key 不一致
+#   （_in_mode("size_tier") に対し DAILY_MODULES に "size_tier" が無い）も
+#   是正済み。DAILY_MODULES の末尾を参照。
+#
+#   【スコアへの影響】ON にすると以下が composite/pearl スコアに効き始める:
+#     - independence_score / cross_size_signal → signal_aggregator のカテゴリ
+#     - latent_pearl 昇格ボーナス（ENABLE_LATENT_PEARL_BONUS 経由・最大+8pt）
+#     - midterm 達成率 → D3ボーナス（ENABLE_D3_MIDTERM_INTEGRATION 経由）
+#   いずれも上流データが溜まるまでは 0.0 のままなので、初回から大きく動くことはない。
 
-# 標準化トラッカー有効フラグ（デフォルトOFF: 本番確認後ONに変更）
-ENABLE_STANDARDIZATION_TRACKER: bool = False
+# 標準化トラッカー有効フラグ
+ENABLE_STANDARDIZATION_TRACKER: bool = True
 
 # 学術カンファレンス追跡有効フラグ
-ENABLE_ACADEMIC_CONF_TRACKER: bool = False
+ENABLE_ACADEMIC_CONF_TRACKER: bool = True
 
 # 中計トラッカー有効フラグ
-ENABLE_MIDTERM_PLAN_TRACKER: bool = False
+ENABLE_MIDTERM_PLAN_TRACKER: bool = True
 
 # 規模別減衰管理有効フラグ
-ENABLE_SIZE_DECAY_MANAGER: bool = False
+ENABLE_SIZE_DECAY_MANAGER: bool = True
 
 # 規模帯横断シグナル有効フラグ
-ENABLE_CROSS_SIZE_SIGNAL: bool = False
+ENABLE_CROSS_SIZE_SIGNAL: bool = True
 
 # 市場独立性スコア有効フラグ
-ENABLE_INDEPENDENCE_SCORE: bool = False
+ENABLE_INDEPENDENCE_SCORE: bool = True
 
 # 潜伏銘柄管理有効フラグ
-ENABLE_LATENT_PEARL_MANAGER: bool = False
+ENABLE_LATENT_PEARL_MANAGER: bool = True
+
+# ── D3統合・潜伏Pearlボーナスの有効フラグ（2026-07-25 配線＋値の是正）──
+# ★ 重要: 下記4フラグは False と書かれていたが、pearl_score_calculator.py が
+#   一度も読んでおらず、実際には全て「常時適用」で動いていた。
+#   2026-07-25 に実装側へ配線したうえで、値を現行の挙動（＝適用する）に
+#   合わせて True へ揃えた。これによりスコアは変わらない。
+#   ここを False にすると、今度は本当にボーナスが止まる。
+#   なお各ボーナスは上流データが無ければ 0.0 になるため、
+#   ENABLE_INDEPENDENCE_SCORE / ENABLE_MIDTERM_PLAN_TRACKER 等が False の
+#   現状では catalyst / midterm ボーナスは実質発火しない。
 
 # D3 EDINET セグメント統合有効フラグ
-ENABLE_D3_EDINET_SEGMENT: bool = False
+ENABLE_D3_EDINET_SEGMENT: bool = True
 
 # D3 中計連携有効フラグ
-ENABLE_D3_MIDTERM_INTEGRATION: bool = False
+ENABLE_D3_MIDTERM_INTEGRATION: bool = True
 
 # D3 カタリスト連携有効フラグ
-ENABLE_D3_CATALYST_INTEGRATION: bool = False
+ENABLE_D3_CATALYST_INTEGRATION: bool = True
 
 # 潜伏Pearl昇格ボーナス有効フラグ
-ENABLE_LATENT_PEARL_BONUS: bool = False
+ENABLE_LATENT_PEARL_BONUS: bool = True
 # ==============================================================
 # BLOCK 38: 観測性 — モジュール実行台帳設定（Wave OBS-1）
 # ==============================================================
@@ -4233,6 +4405,11 @@ LEDGER_HISTORY_DAYS: int = 14       # 連続失敗・最終成功日の遡及日
 # vault パスはローカル実行専用（GitHub Actions では使用しない）。
 
 ENABLE_INVESTMENT_DEPT: bool = True
+# ── 隔週審議の間隔（2026-07-25 追加）──────────────────────────
+# deliberation_scheduler.py が参照。launchd は毎週日曜20:00に起動するが、
+# 実際に走らせるかはこの間隔で判定する（launchd に隔週指定が無いため）。
+# 前回実行日は stock_data/data/deliberation_state.json に残る。
+DELIBERATION_INTERVAL_DAYS: int = 14
 # V-01=a決定（2026-07-12）: 実働正本はローカル側 Vault2_ClaudeCode_Local。
 # 旧iCloud側 Vault2_ClaudeCode は2026-06-12凍結（凍結READMEを設置済み・書込禁止）。
 INVESTMENT_DEPT_VAULT_DIR: str = os.getenv(
@@ -4395,6 +4572,12 @@ ENABLE_PAPER_TRADING: bool = True
 PAPER_INITIAL_CAPITAL: int = 2_000_000    # 戦略別の初期仮想資金（円）
 PAPER_STRATEGIES: list = ["screener_topN", "ignition", "pead"]
 # S6(commodity)はR4-2実装後に、S4(options)はIBKRペーパー利用のため対象外
+# ★ 2026-07-25: playbooks/*.yaml 由来のイベント戦略（R4-1 / S5）は
+#   paper_broker が adapter 登録済みのものを自動で対象に加える。
+#   ここに書かなくてよい（YAMLを置けば口座ができるのが設計意図）。
+#   従来は adapter だけ登録され PAPER_STRATEGIES に無いため口座が作られず、
+#   earnings_beat_momentum / pead_long_v1 / tdnet_buyback の3本が空回りしていた。
+PAPER_INCLUDE_PLAYBOOK_STRATEGIES: bool = True
 PAPER_LEDGER_PATH: str = "stock_data/paper"   # accounts.json / events.jsonl の置き場
 
 # ==============================================================
@@ -4423,6 +4606,19 @@ ENABLE_TAXONOMY_SIGNAL: bool = True
 TAXONOMY_HOTNESS_BASELINE_DAYS: int = 20   # 加熱判定のベースライン日数
 TAXONOMY_LEADING_ONLY_TH: float = 65.0     # 「先行だけ点灯」の先行閾値
 TAXONOMY_MARKET_DEFAULT: str = "JP"        # T-3 get_company_taxonomy_scores の既定market
+
+# ── taxonomy 台帳の定期投入（2026-07-25 追加）────────────────
+# taxonomy_loader.py（T-1後半 / R2-1）と taxonomy_company_mapper.py
+# （T-2A / R2-3）の有効フラグ。
+# 【背景】どちらも実装・テストまで揃っていたのに GitHub Actions にも
+# launchd にも登録が無く、承認済みseed 293ノードが BQ に入らないまま
+# taxonomy 信号が空を参照していた（2026-07-25 の棚卸しで判明）。
+# 週次（月曜）に daily_run.yml から実行する。どちらも node_id /
+# (company_id, node_id) キーの MERGE で冪等。
+# taxonomy_loader は _meta.status が APPROVED のバッチしか投入しないため、
+# 自動実行でも未承認データが入ることはない。
+ENABLE_TAXONOMY_LOADER: bool = True
+ENABLE_TAXONOMY_COMPANY_MAPPER: bool = True
 
 # ==============================================================
 # BLOCK 49: ドローダウン制御設定（Wave R3-3 / E9）
@@ -4522,12 +4718,26 @@ ML_META_DATASET_MAX_DAYS: int = 500  # features.jsonl の保持日数（古い�
 ENABLE_ML_META_DATASET: bool = True  # 特徴量スナップショット蓄積（学習用・補正はしない）
 
 # ==============================================================
-# BLOCK 56: JP/US共通スコア設定（Wave R5-2 Phase A / E10）
+# BLOCK 56: JP/US共通スコア設定（Wave R5-2 Phase A / E10・Phase B / U-9）
 # ==============================================================
 # score_calculator.py が参照。SPEC_core §8-2 の統合方針の第一段階。
 # Phase A対象 = 保有銘柄 ＋ us_screener 上位N のみ（要件定義書 §R5-2）。
+# 対象ユニバースは Phase B でも拡大しない（決定 J-03=a / 2026-07-27）。
 ENABLE_SCORE_CALCULATOR: bool = True
 UNIFIED_SCORE_US_TOP_N: int = 50     # us_screener からの対象上位件数
+
+# ── Phase B（U-9 / 2026-07-28）: 共通成分による調整 ──────────────
+# composite = clamp(base + dcf_adj + tech_adj + geo_adj, 0, 100)
+# 各成分は results（technical_scorer / dcf_valuation / sectors 等）から
+# 「読むだけ」で取得する。score_calculator は yfinance / BQ を叩かない。
+# 成分が取れない銘柄は当該成分を 0 として base のみで算出するため、
+# 全滅しても Phase A から劣化しない。
+# ★ UNIFIED_SCORE_PHASE_B_ENABLED=False で Phase A と完全に同じ出力へ戻る
+#   （非常口。tests/test_score_calculator.py が同値性を保証）。
+UNIFIED_SCORE_PHASE_B_ENABLED: bool = True
+UNIFIED_SCORE_DCF_MAX_ADJ:  float = 5.0   # DCF調整の上限（±pt）
+UNIFIED_SCORE_TECH_MAX_ADJ: float = 5.0   # テクニカル調整の上限（±pt）
+UNIFIED_SCORE_GEO_MAX_ADJ:  float = 3.0   # 地政学調整の上限（±pt）
 
 # ==============================================================
 # BLOCK 57: APIキー生存判定設定（Issue J-2 / api_key_health）
@@ -4539,3 +4749,705 @@ UNIFIED_SCORE_US_TOP_N: int = 50     # us_screener からの対象上位件数
 # （True にした時のみ CSE を num=1 で1件だけ実クエリして判定する）。
 ENABLE_KEY_HEALTH: bool = True
 KEY_HEALTH_CSE_ENABLED: bool = False
+
+# ==============================================================
+# BLOCK 58: 月次・四半期ランナー設定（2026-07-25 / B-5）
+# ==============================================================
+# monthly_runner.py が参照。月初に走る「提案・レビュー系」を1本に束ねる。
+# 設計上ここが唯一の実行主体で、GitHub Actions（daily_run.yml の月初判定）と
+# 司令塔シェル（invest-monthly）の両方から同じコマンドで起動される。
+#
+# 【背景】2026-07-25 の棚卸しで、月次設計のモジュール群
+# （signal_culling_report / monthly_strategy_review / commodity_rotation /
+#  allocation_meta / paper/monthly_report / tax_optimizer）に
+# GitHub Actions・launchd のどちらにも実行主体が無く、設計だけあって
+# 一度も走っていなかったことが判明したため新設した。
+#
+# 対象月は既定で「前月」。月初1日に走らせて、閉じたばかりの月を
+# レビューする運用のため（commodity_rotation だけは翌月への配分提案なので当月）。
+ENABLE_MONTHLY_RUNNER: bool = True
+# 各ステップの個別スイッチ。False にするとそのステップだけスキップされる。
+ENABLE_SIGNAL_CULLING: bool = True          # E4 シグナル淘汰レポート（月次）
+ENABLE_MONTHLY_STRATEGY_REVIEW: bool = True  # E12 月次戦略レビュー（集約・最後に実行）
+# tax_optimizer を走らせる月（四半期＋11月末の枠取り前）。
+TAX_OPTIMIZER_MONTHS: tuple = (1, 4, 7, 10, 11)
+# 月初判定の許容日（1〜この日までを「月初」とみなす。Actions障害の翌日復旧を許容）
+MONTHLY_RUN_MAX_DAY: int = 3
+
+# ==============================================================
+# BLOCK 59: 実装モジュール定数の集約（2026-07-25 SSOT移設 第1弾）
+# ==============================================================
+# 【背景】Colab で1ファイルずつ書き足していた名残で、各モジュールが
+# 自分用の閾値定数を持ったまま config へ集約されず、
+# 「config を編集しても効かない」状態のものが543件あった（棚卸しレポート参照）。
+# 本ブロックはそのうち **スコアに直結する優先度1の中核** を移設したもの。
+#
+# 【取り込み方式】各モジュールが config_sync.sync_module_constants() を
+# run_* の冒頭で1回呼び、モジュール定数を上書きする。
+# 参照箇所（数十箇所）を書き換えないため差分が小さく、リスクが低い。
+#
+# 【値】すべて移設時点の実装値と同一。したがって挙動は変わらない。
+# 命名はモジュール別プレフィックスで衝突を避けている。
+
+# ── market_breadth.py（市場幅指標 [3-7]）────────────────────
+MB_SCORE_HEALTHY_THRESH: float = 70.0   # これ以上で「healthy」判定
+MB_SCORE_WEAK_THRESH:    float = 30.0   # これ以下で「weak」判定
+MB_SCORE_HEALTHY_BONUS:  float =  3.0   # healthy 時の composite 加点
+MB_SCORE_WEAK_PENALTY:   float = -5.0   # weak 時の composite 減点
+MB_DIVERGENCE_PENALTY:   float = -3.0   # 指数と幅の乖離時の減点
+# 4指標の合成ウェイト（合計 1.00）
+MB_WEIGHT_AD_RATIO:      float = 0.30   # 騰落レシオ
+MB_WEIGHT_NH_RATIO:      float = 0.25   # 新高値/新安値
+MB_WEIGHT_MA200_RATIO:   float = 0.30   # 200日線超え銘柄比率
+MB_WEIGHT_RSI50_RATIO:   float = 0.15   # RSI50超え銘柄比率
+MB_MA200_PERIOD:         int   = 200    # 長期移動平均の期間（営業日）
+MB_RSI_PERIOD:           int   = 14     # RSI 期間
+MB_NH_NL_PERIOD:         int   = 252    # 新高値/新安値の観測期間（約1年）
+MB_CACHE_HOURS:          int   = 24     # キャッシュ有効時間
+
+# ── volume_profile.py（出来高プロファイル [4-7]）─────────────
+VP_LOOKBACK_DAYS:        int   = 60     # プロファイル構築の遡及日数
+VP_HVN_MULTIPLIER:       float = 1.5    # 平均比これ以上で HVN（高出来高帯）
+VP_LVN_MULTIPLIER:       float = 0.5    # 平均比これ以下で LVN（低出来高帯）
+VP_BONUS_ABOVE_VAH:      float = 10.0   # 価値エリア上限超え → 加点
+VP_PENALTY_BELOW_VAL:    float = -10.0  # 価値エリア下限割れ → 減点
+VP_BONUS_POC_CHEAP:      float =  8.0   # POC より割安 → 加点
+VP_PENALTY_POC_DEAR:     float = -8.0   # POC より割高 → 減点
+VP_BONUS_HVN:            float =  5.0   # HVN 圏内 → 加点
+VP_PENALTY_LVN:          float = -5.0   # LVN 圏内 → 減点
+VP_POC_DEVIATION_THRESH: float = 0.05   # POC 乖離の判定閾値（±5%）
+VP_CACHE_HOURS:          int   = 24
+
+# ── support_resistance.py（サポレジ検出 [4-6]）───────────────
+SR_LOOKBACK_52W:         int   = 252    # 52週高安の観測期間（営業日）
+SR_LOOKBACK_VWAP:        int   = 20     # VWAP の算出期間
+SR_PEAK_WINDOW:          int   = 5      # ピーク検出のウィンドウ
+SR_BREAKOUT_THRESH:      float = 0.95   # レジスタンス比これ以上で上抜け間近
+SR_BOTTOM_THRESH:        float = 1.10   # サポート比これ以下で底値圏
+SR_BONUS_BREAKOUT:       float = 20.0   # 上抜け → 加点
+SR_BONUS_UPPER_ZONE:     float =  8.0   # 上方ゾーン → 加点
+SR_BONUS_BOTTOM_ZONE:    float = 12.0   # 底値圏 → 加点（逆張り妙味）
+SR_BONUS_VWAP_ABOVE:     float =  5.0   # VWAP 上 → 加点
+SR_PENALTY_VWAP_BELOW:   float = -5.0   # VWAP 下 → 減点
+SR_BONUS_RESISTANCE_BREAK: float = 10.0 # レジスタンス突破 → 加点
+SR_CACHE_HOURS:          int   = 24
+
+# ── technical_scorer.py（テクニカルスコア）───────────────────
+TS_RSI_PERIOD:           int   = 14
+TS_BB_PERIOD:            int   = 20     # ボリンジャーバンド期間
+TS_CACHE_HOURS:          int   = 24
+# 総合スコアの合成ウェイト（合計 1.00）
+TS_WEIGHT_SECTOR:        float = 0.35
+TS_WEIGHT_VALUE:         float = 0.25
+TS_WEIGHT_QUALITY:       float = 0.20
+TS_WEIGHT_TECHNICAL:     float = 0.20
+
+# ── SSOT移設 第2弾（優先度1・2026-07-26）────────────────────
+# 値は各実装モジュールの移設前既定値と同一。run_* の入口で config_sync が
+# 実行時の設定を取り込むため、環境変数による上書きも反映される。
+
+# rule_optimizer.py
+RO_WEIGHT_MIN: float = 0.30
+RO_WEIGHT_MAX: float = 2.00
+RO_WEIGHT_INIT: float = 1.00
+RO_DEFAULT_SIGNAL_WEIGHTS: dict = {
+    "macro_phase_weight": 0.20, "sector_composite_weight": 0.20,
+    "momentum_weight": 0.15, "earnings_accel_weight": 0.15,
+    "quality_weight": 0.10, "technical_weight": 0.10,
+    "activist_weight": 0.10,
+}
+RO_SIGNAL_WEIGHT_EMA_ALPHA: float = 0.05
+RO_SIGNAL_WEIGHT_MIN: float = 0.05
+RO_SIGNAL_WEIGHT_MAX: float = 0.40
+RO_FACTOR_WEIGHT_EMA: float = 0.10
+
+# earnings_surprise.py
+ES_QUARTER_WEIGHTS: list = [0.40, 0.30, 0.20, 0.10]
+ES_BONUS_CONSEC_POS2: float = 5.0
+ES_BONUS_CONSEC_POS1: float = 2.0
+ES_PENALTY_CONSEC_NEG2: float = -5.0
+ES_PENALTY_CONSEC_NEG1: float = -2.0
+ES_SURPRISE_COMBO_ACCEL_MIN: float = 70.0
+ES_SURPRISE_COMBO_CONSERV_MIN: float = 70.0
+
+# latent_pearl_manager.py（重み・昇格閾値は既存 LATENT_PEARL_* を継続）
+LATENT_PEARL_CONDITION_A_INDEP_MIN: float = 65.0
+LATENT_PEARL_CONDITION_A_CATALYST_MIN: float = 3.0
+LATENT_PEARL_CONDITION_B_STRENGTH_MIN: float = 3.0
+LATENT_PEARL_CONDITION_D_MIDTERM_MIN: float = 80.0
+LATENT_PEARL_CROSS_SIGNAL_NORM_MAX: float = 10.0
+
+# anomaly_detector.py（既存 ANOMALY_* へIQR判定を追加）
+ANOMALY_IQR_MULTIPLIER: float = 1.5
+
+# insider_monitor.py
+IM_CONSECUTIVE_THRESH: int = 2
+IM_BONUS_BUY_SINGLE: float = 3.0
+IM_BONUS_BUY_CONSEC: float = 6.0
+IM_PENALTY_SELL_SINGLE: float = -3.0
+IM_PENALTY_SELL_CONSEC: float = -6.0
+IM_BONUS_LARGE_HOLDING: float = 4.0
+
+# politician_signal_scorer.py
+PSS_SENATE_COMMITTEE_MULTIPLIER: dict = {
+    "finance": 1.8, "banking, housing, and urban affairs": 1.7, "banking": 1.7,
+    "budget": 1.5, "appropriations": 1.5, "armed services": 1.6,
+    "intelligence": 1.6, "homeland security and governmental affairs": 1.4,
+    "commerce, science, and transportation": 1.5, "commerce": 1.5,
+    "energy and natural resources": 1.4, "environment and public works": 1.3,
+    "foreign relations": 1.4, "judiciary": 1.3,
+    "health, education, labor, and pensions": 1.2,
+    "agriculture, nutrition, and forestry": 1.2,
+    "small business and entrepreneurship": 1.1,
+}
+PSS_HOUSE_COMMITTEE_MULTIPLIER: dict = {
+    "ways and means": 1.6, "financial services": 1.5, "intelligence": 1.5,
+    "armed services": 1.4, "energy and commerce": 1.4, "foreign affairs": 1.3,
+    "judiciary": 1.2, "appropriations": 1.2,
+    "science, space, and technology": 1.2, "natural resources": 1.2,
+    "agriculture": 1.1, "transportation and infrastructure": 1.1,
+    "oversight and accountability": 1.1, "homeland security": 1.2, "rules": 1.1,
+}
+PSS_VOTE_CATEGORY_MAX_BONUS: dict = {
+    "tax": 15.0, "semiconductor": 12.0, "defense": 12.0, "healthcare": 10.0,
+    "energy": 10.0, "trade": 10.0, "financial": 8.0, "other": 5.0,
+}
+PSS_L4_SCORE_THRESHOLD: float = 80.0
+PSS_L4_MULTIPLIER: float = 0.5
+PSS_SENATE_CHAMBER_BONUS: float = 5.0
+
+# screener_feedback_loop.py
+SFL_MAX_EDINET_BONUS: float = 8.0
+SFL_MAX_EDINET_PENALTY: float = -8.0
+SFL_CREDIT_WEIGHT: float = 0.40
+SFL_CAGR_WEIGHT: float = 0.25
+SFL_ROE_TREND_WEIGHT: float = 0.20
+SFL_DEBT_WEIGHT: float = 0.15
+
+# options_monitor.py（IV_SPIKE_THRESHOLD は既存設定を継続）
+OM_PCR_FEAR_THRESH: float = 1.2
+OM_PCR_GREED_THRESH: float = 0.6
+OM_TERM_CONTANGO_RATIO: float = 0.90
+OM_TERM_BACKWD_RATIO: float = 1.10
+OM_TERM_SCORE_WEIGHT: float = 0.20
+
+# credit_data.py（既存 CREDIT_* 閾値へ注意・補正値を追加）
+CREDIT_CAUTION_THRESHOLD: float = 6.0
+CREDIT_BONUS_SQUEEZE: float = 3.0
+CREDIT_PENALTY_OVERHEAT: float = -5.0
+
+# ignition_detector.py（既存 IGNITION_* 設定へカテゴリ検出閾値を追加）
+IGNITION_CATEGORY_DETECT_THRESHOLD: float = 0.30
+
+# ── SSOT移設 第3弾（優先度1・2026-07-26）────────────────────
+# 実装モジュールの既定値を集約。各入口で config_sync が値を取り込む。
+ACT_ACADEMIC_SCORE_MAX: float = 100.0
+AA_IC_HIGH_THRESHOLD: float = 0.10
+AA_IC_MID_THRESHOLD: float = 0.05
+AA_IC_NEG_THRESHOLD: float = 0.00
+BCP_RECESSION_WEIGHTS: dict = {
+    "inversion_2y10y": 40, "inversion_3m10y": 30,
+    "inversion_days": 20, "yield_drop_speed": 10,
+}
+CFM_STALE_THRESHOLD: float = 0.30
+CFM_IGNORE_THRESHOLD: float = 0.05
+CC_CATALYST_BONUS_MAX: float = 5.0
+CC_TRIPLE_THRESHOLD: int = 3
+CEO_TENURE_OBSERVING_MAX: float = 1.0
+CEO_TENURE_FULL_MIN: float = 4.0
+CEO_ACTIVIST_RENEWAL_THRESHOLD: float = 60.0
+CM_DEFAULT_STAGE_MULTIPLIER: dict = {
+    "introduced": 0.2, "committee": 0.4, "floor_vote": 0.7,
+    "passed": 0.9, "signed": 1.0,
+}
+CH_HIGH_CORR_THRESH: float = 0.8
+CH_LOW_CORR_THRESH: float = -0.5
+CRU_GDELT_CIRCUIT_THRESHOLD: int = 3
+CSS_SOURCE_SIGNAL_THRESHOLD: float = 5.0
+CSS_NANO_CONTRARIAN_CONFIDENCE_MAX: float = 0.55
+DC_BONUS_UPCOMING_30D: float = 3.0
+DC_PENALTY_POST_EX: float = -2.0
+DD_DEFAULT_SPIKE_THRESHOLD: float = 20.0
+FCM_CROWDING_THRESHOLD: float = 0.6
+FCM_UNWIND_THRESHOLD: float = 0.4
+FCM_CROWDING_SCORE_CAP: int = 100
+GTP_TREND_TAILWIND_THRESHOLD: int = 60
+GTP_TREND_HEADWIND_THRESHOLD: int = 40
+GTP_TREND_MOM_BOOST_THRESHOLD: float = 0.2
+ISC_ALPHA_SCORE_MAX_ANNUAL: float = 0.3
+ISC_CATALYST_SCORE_MAX: float = 10.0
+ISC_COMBINED_WEIGHTS: dict = {"independence": 0.7, "catalyst": 0.3}
+IE_THRESHOLDS: dict = {
+    "vix_fear": 25.0, "vix_crisis": 35.0, "vix_calm": 15.0,
+    "pcr_fear": 1.2, "pcr_greed": 0.6, "us10y_high": 4.5, "us10y_low": 3.5,
+    "yen_weak": 148.0, "yen_strong": 135.0, "oil_high": 85.0,
+    "recession_risk": 60, "recession_low": 30, "breadth_healthy": 65,
+    "breadth_weak": 35, "arxiv_hot": 70,
+}
+I13F_CHANGE_MULTIPLIER: dict = {
+    "new_position": 1.0, "increased": 0.5, "decreased": -0.5,
+    "sold": -1.0, "unchanged": 0.0,
+}
+JUSC_CORR_THRESHOLD: float = 0.7
+LS_DEFAULT_WEIGHTS: dict = {
+    f"{t}_{g}_{j}": 1.0 / 9
+    for t in ("fast", "standard", "slow")
+    for g in ("cooperation", "decoupling", "conflict")
+    for j in ("revival", "stagnation", "transform")
+}
+LS_STANCE_THRESHOLDS: dict = {"long_high": 65.0, "short_high": 60.0}
+MPT_TRAJECTORY_THRESHOLDS: dict = {
+    "ahead": 1.1, "on_track": 0.9, "behind": 0.7, "critical": 0.0,
+}
+MPT_METRIC_WEIGHTS: dict = {
+    "net_sales": 0.25, "operating_income": 0.3, "operating_margin": 0.2,
+    "roe": 0.15, "roa": 0.1,
+}
+MLSC_ML_CORRECTION_MAX: float = 5.0
+MLSC_TRAIN_WEEKS_MIN: int = 26
+NSS_FUZZY_THRESHOLD: float = 0.82
+PM_PEAD_SCORE_ALERT: float = 5.0
+PM_PEAD_VOLUME_MIN: float = 1.5
+PM_MIN_SURPRISE_BONUS: float = 0.5
+PTR_SCORE_CORR_MIN_N: int = 5
+PR_SOURCE_WEIGHTS: dict = {
+    "閣議決定": 1.0, "内閣決定": 1.0, "首相": 0.9, "総理": 0.9,
+    "経済対策": 0.85, "大臣": 0.7, "副大臣": 0.6,
+    "パブリックコメント": 0.6, "パブコメ": 0.6, "中間報告": 0.4,
+    "審議会": 0.4, "諮問": 0.35, "検討": 0.25, "研究会": 0.2,
+    "議員立法": 0.3, "委員会": 0.35,
+}
+PR_CUMULATIVE_THRESHOLD_FOR_L3: int = 3
+PT_L3_SOURCE_THRESHOLD: int = 3
+PT_L3_REALIZATION_SCORE_THRESHOLD: float = 1.5
+PMON_COMMITTEE_MULTIPLIER: dict = {
+    "ways and means": 1.6, "financial services": 1.5, "intelligence": 1.5,
+    "armed services": 1.4, "energy and commerce": 1.4, "foreign affairs": 1.3,
+    "judiciary": 1.2, "appropriations": 1.2,
+    "science, space, and technology": 1.2, "natural resources": 1.2,
+    "agriculture": 1.1,
+}
+PDF_CORR_THRESHOLD_DEFAULT: float = 0.7
+PDF_HHI_ALERT_THRESHOLD: float = 0.3
+PO_REBALANCE_THRESH: float = 0.05
+PORTFOLIO_LOOKBACK_DAYS: int = 252
+PORTFOLIO_MIN_RETURN_OBSERVATIONS: int = 60
+PS_ATR_MULTIPLIER: float = 2.0
+PS_CONVICTION_THRESHOLDS: list = [90, 75, 60, 45]
+PS_CONVICTION_MULTIPLIERS: dict = {5: 1.5, 4: 1.0, 3: 0.7, 2: 0.4, 1: 0.0}
+RD_CONF_ADJ_MAX: float = 0.2
+RD_CONF_ADJ_MIN: float = -0.15
+RD_TRANSITION_ALERT_PROB_THRESHOLD: float = 0.6
+SCB_EDINET_CREDIT_THRESHOLD: int = 80
+SSH_SCORE_TREND_WEEKS: int = 13
+SE_PEARL_HIT_ALPHA_THRESHOLD: float = 3.0
+SHA_INST_HIGH_THRESHOLD: float = 70.0
+SHA_INST_LOW_THRESHOLD: float = 20.0
+SD_SCORE_MAX_TOTAL_ADJ_POS: float = 20.0
+SD_SCORE_MAX_TOTAL_ADJ_NEG: float = -20.0
+SDM_DEFAULT_THRESHOLDS_JP: dict = {
+    "Large": 10000.0, "Mid": 1000.0, "Small": 100.0, "Micro": 50.0, "Nano": 0.0,
+}
+SDM_DEFAULT_THRESHOLDS_US: dict = {
+    "Large": 1000.0, "Mid": 200.0, "Small": 20.0, "Micro": 5.0, "Nano": 0.0,
+}
+SDM_TIER_COMPOSITE_WEIGHTS: dict = {
+    "Large": {"sector_score": 0.45, "value_score": 0.25, "quality_score": 0.3},
+    "Mid": {"sector_score": 0.4, "value_score": 0.3, "quality_score": 0.3},
+    "Small": {"sector_score": 0.33, "value_score": 0.3, "quality_score": 0.37},
+    "Micro": {"sector_score": 0.25, "value_score": 0.3, "quality_score": 0.45},
+    "Nano": {"sector_score": 0.2, "value_score": 0.25, "quality_score": 0.55},
+}
+SDM_SECTOR_WEIGHT_MULTIPLIER: dict = {
+    "Large": 1.0, "Mid": 1.0, "Small": 0.9, "Micro": 0.65, "Nano": 0.4,
+}
+SDM_EFFECTIVE_SIGNAL_MIN_THRESHOLD: float = 0.1
+SDM_NANO_PRIORITY_WEIGHTS: dict = {
+    "liquidity_rank_norm": 0.3, "roe_excess_norm": 0.25,
+    "days_in_queue": 0.2, "taxonomy_correction": 0.25,
+}
+STC_DEFAULT_THRESHOLDS_JP: dict = {
+    "Large": 10000, "Mid": 1000, "Small": 100, "Micro": 50, "Nano": 0,
+}
+STC_DEFAULT_THRESHOLDS_US: dict = {
+    "Large": 1000, "Mid": 200, "Small": 20, "Micro": 5, "Nano": 0,
+}
+SS_DISCOVERY_ANALYST_MAX: int = 3
+SS_DISCOVERY_VOLUME_RATIO: float = 0.5
+DISCOVERY_COMPOSITE_PERCENTILE: float = 0.80
+COMPS_VALUE_BLEND_WEIGHT: float = 0.30
+COMPS_VALUE_DELTA_CAP: float = 10.0
+VALUATION_TOTAL_ADJUSTMENT_CAP: float = 10.0
+ST_CORR_CLUSTER_THRESHOLD: float = 0.75
+TH_SEMI_NEWS_WEIGHT: float = 0.7
+TH_SEMI_POLICY_WEIGHT: float = 0.3
+TET_SIGNAL_THRESHOLDS: dict = {"hot": 70, "warming": 50, "neutral": 35}
+BMD_DEFAULT_THRESHOLDS: dict = {
+    "recurring_revenue_ratio_min": 0.7, "asset_turnover_heavy_max": 0.5,
+    "gross_margin_saas_min": 0.6, "debt_ratio_bank_min": 0.8,
+    "revenue_per_employee_saas": 20000000,
+}
+BMN_BONUS_MAX: float = 10.0
+BMN_BONUS_MIN: float = -5.0
+LAL_SIGNIFICANT_WEIGHT_DELTA: float = 0.15
+LAL_IC_UNDERPERFORM_THRESHOLD: float = 0.05
+PSC_DEFAULT_WEIGHTS: dict = {"D1": 0.25, "D2": 0.15, "D3": 0.3, "D4": 0.15, "D5": 0.15}
+PSC_M_SCORE_PENALTY_THRESHOLD: float = -1.78
+PSC_M_SCORE_MEDIUM_THRESHOLD: float = -2.22
+PSC_M_SCORE_STRONG_MULTIPLIER: float = 0.5
+PSC_M_SCORE_MEDIUM_MULTIPLIER: float = 0.75
+PSC_DEFAULT_TIER_BONUS: dict = {"SS": 15, "S": 10, "A": 5, "B": 2}
+TXS_YOY_SECTION_WEIGHTS: dict = {"risk": 1.0, "business": 0.4, "strategy": 0.3, "governance": 0.2}
+TXS_CATEGORY_MAX_PENALTY: float = 5.0
+TXS_KEYWORD_UNIT_PENALTY: float = 0.5
+TXS_CATALYST_SCORE_MAX: float = 10.0
+TXS_CATALYST_SUPPLY_THRESHOLD: float = 2.0
+SAM_DELTA_THRESHOLDS: dict = {
+    "usdjpy": 3.0, "us10y": 0.2, "oil_wti": 5.0,
+    "vix": 5.0, "sp500": 100.0, "gold": 30.0,
+}
+
+# ── SSOT移設 第4弾（優先度2・2026-07-26）────────────────────
+# 観測・保持期間。値は移設前の実装既定値と同一。
+B4_ALPHA_ATTRIBUTER_LOOKBACK_WEEKS = 26  # LOOKBACK_WEEKS
+B4_ANOMALY_DETECTOR_VOLUME_LOOKBACK = 20  # VOLUME_LOOKBACK
+B4_ANOMALY_DETECTOR_HISTORY_PERIOD = '3mo'  # HISTORY_PERIOD
+B4_ANOMALY_SEASON_LOOKBACK_YEARS = 10  # LOOKBACK_YEARS
+B4_ANOMALY_SEASON_CACHE_HOURS = 24 * 7  # CACHE_HOURS
+B4_BACKTESTER_HOLD_DAYS = 28  # HOLD_DAYS
+B4_BACKTESTER_LOOKBACK_DAYS = 90  # LOOKBACK_DAYS
+B4_CACHE_FRESHNESS_MANAGER_DEFAULT_HALF_LIFE_HOURS = {'yfinance_price': 4.0, 'options_monitor': 4.0, 'macro_snapshot': 24.0, 'us_8k': 20.0, 'policy_radar': 24.0, 'gov_data': 168.0, 'google_trends': 168.0, 'sentiment': 168.0, 'us_macro': 12.0, 'edinet': 720.0, 'sec_edgar': 720.0, 'rule_weights': 720.0, 'us_sector_mapping': 720.0, 'longterm_scenario': 168.0}  # DEFAULT_HALF_LIFE_HOURS
+B4_CATALYST_CALENDAR_HISTORY_TTL_DAYS = 365  # _HISTORY_TTL_DAYS
+B4_CATALYST_CALENDAR_TRIPLE_WINDOW_DAYS = 14  # _TRIPLE_WINDOW_DAYS
+B4_CEO_EVALUATOR_SCORES_RETAIN_YEARS = 5  # SCORES_RETAIN_YEARS
+B4_COMPS_ANALYZER_CACHE_HOURS = 24  # CACHE_HOURS
+B4_CONGRESS_MONITOR_DEFAULT_CACHE_TTL_MONTHS = 12  # _DEFAULT_CACHE_TTL_MONTHS
+B4_CORRELATION_HEATMAP_LOOKBACK_DAYS = 90  # LOOKBACK_DAYS
+B4_CORRELATION_HEATMAP_CACHE_HOURS = 24  # CACHE_HOURS
+B4_CREDIT_DATA_CACHE_HOURS = 24 * 7  # CACHE_HOURS
+B4_DCF_VALUATION_CACHE_HOURS = 24 * 7  # CACHE_HOURS
+B4_DIVIDEND_CALENDAR_ALERT_WINDOW_DAYS = 30  # ALERT_WINDOW_DAYS
+B4_DIVIDEND_CALENDAR_URGENT_WINDOW_DAYS = 7  # URGENT_WINDOW_DAYS
+B4_DIVIDEND_CALENDAR_CACHE_HOURS = 24  # CACHE_HOURS
+B4_EARNINGS_SURPRISE_HISTORY_QUARTERS = 4  # HISTORY_QUARTERS
+B4_EARNINGS_SURPRISE_CACHE_HOURS = 24  # CACHE_HOURS
+B4_EARNINGS_SURPRISE_CONSERVATISM_QUARTERS = 8  # CONSERVATISM_QUARTERS
+B4_EMERGING_TECHNOLOGY_DETECTOR_CACHE_TTL_DAYS = 14  # _CACHE_TTL_DAYS
+B4_FACTOR_CROWDING_MONITOR_LOOKBACK_DAYS = 30  # LOOKBACK_DAYS
+B4_FACTOR_CROWDING_MONITOR_HISTORY_RETAIN_WEEKS = 12  # HISTORY_RETAIN_WEEKS
+B4_FED_CALENDAR_FETCHER_BOJ_PROXIMITY_DAYS = 7  # BOJ_PROXIMITY_DAYS
+B4_FINBERT_ANALYZER_CACHE_VALID_DAYS = 7  # CACHE_VALID_DAYS
+B4_GOOGLE_TRENDS_PIPELINE_CACHE_VALID_DAYS = 7  # CACHE_VALID_DAYS
+B4_GOOGLE_TRENDS_PIPELINE_LOOKBACK_WEEKS = 13  # LOOKBACK_WEEKS
+B4_INDEPENDENCE_SCORE_CALCULATOR_ROLLING_WINDOW_DAYS = 60  # _ROLLING_WINDOW_DAYS
+# 2026-07-28 U-6: insider_monitor.py の米国 Form 4 経路（_parse_form4_simple 等、
+# LOOKBACK_DAYS を参照していた唯一の箇所）を us_insider_form4_scraper.py へ委譲・削除した
+# ため、LOOKBACK_DAYS 定数自体が不要になった。
+# 削除して未参照0件を維持する（旧値は30日）。
+B4_INSIDER_MONITOR_CACHE_HOURS = 24 * 7  # CACHE_HOURS
+B4_JP_US_SECTOR_BRIDGE_CORR_LOOKBACK_WEEKS = 52  # CORR_LOOKBACK_WEEKS
+B4_JP_US_SECTOR_BRIDGE_ROTATION_LOOKBACK = 8  # ROTATION_LOOKBACK
+B4_JP_US_SECTOR_BRIDGE_CACHE_HOURS = 24 * 7  # CACHE_HOURS
+B4_JP_US_SECTOR_CORRELATION_LOOKBACK_DAYS = 60  # LOOKBACK_DAYS
+B4_JP_US_SECTOR_CORRELATION_FETCH_BUFFER_DAYS = 90  # FETCH_BUFFER_DAYS
+B4_JP_US_SECTOR_CORRELATION_CACHE_TTL_DAYS = 7  # CACHE_TTL_DAYS
+B4_MARKET_BREADTH_HISTORY_PERIOD = '13mo'  # HISTORY_PERIOD
+B4_ML_SCORE_CORRECTOR_LOOKBACK_WEEKS = 26  # LOOKBACK_WEEKS
+B4_MOMENTUM_FACTOR_LOOKBACK_DAYS = 28  # LOOKBACK_DAYS
+B4_MULTI_CURRENCY_MONITOR_CACHE_HOURS = 8  # CACHE_HOURS
+B4_NEDO_SELECTION_SCRAPER_CACHE_TTL_DAYS = 7  # CACHE_TTL_DAYS
+B4_OPTIONS_MONITOR_CACHE_HOURS = 4  # CACHE_HOURS
+B4_PEAD_MONITOR_CACHE_TTL_DAYS = 60  # _CACHE_TTL_DAYS
+B4_PEAD_MONITOR_VOLUME_WINDOW_DAYS = 20  # _VOLUME_WINDOW_DAYS
+B4_PEAD_MONITOR_PRICE_DRIFT_WINDOW = 5  # _PRICE_DRIFT_WINDOW
+B4_PERFORMANCE_TRACKER_HISTORY_RETAIN_DAYS = 90  # HISTORY_RETAIN_DAYS
+B4_PERFORMANCE_TRACKER_DRIFT_LOG_RETAIN_DAYS = 90  # DRIFT_LOG_RETAIN_DAYS
+B4_POLICY_SIGNAL_APPLIER_DECAY_TTL_DAYS = 30  # _DECAY_TTL_DAYS
+B4_PORTFOLIO_DIVERSITY_FILTER_CORR_WINDOW_DAYS = 60  # _CORR_WINDOW_DAYS
+B4_PORTFOLIO_OPTIMIZER_CACHE_HOURS = 24  # CACHE_HOURS
+B4_POSITION_SIZER_ATR_PERIOD = 14  # ATR_PERIOD
+B4_REGIME_DETECTOR_MIN_TRAIN_DAYS = 30  # MIN_TRAIN_DAYS
+B4_RULE_OPTIMIZER_LOOKBACK_WEEKS = 12  # LOOKBACK_WEEKS
+B4_RULE_OPTIMIZER_FACTOR_LOOKBACK_DEF = 12  # FACTOR_LOOKBACK_DEF
+B4_SCREENER_FEEDBACK_LOOP_CACHE_HOURS = 24 * 7  # CACHE_HOURS
+B4_SCREENER_SECTOR_HEATMAP_CACHE_HOURS = 24  # CACHE_HOURS
+B4_SECTOR_ROTATION_DETECTOR_AVG_WINDOW_DAYS = 84  # AVG_WINDOW_DAYS
+B4_SECTOR_ROTATION_DETECTOR_TREND_WINDOW_DAYS = 28  # TREND_WINDOW_DAYS
+B4_SECTOR_ROTATION_DETECTOR_CACHE_TTL_DAYS = 7  # CACHE_TTL_DAYS
+B4_SELF_EVALUATOR_HOLD_DAYS = 28  # HOLD_DAYS
+B4_SELF_EVALUATOR_LOOKBACK_WEEKS = 8  # LOOKBACK_WEEKS
+B4_SHAREHOLDER_ANALYZER_HISTORY_RETAIN_QUARTERS = 8  # HISTORY_RETAIN_QUARTERS
+B4_SIGNAL_CULLING_REPORT_FWD_DAYS = 20  # FWD_DAYS
+B4_STRESS_TESTER_VAR_LOOKBACK = 252  # VAR_LOOKBACK
+B4_STRESS_TESTER_MDD_LOOKBACK = 504  # MDD_LOOKBACK
+B4_TAXONOMY_HOTNESS_HISTORY_DAYS = 60  # HISTORY_DAYS
+B4_TAXONOMY_HOTNESS_BASELINE_DAYS = 20  # BASELINE_DAYS
+B4_TECHNICAL_SCORER_HISTORY_PERIOD = '2y'  # HISTORY_PERIOD
+B4_US_8K_MONITOR_CACHE_VALID_HOURS = 20  # CACHE_VALID_HOURS
+B4_US_FUNDAMENTAL_ROTATOR_CACHE_DAYS = 30  # CACHE_DAYS
+B4_US_INSIDER_FORM4_SCRAPER_WINDOW_DAYS_DEFAULT = 30  # _WINDOW_DAYS_DEFAULT
+B4_US_SECTOR_BRIDGE_ENHANCED_MAPPING_CACHE_DAYS = 30  # MAPPING_CACHE_DAYS
+B4_WEEKLY_FEEDBACK_RUNNER_STALE_DAYS = 7  # STALE_DAYS
+
+# ── SSOT移設 第5弾（優先度3・2026-07-26）────────────────────
+# API・実行時パラメータ。値は移設前の実装既定値と同一。
+B5_DATA_RELIABILITY_DEFAULT_RETRY_SCHEDULE = [2, 4, 8]  # _DEFAULT_RETRY_SCHEDULE
+B5_POLITICIAN_MONITOR_REQUEST_TIMEOUT = 20  # _REQUEST_TIMEOUT
+B5_POLITICIAN_MONITOR_RETRY_COUNT = 3  # _RETRY_COUNT
+B5_POLITICIAN_MONITOR_RETRY_WAIT_SEC = 5  # _RETRY_WAIT_SEC
+B5_NEDO_SELECTION_SCRAPER_REQUEST_TIMEOUT = 20  # REQUEST_TIMEOUT
+B5_STRESS_TESTER_FETCH_DELAY = 0.25  # FETCH_DELAY
+B5_JOB_POSTING_MONITOR_REQUEST_TIMEOUT = 15  # _REQUEST_TIMEOUT
+B5_DB_REST_CLIENT_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}  # RETRYABLE_STATUS_CODES
+B5_FACILITY_EXPANSION_MONITOR_REQUEST_TIMEOUT = 20  # _REQUEST_TIMEOUT
+B5_ARXIV_MONITOR_SS_TIMEOUT = 15  # _SS_TIMEOUT
+B5_JOGMEC_SCRAPER_FETCH_TIMEOUT = 25  # _FETCH_TIMEOUT
+B5_JOGMEC_SCRAPER_RETRY_WAIT_SEC = 5  # _RETRY_WAIT_SEC
+B5_CORRELATION_HEATMAP_FETCH_DELAY = 0.25  # FETCH_DELAY
+B5_GOOGLE_TRENDS_PIPELINE_FETCH_SLEEP_SEC = 5.0  # FETCH_SLEEP_SEC
+B5_PORTFOLIO_OPTIMIZER_FETCH_DELAY = 0.3  # FETCH_DELAY
+B5_ANOMALY_SEASON_FETCH_DELAY = 0.3  # FETCH_DELAY
+B5_US_FUNDAMENTAL_ROTATOR_DAILY_FETCH_LIMIT = 20  # DAILY_FETCH_LIMIT
+B5_US_FUNDAMENTAL_ROTATOR_REQUEST_DELAY = 0.12  # REQUEST_DELAY
+B5_US_FUNDAMENTAL_ROTATOR_REQUEST_TIMEOUT = 15  # REQUEST_TIMEOUT
+B5_PAID_MEDIA_SEARCHER_CSE_DEAD_LIMIT = 3  # _CSE_DEAD_LIMIT
+B5_US_INSIDER_FORM4_SCRAPER_HTTP_TIMEOUT = 15  # _HTTP_TIMEOUT
+B5_US_INSIDER_FORM4_SCRAPER_FETCH_DELAY = 0.5  # _FETCH_DELAY
+B5_EDINET_CLIENT_DAILY_BUDGET = 80  # DAILY_BUDGET
+B5_PEAD_MONITOR_FETCH_DELAY = 0.5  # _FETCH_DELAY
+B5_SELF_EVALUATOR_FETCH_DELAY = 0.25  # FETCH_DELAY
+B5_SEC_GEOGRAPHIC_EXTRACTOR_FETCH_TIMEOUT = 30  # _FETCH_TIMEOUT
+# 2026-07-27 U-1b: sec_geographic_extractor の独自リトライ・レート制限を sec_client.py へ
+# 統合したため、下記2定数は BLOCK 60 の SEC_MAX_RETRIES / SEC_RATE_LIMIT_RPS に代替された。
+# 削除して未参照0件を維持する（旧値は RETRY_WAIT_SEC=6 / SEC_RATE_LIMIT=0.12 秒間隔）。
+# ※ B5_SEC_GEOGRAPHIC_EXTRACTOR_FETCH_TIMEOUT は移行後も timeout=30 の明示指定で
+#   参照が残っているため存置する。
+B5_ACADEMIC_CONF_TRACKER_REQUEST_TIMEOUT = 20  # _REQUEST_TIMEOUT
+B5_EARNINGS_SURPRISE_FETCH_DELAY = 0.3  # FETCH_DELAY
+B5_US_8K_MONITOR_REQUEST_TIMEOUT = 10  # REQUEST_TIMEOUT
+B5_US_8K_MONITOR_FETCH_DELAY = 0.15  # FETCH_DELAY
+B5_FINBERT_ANALYZER_DEFAULT_BATCH_SIZE = 8  # DEFAULT_BATCH_SIZE
+B5_DIVIDEND_CALENDAR_FETCH_DELAY = 0.3  # FETCH_DELAY
+B5_SUPPORT_RESISTANCE_FETCH_DELAY = 0.3  # FETCH_DELAY
+B5_OPTIONS_MONITOR_FETCH_DELAY = 0.4  # FETCH_DELAY
+B5_DCF_VALUATION_FETCH_DELAY = 0.3  # FETCH_DELAY
+B5_CATALYST_CALENDAR_FETCH_DELAY = 0.5  # _FETCH_DELAY
+B5_INDUSTRY_STANDARD_TRACKER_REQUEST_TIMEOUT = 20  # _REQUEST_TIMEOUT
+B5_INSIDER_MONITOR_FETCH_DELAY = 0.12  # FETCH_DELAY
+B5_PORTFOLIO_DIVERSITY_FILTER_FETCH_DELAY = 0.4  # _FETCH_DELAY
+B5_BACKTESTER_FETCH_DELAY = 0.25  # FETCH_DELAY
+B5_FACTOR_CROWDING_MONITOR_TOP_N_DEFAULT = 20  # TOP_N_DEFAULT
+B5_FACTOR_CROWDING_MONITOR_FETCH_DELAY = 0.15  # FETCH_DELAY
+B5_COMPS_ANALYZER_FETCH_DELAY = 0.2  # FETCH_DELAY
+B5_EXECUTIVE_TRANSITION_TRACKER_REQUEST_TIMEOUT = 20  # _REQUEST_TIMEOUT
+B5_VOLUME_PROFILE_FETCH_DELAY = 0.3  # FETCH_DELAY
+B5_PERFORMANCE_TRACKER_RETURN_FETCH_DELAY = 0.25  # RETURN_FETCH_DELAY
+B5_TECHNICAL_SCORER_FETCH_DELAY = 0.25  # FETCH_DELAY
+B5_US_SECTOR_BRIDGE_ENHANCED_REQUEST_DELAY = 0.12  # REQUEST_DELAY
+B5_US_SECTOR_BRIDGE_ENHANCED_REQUEST_TIMEOUT = 10  # REQUEST_TIMEOUT
+B5_API_KEY_HEALTH_STATE_LIMITED = 'limited'  # STATE_LIMITED
+B5_API_KEY_HEALTH_PROBE_TIMEOUT = 5  # PROBE_TIMEOUT
+B5_POSITION_SIZER_FETCH_DELAY = 0.3  # FETCH_DELAY
+B5_STOCK_DETAIL_REPORT_FETCH_DELAY = 0.25  # FETCH_DELAY
+B5_COUNTRY_RISK_UPDATER_FETCH_TIMEOUT = 20  # _FETCH_TIMEOUT
+B5_COUNTRY_RISK_UPDATER_RETRY_WAIT = 5  # _RETRY_WAIT
+B5_COUNTRY_RISK_UPDATER_GDELT_TOTAL_FAIL_LIMIT = 8  # _GDELT_TOTAL_FAIL_LIMIT
+
+# ── SSOT移設 第6弾（優先度4・2026-07-26）────────────────────
+# 投資方針・資金管理・統計モデルの可変数値。値は移設前の実装既定値と同一。
+B6_LEARNING_AUDIT_LOG_MANUAL_REVIEW_TRIGGER = 2  # MANUAL_REVIEW_TRIGGER
+B6_REGIME_DETECTOR_N_STATES = 4  # N_STATES
+B6_REGIME_DETECTOR_N_FEATURES = 7  # N_FEATURES
+B6_IGNITION_DETECTOR_DEFAULT_CRITICAL_SCORE = 3.5  # _DEFAULT_CRITICAL_SCORE
+B6_IGNITION_DETECTOR_DEFAULT_CRITICAL_REPEAT = 14  # _DEFAULT_CRITICAL_REPEAT
+B6_IGNITION_DETECTOR_DEFAULT_ALERT_TTL = 14  # _DEFAULT_ALERT_TTL
+B6_IGNITION_DETECTOR_DEFAULT_HISTORY_TTL = 180  # _DEFAULT_HISTORY_TTL
+B6_NEDO_SELECTION_SCRAPER_REQUEST_INTERVAL = 1.5  # REQUEST_INTERVAL
+B6_SIZE_DECAY_MANAGER_DEFAULT_NANO_MAX_PER_DAY = 5  # _DEFAULT_NANO_MAX_PER_DAY
+B6_SIGNAL_CULLING_REPORT_T_PROMOTE = 2.0  # T_PROMOTE
+B6_MULTI_CURRENCY_MONITOR_SIGNAL_DELTA = 5.0  # SIGNAL_DELTA
+B6_JOB_POSTING_MONITOR_REQUEST_WAIT = 2.0  # _REQUEST_WAIT
+B6_SCORE_PRIOR_MANAGER_DEFAULT_HALF_LIFE = 14  # _DEFAULT_HALF_LIFE
+B6_SCORE_PRIOR_MANAGER_DEFAULT_MIN_OBS = 7  # _DEFAULT_MIN_OBS
+B6_ALPHA_ATTRIBUTER_MIN_FIRE_COUNT = 3  # MIN_FIRE_COUNT
+B6_FACILITY_EXPANSION_MONITOR_REQUEST_WAIT = 2.0  # _REQUEST_WAIT
+B6_RULE_OPTIMIZER_EMA_ALPHA = 0.1  # EMA_ALPHA
+B6_RULE_OPTIMIZER_MIN_FIRE_COUNT = 3  # MIN_FIRE_COUNT
+B6_RULE_OPTIMIZER_CORR_SCALE = 0.5  # CORR_SCALE
+B6_ARXIV_MONITOR_SS_REQUEST_INTERVAL = 3.0  # _SS_REQUEST_INTERVAL
+B6_NOTION_OBSIDIAN_WRITER_MAX_NOTION_PAGES = 20  # MAX_NOTION_PAGES
+B6_JOGMEC_SCRAPER_MAX_RETRIES = 3  # _MAX_RETRIES
+B6_CORRELATION_HEATMAP_MIN_DATA_POINTS = 20  # MIN_DATA_POINTS
+B6_IMF_PIPELINE_FETCH_YEARS = 3  # FETCH_YEARS
+B6_POLICY_SIGNAL_APPLIER_DEFAULT_EMERGENCY_VIX = 45.0  # _DEFAULT_EMERGENCY_VIX
+B6_POLICY_SIGNAL_APPLIER_DEFAULT_L4_MAX_ADJ = 25.0  # _DEFAULT_L4_MAX_ADJ
+B6_GOOGLE_TRENDS_PIPELINE_TREND_TAILWIND_PTS = 3.0  # TREND_TAILWIND_PTS
+B6_PORTFOLIO_OPTIMIZER_N_SIMULATIONS = 2000  # N_SIMULATIONS
+B6_PORTFOLIO_OPTIMIZER_RISK_FREE_RATE = 0.005  # RISK_FREE_RATE
+B6_ANOMALY_DETECTOR_MIN_DATA_POINTS = 20  # MIN_DATA_POINTS
+B6_JP_US_SECTOR_BRIDGE_CORR_SIGNIFICANT = 0.45  # CORR_SIGNIFICANT
+B6_JP_US_SECTOR_BRIDGE_LAG_ADJUSTMENT_PTS = 3.0  # LAG_ADJUSTMENT_PTS
+B6_DRIFT_DETECTOR_DEFAULT_DECAY_WEEKS = 4  # _DEFAULT_DECAY_WEEKS
+B6_DRIFT_DETECTOR_DEFAULT_HISTORY_TTL = 180  # _DEFAULT_HISTORY_TTL
+B6_JP_US_SECTOR_CORRELATION_MIN_DATA_POINTS = 20  # MIN_DATA_POINTS
+B6_ANOMALY_SEASON_MIN_SAMPLES = 5  # MIN_SAMPLES
+B6_ANOMALY_SEASON_P_SIGNIFICANT = 0.05  # P_SIGNIFICANT
+B6_ANOMALY_SEASON_MAX_ADJUSTMENT = 8.0  # MAX_ADJUSTMENT
+B6_US_INSIDER_FORM4_SCRAPER_MAX_FORM4_PARSE = 10  # _MAX_FORM4_PARSE
+B6_DEEP_DIVE_TRIGGER_DEFAULT_CONFIDENCE_DROP = 15.0  # _DEFAULT_CONFIDENCE_DROP
+B6_DEEP_DIVE_TRIGGER_DEFAULT_RANK_JUMP = 10  # _DEFAULT_RANK_JUMP
+B6_DEEP_DIVE_TRIGGER_DEFAULT_HISTORY_TTL = 30  # _DEFAULT_HISTORY_TTL
+B6_TEXT_SIGNAL_YOY_SCALE_FACTOR = 5.0  # _YOY_SCALE_FACTOR
+B6_PEAD_MONITOR_PEAD_DECAY_DAILY = 0.85  # _PEAD_DECAY_DAILY
+B6_PEAD_MONITOR_MAX_CANDIDATES = 200  # _MAX_CANDIDATES
+B6_PEARL_SCORE_CALCULATOR_D2_CONFIDENCE_DISCOUNT_US = 0.7  # _D2_CONFIDENCE_DISCOUNT_US
+B6_PEARL_SCORE_CALCULATOR_MARKET_RETURN_JP = 0.1  # _MARKET_RETURN_JP
+B6_PEARL_SCORE_CALCULATOR_MARKET_RETURN_US = 0.15  # _MARKET_RETURN_US
+B6_CROSS_SIZE_SIGNAL_JP_US_CROSS_DECAY = 0.7  # _JP_US_CROSS_DECAY
+B6_SELF_EVALUATOR_MIN_SAMPLES = 5  # MIN_SAMPLES
+B6_SELF_EVALUATOR_MAX_LOG_ENTRIES = 52  # MAX_LOG_ENTRIES
+B6_SELF_EVALUATOR_PEARL_BACKTEST_MAX_ENTRY = 52  # PEARL_BACKTEST_MAX_ENTRY
+B6_SEC_GEOGRAPHIC_EXTRACTOR_MAX_RETRIES = 3  # _MAX_RETRIES
+B6_POLITICIAN_SIGNAL_SCORER_L4_MAX_ADJ = 25.0  # _L4_MAX_ADJ
+B6_EARNINGS_SURPRISE_SURPRISE_POS = 3.0  # SURPRISE_POS
+B6_EARNINGS_SURPRISE_CONS_HIGH_MEAN = 15.0  # CONS_HIGH_MEAN
+B6_EARNINGS_SURPRISE_CONS_MID_MEAN = 10.0  # CONS_MID_MEAN
+B6_EARNINGS_SURPRISE_CONS_LOW_MEAN = 0.0  # CONS_LOW_MEAN
+B6_EARNINGS_SURPRISE_CONS_HIGH_STD = 10.0  # CONS_HIGH_STD
+B6_EARNINGS_SURPRISE_CONS_MID_STD = 15.0  # CONS_MID_STD
+B6_EARNINGS_SURPRISE_CONS_LOW_STD = 20.0  # CONS_LOW_STD
+B6_EARNINGS_SURPRISE_SURPRISE_COMBO_NEG_ACCEL = 30.0  # SURPRISE_COMBO_NEG_ACCEL
+B6_EARNINGS_SURPRISE_SURPRISE_COMBO_NEG_CONSERV = 30.0  # SURPRISE_COMBO_NEG_CONSERV
+B6_INVESTMENT_JOURNAL_AUTO_EXIT_WEEKS_DEF = 12  # AUTO_EXIT_WEEKS_DEF
+B6_US_8K_MONITOR_MAX_8K_PER_DAY = 200  # MAX_8K_PER_DAY
+B6_FINBERT_ANALYZER_MAX_TEXT_LEN = 128  # MAX_TEXT_LEN
+B6_FINBERT_ANALYZER_SENTIMENT_STRONG_POS = 0.7  # SENTIMENT_STRONG_POS
+B6_FINBERT_ANALYZER_SENTIMENT_STRONG_NEG = 0.3  # SENTIMENT_STRONG_NEG
+B6_FINBERT_ANALYZER_SENTIMENT_TAILWIND_PTS = 3.0  # SENTIMENT_TAILWIND_PTS
+B6_LONGTERM_SCENARIO_LONGTERM_HOLD_STANCE_RELAX_PT = 5.0  # LONGTERM_HOLD_STANCE_RELAX_PT
+B6_EMERGING_TECHNOLOGY_DETECTOR_W_CLUSTER = 0.5  # _W_CLUSTER
+B6_EMERGING_TECHNOLOGY_DETECTOR_W_ARXIV = 0.3  # _W_ARXIV
+B6_EMERGING_TECHNOLOGY_DETECTOR_W_NEWS = 0.2  # _W_NEWS
+B6_ML_SCORE_CORRECTOR_TEST_SPLIT_WEEKS = 4  # TEST_SPLIT_WEEKS
+B6_ML_SCORE_CORRECTOR_XGB_PARAMS = {'max_depth': 3, 'n_estimators': 100, 'learning_rate': 0.05, 'subsample': 0.8, 'colsample_bytree': 0.8, 'reg_lambda': 1.0, 'reg_alpha': 0.5, 'random_state': 42, 'n_jobs': -1}  # XGB_PARAMS
+B6_CEO_EVALUATOR_CAGR_EXCELLENT = 0.15  # CAGR_EXCELLENT
+B6_CEO_EVALUATOR_CAGR_GOOD = 0.08  # CAGR_GOOD
+B6_CEO_EVALUATOR_CAGR_NEUTRAL = 0.0  # CAGR_NEUTRAL
+B6_CEO_EVALUATOR_MIDTERM_EXCELLENT = 0.9  # MIDTERM_EXCELLENT
+B6_CEO_EVALUATOR_MIDTERM_GOOD = 0.7  # MIDTERM_GOOD
+B6_CEO_EVALUATOR_MIDTERM_FAIR = 0.5  # MIDTERM_FAIR
+B6_SUPPORT_RESISTANCE_MIN_PEAK_DISTANCE = 10  # MIN_PEAK_DISTANCE
+B6_SUPPORT_RESISTANCE_CLUSTER_RANGE_PCT = 0.015  # CLUSTER_RANGE_PCT
+B6_OPTIONS_MONITOR_VIX_EXTREME_FEAR = 30  # VIX_EXTREME_FEAR
+B6_OPTIONS_MONITOR_SKEW_EXTREME = 145  # SKEW_EXTREME
+B6_OPTIONS_MONITOR_SKEW_ELEVATED = 130  # SKEW_ELEVATED
+B6_DCF_VALUATION_DEFAULT_RF_JP = 0.015  # DEFAULT_RF_JP
+B6_DCF_VALUATION_DEFAULT_RF_US = 0.045  # DEFAULT_RF_US
+B6_DCF_VALUATION_MARKET_RISK_PREM = 0.055  # MARKET_RISK_PREM
+B6_DCF_VALUATION_DEFAULT_BETA = 1.0  # DEFAULT_BETA
+B6_DCF_VALUATION_DEFAULT_GROWTH = 0.02  # DEFAULT_GROWTH
+B6_DCF_VALUATION_FORECAST_YEARS = 5  # FORECAST_YEARS
+B6_DCF_VALUATION_FCF_GROWTH_RATE = 0.05  # FCF_GROWTH_RATE
+B6_DCF_VALUATION_WACC_RANGE = [-0.02, 0.0, +0.02]  # WACC_RANGE
+B6_DCF_VALUATION_GROWTH_RANGE = [-0.01, 0.0, +0.01]  # GROWTH_RANGE
+B6_DCF_VALUATION_DCF_LARGE_DISCOUNT = 20.0  # DCF_LARGE_DISCOUNT
+B6_DCF_VALUATION_DCF_SMALL_DISCOUNT = 10.0  # DCF_SMALL_DISCOUNT
+B6_SECTOR_ROTATION_DETECTOR_MOMENTUM_DEADZONE = 0.02  # MOMENTUM_DEADZONE
+B6_SECTOR_ROTATION_DETECTOR_MIN_DATA_POINTS = 8  # MIN_DATA_POINTS
+B6_CONGRESS_MONITOR_DEFAULT_L4_MAX_ADJ = 25.0  # _DEFAULT_L4_MAX_ADJ
+B6_SCREENER_CANDIDATE_BUILDER_DYNAMIC_SCREENER_MAX_ADD = 50  # DYNAMIC_SCREENER_MAX_ADD
+B6_SHAREHOLDER_ANALYZER_FOREIGN_SPIKE_PCT = 3.0  # FOREIGN_SPIKE_PCT
+B6_SHAREHOLDER_ANALYZER_FOREIGN_SURGE_PCT = 5.0  # FOREIGN_SURGE_PCT
+B6_SHAREHOLDER_ANALYZER_ACTIVIST_HOLDINGS_PCT = 5.0  # ACTIVIST_HOLDINGS_PCT
+B6_PORTFOLIO_DIVERSITY_FILTER_HHI_WARNING_DEFAULT = 0.25  # _HHI_WARNING_DEFAULT
+B6_PORTFOLIO_DIVERSITY_FILTER_HHI_CRITICAL_DEFAULT = 0.35  # _HHI_CRITICAL_DEFAULT
+B6_PORTFOLIO_DIVERSITY_FILTER_MIN_DATA_POINTS = 20  # _MIN_DATA_POINTS
+B6_PORTFOLIO_DIVERSITY_FILTER_MIN_CORR_PAIRS_FOR_ALERT = 3  # _MIN_CORR_PAIRS_FOR_ALERT
+B6_BACKTESTER_MIN_RECORDS = 10  # MIN_RECORDS
+B6_EXECUTIVE_TRANSITION_TRACKER_REQUEST_WAIT = 1.0  # _REQUEST_WAIT
+B6_TAXONOMY_HOTNESS_COMBINE_SEMI = 0.6  # COMBINE_SEMI
+B6_TAXONOMY_HOTNESS_COMBINE_LEADING = 0.4  # COMBINE_LEADING
+B6_EDINET_DIRECT_FETCHER_XBRL_TYPE = 5  # XBRL_TYPE
+B6_VOLUME_PROFILE_VP_NUM_BUCKETS = 30  # VP_NUM_BUCKETS
+B6_VOLUME_PROFILE_VALUE_AREA_PCT = 0.7  # VALUE_AREA_PCT
+B6_SCREENER_SECTOR_HEATMAP_ROTATION_DELTA = 2  # ROTATION_DELTA
+B6_MARKET_BREADTH_US_SAMPLE_SIZE = 100  # US_SAMPLE_SIZE
+B6_PERFORMANCE_TRACKER_MIN_CANDIDATES = 3  # MIN_CANDIDATES
+B6_TECHNICAL_SCORER_MACD_FAST = 12  # MACD_FAST
+B6_TECHNICAL_SCORER_MACD_SLOW = 26  # MACD_SLOW
+B6_TECHNICAL_SCORER_MACD_SIGNAL = 9  # MACD_SIGNAL
+B6_TECHNICAL_SCORER_BB_STD = 2.0  # BB_STD
+B6_TECHNICAL_SCORER_MA_SHORT = 50  # MA_SHORT
+B6_TECHNICAL_SCORER_MA_LONG = 200  # MA_LONG
+B6_STOCK_SCREENER_DISCOVERY_MCAP_MAX_B = 500.0  # DISCOVERY_MCAP_MAX_B
+B6_MOMENTUM_FACTOR_MIN_DATA_POINTS = 5  # MIN_DATA_POINTS
+B6_MIDTERM_PLAN_TRACKER_DEFAULT_ACHIEVEMENT_HIGH = 0.9  # _DEFAULT_ACHIEVEMENT_HIGH
+B6_MIDTERM_PLAN_TRACKER_DEFAULT_ACHIEVEMENT_RISK = 0.7  # _DEFAULT_ACHIEVEMENT_RISK
+B6_POSITION_SIZER_RISK_PCT_DEFAULT = 0.01  # RISK_PCT_DEFAULT
+B6_POSITION_SIZER_MIN_POSITION_PCT = 0.02  # MIN_POSITION_PCT
+B6_POSITION_SIZER_MAX_POSITION_PCT = 0.15  # MAX_POSITION_PCT
+B6_POSITION_SIZER_LOT_SIZE_JP = 100  # LOT_SIZE_JP
+B6_POSITION_SIZER_CONVICTION_PCT_RANGE = {5: (0.1, 0.15), 4: (0.06, 0.1), 3: (0.03, 0.06), 2: (0.01, 0.03), 1: (0.0, 0.0)}  # CONVICTION_PCT_RANGE
+B6_POSITION_SIZER_REGIME_SIZE_MATRIX = {0: 1.0, 1: 0.75, 2: 0.5, 3: 0.0}  # REGIME_SIZE_MATRIX
+B6_POSITION_SIZER_TRADING_DAYS_V2 = 252  # _TRADING_DAYS_V2
+B6_COUNTRY_RISK_UPDATER_MAX_RETRIES = 3  # _MAX_RETRIES
+B6_COUNTRY_RISK_UPDATER_GDELT_MAX_COUNTRIES = 15  # _GDELT_MAX_COUNTRIES
+B6_STRATEGY_OUTPUT_SCHEMA_SATELLITE_SMALLCAP_DISCOVERY = 80  # SATELLITE_SMALLCAP_DISCOVERY
+
+# ==============================================================
+# BLOCK 60: SEC共通アクセス層設定（Wave J1 / U-1a）
+# ==============================================================
+# 【背景】SEC EDGAR アクセスが insider_monitor / institutional_13f_monitor /
+# sec_geographic_extractor / sec_summarizer / us_8k_monitor /
+# us_fundamental_rotator / us_insider_form4_scraper / us_sector_bridge_enhanced
+# の8ファイルに散在し、User-Agent・CIK解決・レート制限・リトライ・キャッシュを
+# 各自が独自実装していた（D-6/D-7、要件定義書_JP-US統合_20260726.md §2-1）。
+# sec_client.py（新設）がこれらを1箇所に集約する。本ブロックはその設定。
+#
+# 【既定値の根拠】既存8ファイルの実測（2026-07-27 U-1a着手時点）:
+#   FETCH_DELAY: insider_monitor=0.12 / us_8k_monitor=0.15 /
+#                sec_geographic_extractor=0.5 / sec_summarizer=0.5 /
+#                us_insider_form4_scraper=_FETCH_DELAY=0.5（最も保守的）
+#   → SEC_RATE_LIMIT_RPS はこの 0.5s 間隔（=2 req/s）に合わせた。
+#   TIMEOUT:     us_8k_monitor=10 / us_insider_form4_scraper=_HTTP_TIMEOUT=15 /
+#                us_fundamental_rotator=15（通常経路。XBRL大容量取得のみ30）
+#   → 汎用HTTPタイムアウトとして 15 を採用（XBRL等の特大レスポンス用の
+#     30秒は sec_client の責務外＝各モジュールが timeout= で個別指定する）。
+#   TTL:         us_insider_form4_scraper._TICKER_MAP_TTL = 7（日）
+#   RETRIES:     us_stock_screener._fetch_one の既定 max_retries=3 に準拠
+#
+# 【本バッチ（U-1a）の範囲】sec_client.py の新設のみ。既存8ファイルの
+# この設定への移行は別バッチで行う（現時点でこの4定数を参照するのは
+# sec_client.py のみ）。
+SEC_RATE_LIMIT_RPS: float = 2.0      # 現行の FETCH_DELAY=0.5 相当（最も保守的）
+SEC_HTTP_TIMEOUT: int = 15           # 現行の最大値（通常経路。XBRL等の特大取得を除く）
+SEC_CIK_MAP_TTL_DAYS: int = 7        # us_insider_form4_scraper の _TICKER_MAP_TTL 準拠
+SEC_MAX_RETRIES: int = 3
+
+# ==============================================================
+# BLOCK 61: 市場別プロファイル索引（Wave J3 / U-8）
+# ==============================================================
+# 既存の *_JP / *_US 設定値は削除・複製しない。市場横断コードが必要とする
+# 設定名をここで索引化し、実値は従来どおり各定数を正本とする。
+# revision_multiplier / revision_cap は screener_common.py にだけ存在していた
+# 市場差を移したもの。既存の JP/US スコア挙動は変えない。
+MARKET_PROFILE: dict = {
+    "JP": {
+        "suffix": ".T",
+        "revision_multiplier": 6.0,
+        "revision_cap": 3.0,
+        "size_thresholds": "SIZE_TIER_THRESHOLDS_JP",
+        "slippage_bps": "BT_SLIPPAGE_BPS_JP",
+        "defensive_sectors": "DEFENSIVE_SECTOR_CODES_JP",
+        "sector_taxonomy": "TSE33",
+    },
+    "US": {
+        "suffix": "",
+        "revision_multiplier": 10.0,
+        "revision_cap": 5.0,
+        "size_thresholds": "SIZE_TIER_THRESHOLDS_US",
+        "slippage_bps": "BT_SLIPPAGE_BPS_US",
+        "defensive_sectors": "DEFENSIVE_GICS_SECTORS_US",
+        "sector_taxonomy": "GICS11",
+    },
+}

@@ -1002,23 +1002,23 @@ def save_tickers_to_sheet(client, spreadsheet_id: str,
 
 def load_settings_from_sheet(client, spreadsheet_id: str) -> dict:
     """settings シートからアラート閾値を読み込む"""
-    from finance_logic import DEFAULT_THRESHOLDS
+    from finance_logic import get_default_thresholds
+    defaults = get_default_thresholds()
     try:
         sh   = client.open_by_key(spreadsheet_id)
         ws   = _get_or_create_ws(sh, WS_SETTINGS, rows=50, cols=2)
         recs = ws.get_all_records()
-        result = dict(DEFAULT_THRESHOLDS)
+        result = dict(defaults)
         for r in recs:
             k = str(r.get("key", "")).strip()
-            if k in DEFAULT_THRESHOLDS:
+            if k in defaults:
                 v = _safe_float(r.get("value"))
                 if v is not None:
                     result[k] = v
         return result
     except Exception as e:
-        from finance_logic import DEFAULT_THRESHOLDS
         st.warning(f"settings 読み込みエラー: {e}")
-        return dict(DEFAULT_THRESHOLDS)
+        return dict(defaults)
 
 
 def save_settings_to_sheet(client, spreadsheet_id: str, thresholds: dict) -> bool:

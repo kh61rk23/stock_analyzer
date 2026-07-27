@@ -51,13 +51,26 @@ AUDIT_FILE_PREFIX = "learning_audit_"
 AUDIT_FILE_SUFFIX = ".json"
 
 # 変更量がこれ以上の場合に「大きな変更」とみなす
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'LAL_SIGNIFICANT_WEIGHT_DELTA': 'SIGNIFICANT_WEIGHT_DELTA',
+    'LAL_IC_UNDERPERFORM_THRESHOLD': 'IC_UNDERPERFORM_THRESHOLD',
+    'B6_LEARNING_AUDIT_LOG_MANUAL_REVIEW_TRIGGER': 'MANUAL_REVIEW_TRIGGER',
+}
+
 SIGNIFICANT_WEIGHT_DELTA = 0.15
 
 # IC がこれ未満のルールを「underperforming」とみなす
 IC_UNDERPERFORM_THRESHOLD = 0.05
 
-# IC がこれ以上のルールを「stable」とみなす
-IC_STABLE_THRESHOLD = 0.20
+# IC_STABLE_THRESHOLD は削除（2026-07-25 バッチ4）。
+# 「IC がこれ以上なら stable」という定義だったが、このモジュールは
+# 安定判定を自前で行わず alpha_attributer が算出済みの stable_signals を
+# 読むだけで、この定数を参照するコードは存在しなかった。
+# 安定判定の正本は config.IC_STABLE_MIN_RATE（IC>=0 だった週の比率 0.80）で、
+# 意味も基準も別物のため、紛らわしい残骸として削除する。
 
 # 見直し推奨の閾値（underperforming が何件以上で manual_review_needed=True）
 MANUAL_REVIEW_TRIGGER = 2
@@ -112,6 +125,12 @@ def save_audit(cfg, period: str, audit: dict) -> None:
 # ==============================================================
 
 def _load_ic_tracker(cfg) -> dict:
+    # 2026-07-25: BLOCK A-1 の ENABLE_IC_TRACKER を配線。
+    # ic_tracker.json の読み込みと IC 分析の実装はあるのに、有効フラグだけが
+    # 誰にも読まれず、False にしても IC ベースの見直し推奨が出続けていた。
+    # 無効時は空dictを返す（_analyze_ic は空入力で空結果を返すため安全）。
+    if not getattr(cfg, "ENABLE_IC_TRACKER", True):
+        return {}
     p = _data_dir(cfg) / "ic_tracker.json"
     if p.exists():
         try:
@@ -249,6 +268,7 @@ def generate_audit_log(
     Returns:
         監査ログ dict（スキーマは上部参照）
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     today  = date.today()
     period = f"{today.year}-{today.month:02d}"
 

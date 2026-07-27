@@ -85,6 +85,14 @@ _CONFIG_BM_TO_NORM: dict[str, str] = {
 }
 
 # bm_bonus 上下限（quality_score への加算値）
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'BMN_BONUS_MAX': '_BONUS_MAX',
+    'BMN_BONUS_MIN': '_BONUS_MIN',
+}
+
 _BONUS_MAX =  10.0
 _BONUS_MIN =  -5.0
 
@@ -116,6 +124,7 @@ def detect_bm_norm_type(
     Returns:
         NORM_SHOSHA | NORM_BANK | NORM_INSURANCE | NORM_STANDARD
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     try:
         sc = str(sector_code).strip() if sector_code else ""
 

@@ -216,7 +216,10 @@ def run_short_term_analysis(cfg) -> list:
         name = cfg.JAPAN_SECTORS.get(code, {}).get("name_ja", code)
         print(f"    [{code}] {name} ...")
 
-        prices = fetch_daily_prices(tickers, days=5)
+        # 2026-07-25 バッチ4: 取得日数を config.SHORT_TERM_DAYS から読む。
+        # 従来 days=5 の直書きで、config 側の SHORT_TERM_DAYS は未参照だった。
+        prices = fetch_daily_prices(
+            tickers, days=int(getattr(cfg, "SHORT_TERM_DAYS", 5)))
         if prices is None or len(prices) < 2:
             print(f"      ⚠️  データ不足（スキップ）"); continue
 

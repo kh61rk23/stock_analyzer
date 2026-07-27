@@ -175,6 +175,12 @@ def main():
     except Exception:
         cfg = None
 
+    # 2026-07-25: 定期実行（週次）に載せたのに合わせて有効フラグを配線。
+    if not dry and not getattr(cfg, "ENABLE_TAXONOMY_COMPANY_MAPPER", True):
+        print("⏩ taxonomy_company_mapper: スキップ"
+              "（ENABLE_TAXONOMY_COMPANY_MAPPER=False）")
+        return
+
     segments = fetch_segments_from_bq(cfg)
     print(f"🏢 セグメント保有企業: {len(segments)}社")
     if not segments:

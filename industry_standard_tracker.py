@@ -220,6 +220,12 @@ _DATA_SOURCES = {
     "iso_search":   "https://www.iso.org/search.html",
 }
 
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'B5_INDUSTRY_STANDARD_TRACKER_REQUEST_TIMEOUT': '_REQUEST_TIMEOUT',
+}
+
 _REQUEST_TIMEOUT = 20
 _REQUEST_HEADERS = {
     "User-Agent": (
@@ -858,6 +864,7 @@ def run_industry_standard_tracker(cfg=None, force_refresh: bool = False) -> dict
           "timestamp":       str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  📡 標準化動向トラッカー（Wave 7 - Step 1）実行中...")
 
     # ── キャッシュ確認 ──────────────────────────────────────────

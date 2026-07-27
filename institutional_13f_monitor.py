@@ -64,6 +64,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+import sec_client
+
 
 # ==============================================================
 # BLOCK 1: Tier 定義・スコア定数フォールバック
@@ -73,6 +75,13 @@ _TIER_BASE_SCORE: dict = {
     1: 15.0,   # Buffett クラス
     2: 10.0,   # 著名アクティビスト
     3:  5.0,   # 大手機関
+}
+
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'I13F_CHANGE_MULTIPLIER': '_CHANGE_MULTIPLIER',
 }
 
 _CHANGE_MULTIPLIER: dict = {
@@ -96,10 +105,6 @@ _KNOWN_CIKS: dict = {
     "0000315066": {"name": "Fidelity", "tier": 3},
     "0001113169": {"name": "T. Rowe Price", "tier": 3},
 }
-
-# 四半期終了月（3/6/9/12月）
-_QUARTER_END_MONTHS = {3, 6, 9, 12}
-
 
 def _current_quarter() -> str:
     """現在の四半期文字列を返す（例: "2026Q1"）。"""
@@ -194,27 +199,34 @@ def _safe_parse_dt(s: str) -> datetime:
 # BLOCK 3: SEC EDGAR API からポジション取得
 # ==============================================================
 
-def _fetch_cik_filings(cik: str, timeout: int = 15) -> Optional[dict]:
+# 2026-07-27是正（U-2 / F-2）: SECは連絡先を含まないUser-Agentを403で拒否する。
+# us_8k_monitor.py:116-122 の _sec_user_agent() と同型（優先順: 環境変数 →
+# cfg.SEC_USER_AGENT（cfg未指定時は import config でのフォールバック取得）→ 固定文字列）。
+# U-1b: 実体は sec_client.user_agent() に統合済み。本関数は tests/test_sec_user_agent.py
+# の既存回帰テストとの互換のために薄いラッパーとして残す。
+_SEC_UA_FALLBACK = "StockAnalyzer stockanalyzer@example.com"
+
+
+def _sec_user_agent(cfg=None) -> str:
+    return sec_client.user_agent(cfg)
+
+
+def _fetch_cik_filings(cik: str, cfg=None) -> Optional[dict]:
     """
-    SEC EDGAR submissions API から CIK のファイリング一覧を取得する。
+    SEC EDGAR submissions API から CIK のファイリング一覧を取得する（sec_client 経由）。
     URL: https://data.sec.gov/submissions/{CIK}.json
+
+    挙動注記: タイムアウトは sec_client 側（HTTP_TIMEOUT 既定15秒 / cfg.SEC_HTTP_TIMEOUT
+    で上書き可）に委譲する。旧実装の既定値（15秒）と同一。
 
     Returns:
         submissions dict or None
     """
-    cik_padded = cik.lstrip("0").zfill(10)
-    url = f"https://data.sec.gov/submissions/CIK{cik_padded}.json"
     try:
-        import urllib.request
-        req = urllib.request.Request(
-            url,
-            headers={
-                "User-Agent": "stock_analyzer/1.0 (contact@example.com)",
-                "Accept":     "application/json",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        data = sec_client.submissions(cik, cfg=cfg)
+        if data is None:
+            print(f"    ⚠️  [13f] CIK {cik} 取得失敗")
+        return data
     except Exception as e:
         print(f"    ⚠️  [13f] CIK {cik} 取得失敗: {str(e)[:50]}")
         return None
@@ -223,6 +235,7 @@ def _fetch_cik_filings(cik: str, timeout: int = 15) -> Optional[dict]:
 def _fetch_13f_holdings(
     accession_number: str,
     cik: str,
+    cfg=None,
     timeout: int = 20,
 ) -> list[dict]:
     """
@@ -242,16 +255,10 @@ def _fetch_13f_holdings(
         f"{int(cik_padded)}/{acc_clean}/infotable.json"
     )
     try:
-        import urllib.request
-        req = urllib.request.Request(
-            url,
-            headers={
-                "User-Agent": "stock_analyzer/1.0 (contact@example.com)",
-                "Accept":     "application/json",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+        data = sec_client.get_json(url, cfg=cfg, accept="application/json",
+                                    timeout=timeout)
+        if data is None:
+            raise ValueError("sec_client.get_json returned None")
 
         for h in data.get("data", []):
             # infotable.json のフォーマット:
@@ -488,6 +495,7 @@ def run_institutional_13f_monitor(
     Returns:
         run_institutional_13f_monitor の出力スキーマ参照
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  🏦 [13f] 機関投資家ポジション監視 開始...")
     t0      = datetime.now()
     quarter = _current_quarter()
@@ -538,7 +546,7 @@ def run_institutional_13f_monitor(
         print(f"    📄 [13f] {name} ({cik}) を取得中...")
 
         try:
-            submissions = _fetch_cik_filings(cik)
+            submissions = _fetch_cik_filings(cik, cfg)
             if not submissions:
                 continue
 
@@ -547,7 +555,7 @@ def run_institutional_13f_monitor(
                 print(f"    ⚠️  [13f] {name}: 13F ファイリングなし")
                 continue
 
-            holdings = _fetch_13f_holdings(acc, cik)
+            holdings = _fetch_13f_holdings(acc, cik, cfg)
             if not holdings:
                 print(f"    ⚠️  [13f] {name}: 保有リスト取得失敗")
                 continue

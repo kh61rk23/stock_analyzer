@@ -330,8 +330,17 @@ def _priority_tickers(cfg) -> tuple[list[str], list[str], list[str]]:
             if isinstance(item, dict):
                 screener.append(item.get("ticker") or item.get("code") or "")
 
+    # 2026-07-25 バッチ6: config.EDINET_SKIP_SECTORS を配線。
+    # 「EdinetDB取得をスキップする業種コード（優先度低・APIコール節約）」と
+    # 定義されていたのに実装が一度も参照しておらず、除外が効いていなかった。
+    # 保有銘柄（P1）と screener 候補（P2）は投資判断に直結するため除外しない。
+    # 対象は第3優先の代表銘柄のみ＝業種まるごとの取得を間引く、という設計意図に沿う。
+    _skip = {str(s) for s in (getattr(cfg, "EDINET_SKIP_SECTORS", None) or [])}
     representatives = []
-    for tickers in getattr(cfg, "SECTOR_REPRESENTATIVE_TICKERS", {}).values():
+    for _sector_code, tickers in getattr(
+            cfg, "SECTOR_REPRESENTATIVE_TICKERS", {}).items():
+        if str(_sector_code) in _skip:
+            continue
         representatives.extend(tickers)
     return holdings, screener[:50], representatives
 

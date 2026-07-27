@@ -37,6 +37,14 @@ from typing import Optional
 # ==============================================================
 
 DYNAMIC_SCREENER_MAX_ADD = 50    # 動的追加の上限社数
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'SCB_EDINET_CREDIT_THRESHOLD': 'EDINET_CREDIT_THRESHOLD',
+    'B6_SCREENER_CANDIDATE_BUILDER_DYNAMIC_SCREENER_MAX_ADD': 'DYNAMIC_SCREENER_MAX_ADD',
+}
+
 EDINET_CREDIT_THRESHOLD  = 80    # これ以上のcredit_scoreで動的追加
 JOURNAL_WATCH_STATUS     = "watching"  # investment_journal の対象ステータス
 
@@ -329,6 +337,7 @@ def run_screener_candidate_builder(cfg, results: dict = None) -> dict:
     Returns:
         build_dynamic_screener_tickers() の出力 dict
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  📋 スクリーニング対象銘柄ビルダー 開始...")
     result = build_dynamic_screener_tickers(cfg, results)
 

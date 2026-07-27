@@ -67,6 +67,14 @@ from typing import Optional
 
 # 実現度スコア（ソース × 役職ウェイト）
 # $realization\_score = source\_weight \times time\_decay$
+
+from config_sync import sync_module_constants
+
+_CFG_CONST_MAP = {
+    'PR_SOURCE_WEIGHTS': '_SOURCE_WEIGHTS',
+    'PR_CUMULATIVE_THRESHOLD_FOR_L3': '_CUMULATIVE_THRESHOLD_FOR_L3',
+}
+
 _SOURCE_WEIGHTS: dict = {
     "閣議決定":       1.00,
     "内閣決定":       1.00,
@@ -1133,6 +1141,7 @@ def run_policy_radar(cfg, results: Optional[dict] = None) -> dict:
           "timestamp":       str,
         }
     """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  🎯 [policy_radar] 政策レーダー 開始...")
     t0 = datetime.now()
 

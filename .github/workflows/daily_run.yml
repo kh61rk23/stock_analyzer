@@ -273,6 +273,29 @@ jobs:
           nonzero = sum(1 for v in bonus_map.values() if v != 0.0)
           print(f"✅ text_signal 完了: {nonzero}/{len(bonus_map)}社でリスク検出")
           EOF
+
+      # ── 3-B4. taxonomy台帳の投入（週次・2026-07-25追加）──────────
+      # T-1後半 / T-2A。どちらも実装・テストまで揃っていたのに Actions にも
+      # launchd にも登録が無く、承認済みseed 293ノードが BQ に入らないまま
+      # taxonomy 信号（BLOCK 55）が空のテーブルを参照していた。
+      #
+      # 実行順は固定: node（親テーブル）を先に MERGE してから、企業×node の
+      # マッピングを入れる。逆順だと参照先ノードが無い行ができる。
+      # どちらも MERGE で冪等。taxonomy_loader は _meta.status=APPROVED の
+      # バッチしか投入しないため、自動実行でも未承認データは入らない。
+      # continue-on-error: taxonomy が落ちても日次分析は続ける（信号1本ぶん）。
+      - name: 🗂️ Load taxonomy nodes & company map (weekly)
+        if: steps.set-mode.outputs.mode == 'weekly'
+        continue-on-error: true
+        env:
+          STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
+          BQ_CREDENTIALS:      ${{ secrets.BQ_CREDENTIALS }}
+          BQ_PROJECT_ID:       ${{ secrets.BQ_PROJECT_ID }}
+          EDINETDB_API_KEY:    ${{ secrets.EDINETDB_API_KEY }}
+        run: |
+          python -u taxonomy_loader.py 2>&1
+          python -u taxonomy_company_mapper.py 2>&1
+
       # ── 5. アナライザー実行 ───────────────────────────────
       # github actionsのAPIキーやファイルパスをそれぞれ定義している。
       # シングルモードの時は指定モジュールを実行。そうでないときはrun_headless.pyから参照する。
@@ -311,6 +334,32 @@ jobs:
           else
             python -u run_headless.py --mode ${{ steps.set-mode.outputs.mode }} 2>&1
           fi
+
+      # ── 5-A2. 月次・四半期ランナー（2026-07-25 B-5追加）──────────
+      # 月初のみ実行。E4淘汰 / S2月次成績 / S11配分提案 / S6コモディティ /
+      # S10税・NISA / E12戦略レビューを依存順に流す（monthly_runner.py）。
+      #
+      # 【なぜ日次に内包するか】これらは設計・実装・テストまで揃っていたのに
+      # Actions にも launchd にも実行主体が無く、2026-07-25 の棚卸しまで
+      # 一度も走っていなかった。専用ワークフローを増やすと Secrets 定義と
+      # commit 処理が二重管理になるため、CHANGELOG 2026-07-22 の
+      # 「Actions正本は daily_run.yml だけ」方針に合わせて内包する。
+      #
+      # 月初判定は monthly_runner 側（config.MONTHLY_RUN_MAX_DAY）が持つので
+      # ここは常時呼び、対象外の日は runner が自分でスキップする。
+      # continue-on-error: 月次提案の失敗で日次の状態コミットを落とさない。
+      - name: 🗓️ Run monthly runner (month start only)
+        if: steps.set-mode.outputs.mode != 'single'
+        continue-on-error: true
+        env:
+          STOCK_ANALYZER_BASE:  ${{ github.workspace }}/stock_data
+          BQ_CREDENTIALS:       ${{ secrets.BQ_CREDENTIALS }}
+          BQ_PROJECT_ID:        ${{ secrets.BQ_PROJECT_ID }}
+          EDINETDB_API_KEY:     ${{ secrets.EDINETDB_API_KEY }}
+          FUDOSAN_API_KEY:      ${{ secrets.FUDOSAN_API_KEY }}
+          POLICY_FRED_API_KEY:  ${{ secrets.POLICY_FRED_API_KEY }}
+        run: python -u monthly_runner.py 2>&1
+
       # ── 5-B. 状態ファイル・キャッシュをリポジトリにコミット ───────
       # 2026-07-12 BUG-03対応: .iqy生成（Excel Webクエリ）は廃止（ENABLE_EXCEL_EXPORT=False）。
       # あわせて「ダッシュボードCSVが存在する時だけコミット」というゲートを撤去した。
@@ -454,6 +503,14 @@ jobs:
             git add stock_data/data/ml_dataset/ 2>/dev/null || true
             # ── GDELT「最後に取れた値」永続キャッシュ（2026-07-17追加・Issue J-1）──
             git add stock_data/cache/gdelt_instability_cache.json 2>/dev/null || true
+            # ── 月次ランナーの成果物（2026-07-25 B-5追加）──────────
+            # 提案系の注文票と月次ループの実行状況。insights/ は上で add 済み。
+            git add stock_data/orders/ 2>/dev/null || true
+            git add stock_data/monthly_loop_status.json 2>/dev/null || true
+            # 実行間隔の判定に使う状態ファイル。これが永続化されないと
+            # 毎回「初回」扱いになり、30日間隔・隔週間隔が効かなくなる。
+            git add stock_data/data/geo_exposure_state.json 2>/dev/null || true
+            git add stock_data/data/deliberation_state.json 2>/dev/null || true
             git diff --cached --quiet || git commit -m "auto: daily update $(date '+%Y-%m-%d')"
             # 2026-07-16是正: 未ステージ変更が残ると pull --rebase が
             # 「You have unstaged changes」で失敗し、リモートが先行している日は
