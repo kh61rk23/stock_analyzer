@@ -1,5 +1,33 @@
 {
   "_comment": "S8 LLMニュース・アルファ（D-02=b・週次手動）。記入手順= 01_最新版ロードマップ・必要書類/S8_LLMニュースアルファ週次手動_手順書_20260712.md。上書き方式・signals空配列可。現状はsignal_aggregator未配線（参考情報・D-19で配線判断）。",
-  "as_of": null,
-  "signals": []
+  "as_of": "2026-07-28",
+  "signals": [
+    {
+      "ticker": "ORCL",
+      "market": "US",
+      "direction": "bull",
+      "strength": 2,
+      "thesis": "米国防総省がOracleと最大70億ドル・最長10年のソフトウェア一括契約(2026/7/23発表)を締結。長期契約の収益価値が短期的な株価反応にまだ十分織り込まれていない可能性。",
+      "source_url": "https://www.cnbc.com/2026/07/23/oracle-wins-10-year-pentagon-software-contract-worth-up-to-7-billion.html",
+      "expire_date": "2026-08-20"
+    },
+    {
+      "ticker": "RKLB",
+      "market": "US",
+      "direction": "bull",
+      "strength": 2,
+      "thesis": "Rocket Labが米宇宙軍から過去最大となる準軌道打ち上げ12回・最大2.66億ドルの契約(2026/7/27発表)を獲得。2028年末までの複数年契約価値が織り込み途上とみられる。",
+      "source_url": "https://www.globenewswire.com/news-release/2026/07/27/3333334/0/en/rocket-lab-awarded-record-266m-missile-defense-contract-with-u-s-space-force-for-suborbital-launches.html",
+      "expire_date": "2026-08-24"
+    },
+    {
+      "ticker": "5830.T",
+      "market": "JP",
+      "direction": "bull",
+      "strength": 2,
+      "thesis": "いよぎんホールディングスが愛媛銀行との2027年4月メド経営統合で基本合意(2026/7/24発表)。総資産12兆円規模の地銀グループ誕生も、最終契約(26年12月予定)前でシナジーはまだ株価に織り込み途上。",
+      "source_url": "https://www.nikkei.com/article/DGXZQOUB23BBN0T20C26A7000000/",
+      "expire_date": "2026-08-21"
+    }
+  ]
 }

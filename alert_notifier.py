@@ -38,6 +38,16 @@ from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+# ── 審議キューの機械可読マーカー（2026-07-28）────────────────
+# Claude の予定済みタスクが Gmail MCP でこのメールを読み、審議対象を
+# 取り出すための固定プレフィックス。**変更するとタスク側の抽出が壊れる**
+# ため、変えるときは以下も同時に更新すること:
+#   ~/.claude/scheduled-tasks/stock-analyzer-deliberation/SKILL.md
+#   tests/test_deliberation_queue.py
+# 週次レポート（weekly_report_generator）も同じ文字列を使う。
+DELIBERATION_QUEUE_MARKER = "DELIBERATION_QUEUE_V1:"
+
+
 # ── fmt_cap: 時価総額・FCF等の大数値フォーマット ──────────────
 def fmt_cap(val) -> str:
     """大きな数値を兆・億単位で整形（finance_logic.fmt_large 相当）"""
@@ -260,8 +270,11 @@ def extract_alerts(cfg, results: dict) -> list:
                 line += f"\n    💬 {reason}"
 
             # 代表銘柄の財務ハイライト（yfinance全フィールドから抽出）
+            # 2026-07-28: 表示件数が 2 固定で「代表2銘柄しか出ない」状態だったため
+            # config 化した（ALERT_SECTOR_TOP_COMPANIES / 既定は従来どおり 2）。
             top_cos = r.get("top_companies", [])
-            for c in top_cos[:2]:
+            _top_n = int(getattr(cfg, "ALERT_SECTOR_TOP_COMPANIES", 2))
+            for c in top_cos[:_top_n]:
                 if not c.get("fetch_ok"):
                     continue
                 cname = c.get("name", c.get("ticker", ""))[:12]
@@ -295,17 +308,152 @@ def extract_alerts(cfg, results: dict) -> list:
                         line += f"\n    📈 売上CAGR(3年): {rev_cagr*100:+.1f}%/年"
                 gov = tdata.get("gov_meta", {})
                 if gov:
-                    line += f"\n    📋 有報提出: {gov.get('submit_date','N/A')}"
+                    # 2026-07-28 バグ修正: submit_date はキーが存在して値が None の
+                    # ケースがあり、get(key,'N/A') では None がそのまま出て
+                    # 「📋 有報提出: None」と表示されていた。値が無いなら行ごと出さない。
+                    _submit = gov.get("submit_date")
+                    if _submit:
+                        line += f"\n    📋 有報提出: {_submit}"
 
             lines.append(line)
 
         if lines:
             alerts.append({
                 "trigger":  "top_sectors",
-                "title":    "🏆 注目業種トップ3（本日）",
+                "title":    "🇯🇵 注目業種トップ3（日本株・本日）",
                 "body":     "\n".join(lines),
                 "severity": "info",
             })
+
+    # ── ⑥-2 米国株サマリー（2026-07-28 新設） ──────────────────
+    # 【背景】us_screener は毎日 900〜1000社をスクリーニングし 300社超が通過
+    #   しているのに、alert_notifier.py には us_screener / us_sectors への参照が
+    #   1つも無く、日次メールに米国株の情報が一切載っていなかった。
+    #   （grep "us_screener\|us_sectors" alert_notifier.py → 0件で実測確認）
+    if getattr(cfg, "ALERT_ON_US_SUMMARY", True):
+        try:
+            _us_lines = []
+
+            # (a) USセクター騰落（us_sector_pipeline）
+            _us_sec = results.get("us_sectors", {}) or {}
+            _sec_list = _us_sec.get("sector_list", []) if not _us_sec.get("skipped") else []
+            _ok = [r for r in _sec_list
+                   if isinstance(r, dict) and r.get("score_result", {}).get("fetch_ok")]
+            if _ok:
+                _n = int(getattr(cfg, "ALERT_US_SECTOR_TOP_N", 3))
+                _us_lines.append("  【セクター】")
+                for r in _ok[:_n]:
+                    _s = r.get("sector", {}) or {}
+                    _sr = r.get("score_result", {}) or {}
+                    _nm = _s.get("name_ja") or _s.get("name_en") or _s.get("etf", "")
+                    _risk = _sr.get("risk_level", "")
+                    _risk_s = f" | リスク:{_risk}" if _risk else ""
+                    _us_lines.append(
+                        f"    ▲ {_nm}（{_s.get('etf','')}）: "
+                        f"{_sr.get('score', 0):.0f}点{_risk_s}")
+                for r in _ok[-1:]:
+                    _s = r.get("sector", {}) or {}
+                    _sr = r.get("score_result", {}) or {}
+                    _nm = _s.get("name_ja") or _s.get("name_en") or _s.get("etf", "")
+                    _us_lines.append(
+                        f"    ▼ {_nm}（{_s.get('etf','')}）: "
+                        f"{_sr.get('score', 0):.0f}点")
+
+            # (b) USスクリーナー通過上位（us_stock_screener）
+            _us_scr = results.get("us_screener", {}) or {}
+            if not _us_scr.get("skipped"):
+                _picks = _us_scr.get("top_picks") or _us_scr.get("passed") or []
+                if _picks:
+                    _pn = int(getattr(cfg, "ALERT_US_TOP_PICKS", 5))
+                    _us_lines.append(
+                        f"  【スクリーニング】{_us_scr.get('pass_count', 0)}社通過 "
+                        f"/ {_us_scr.get('screened_count', 0)}社中")
+                    for c in _picks[:_pn]:
+                        if not isinstance(c, dict):
+                            continue
+                        _nm = str(c.get("name") or c.get("ticker", ""))[:18]
+                        _pp = []
+                        if c.get("per"):
+                            _pp.append(f"PER:{c['per']:.1f}x")
+                        if c.get("roe"):
+                            _pp.append(f"ROE:{c['roe']*100:.0f}%")
+                        if c.get("div_yield"):
+                            _pp.append(f"配当:{c['div_yield']*100:.1f}%")
+                        if c.get("analyst_upside") is not None:
+                            _pp.append(f"目標乖離:{c['analyst_upside']*100:+.0f}%")
+                        _detail = f" | {' | '.join(_pp)}" if _pp else ""
+                        _us_lines.append(
+                            f"    📌 {_nm}（{c.get('ticker','')}）: "
+                            f"{c.get('composite_score', 0):.0f}点"
+                            f" | {c.get('sector','')}{_detail}")
+
+            if _us_lines:
+                alerts.append({
+                    "trigger":  "us_summary",
+                    "title":    "🇺🇸 米国株サマリー（本日）",
+                    "body":     "\n".join(_us_lines),
+                    "severity": "info",
+                })
+        except Exception as _us_err:
+            print(f"  ⚠️  [alert] 米国株サマリー生成失敗: {str(_us_err)[:80]}")
+
+    # ── ⑥-3 審議キュー候補（2026-07-28 新設） ──────────────────
+    # 隔週のB部門審議（E3）へ次に上げる銘柄を、毎日メールで見えるようにする。
+    # 並び順は deliberation_scheduler.build_deliberation_queue と同一なので、
+    # ここに出る先頭銘柄が隔週ジョブで実際に選定される銘柄になる。
+    if getattr(cfg, "ALERT_ON_DELIBERATION_QUEUE", True):
+        try:
+            from deliberation_scheduler import get_queue_for_report
+            _dq = get_queue_for_report(
+                cfg, results,
+                top_n=int(getattr(cfg, "DELIBERATION_QUEUE_TOP_N", 5)))
+            _q = _dq.get("queue", [])
+            if _q:
+                _ql = []
+                for _i, _c in enumerate(_q, 1):
+                    _mark = "▶" if _i == 1 else " "
+                    _sc = _c.get("composite_score")
+                    _sc_s = f"{float(_sc):.0f}点" if _sc is not None else "—"
+                    _nm = str(_c.get("name") or _c.get("ticker", ""))[:16]
+                    _extra = []
+                    if _c.get("sector_name"):
+                        _extra.append(str(_c["sector_name"]))
+                    elif _c.get("sector_code"):
+                        _extra.append(str(_c["sector_code"]))
+                    if _c.get("strategy_label"):
+                        _extra.append(str(_c["strategy_label"]))
+                    _ex_s = f" | {' / '.join(_extra)}" if _extra else ""
+                    _ql.append(
+                        f"  {_mark} {_i}. {_nm}（{_c.get('ticker','')}）: "
+                        f"{_sc_s}{_ex_s}")
+                _ql.append("")
+                _ql.append(f"  ▶ = 次回の審議で選定される銘柄"
+                           f"（隔週 / {_dq.get('interval_days', 14)}日間隔）")
+                _ql.append(f"  審議済み除外: {_dq.get('already_count', 0)}銘柄"
+                           f"（出所: {_dq.get('source', '不明')}）")
+                if _dq.get("partial"):
+                    # 除外集合が正本でないことは必ず明示する。
+                    # Actions からは vault の 40_判断台帳.md が読めないため、
+                    # 「審議済みなのに候補に出る」ことが起こり得る。
+                    _ql.append("  ⚠️ 判断台帳（正本）を参照できていないため、"
+                               "審議済み銘柄が混じる可能性があります")
+                # ── 機械可読マーカー（2026-07-28）─────────────────
+                # Claude の予定済みタスクが Gmail MCP でこのメールを読み、
+                # 審議対象を取り出すための行。整形済みの日本語本文を
+                # スクレイピングすると書式変更で壊れるため、
+                # 「固定プレフィックス＋カンマ区切りティッカー」だけを置く。
+                # 本文は HTML で送られるが、この形なら正規表現で拾える。
+                _ql.append("")
+                _ql.append(f"{DELIBERATION_QUEUE_MARKER} "
+                           + ",".join(str(c.get("ticker", "")) for c in _q))
+                alerts.append({
+                    "trigger":  "deliberation_queue",
+                    "title":    f"🗳️ 審議キュー候補 {len(_q)}銘柄",
+                    "body":     "\n".join(_ql),
+                    "severity": "info",
+                })
+        except Exception as _dq_err:
+            print(f"  ⚠️  [alert] 審議キュー生成失敗: {str(_dq_err)[:80]}")
 
     # ── ⑦ 高配当銘柄アラート（新規） ──────────────────────────
     min_dy = getattr(cfg, "ALERT_MIN_DIVIDEND_YIELD", 0.04)  # デフォルト4%
@@ -1660,10 +1808,30 @@ def extract_alerts(cfg, results: dict) -> list:
         _sla = results.get("data_sla_report", {}) or {}
         _violations = _sla.get("violations", [])
         if _violations:
-            _lines = [f"  ⏰ [{v.get('kind','')}] {v.get('status','')} "
-                      f"経過{v.get('age_days','?')}日 (SLA {v.get('limit_days','?')}日): "
-                      f"{str(v.get('path',''))[-50:]}"
-                      for v in _violations[:8]]
+            # 2026-07-28 バグ修正:
+            #  ① status="missing" のとき data_reliability は age_days=None を
+            #     明示的に入れる。get(key, '?') は「キーがある」ため None を返し、
+            #     「経過None日」と表示されていた。missing は経過日数が無意味なので
+            #     文言自体を分ける。
+            #  ② パスを [-50:] で切っていたため先頭が欠けて
+            #     「zer/stock_analyzer/...」のような判読不能な断片になっていた。
+            #     欠けた場合は先頭に … を付けて「省略」であることを示す。
+            def _sla_path(p: str, width: int = 50) -> str:
+                p = str(p or "")
+                return p if len(p) <= width else "…" + p[-(width - 1):]
+
+            def _sla_line(v: dict) -> str:
+                kind   = v.get("kind", "")
+                status = v.get("status", "")
+                limit  = v.get("limit_days", "?")
+                path   = _sla_path(v.get("path", ""))
+                age    = v.get("age_days")
+                if status == "missing" or age is None:
+                    return f"  ⏰ [{kind}] ファイルなし (SLA {limit}日): {path}"
+                return (f"  ⏰ [{kind}] {status} 経過{age}日 "
+                        f"(SLA {limit}日): {path}")
+
+            _lines = [_sla_line(v) for v in _violations[:8]]
             alerts.append({
                 "trigger":  "data_sla_violation",
                 "title":    f"⏰ データ鮮度SLA違反 {len(_violations)}件",

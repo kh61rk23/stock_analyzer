@@ -27,6 +27,14 @@ except ImportError:
     BQ_CREDENTIALS_PATH = os.environ.get("BQ_CREDENTIALS_PATH", "")
     BQ_DATASET         = os.environ.get("BQ_DATASET", "edinet")
 
+# 1クエリあたりのスキャン上限（暴走クエリの費用ガード / 2026-07-28）
+try:
+    from config import BQ_MAX_BYTES_BILLED
+except ImportError:
+    BQ_MAX_BYTES_BILLED = int(
+        os.environ.get("BQ_MAX_BYTES_BILLED", 10 * 1024 ** 3)
+    )
+
 
 # ============================================================
 # クライアント本体
@@ -93,7 +101,31 @@ class EDINETBQClient:
             )
         self.project = project
         self.dataset = f"{project}.{BQ_DATASET}"
-        self.client  = bigquery.Client(project=project, credentials=creds)
+
+        # ── 2026-07-28: 暴走クエリの費用上限（maximum_bytes_billed）──────
+        # 1クエリでスキャンできるバイト数に上限を設ける。超えるクエリは
+        # 実行前に失敗し、課金は 0 になる（BigQuery の仕様）。
+        # default_query_job_config に入れておくと、各所の
+        # bigquery.QueryJobConfig(query_parameters=[...]) を書き換えなくても、
+        # 未設定プロパティが既定値で補完されるため全クエリに効く。
+        # 既定 10GB = 無料枠(月1TB)の約1%。本システムの最大テーブルが17MB
+        # であることを踏まえた「事故だけを止める」水準。
+        try:
+            _max_bytes = int(BQ_MAX_BYTES_BILLED or 0)
+        except (TypeError, ValueError):
+            _max_bytes = 0
+        if _max_bytes <= 0:
+            _max_bytes = 10 * 1024 ** 3      # 10GB（0/未設定時のフォールバック）
+
+        self.max_bytes_billed = _max_bytes
+        _default_job_config = bigquery.QueryJobConfig(
+            maximum_bytes_billed=_max_bytes
+        )
+        self.client = bigquery.Client(
+            project=project,
+            credentials=creds,
+            default_query_job_config=_default_job_config,
+        )
 
     # ----------------------------------------------------------
     # 書き込み系

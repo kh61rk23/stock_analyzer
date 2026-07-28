@@ -672,6 +672,62 @@ def _section_etf(results: dict) -> list:
 # BLOCK 5: スクリーニング結果
 # ==============================================================
 
+def _section_deliberation_queue(results: dict, cfg) -> list:
+    """B部門審議（E3）へ次に上げる候補の一覧（2026-07-28 新設）。
+
+    並び順は deliberation_scheduler.build_deliberation_queue と同一。
+    先頭が隔週ジョブで実際に選定される銘柄になる。
+    """
+    lines = ["## 🗳️ 審議キュー候補（B部門 E3）", ""]
+    try:
+        from deliberation_scheduler import get_queue_for_report
+        dq = get_queue_for_report(
+            cfg, results,
+            top_n=int(getattr(cfg, "DELIBERATION_QUEUE_TOP_N", 5)))
+    except Exception as e:
+        lines.append(f"*キュー生成エラー: {str(e)[:80]}*")
+        lines.append("")
+        return lines
+
+    queue = dq.get("queue", [])
+    if not queue:
+        lines.append("*未審議の候補なし（screener 通過銘柄が全て審議済み"
+                     " or screener データなし）*")
+        lines.append("")
+        return lines
+
+    lines.append(f"次回審議（隔週 / {dq.get('interval_days', 14)}日間隔）では"
+                 f"**先頭の1銘柄**が自動選定されます。")
+    lines.append("")
+    lines.append("| # | 銘柄 | コード | スコア | 業種 | 戦略 |")
+    lines.append("|---|---|---|---|---|---|")
+    for i, c in enumerate(queue, 1):
+        mark = "**▶ 1**" if i == 1 else str(i)
+        sc = c.get("composite_score")
+        sc_s = f"{float(sc):.1f}" if sc is not None else "—"
+        name = str(c.get("name") or c.get("ticker", ""))[:20]
+        sector = c.get("sector_name") or c.get("sector_code") or "—"
+        strat = c.get("strategy_label") or "—"
+        lines.append(f"| {mark} | {name} | `{c.get('ticker','')}` | "
+                     f"{sc_s} | {sector} | {strat} |")
+    lines.append("")
+    lines.append(f"- 審議済み除外: **{dq.get('already_count', 0)}銘柄**"
+                 f"（出所: {dq.get('source', '不明')}）")
+    if dq.get("partial"):
+        lines.append("- ⚠️ 判断台帳（正本）を参照できていないため、"
+                     "審議済み銘柄が混じる可能性があります")
+    # 機械可読マーカー（日次メールと同一形式。詳細は alert_notifier 側の注記）
+    try:
+        from alert_notifier import DELIBERATION_QUEUE_MARKER as _mk
+    except Exception:
+        _mk = "DELIBERATION_QUEUE_V1:"
+    lines.append("")
+    lines.append(f"{_mk} "
+                 + ",".join(str(c.get("ticker", "")) for c in queue))
+    lines.append("")
+    return lines
+
+
 def _section_screener(results: dict) -> list:
     lines = ["## 🔍 個別銘柄スクリーニング", ""]
     screener = results.get("screener", {})
@@ -950,9 +1006,13 @@ def _section_biz_summaries(results: dict) -> list:
         name = d.get("name", ticker)
         core = d.get("core_summary", "")
         if core:
+            # 2026-07-28 バグ修正: ここは「原文が英語か翻訳済みか」を表す記号だったが、
+            # 未翻訳の日本株にも 🇺🇸 が付き「米国銘柄」と誤読される状態だった。
+            # 国旗は市場（.T なら JP）から決め、翻訳状態は別記号で示す。
             translated = d.get("translated", False)
-            src_icon   = "🌐" if translated else "🇺🇸"
-            lines.append(f"**{name}** (`{ticker}`) {src_icon}")
+            market_icon = "🇯🇵" if str(ticker).upper().endswith(".T") else "🇺🇸"
+            trans_icon  = " 🌐" if translated else ""
+            lines.append(f"**{name}** (`{ticker}`) {market_icon}{trans_icon}")
             lines.append(f"> {core}")
             lines.append("")
 
@@ -971,13 +1031,24 @@ def _section_macro(results: dict) -> list:
     if isinstance(policy, dict):
         rates = policy.get("current_rates", {})
         if rates:
-            lines.append("**主要中銀 政策金利**")
-            for bank, info in rates.items():
-                if isinstance(info, dict):
-                    rate = info.get("rate", info.get("current", "N/A"))
-                    chg  = info.get("change_pt", 0)
-                    chg_s = f"({chg:+.3f}%pt)" if chg else ""
-                    lines.append(f"  {bank}: {rate}% {chg_s}")
+            # 2026-07-28 バグ修正: producer/consumer キー不整合。
+            # policy_tracker.py L456 は {"label","bank","value","date"} を格納するが、
+            # ここは "rate" / "current" を読んでいたため全行 "N/A%" になっていた。
+            # 表示名も辞書キー（"^IRX" 等の yfinance ティッカー）をそのまま
+            # 出していたため「主要中銀 政策金利」の見出しと内容が食い違っていた。
+            lines.append("**主要政策金利・指標**")
+            for ticker, info in rates.items():
+                if not isinstance(info, dict):
+                    continue
+                val = info.get("value")
+                if val is None:                      # 取得できた項目だけ出す
+                    continue
+                label = info.get("label") or info.get("bank") or ticker
+                chg   = info.get("change_pt", 0)
+                chg_s = f"（{chg:+.3f}%pt）" if chg else ""
+                asof  = info.get("date", "")
+                asof_s = f" [{asof}]" if asof else ""
+                lines.append(f"  {label}（{ticker}）: {val}%{chg_s}{asof_s}")
             lines.append("")
 
     # マクロシグナル（macro結果から）
@@ -3455,6 +3526,7 @@ def generate_weekly_report(cfg, results: dict) -> dict:
     sections.append(_section_etf(results))
     sections.append(_section_risk_constraints(results))   # ★ C-1/C-2追加
     sections.append(_section_screener(results))
+    sections.append(_section_deliberation_queue(results, cfg))   # 2026-07-28
     sections.append(_section_analyst_revision(results, cfg))        # Wave 2 - FE-2
     sections.append(_section_ignition_alert(results, cfg))          # Wave 2 - FE-4
     sections.append(_section_pead_drift_candidates(results, cfg))   # Wave 3 - FE-5
@@ -3516,32 +3588,36 @@ def generate_weekly_report(cfg, results: dict) -> dict:
     ])
 
     # Wave 6 - G-X: 資源権益・地政学影響セクション
+    # 2026-07-28 バグ修正: sections は「行リストのリスト」であり、末尾の結合が
+    #   "\n".join(line for sec in sections for line in sec)
+    # と2重ループになっている。ここだけ sections.append("文字列") や
+    # sections += _section_*() を使っていたため、文字列が1文字ずつ
+    # イテレートされ、レポートが縦書き（1文字1行）になっていた。
+    # 他の全セクションと同じく「行リストを1個 append する」形に統一する。
     try:
         if getattr(cfg, "ENABLE_GEO_SIGNAL", False):
-            sections.append("")
-            sections += _section_geo_exposure(results, cfg)
-            sections += _section_geo_signal_detail(results, cfg)
+            sections.append([""])
+            sections.append(_section_geo_exposure(results, cfg))
+            sections.append(_section_geo_signal_detail(results, cfg))
         elif results.get("geo_risk") and not results["geo_risk"].get("skipped"):
             # ENABLE_GEO_SIGNAL=False でも国別リスクデータがあれば簡易表示
-            sections.append("")
-            sections.append("## ⛏️ 資源権益・地政学影響（Wave 6 - G-X）")
-            sections.append("")
-            sections.append(
-                "*ENABLE_GEO_SIGNAL=False のため geo_impact_bonus 計算はスキップ。*"
-            )
-            sections.append(
+            sections.append([
+                "",
+                "## ⛏️ 資源権益・地政学影響（Wave 6 - G-X）",
+                "",
+                "*ENABLE_GEO_SIGNAL=False のため geo_impact_bonus 計算はスキップ。*",
                 "*BQ に country_risk_daily / company_country_exposure "
-                "のデータが蓄積されたら True に切り替えてください。*"
-            )
-            sections.append("")
+                "のデータが蓄積されたら True に切り替えてください。*",
+                "",
+            ])
     except Exception as _gx_err:
         # G-X セクション生成失敗はレポート全体を止めない
-        sections.append("")
-        sections.append(
+        sections.append([
+            "",
             f"*[G-X] 地政学セクション生成エラー（スキップ）: "
-            f"{str(_gx_err)[:80]}*"
-        )
-        sections.append("")
+            f"{str(_gx_err)[:80]}*",
+            "",
+        ])
 
     # Markdown全文結合
     report_md = "\n".join(line for sec in sections for line in sec)
