@@ -1258,6 +1258,20 @@ BQ_PROJECT_ID: str       = os.getenv("BQ_PROJECT_ID", "")
 BQ_CREDENTIALS_PATH: str = os.getenv("BQ_CREDENTIALS_PATH", "")
 BQ_DATASET: str          = os.getenv("BQ_DATASET", "edinet")
 
+# ── BigQuery 費用ガード（2026-07-28 / 課金有効化に伴い追加）──────────
+# 1クエリでスキャンできるバイト数の上限。超えるクエリは実行前に失敗し、
+# 課金は 0 になる（BigQuery の maximum_bytes_billed 仕様）。
+# edinet_bq_client が default_query_job_config に設定するため、
+# 各所の QueryJobConfig を書き換えなくても全クエリに効く。
+#
+# 【水準の根拠】無料枠は月1TB。本システムの最大テーブルは
+# edinet.text_analysis の 17MB、全テーブル合計でも約20MB（2026-07-28実測）。
+# 既定10GB は通常運用の数百倍だが、無料枠の約1%でしかないため
+# 「事故だけを止め、正常な運用は絶対に妨げない」水準として設定。
+BQ_MAX_BYTES_BILLED: int = int(
+    os.getenv("BQ_MAX_BYTES_BILLED", str(10 * 1024 ** 3))
+)
+
 # 有報の検索期間（日）: 直近 60 日以内の有報を検索（60回/社の検索）
 EDINET_LOOKBACK_DAYS = 60
 
@@ -1670,6 +1684,20 @@ ENABLE_WEEKLY_REPORT: bool = True
 # 高配当アラート（配当利回りがこの値以上の銘柄を通知）
 ALERT_ON_HIGH_DIVIDEND: bool = True
 ALERT_MIN_DIVIDEND_YIELD: float = 0.04   # 4%以上
+
+# ── 日次メール表示件数・米国株サマリー（2026-07-28 追加）──────
+# 注目業種トップ3で業種ごとに出す代表銘柄の件数。
+# 従来 alert_notifier.py に 2 がハードコードされており「代表2銘柄しか
+# 出ない」状態だったため設定化した（既定値は従来と同じ 2 ＝挙動不変）。
+ALERT_SECTOR_TOP_COMPANIES: int = 2
+
+# 米国株サマリーを日次メールに載せるか。
+# us_screener は毎日900〜1000社を処理し300社超が通過しているのに、
+# alert_notifier.py に us_screener / us_sectors への参照が1つも無く、
+# 日次メールに米国株が一切載っていなかったため新設した。
+ALERT_ON_US_SUMMARY: bool = True
+ALERT_US_SECTOR_TOP_N: int = 3    # USセクターの上位表示件数（別途ワースト1件を付す）
+ALERT_US_TOP_PICKS:    int = 5    # USスクリーナー通過銘柄の表示件数
 
 # アナリスト強気推奨アラート
 ALERT_ON_STRONG_BUY: bool = True
@@ -4410,6 +4438,12 @@ ENABLE_INVESTMENT_DEPT: bool = True
 # 実際に走らせるかはこの間隔で判定する（launchd に隔週指定が無いため）。
 # 前回実行日は stock_data/data/deliberation_state.json に残る。
 DELIBERATION_INTERVAL_DAYS: int = 14
+
+# ── 審議キュー（2026-07-28 追加）────────────────────────────────
+# 日次・週次メールに「次に審議へ上げる候補」を何件出すか。
+# 先頭1件が隔週ジョブ（deliberation_scheduler）で実際に選定される銘柄。
+DELIBERATION_QUEUE_TOP_N: int = 5
+ALERT_ON_DELIBERATION_QUEUE: bool = True
 # V-01=a決定（2026-07-12）: 実働正本はローカル側 Vault2_ClaudeCode_Local。
 # 旧iCloud側 Vault2_ClaudeCode は2026-06-12凍結（凍結READMEを設置済み・書込禁止）。
 INVESTMENT_DEPT_VAULT_DIR: str = os.getenv(

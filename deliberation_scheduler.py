@@ -34,19 +34,45 @@ if str(REPO) not in sys.path:
 
 # ── 純粋ロジック（pytest対象） ────────────────────────────────
 
-def select_deliberation_target(candidates: list, already: set) -> dict | None:
+def build_deliberation_queue(candidates: list, already: set,
+                             top_n: int = 5) -> list:
     """
-    composite_score 降順で「未審議」の先頭候補を返す。
-    candidates: [{"ticker","composite_score","sector_code",...}]
-    already: 既に審議済みの ticker 集合（40_判断台帳から抽出）
-    Returns: 選定候補dict / なければ None
+    composite_score 降順で「未審議」の候補を最大 top_n 件返す（審議キュー）。
+
+    2026-07-28 新設。従来は先頭1件だけを返す select_deliberation_target が
+    あったが、日次・週次メールに「次に審議へ上げる候補」を一覧で出したい
+    ため一般化した。**select_deliberation_target はこの関数の先頭要素を
+    返すだけの薄いラッパーに変更してあるので、メールに出る並びと
+    隔週ジョブが実際に選ぶ銘柄は必ず一致する。**
+
+    Args:
+        candidates: [{"ticker","composite_score","sector_code",...}]
+        already:    既に審議済みの ticker 集合
+        top_n:      返す最大件数
+
+    Returns:
+        composite_score 降順のリスト（0件なら空リスト）
     """
     ranked = sorted(
         (c for c in candidates
          if c.get("ticker") and c.get("composite_score") is not None
          and c["ticker"] not in already),
         key=lambda c: -float(c["composite_score"]))
-    return ranked[0] if ranked else None
+    return ranked[:max(0, int(top_n))]
+
+
+def select_deliberation_target(candidates: list, already: set) -> dict | None:
+    """
+    composite_score 降順で「未審議」の先頭候補を返す。
+    candidates: [{"ticker","composite_score","sector_code",...}]
+    already: 既に審議済みの ticker 集合（40_判断台帳から抽出）
+    Returns: 選定候補dict / なければ None
+
+    ※ 実体は build_deliberation_queue の先頭。メール表示と選定を
+      同一ロジックに揃えるための委譲（2026-07-28）。
+    """
+    queue = build_deliberation_queue(candidates, already, top_n=1)
+    return queue[0] if queue else None
 
 
 def parse_deliberated_tickers(ledger_text: str) -> set:
@@ -151,17 +177,148 @@ def _load_ledger_tickers(cfg) -> set:
         return set()
 
 
+# ── 審議済みティッカーの解決（2026-07-28 / メール表示用）────────────
+#
+# 【なぜ複数ソースが要るか】
+#   審議済みの正本は Obsidian vault の 40_判断台帳.md だが、これは Mac 上
+#   にしか無い。日次・週次メールを生成する GitHub Actions からは読めない。
+#   除外集合が空のままだと「審議済みの銘柄がキュー先頭に出続ける」ので、
+#   リポジトリ内にある記録で補完する。
+#
+# 優先順:
+#   ① vault の 40_判断台帳.md（正本。Mac 実行時のみ読める）
+#   ② stock_data/data/deliberated_tickers.json
+#      （obsidian_sync が vault から書き出すリポジトリ側ミラー）
+#   ③ investment_journal.json のティッカー
+#      （※承認済みBuy行のみ＝審議したが見送った銘柄は含まれない部分集合）
+
+_DELIBERATED_MIRROR = "deliberated_tickers.json"
+
+
+def _load_journal_tickers(cfg) -> set:
+    data_dir = Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
+    try:
+        raw = json.loads(
+            (data_dir / "investment_journal.json").read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    entries = raw.get("entries", raw) if isinstance(raw, dict) else raw
+    if not isinstance(entries, list):
+        return set()
+    return {str(e.get("ticker")) for e in entries
+            if isinstance(e, dict) and e.get("ticker")}
+
+
+def _load_mirror_tickers(cfg) -> set:
+    data_dir = Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
+    try:
+        raw = json.loads(
+            (data_dir / _DELIBERATED_MIRROR).read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    tickers = raw.get("tickers", []) if isinstance(raw, dict) else raw
+    return {str(t) for t in tickers if t} if isinstance(tickers, list) else set()
+
+
+def resolve_deliberated(cfg) -> tuple[set, str]:
+    """審議済みティッカー集合と、その出所ラベルを返す。
+
+    Returns:
+        (tickers, source)  source は "台帳(正本)" / "ミラー" / "journal(部分)" /
+                           "なし" のいずれか。メールに但し書きを出すために使う。
+    """
+    ledger = _load_ledger_tickers(cfg)
+    if ledger:
+        return ledger, "台帳(正本)"
+    mirror = _load_mirror_tickers(cfg)
+    if mirror:
+        return mirror, "ミラー"
+    journal = _load_journal_tickers(cfg)
+    if journal:
+        return journal, "journal(部分)"
+    return set(), "なし"
+
+
+def export_deliberated_mirror(cfg) -> dict:
+    """vault の判断台帳をリポジトリ側へミラーする（Mac 実行時のみ有効）。
+
+    Actions 側のメール生成が正しい除外集合を使えるようにするための橋渡し。
+    vault が読めない環境では何もしない（skipped を返す）。
+    """
+    tickers = _load_ledger_tickers(cfg)
+    if not tickers:
+        return {"skipped": True, "reason": "vault の判断台帳を読めない", "count": 0}
+    data_dir = Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / _DELIBERATED_MIRROR).write_text(
+            json.dumps({
+                "tickers": sorted(tickers),
+                "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "source": "40_判断台帳.md",
+            }, ensure_ascii=False, indent=2),
+            encoding="utf-8")
+    except Exception as e:
+        return {"skipped": True, "reason": str(e)[:80], "count": 0}
+    return {"skipped": False, "count": len(tickers)}
+
+
+def get_queue_for_report(cfg, results: dict = None, top_n: int = 5) -> dict:
+    """日次・週次メール用に審議キューを組み立てる（副作用なし・読み取りのみ）。
+
+    候補は results["screener"]["candidates"] を優先し、無ければ
+    screener_history.json から読む（Actions/ローカルどちらでも動くように）。
+
+    Returns:
+        {"queue": [...], "source": str, "already_count": int,
+         "partial": bool, "interval_days": int}
+        partial=True は除外集合が正本でない（＝審議済みが混じり得る）ことを示す。
+    """
+    cands = []
+    if isinstance(results, dict):
+        cands = ((results.get("screener") or {}).get("candidates") or [])
+    if not cands:
+        cands = _load_screener_candidates(cfg)
+
+    already, source = resolve_deliberated(cfg)
+    queue = build_deliberation_queue(cands, already, top_n=top_n)
+    return {
+        "queue":         queue,
+        "source":        source,
+        "already_count": len(already),
+        "partial":       source != "台帳(正本)",
+        "interval_days": int(getattr(cfg, "DELIBERATION_INTERVAL_DAYS", 14)),
+    }
+
+
 def run_prep(cfg, ticker: str = "", dry_run: bool = False) -> dict:
     """メインエントリ。Returns: {"ticker","case_id","packet","prompts_path","skipped"}"""
+    # 2026-07-28: vault が読める環境（Mac）でのみ、審議済みティッカーを
+    # リポジトリ側へミラーする。GitHub Actions のメール生成が正しい除外集合を
+    # 使えるようにするための橋渡し（Actions からは vault を読めないため）。
+    if not dry_run:
+        _mirror = export_deliberated_mirror(cfg)
+        if not _mirror.get("skipped"):
+            print(f"  🔁 審議済みミラー更新: {_mirror.get('count', 0)}銘柄")
+
     if not ticker:
         cands = _load_screener_candidates(cfg)
         already = _load_ledger_tickers(cfg)
-        target = select_deliberation_target(cands, already)
-        if not target:
+        # メールに出したキューと同じ並び。先頭が選定対象になる。
+        queue = build_deliberation_queue(
+            cands, already,
+            top_n=int(getattr(cfg, "DELIBERATION_QUEUE_TOP_N", 5)))
+        if not queue:
             print("  ⏩ 審議対象なし（screener候補が空 or 全て審議済み）")
             return {"skipped": True}
+        target = queue[0]
         ticker = target["ticker"]
         print(f"  🎯 審議対象選定: {ticker}（composite={target.get('composite_score')}）")
+        if len(queue) > 1:
+            _rest = " / ".join(
+                f"{c.get('ticker')}({c.get('composite_score')})"
+                for c in queue[1:])
+            print(f"     次点: {_rest}")
 
     case_id = f"{datetime.now().strftime('%Y-%m-%d')}_{ticker.replace('.', '')}"
     prompts_md = build_launch_prompts(case_id, ticker)

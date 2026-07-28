@@ -74,6 +74,22 @@ _CACHE_DATE: str = ""                         # キャッシュの日付（日�
 # キャッシュを張った時刻（2026-07-25: GEO_RISK_CACHE_TTL_SEC 判定用）
 _CACHE_STAMP: float = 0.0
 
+# 2026-07-28: exposure クエリのサーキットブレーカー。
+# 本番ログで全銘柄について
+#   「geo_signal exposure BQ [8766.T]: 400 Name ticker not found inside e」
+# が延々と出ていた。原因はテーブル定義の乖離（下記）で、銘柄ごとに再試行しても
+# 絶対に成功しないため、1回失敗したらセッション内では以降 BQ を叩かない。
+#
+# 【根本原因（2026-07-28 実測）】
+#   edinet_bq_schema.py の DDL は company_country_exposure に ticker 列を
+#   定義しているが、本番の BQ 実表には ticker 列が無い（実表12列 / DDL 22列）。
+#   CREATE TABLE IF NOT EXISTS は既存テーブルを変更しないため、DDL を後から
+#   拡張しても実表に反映されていなかった。
+#   → 実表への不足列追加は setup_db_integration_bq.py（Actions の
+#     「Ensure edinetDB bigquery schema」）の ALTER ADD COLUMN 群で行う。
+_EXPOSURE_BQ_DISABLED: bool = False
+_EXPOSURE_BQ_ERROR: str = ""
+
 
 def _get_raw_bq(project_id: str = "stock-analyzer-edinet"):
     """BQ Client を返す（セッション内キャッシュ）。失敗時 None。"""
@@ -102,6 +118,7 @@ def _reset_daily_cache(cfg=None) -> None:
     既定の86400秒＝1日なので、既定値のままなら実質的な挙動は変わらない。
     """
     global _RISK_SCORE_CACHE, _EXPOSURE_CACHE, _CACHE_DATE, _CACHE_STAMP
+    global _EXPOSURE_BQ_DISABLED, _EXPOSURE_BQ_ERROR
     ttl = float(getattr(cfg, "GEO_RISK_CACHE_TTL_SEC", 86400) or 86400)
     now = time.time()
     today = date.today().isoformat()
@@ -110,6 +127,9 @@ def _reset_daily_cache(cfg=None) -> None:
         _RISK_SCORE_CACHE = {}
         _EXPOSURE_CACHE   = {}
         _CACHE_DATE       = today
+        # サーキットブレーカーも解除する（列追加などで復旧している可能性があるため）
+        _EXPOSURE_BQ_DISABLED = False
+        _EXPOSURE_BQ_ERROR    = ""
         _CACHE_STAMP      = now
 
 
@@ -137,6 +157,8 @@ def _get_exposure_list(
         list of {country_code, exposure_type, exposure_strength,
                  commodity_code, composite_risk_score}
     """
+    # サーキットブレーカーの読み書きを行うため関数先頭で global 宣言する
+    global _EXPOSURE_BQ_DISABLED, _EXPOSURE_BQ_ERROR
     _reset_daily_cache(cfg)
     _pid = getattr(cfg, "GEO_BQ_PROJECT_ID", project_id) if cfg else project_id
 
@@ -149,8 +171,8 @@ def _get_exposure_list(
     if cache_key in _EXPOSURE_CACHE:
         return _EXPOSURE_CACHE[cache_key]
 
-    # ③ BQ
-    raw_bq = _get_raw_bq(_pid)
+    # ③ BQ（サーキットブレーカー: 一度失敗したらセッション内は再試行しない）
+    raw_bq = None if _EXPOSURE_BQ_DISABLED else _get_raw_bq(_pid)
     if raw_bq:
         try:
             query = f"""
@@ -194,7 +216,18 @@ def _get_exposure_list(
             _EXPOSURE_CACHE[cache_key] = result
             return result
         except Exception as e:
-            print(f"  ⚠️  geo_signal exposure BQ [{ticker}]: {str(e)[:60]}")
+            # 2026-07-28: 銘柄ごとに同じエラーを出し続けないよう、初回だけ報告して
+            # 以降はセッション内で BQ 経路を止める（下の④フォールバックへ落ちる）。
+            _EXPOSURE_BQ_DISABLED = True
+            _EXPOSURE_BQ_ERROR    = str(e)
+            print(f"  ⚠️  geo_signal exposure BQ 停止（初回失敗・以降スキップ）"
+                  f"[{ticker}]: {str(e)[:120]}")
+            if "not found inside" in str(e) or "Name ticker" in str(e):
+                print("     → 実表に列が不足しています。"
+                      "`python3 setup_db_integration_bq.py`（Actions の "
+                      "「Ensure edinetDB bigquery schema」）を実行すると "
+                      "ALTER ADD COLUMN で不足列を追加します。"
+                      "※GCPの課金が有効である必要があります。")
 
     # ④ フォールバック: JP株のみ jogmec_scraper 手動マスターを参照
     if market == "JP":
