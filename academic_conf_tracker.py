@@ -825,7 +825,14 @@ def run_academic_conf_tracker(cfg=None, force_refresh: bool = False) -> dict:
                 "timestamp":      datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
 
+    # 2026-07-28: config.ACADEMIC_CONF_CONFIG は「本番時は辞書を設定」の
+    # プレースホルダとして None が入っている。getattr の第3引数は
+    # 「属性が存在しないとき」しか効かないため、None が入っていると
+    # そのまま None が返り .items() で落ちていた（3日連続失敗）。
+    # midterm_plan_tracker と同じく、falsy なら既定値へ倒す。
     conf_config = getattr(cfg, "ACADEMIC_CONF_CONFIG", _DEFAULT_CONF_CONFIG)
+    if not conf_config:
+        conf_config = _DEFAULT_CONF_CONFIG
     all_conferences: dict = {}
     total_papers_global = 0
 
