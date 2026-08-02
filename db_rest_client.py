@@ -62,6 +62,11 @@ class DBRestClient:
         self.session = session
         self.usage_endpoint = usage_endpoint
         self._auth_failed = False
+        # 2026-07-28: ログ抑制カウンタと直近の失敗種別。
+        # last_error は呼び出し側が「404=恒久的な不在」と
+        # 「429/予算枯渇=一時障害」を区別するために読む。
+        self._log_counts: dict[str, int] = {}
+        self.last_error: str | None = None
 
     @classmethod
     def edinetdb(cls, cfg):
@@ -138,10 +143,45 @@ class DBRestClient:
             ledger["remote_daily_remaining"] = max(0, int(remaining) - 1)
         self._save_ledger(ledger)
 
+    def _log_once(self, key: str, message: str) -> None:
+        """同一種別のログを1実行につき1回だけ出す。
+
+        2026-07-28: 「日次予算到達」「GET再試行上限」が呼び出しのたびに
+        出力され、本番ログが同じ行で埋まって他の異常が見えなくなっていた。
+        件数は最後に集計して出す（_log_summary）。
+        """
+        self._log_counts[key] = self._log_counts.get(key, 0) + 1
+        if self._log_counts[key] == 1:
+            print(message)
+
+    def log_summary(self) -> dict:
+        """抑制したログの件数を1行で報告し、カウンタを返す。"""
+        counts = dict(self._log_counts)
+        extra = {k: v for k, v in counts.items() if v > 1}
+        if extra:
+            detail = " / ".join(f"{k}×{v}" for k, v in sorted(extra.items()))
+            print(f"  ℹ️ {self.source_name} 抑制したログ: {detail}")
+        return counts
+
+    @property
+    def budget_exhausted(self) -> bool:
+        """日次予算を使い切っているか（呼び出し側の早期打ち切り用）。"""
+        ledger = self._load_ledger()
+        return budget_remaining(
+            ledger.get("calls_used", 0), self.daily_budget,
+            ledger.get("remote_daily_remaining"),
+        ) <= 0
+
     def _request(self, path: str, params: dict | None = None) -> dict | None:
-        """429/5xx だけを最大2回再試行して JSON 封筒を返す。"""
+        """429/5xx だけを最大2回再試行して JSON 封筒を返す。
+
+        失敗の種別は self.last_error に残す（呼び出し側が
+        「恒久的な不在(404)」と「一時障害・予算枯渇」を区別するため）。
+        """
+        self.last_error = None
         if not self.api_key:
-            print(f"⏭️ {self.source_name}: APIキー未設定")
+            self._log_once("no_api_key", f"⏭️ {self.source_name}: APIキー未設定")
+            self.last_error = "no_api_key"
             return None
 
         url = f"{self.base_url}/{path.lstrip('/')}"
@@ -151,7 +191,10 @@ class DBRestClient:
                 ledger.get("calls_used", 0), self.daily_budget,
                 ledger.get("remote_daily_remaining"),
             ) <= 0:
-                print(f"⏹️ {self.source_name} 日次予算{self.daily_budget}到達")
+                self._log_once(
+                    "budget",
+                    f"⏹️ {self.source_name} 日次予算{self.daily_budget}到達")
+                self.last_error = "budget"
                 return None
             # 通信例外でもサーバー到達の有無を確定できないため、送信前に
             # 1試行として記録し、日次上限を越える再試行を防ぐ。
@@ -162,25 +205,51 @@ class DBRestClient:
                     url, headers=self._headers(), params=params, timeout=self.timeout
                 )
             except requests.RequestException as exc:
-                print(f"⚠️ {self.source_name} GET失敗 ({path}): {type(exc).__name__}")
+                self._log_once(
+                    "net",
+                    f"⚠️ {self.source_name} GET失敗 ({path}): {type(exc).__name__}")
+                self.last_error = "network"
                 return None
 
             if response.status_code in (401, 403):
                 self._auth_failed = True
-                print(f"⚠️ {self.source_name}: APIキー認証失敗 (HTTP {response.status_code})")
+                self._log_once(
+                    "auth",
+                    f"⚠️ {self.source_name}: APIキー認証失敗 "
+                    f"(HTTP {response.status_code})")
+                self.last_error = "auth"
+                return None
+            if response.status_code == 404:
+                # 恒久的な不在。再試行しても永遠に取れないので、
+                # 呼び出し側が「取得済み（データなし）」として扱えるようにする。
+                self._log_once(
+                    "not_found",
+                    f"ℹ️ {self.source_name} データなし ({path}): HTTP 404")
+                self.last_error = "not_found"
                 return None
             if response.status_code == 200:
                 try:
                     payload = response.json()
                 except ValueError:
-                    print(f"⚠️ {self.source_name} GET失敗 ({path}): JSONでない応答")
+                    self._log_once(
+                        "json",
+                        f"⚠️ {self.source_name} GET失敗 ({path}): JSONでない応答")
+                    self.last_error = "bad_json"
                     return None
                 return payload if isinstance(payload, dict) else None
             if response.status_code not in RETRYABLE_STATUS_CODES:
-                print(f"⚠️ {self.source_name} GET失敗 ({path}): HTTP {response.status_code}")
+                self._log_once(
+                    f"http_{response.status_code}",
+                    f"⚠️ {self.source_name} GET失敗 ({path}): "
+                    f"HTTP {response.status_code}")
+                self.last_error = f"http_{response.status_code}"
                 return None
             if attempt == MAX_RETRIES:
-                print(f"⚠️ {self.source_name} GET再試行上限 ({path}): HTTP {response.status_code}")
+                self._log_once(
+                    "retry_exhausted",
+                    f"⚠️ {self.source_name} GET再試行上限 ({path}): "
+                    f"HTTP {response.status_code}")
+                self.last_error = "retry_exhausted"
                 return None
             time.sleep(2 ** attempt)
         return None

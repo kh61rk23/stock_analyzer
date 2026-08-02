@@ -231,6 +231,80 @@ def text_block_params(fiscal_year: int | None) -> dict:
     return params
 
 
+def reconcile_meta_with_bq(meta: dict, companies: Iterable,
+                           bq_latest: dict) -> tuple[dict, int]:
+    """BQ にある取得済みデータをローテ台帳へ反映する（純関数・pytest対象）。
+
+    【なぜ必要か / 2026-07-30】
+    ローテ台帳（edinetdb_rotation_meta.json）はローカルJSONのキャッシュに
+    過ぎず、Actions の状態コミットが飛ぶと BQ より遅れる。実測で
+    **BQ に 114社ある一方で台帳は 69社**しか記録しておらず、既に BQ へ
+    格納済みの約45社を毎日再取得して API 予算を空費していた。
+    BQ を正とみなして台帳を補完し、「取れているもの／取れていないもの」を
+    はっきりさせる。
+
+    Args:
+        meta:      現在のローテ台帳 {edinet_code: {"last_fetched": "YYYY-MM-DD"}}
+        companies: company cache の全社（edinet_code と sec_code を持つ）
+        bq_latest: BQ から得た {証券コード4桁: "YYYY-MM-DD"}
+
+    Returns:
+        (更新後meta, 補完した件数)
+    """
+    if not bq_latest:
+        return meta, 0
+    # sec_code は5桁（末尾0）で入っているため先頭4桁で突合する
+    sec_to_edinet: dict[str, str] = {}
+    for company in companies or []:
+        if not isinstance(company, dict):
+            continue
+        edinet_code = str(company.get("edinet_code") or "").strip()
+        sec_code = str(company.get("sec_code") or "").strip()
+        if edinet_code and len(sec_code) >= 4:
+            sec_to_edinet.setdefault(sec_code[:4], edinet_code)
+
+    filled = 0
+    for sec_code, fetched_at in bq_latest.items():
+        edinet_code = sec_to_edinet.get(str(sec_code)[:4])
+        if not edinet_code or not fetched_at:
+            continue
+        current = str((meta.get(edinet_code) or {}).get("last_fetched") or "")[:10]
+        new_value = str(fetched_at)[:10]
+        # BQ の方が新しい（または台帳に無い）ときだけ書き換える
+        if new_value > current:
+            entry = dict(meta.get(edinet_code) or {})
+            entry["last_fetched"] = new_value
+            entry["source"] = "bq"
+            meta[edinet_code] = entry
+            filled += 1
+    return meta, filled
+
+
+def _bq_ingested_latest(cfg) -> dict:
+    """BQ の取得済み企業と最終更新日を {証券コード: "YYYY-MM-DD"} で返す。
+
+    読み取り1クエリのみ（EdinetDB の API 予算は消費しない）。
+    BQ が使えない環境では空dictを返し、従来どおり台帳のみで動く。
+    """
+    try:
+        from edinet_bq_client import EDINETBQClient
+        bq = EDINETBQClient()
+    except Exception:
+        return {}
+    sql = f"""
+        SELECT company_code, CAST(MAX(updated_at) AS STRING) AS latest
+        FROM `{bq.project}.edinet.financials`
+        WHERE company_code IS NOT NULL
+        GROUP BY company_code
+    """
+    try:
+        rows = list(bq.client.query(sql).result())
+    except Exception as exc:
+        print(f"  ⚠️ BQ 取得済み照会に失敗（台帳のみで継続）: {str(exc)[:70]}")
+        return {}
+    return {str(r.company_code): str(r.latest or "")[:10] for r in rows}
+
+
 def select_ingest_targets(
     holdings: Iterable,
     screener: Iterable,
@@ -423,6 +497,18 @@ def run_edinetdb_ingest(
     cached_companies = company_cache.get("companies", []) if isinstance(company_cache, dict) else []
     meta_path = data_dir / getattr(cfg, "EDINETDB_ROTATION_META", "edinetdb_rotation_meta.json")
     meta = _load_json(meta_path, {})
+
+    # 2026-07-30: 取得ローテを回す前に「BQに既にあるもの」を台帳へ反映する。
+    # 台帳はローカルJSONのキャッシュに過ぎず BQ より遅れることがあり、
+    # 実測で BQ 114社 vs 台帳 69社の乖離＝約45社の無駄な再取得があった。
+    # 読み取り1クエリだけで、EdinetDB の API 予算は消費しない。
+    if getattr(cfg, "EDINETDB_RECONCILE_WITH_BQ", True) and cached_companies:
+        meta, _filled = reconcile_meta_with_bq(
+            meta, cached_companies, _bq_ingested_latest(cfg))
+        if _filled:
+            print(f"  🔁 BQ照合: 取得済み{_filled}社を台帳へ補完（再取得を回避）")
+            if not dry_run:
+                _save_json(meta_path, meta)
 
     if dry_run:
         if not cached_companies:

@@ -246,13 +246,19 @@ def run_fudosan_ingest(
     if not isinstance(area_meta, dict):
         area_meta = {}
     seen_municipalities: set[str] = set()
+    budget_stop = False
     for code in targets:
+        if budget_stop:
+            # 予算を使い切った後は全企業が失敗するだけなので周回を止める。
+            break
         raw = client.get(
             "/corporate/real-estate-holdings", {"edinet_code": code, "limit": 2000}
         )
         raw_items = _items(raw)
         if raw is None or (not raw_items and not isinstance(raw, (list, dict))):
             failure += 1
+            if getattr(client, "last_error", None) == "budget":
+                break
             continue
         holding_rows = [map_corporate_holding(item, now=now) for item in raw_items]
         holding_rows = [row for row in holding_rows if row]
@@ -278,16 +284,36 @@ def run_fudosan_ingest(
             except ValueError:
                 pass
             profile = client.get(f"/area-profile/{municipality_code}")
+            # 2026-07-28: 失敗種別で扱いを分ける。
+            #   ・成功        → 取得済みとして記録
+            #   ・404         → その自治体にデータが無い＝再試行しても永遠に
+            #                   取れない。取得済み扱いにして企業の完了を妨げない
+            #   ・429/予算枯渇 → 一時障害。metaには記録せず次回に再試行する
+            # いずれの場合も seen_municipalities には入れる。
+            # 【なぜ入れるか】以前は失敗時に seen へ入れず「同一実行内でも別企業
+            # から再試行できる」設計だったが、失敗が続く自治体を参照する企業が
+            # N社あると1回の実行で同じ自治体をN回叩き、日次予算900を
+            # 使い切っていた（実測: 33社しか完了していないのに予算満額消費）。
+            # 1実行につき1自治体1回に制限し、再試行は次回の実行に回す。
+            seen_municipalities.add(municipality_code)
             if isinstance(profile, dict):
-                seen_municipalities.add(municipality_code)
                 area_rows.append(map_area_profile(profile, municipality_code, now=now))
                 area_updates[municipality_code] = {
                     "last_fetched": date.today().isoformat()
                 }
+            elif getattr(client, "last_error", None) == "not_found":
+                # データ不在を「取得済み・空」として記録する。
+                # これをしないと該当自治体を持つ企業が永久に完了しない。
+                area_updates[municipality_code] = {
+                    "last_fetched": date.today().isoformat(),
+                    "empty": True,
+                }
             else:
-                # 一時障害・予算枯渇を取得済み扱いにしない。同一実行内でも
-                # 別企業から同じ自治体を再試行できるようseenにも入れない。
                 profile_failed = True
+                if getattr(client, "last_error", None) == "budget":
+                    # 予算枯渇後は以降の企業も必ず失敗する。無駄な周回を止める。
+                    budget_stop = True
+                    break
         try:
             bq.merge_rows(
                 getattr(cfg, "FUDOSAN_HOLDINGS_TABLE", "corporate_holdings_p1"), holding_rows,
@@ -311,10 +337,13 @@ def run_fudosan_ingest(
             failure += 1
     meta["_area_profiles"] = area_meta
     _save_json(meta_path, meta)
+    log_counts = client.log_summary() if hasattr(client, "log_summary") else {}
     return {
         "skipped": False, "success": success, "failure": failure,
         "holdings": holdings_count, "area_profiles": area_count,
         "targets": targets, "budget": daily_budget,
+        "budget_stop": budget_stop,
+        "log_counts": log_counts,
     }
 
 

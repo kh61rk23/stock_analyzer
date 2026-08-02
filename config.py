@@ -1299,18 +1299,31 @@ EDINET_SCREENER_CANDIDATES: list = [] # 前日screener通過銘柄（自動注�
 ENABLE_EDINET: bool = False                 # legacy 業種別REST取得
 ENABLE_EDINET_BQ_ANALYSIS: bool = True      # BQ既存データのread-only分析
 # 通常ロード時はFalse。09:00 JSTのdaily_run同期ステップだけ環境変数で有効化する。
+# 2026-07-30: 既定を "0"→"1" に変更（健太決定）。日次分析でも EdinetDB を叩き、
+# 月次コール枠（EDINETDB_MONTHLY_GUARD）を使い切ったらスキップする運用にする。
+# 取得ローテを回す前に BQ の取得済みを台帳へ反映するため（EDINETDB_RECONCILE_WITH_BQ）、
+# 既に BQ にあるものへは API を使わない。
 ENABLE_EDINETDB_INGEST: bool = os.getenv(
-    "ENABLE_EDINETDB_INGEST", "0"
+    "ENABLE_EDINETDB_INGEST", "1"
 ).strip().lower() in {"1", "true", "yes", "on"}
+# 取得ローテ前に BQ の取得済みを台帳へ反映する（読み取り1クエリ・API消費なし）
+EDINETDB_RECONCILE_WITH_BQ: bool = True
 ENABLE_EDINET_DIRECT_FETCH: bool = False
 EDINETDB_BASE_URL: str = os.getenv("EDINETDB_BASE_URL", "https://edinetdb.jp/v1")
 EDINETDB_LOOKBACK_DAYS: int = 7
-EDINETDB_DAILY_BUDGET: int = 90
+# 2026-07-30: 90→46 に変更。日次で EdinetDB を叩く方針にしたため、
+# 日次予算が月次枠と整合していないと月半ばで枠切れし、残り2週間まるごと
+# 取得が止まる（doc_index も道連れになる）。1450÷31≈46 で月末まで均等に回す。
+# 旧値90のままだと 90×16日=1440 で16日目に枯渇していた。
+EDINETDB_DAILY_BUDGET: int = 46
 EDINETDB_MONTHLY_GUARD: int = 1450
 EDINETDB_REFRESH_DAYS: int = 180
 EDINETDB_TEXTBLOCK_EVERY_N: int = 2
 EDINETDB_ROTATION_META: str = "edinetdb_rotation_meta.json"
 EDINETDB_DOC_INDEX_LIMIT: int = 10
+# doc_index の取得窓（日）。有報は年1回しか出ないため、7日窓では
+# 構造的にほぼ常に0件になっていた（実測 inserted 0）。年次サイクルを跨ぐ。
+EDINETDB_DOC_INDEX_LOOKBACK_DAYS: int = 400
 EDINETDB_DOC_INDEX_RESERVE: int = 11  # /usage 1 + 開示10社
 
 # D-②: P1 corporate real-estate enrichment; all missing data is neutral.
@@ -1505,6 +1518,14 @@ NEWS_ALERT_MAX_ARTICLES: int = 5  # Gmailアラートに含める記事数
 # 実行対象モジュールキー（ENABLE_* フラグが True の場合のみ実際に動く）
 DAILY_MODULES = [
     "key_health",    # APIキー生存判定（Issue J-2・最序盤で実行）
+    # 2026-07-30（健太決定）: 日次でも EdinetDB を叩く。
+    # 旧方針（D-①「日次経路はBQ読み取り専用」）からの変更。
+    # 月次コール枠（EDINETDB_MONTHLY_GUARD=1450）を使い切ったら
+    # edinetdb_ingestor 側が自動でスキップする。
+    # 取得ローテの前に BQ の取得済みを台帳へ反映するため
+    # （EDINETDB_RECONCILE_WITH_BQ）、既にBQにある企業へAPIは使わない。
+    "edinetdb_ingest",  # DB統合W3: EdinetDB→BQ（company/financials/segments/text）
+    "edinet_doc_index", # DB統合W3: 開示書類インデックス（有報は年1回=窓400日）
     "fudosan_ingest",   # DB統合W5: 企業保有不動産→BQ
     "gov",           # 政府データパイプライン
     "macro",         # マクロ指標取得

@@ -100,10 +100,19 @@ def run_doc_indexer(days_back: int = 1, cfg=None) -> dict:
     except (OSError, ValueError, TypeError):
         return {"skipped": True, "reason": "W3 cache unavailable", "inserted": 0}
     by_code = {str(item.get("edinet_code")): item for item in companies}
+    # 2026-07-30: 対象選定を「最近取得した順（reverse=True）」から
+    # 「doc_index をまだ取っていない順」へ変更。
+    # 旧実装は毎回いちばん新しい10社を見に行くため、同じ企業を繰り返し
+    # 叩くだけで対象が広がらなかった（doc_index は 2026-04-26 で停止・193件）。
+    doc_meta = rotation.get("_doc_index", {})
+    if not isinstance(doc_meta, dict):
+        doc_meta = {}
     targets = sorted(
-        rotation,
-        key=lambda code: str((rotation.get(code) or {}).get("last_fetched") or ""),
-        reverse=True,
+        (c for c in rotation if not str(c).startswith("_")),
+        key=lambda code: (
+            str((doc_meta.get(code) or {}).get("last_indexed") or ""),  # 未取得が先
+            str(code),
+        ),
     )[:max(0, int(getattr(cfg, "EDINETDB_DOC_INDEX_LIMIT", 10)))]
     client = DBRestClient(
         getattr(cfg, "EDINETDB_BASE_URL", "https://edinetdb.jp/v1"), api_key,
@@ -116,20 +125,54 @@ def run_doc_indexer(days_back: int = 1, cfg=None) -> dict:
     except Exception as exc:
         return {"skipped": True, "reason": f"BQ unavailable: {type(exc).__name__}", "inserted": 0}
 
-    since = (date.today() - timedelta(days=max(1, int(days_back)))).isoformat()
+    # 2026-07-30: 取得窓を days_back（既定7日）から専用設定へ変更。
+    # 有価証券報告書は**年1回**しか提出されないため、7日窓で types=yuho を
+    # 探しても構造的にほぼ常に0件になっていた（実測: inserted 0 / targets 10）。
+    # 年次サイクルを跨ぐ既定400日にして、1社1回は必ず拾えるようにする。
+    lookback = max(
+        int(days_back),
+        int(getattr(cfg, "EDINETDB_DOC_INDEX_LOOKBACK_DAYS", 400)),
+    )
+    since = (date.today() - timedelta(days=max(1, lookback))).isoformat()
     rows = []
+    indexed_today = []
     for code in targets:
         data = client.get(
             f"/companies/{code}/disclosures",
             {"since": since, "until": date.today().isoformat(), "types": "yuho"},
         )
+        if data is None:
+            # 予算枯渇・一時障害。取得済み扱いにせず次回に回す。
+            if getattr(client, "last_error", None) == "budget":
+                break
+            continue
         rows.extend(build_doc_index_rows(data, by_code.get(code, {})))
+        indexed_today.append(code)
     try:
         bq.merge_rows("doc_index", rows, ["doc_id"])
     except Exception as exc:
         return {"skipped": True, "reason": f"MERGE failed: {type(exc).__name__}", "inserted": 0}
-    result = {"skipped": False, "inserted": len(rows), "targets": len(targets)}
-    print(f"[doc_indexer] ✅ EdinetDB由来 {len(rows)}件 MERGE")
+
+    # 巡回状況を記録して、次回は未取得の企業から見に行けるようにする。
+    # 0件だった企業も「見に行った」ことは記録する（無限に同じ企業を
+    # 叩き続けないため）。
+    if indexed_today:
+        today_str = date.today().isoformat()
+        for code in indexed_today:
+            doc_meta[code] = {"last_indexed": today_str}
+        rotation["_doc_index"] = doc_meta
+        try:
+            (data_dir / getattr(cfg, "EDINETDB_ROTATION_META",
+                                "edinetdb_rotation_meta.json")).write_text(
+                json.dumps(rotation, ensure_ascii=False, indent=2),
+                encoding="utf-8")
+        except OSError as exc:
+            print(f"[doc_indexer] ⚠️ 巡回状況の保存失敗: {str(exc)[:60]}")
+
+    result = {"skipped": False, "inserted": len(rows),
+              "targets": len(targets), "visited": len(indexed_today)}
+    print(f"[doc_indexer] ✅ EdinetDB由来 {len(rows)}件 MERGE "
+          f"（巡回{len(indexed_today)}/{len(targets)}社・窓{lookback}日）")
     return result
 
 

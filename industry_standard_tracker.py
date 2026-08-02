@@ -886,7 +886,15 @@ def run_industry_standard_tracker(cfg=None, force_refresh: bool = False) -> dict
             }
 
     # ── 設定値取得 ────────────────────────────────────────────
-    standards_config = getattr(cfg, "STANDARDS_TRACKING_CONFIG", _DEFAULT_STANDARDS_CONFIG)
+    # 2026-07-28: config.STANDARDS_TRACKING_CONFIG は「本番時は辞書を設定」の
+    # プレースホルダとして None が入っている。getattr の第3引数は
+    # 「属性が存在しないとき」しか効かないため、None がそのまま返り
+    # `"3gpp" in standards_config` で落ちていた（3日連続失敗）。
+    # midterm_plan_tracker と同じく、falsy なら既定値へ倒す。
+    standards_config = getattr(cfg, "STANDARDS_TRACKING_CONFIG",
+                               _DEFAULT_STANDARDS_CONFIG)
+    if not standards_config:
+        standards_config = _DEFAULT_STANDARDS_CONFIG
 
     all_standards: dict = {}
 
