@@ -3,6 +3,11 @@
 # GitHub Actions / ローカル実行 用 依存パッケージ
 # ==============================================================
 
+# 2026-09-06: torchのCUDA版(nvidia-cuda-*等を大量に同梱・数GB)がGitHub Actions
+# ランナーのディスクを圧迫し "No space left on device" で落ちるため、
+# CPU版torchを優先させる（GPUはActions上に無いのでCPU版で機能に影響なし）
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 # データ取得
 yfinance>=0.2.40
 requests>=2.31.0
