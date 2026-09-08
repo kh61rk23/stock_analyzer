@@ -106,9 +106,17 @@ from config_sync import sync_module_constants
 
 _CFG_CONST_MAP = {
     'B5_PAID_MEDIA_SEARCHER_CSE_DEAD_LIMIT': '_CSE_DEAD_LIMIT',
+    'B5_PAID_MEDIA_SEARCHER_CSE_CALL_LIMIT': '_CSE_CALL_LIMIT',
 }
 
 _CSE_DEAD_LIMIT = 3
+
+# この実行内の CSE 呼出数。Google CSE の無料枠は100クエリ/日で、
+# 超過分から課金される。従来は呼出回数の上限がなく、quota が尽きて
+# 403 が返るまで撃ち続けていた（2026-08-27 実測で403到達）。
+# 日次1実行のため、実行内カウンタがそのまま日次上限として働く。
+_CSE_CALL_COUNT = 0
+_CSE_CALL_LIMIT = 90
 
 def _search_gcse(api_key: str, cse_id: str, site: str,
                  query: str, num: int = 10,
@@ -128,9 +136,16 @@ def _search_gcse(api_key: str, cse_id: str, site: str,
 
     # ★ 2026-07-12: 403/429 はキー無効・quota枯渇で同一実行内では回復しない。
     #   3回検出したら以降のCSE呼び出しを打ち切る（本番で12回連続403の実害）。
-    global _CSE_DEAD_COUNT
+    global _CSE_DEAD_COUNT, _CSE_CALL_COUNT
     if _CSE_DEAD_COUNT >= _CSE_DEAD_LIMIT:
         return []
+    if _CSE_CALL_LIMIT > 0 and _CSE_CALL_COUNT >= _CSE_CALL_LIMIT:
+        if _CSE_CALL_COUNT == _CSE_CALL_LIMIT:
+            _CSE_CALL_COUNT += 1   # この通知を1回だけ出すための番兵
+            print(f"    ⏹️ CSE 呼出上限 {_CSE_CALL_LIMIT}件 到達 "
+                  f"→ 以降スキップ（無料枠超過による課金を回避）")
+        return []
+    _CSE_CALL_COUNT += 1
 
     params = {
         "key":         api_key,

@@ -55,6 +55,11 @@ _DEFAULT_MODE_KEY_ALIASES: dict = {
     "excel_export":     ["excel_export", "correlation_heatmap"],
     "ml_meta":          ["ml_meta_dataset", "ml_meta_correction"],
     "us_sector_bridge": ["us_sector_bridge"],
+    # mode-key "size_tier" で走るのは size_decay_manager / cross_size_signal で、
+    # どちらも "size_tier_" 接頭辞を持たないため接頭辞ルールで救えず、
+    # 正常実行されているのに毎回「記録なし（配線漏れ疑い）」に出ていた。
+    # （週次の "size_tier_classifier" は別の登録mode-keyなので含めない）
+    "size_tier":        ["size_decay_manager", "cross_size_signal"],
 }
 
 
@@ -112,10 +117,16 @@ def build_daily_ledger(cfg, logs: list, date_str: str = None) -> dict:
             "datetime": e.get("datetime", ""),
         }
 
+    # warn / alert は success でも error でもないため、旧集計ではどこにも
+    # 計上されず「失敗0」と表示されていた。成果ゼロで alert を出している
+    # モジュール（2026-08-27 の edinetdb_ingest 0/11・fudosan_ingest 0/45）が
+    # 健全に見えてしまうため、要確認として明示的に数える。
     stats = {
         "success": sum(1 for m in modules.values() if m["status"] == "success"),
         "error":   sum(1 for m in modules.values() if m["status"] == "error"),
         "skipped": sum(1 for m in modules.values() if m["status"] == "skipped"),
+        "warn":    sum(1 for m in modules.values()
+                       if m["status"] in ("warn", "alert")),
         "total":   len(modules),
     }
 
@@ -264,9 +275,13 @@ def finalize_daily_ledger(cfg, logs: list, send_alert: bool = True) -> dict:
     s = ledger["stats"]
     print(
         f"\n  📒 実行台帳: 成功{s['success']} / 失敗{s['error']} / "
-        f"スキップ{s['skipped']}"
+        f"要確認{s.get('warn', 0)} / スキップ{s['skipped']}"
         + (f" / 記録なし{len(ledger['unrecorded'])}" if ledger["unrecorded"] else "")
     )
+    _warned = [n for n, m in ledger.get("modules", {}).items()
+               if m.get("status") in ("warn", "alert")]
+    if _warned:
+        print(f"    ⚠️  要確認: {', '.join(sorted(_warned)[:8])}")
     for a in ledger["alerts"]:
         print(f"    🚨 連続失敗 {a['days']}日: {a['module']} ({a['note'][:50]})")
     if ledger["unrecorded"]:

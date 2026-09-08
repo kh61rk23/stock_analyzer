@@ -254,12 +254,16 @@ def _batch_fetch_prices(tickers: list, period: str = HISTORY_PERIOD) -> dict:
                             "low":   lows,
                         }
             else:
-                # MultiIndex: (Level0=OHLCV, Level1=Ticker)
+                # group_by="ticker" の MultiIndex は (Level0=Ticker, Level1=OHLCV)。
+                # df["Close"][t] は level0 に "Close" が無く KeyError になり、
+                # 下の except で全銘柄が黙って捨てられていた
+                # （2026-09-08 修正。anomaly_detector と同型）。
                 for t in batch:
                     try:
-                        closes = df["Close"][t].dropna().tolist()
-                        highs  = df["High"][t].dropna().tolist()
-                        lows   = df["Low"][t].dropna().tolist()
+                        sub    = df[t]
+                        closes = sub["Close"].dropna().tolist()
+                        highs  = sub["High"].dropna().tolist()
+                        lows   = sub["Low"].dropna().tolist()
                         if len(closes) >= 20:
                             all_data[t] = {
                                 "close": closes,

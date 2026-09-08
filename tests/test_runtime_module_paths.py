@@ -48,9 +48,27 @@ def test_report_writers_do_not_target_legacy_root_insights():
         assert "INSIGHT_DIR" in source
 
 
-def test_edinet_ingest_flag_is_opt_in(monkeypatch):
-    monkeypatch.delenv("ENABLE_EDINETDB_INGEST", raising=False)
-    assert config.ENABLE_EDINETDB_INGEST is False
+def test_edinet_ingest_is_enabled_by_default():
+    """2026-07-30（健太決定）: 日次でも EdinetDB を叩く方針へ変更。
+
+    旧テスト名 test_edinet_ingest_flag_is_opt_in は
+    「既定 False（opt-in）」を固定していたが、その前提自体が覆った。
+    月次コール枠を使い切ったら edinetdb_ingestor 側が自動スキップするため、
+    既定 True でも枠を超過しない設計になっている。
+    """
+    assert config.ENABLE_EDINETDB_INGEST is True
+
+
+def test_edinet_ingest_flag_can_be_disabled(monkeypatch):
+    """環境変数で明示的に止められること（非常口が残っていること）。"""
+    monkeypatch.setenv("ENABLE_EDINETDB_INGEST", "0")
+    import importlib
+    reloaded = importlib.reload(config)
+    try:
+        assert reloaded.ENABLE_EDINETDB_INGEST is False
+    finally:
+        monkeypatch.delenv("ENABLE_EDINETDB_INGEST", raising=False)
+        importlib.reload(config)
 
 
 def test_daily_workflow_runs_edinet_after_provider_refresh():
@@ -58,7 +76,10 @@ def test_daily_workflow_runs_edinet_after_provider_refresh():
     workflow = (repo / ".github/workflows/daily_run.yml").read_text(
         encoding="utf-8"
     )
-    assert 'cron: "0 0 * * *"' in workflow
+    # UTC 00:00 = JST 09:00。日曜のみ停止（Actions無料枠の節約。
+    # 土 09:00 JST は米国金曜の引け後にあたるため存置する）。
+    # 月曜は 1-6 に含まれるので weekly 昇格の判定は従来どおり効く。
+    assert 'cron: "0 0 * * 1-6"' in workflow
     assert '$(date -u +%u)" = "1"' in workflow
     assert 'ENABLE_EDINETDB_INGEST: "1"' in workflow
     assert "python setup_db_integration_bq.py" in workflow

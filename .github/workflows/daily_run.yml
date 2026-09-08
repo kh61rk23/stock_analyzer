@@ -42,11 +42,14 @@
 name: 📊 Stock Analyzer 自律実行
 
 on:
-  # ── デイリー: 毎日 09:00 JST ──────────────────────────────
+  # ── デイリー: 月〜土 09:00 JST ────────────────────────────
   #   日本は DST がないため UTC+9 固定。UTC 00:00 = JST 09:00。
   #   月曜 JST（= 月曜 UTC）の回は "Set execution mode" が weekly に昇格する。
+  #   日曜だけ止める: 土 09:00 JST は米国金曜の引け後で取得価値があるが、
+  #   日 09:00 JST は日米とも市場が動いておらず、Actions 無料枠を
+  #   消費するだけになる（2026-09 に月間枠 2,000分を超過した経緯）。
   schedule:
-    - cron: "0 0 * * *"       # UTC 00:00 = JST 09:00（毎日）
+    - cron: "0 0 * * 1-6"     # UTC 00:00 = JST 09:00（月〜土）
 
   # ── 手動実行 ──────────────────────────────────────────────
   # 実行モードは四種類ある。
@@ -382,6 +385,9 @@ jobs:
             git add stock_data/data/edinetdb_rotation_meta.json 2>/dev/null || true
             git add stock_data/data/fudosandb_cache/ 2>/dev/null || true
             git add stock_data/data/fudosan_rotation_meta.json 2>/dev/null || true
+            # Drive差分同期の署名台帳。消えても全件送り直すだけだが、
+            # 永続化しないと毎回2000件超の全件アップロードに戻る
+            git add stock_data/data/gdrive_sync_state.json 2>/dev/null || true
             git add stock_data/data/biz_summary_cache/ 2>/dev/null || true
             git add stock_data/data/imf_cache.json 2>/dev/null || true
             # 全レポートの正本は config.INSIGHT_DIR (= stock_data/insights)。

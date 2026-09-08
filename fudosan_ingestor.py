@@ -257,7 +257,9 @@ def run_fudosan_ingest(
         raw_items = _items(raw)
         if raw is None or (not raw_items and not isinstance(raw, (list, dict))):
             failure += 1
-            if getattr(client, "last_error", None) == "budget":
+            # rate_limited も budget と同じく「以降すべて失敗する」状態。
+            # 打ち切らないと残り全社を空振りで回して失敗数だけ積む。
+            if getattr(client, "last_error", None) in ("budget", "rate_limited"):
                 break
             continue
         holding_rows = [map_corporate_holding(item, now=now) for item in raw_items]
@@ -310,8 +312,10 @@ def run_fudosan_ingest(
                 }
             else:
                 profile_failed = True
-                if getattr(client, "last_error", None) == "budget":
-                    # 予算枯渇後は以降の企業も必ず失敗する。無駄な周回を止める。
+                if getattr(client, "last_error", None) in ("budget",
+                                                           "rate_limited"):
+                    # 予算枯渇・レート制限後は以降の企業も必ず失敗する。
+                    # 無駄な周回を止める。
                     budget_stop = True
                     break
         try:

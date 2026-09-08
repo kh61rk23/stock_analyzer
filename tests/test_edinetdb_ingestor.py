@@ -258,3 +258,59 @@ def test_ingest_does_not_advance_rotation_when_full_text_fetch_fails(
     assert result["success"] == 0
     assert result["failure"] == 1
     assert "E02144" not in module._load_json(tmp_path / "rotation.json", {})
+
+
+# ── BQ照合によるローテ台帳の補完（2026-07-30）────────────────────
+#
+# 台帳はローカルJSONのキャッシュに過ぎず BQ より遅れることがある。
+# 実測で BQ 114社 vs 台帳 69社の乖離があり、既に取得済みの約45社を
+# 毎日再取得して API 予算を空費していた。BQ を正として補完する。
+
+from edinetdb_ingestor import reconcile_meta_with_bq  # noqa: E402
+
+
+_COMPANIES = [
+    {"edinet_code": "E03006", "sec_code": "30760"},   # sec_codeは5桁（末尾0）
+    {"edinet_code": "E01225", "sec_code": "86240"},
+    {"edinet_code": "E99999", "sec_code": "99990"},
+]
+
+
+def test_reconcile_fills_missing_entries_from_bq():
+    meta = {}
+    meta, filled = reconcile_meta_with_bq(
+        meta, _COMPANIES, {"3076": "2026-07-30", "8624": "2026-07-29"})
+    assert filled == 2
+    assert meta["E03006"]["last_fetched"] == "2026-07-30"
+    assert meta["E01225"]["last_fetched"] == "2026-07-29"
+    assert meta["E03006"]["source"] == "bq"
+
+
+def test_reconcile_keeps_newer_local_entry():
+    """台帳の方が新しいときは BQ で上書きしないこと。"""
+    meta = {"E03006": {"last_fetched": "2026-07-31"}}
+    meta, filled = reconcile_meta_with_bq(
+        meta, _COMPANIES, {"3076": "2026-07-30"})
+    assert filled == 0
+    assert meta["E03006"]["last_fetched"] == "2026-07-31"
+
+
+def test_reconcile_matches_on_first_four_digits():
+    """BQ は4桁の証券コード、company cache は5桁。先頭4桁で突合すること。"""
+    meta, filled = reconcile_meta_with_bq({}, _COMPANIES, {"8624": "2026-07-30"})
+    assert filled == 1
+    assert "E01225" in meta
+
+
+def test_reconcile_ignores_unknown_codes():
+    meta, filled = reconcile_meta_with_bq({}, _COMPANIES, {"0000": "2026-07-30"})
+    assert filled == 0
+    assert meta == {}
+
+
+def test_reconcile_noop_when_bq_empty():
+    """BQが使えない環境では台帳をそのまま返すこと（従来動作を維持）。"""
+    original = {"E03006": {"last_fetched": "2026-07-01"}}
+    meta, filled = reconcile_meta_with_bq(dict(original), _COMPANIES, {})
+    assert filled == 0
+    assert meta == original

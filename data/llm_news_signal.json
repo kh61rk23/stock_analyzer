@@ -1,33 +1,42 @@
 {
   "_comment": "S8 LLMニュース・アルファ（D-02=b・週次手動）。記入手順= 01_最新版ロードマップ・必要書類/S8_LLMニュースアルファ週次手動_手順書_20260712.md。上書き方式・signals空配列可。現状はsignal_aggregator未配線（参考情報・D-19で配線判断）。",
-  "as_of": "2026-07-28",
+  "as_of": "2026-09-05",
   "signals": [
     {
-      "ticker": "ORCL",
+      "ticker": "GH",
       "market": "US",
       "direction": "bull",
-      "strength": 2,
-      "thesis": "米国防総省がOracleと最大70億ドル・最長10年のソフトウェア一括契約(2026/7/23発表)を締結。長期契約の収益価値が短期的な株価反応にまだ十分織り込まれていない可能性。",
-      "source_url": "https://www.cnbc.com/2026/07/23/oracle-wins-10-year-pentagon-software-contract-worth-up-to-7-billion.html",
-      "expire_date": "2026-08-20"
+      "strength": 3,
+      "thesis": "9/4付のFDAによるEtcamah（camizestrant）迅速承認と同時に、Guardant360 CDxがESR1変異検出のコンパニオン診断として認可された。FDAが「画像所見で進行が確認される前にctDNA上の耐性変異を検出して治療を切り替える」承認を出したのは初で、投薬判断が単発検査ではなく治療中の反復検査を前提とする構造に変わる。市場の関心は承認された薬剤（AZN）側に集中し、検査回数が経常化する診断側の売上構造変化は定量化されにくい。",
+      "source_url": "https://www.fda.gov/news-events/press-announcements/fda-grants-accelerated-approval-new-breast-cancer-treatment",
+      "expire_date": "2026-10-03"
     },
     {
-      "ticker": "RKLB",
-      "market": "US",
-      "direction": "bull",
-      "strength": 2,
-      "thesis": "Rocket Labが米宇宙軍から過去最大となる準軌道打ち上げ12回・最大2.66億ドルの契約(2026/7/27発表)を獲得。2028年末までの複数年契約価値が織り込み途上とみられる。",
-      "source_url": "https://www.globenewswire.com/news-release/2026/07/27/3333334/0/en/rocket-lab-awarded-record-266m-missile-defense-contract-with-u-s-space-force-for-suborbital-launches.html",
-      "expire_date": "2026-08-24"
-    },
-    {
-      "ticker": "5830.T",
+      "ticker": "7011.T",
       "market": "JP",
       "direction": "bull",
       "strength": 2,
-      "thesis": "いよぎんホールディングスが愛媛銀行との2027年4月メド経営統合で基本合意(2026/7/24発表)。総資産12兆円規模の地銀グループ誕生も、最終契約(26年12月予定)前でシナジーはまだ株価に織り込み途上。",
-      "source_url": "https://www.nikkei.com/article/DGXZQOUB23BBN0T20C26A7000000/",
-      "expire_date": "2026-08-21"
+      "thesis": "9/2付でNECと防衛分野の戦略的提携に向けた覚書を締結し、作戦計画・指揮統制システムおよび無人アセット領域で連携すると発表。株価は翌9/3に+71円（3795円）と限定的な反応にとどまったが、覚書段階で金額が未開示のため、指揮統制システム国産化という複数年にわたる防衛省調達フローが業績予想に反映されていない。",
+      "source_url": "https://jpn.nec.com/press/202609/20260902_04.html",
+      "expire_date": "2026-10-03"
+    },
+    {
+      "ticker": "6701.T",
+      "market": "JP",
+      "direction": "bull",
+      "strength": 1,
+      "thesis": "上記9/2の三菱重工との覚書で、NEC側はAI・クラウド・指揮統制ソフトウェアの担い手として位置づけられた。同社の株式の物語はITサービス・海外事業の収益性が支配的で、防衛セグメントは規模が小さく個別に評価されにくいため、防衛AI基盤の受け皿という位置づけの変化は織り込まれにくい（7011.Tと同一事象由来である点に留意）。",
+      "source_url": "https://jpn.nec.com/press/202609/20260902_04.html",
+      "expire_date": "2026-10-03"
+    },
+    {
+      "ticker": "IONS",
+      "market": "US",
+      "direction": "bull",
+      "strength": 1,
+      "thesis": "9/3付でFDAがZanvastro（zilganersen）をアレキサンダー病の初の治療薬として、乳児から成人までを含む広い年齢適応で承認。有病率が100万人に1人未満のため売上寄与は小さいが、髄腔内投与アンチセンス核酸がCNS疾患で承認された実績は後続CNSパイプラインの承認確度に対する前提を変える。希少小児疾患指定に伴う優先審査バウチャーの売却価値も含め、単剤の売上モデルには乗らない。",
+      "source_url": "https://www.fda.gov/news-events/press-announcements/fda-approves-first-drug-treat-alexander-disease",
+      "expire_date": "2026-10-03"
     }
   ]
 }

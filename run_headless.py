@@ -19,6 +19,7 @@
 
 import argparse
 import importlib.util
+import json
 import os
 import sys
 from datetime import datetime
@@ -97,7 +98,8 @@ def apply_env_overrides(cfg):
 
 # OAuth認証を用いてGoogle Drive APIの操作環境を構築・実行する関数
 def _upload_to_gdrive_oauth(client_id, client_secret, refresh_token,
-                             folder_id, insight_dir, log_dir):
+                             folder_id, insight_dir, log_dir,
+                             state_path=None):
     try:
         from google.oauth2.credentials import Credentials # type: ignore
         from google.auth.transport.requests import Request # type: ignore
@@ -127,52 +129,121 @@ def _upload_to_gdrive_oauth(client_id, client_secret, refresh_token,
     creds.refresh(Request())
     service = build("drive", "v3", credentials=creds)
 
+    # 前回同期時の {相対パス: "mtime:size"}。差分だけ送るために使う。
+    # 壊れていても全件送り直すだけなので、読めなければ黙って空で始める。
+    prev_state: dict = {}
+    if state_path:
+        try:
+            loaded = json.loads(Path(state_path).read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                prev_state = loaded
+        except (OSError, ValueError):
+            pass
+
+    folder_cache:  dict = {}   # (parent_id, name) -> folder_id
+    listing_cache: dict = {}   # parent_id -> {file_name: file_id}
+
     #グーグルドライブの既存フォルダの特定、または新規作成によるID取得をする関数
     def _get_or_create_folder(name, parent_id):
+        key = (parent_id, name)
+        if key in folder_cache:
+            return folder_cache[key]
         q = (f"name='{name}' and "
              f"mimeType='application/vnd.google-apps.folder' and "
              f"'{parent_id}' in parents and trashed=false")
         res = service.files().list(q=q, fields="files(id)").execute()
         files = res.get("files", [])
         if files:
-            return files[0]["id"]
-        meta = {"name": name,
-                "mimeType": "application/vnd.google-apps.folder",
-                "parents": [parent_id]}
-        return service.files().create(body=meta, fields="id").execute()["id"]
-
-    #グーグルドライブに既存確認を伴うファイルの新規作成または更新（同期）する関数
-    def _upload_file(local_path, parent_id):
-        name = local_path.name
-        q = (f"name='{name}' and '{parent_id}' in parents and trashed=false")
-        res = service.files().list(q=q, fields="files(id)").execute()
-        files = res.get("files", [])
-        media = MediaFileUpload(str(local_path))
-        if files:
-            service.files().update(
-                fileId=files[0]["id"], media_body=media).execute()
+            fid = files[0]["id"]
         else:
-            service.files().create(
+            meta = {"name": name,
+                    "mimeType": "application/vnd.google-apps.folder",
+                    "parents": [parent_id]}
+            fid = service.files().create(body=meta, fields="id").execute()["id"]
+        folder_cache[key] = fid
+        return fid
+
+    #フォルダ直下の{名前:ID}を1クエリで引く（ファイル毎の存在確認をなくす）
+    def _listing(parent_id):
+        if parent_id in listing_cache:
+            return listing_cache[parent_id]
+        mapping: dict = {}
+        page_token = None
+        while True:
+            res = service.files().list(
+                q=f"'{parent_id}' in parents and trashed=false",
+                fields="nextPageToken, files(id, name)",
+                pageSize=1000, pageToken=page_token,
+            ).execute()
+            for item in res.get("files", []):
+                mapping[item["name"]] = item["id"]
+            page_token = res.get("nextPageToken")
+            if not page_token:
+                break
+        listing_cache[parent_id] = mapping
+        return mapping
+
+    #グーグルドライブにファイルを新規作成または更新（同期）する関数
+    def _upload_file(local_path, parent_id):
+        name    = local_path.name
+        mapping = _listing(parent_id)
+        media   = MediaFileUpload(str(local_path))
+        if name in mapping:
+            service.files().update(
+                fileId=mapping[name], media_body=media).execute()
+        else:
+            created = service.files().create(
                 body={"name": name, "parents": [parent_id]},
                 media_body=media, fields="id").execute()
+            mapping[name] = created["id"]
 
-    total = 0
+    new_state: dict = {}
+    sent = skipped = failed = 0
     for local_base, remote_name in [(insight_dir, "insights"),
                                      (log_dir, "logs")]:
         if not Path(local_base).exists():
             continue
-        base_id = _get_or_create_folder(remote_name, folder_id)
+        base_id = None
         for f in Path(local_base).rglob("*"):
             if not f.is_file():
                 continue
             rel = f.relative_to(local_base)
+            key = f"{remote_name}/{rel.as_posix()}"
+            try:
+                stat = f.stat()
+            except OSError:
+                continue
+            sig = f"{int(stat.st_mtime)}:{stat.st_size}"
+            new_state[key] = sig
+            if prev_state.get(key) == sig:
+                skipped += 1
+                continue
+            # 送るものが1件も無いフォルダではAPIを一切呼ばない
+            if base_id is None:
+                base_id = _get_or_create_folder(remote_name, folder_id)
             pid = base_id
             for part in rel.parts[:-1]:
                 pid = _get_or_create_folder(part, pid)
-            _upload_file(f, pid)
-            total += 1
+            try:
+                _upload_file(f, pid)
+                sent += 1
+            except Exception as exc:
+                failed += 1
+                new_state.pop(key, None)   # 記録しない = 次回再送する
+                if failed <= 3:
+                    print(f"  WARNING アップロード失敗 ({key}): "
+                          f"{type(exc).__name__}: {str(exc)[:80]}")
 
-    print(f"  OK Google Drive アップロード完了: {total} ファイル")
+    if state_path:
+        try:
+            Path(state_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(state_path).write_text(
+                json.dumps(new_state, ensure_ascii=False), encoding="utf-8")
+        except OSError as exc:
+            print(f"  WARNING 同期状態の保存失敗: {exc}")
+
+    print(f"  OK Google Drive 同期完了: 送信{sent} / 変更なし{skipped}"
+          + (f" / 失敗{failed}" if failed else ""))
 
 # 環境設定・分析実行・結果のクラウド保存までを全自動で一気通貫に行う、システムの実行制御（メインルーチン）関数
 def main():
@@ -259,12 +330,14 @@ def main():
     folder_id     = os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "")
 
     if all([client_id, client_secret, refresh_token, folder_id]):
-        print("\n  UPLOAD Google Drive にアップロード中...")
+        print("\n  UPLOAD Google Drive に同期中（差分のみ）...")
         try:
             _upload_to_gdrive_oauth(
                 client_id=client_id, client_secret=client_secret,
                 refresh_token=refresh_token, folder_id=folder_id,
                 insight_dir=cfg_mod.INSIGHT_DIR, log_dir=cfg_mod.LOG_DIR,
+                state_path=Path(getattr(cfg_mod, "DATA_DIR", "stock_data/data"))
+                           / "gdrive_sync_state.json",
             )
         except Exception as e:
             print(f"  WARNING Google Drive アップロードエラー: {e}")

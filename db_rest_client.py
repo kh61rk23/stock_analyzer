@@ -52,6 +52,7 @@ class DBRestClient:
         timeout: int = 20,
         session: requests.Session | None = None,
         usage_endpoint: str | None = "/usage",
+        min_interval: float = 0.5,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key.strip()
@@ -62,6 +63,12 @@ class DBRestClient:
         self.session = session
         self.usage_endpoint = usage_endpoint
         self._auth_failed = False
+        # 2026-09-08: 連続GETが速すぎて 429 を誘発し、その再試行が日次予算を
+        # 食い潰して全件失敗していた（edinetdb 0/11・fudosandb 0/45）。
+        # 送信間隔を最低 min_interval 秒あけて 429 自体を防ぐ。
+        self.min_interval = max(0.0, float(min_interval))
+        self._last_request_at = 0.0
+        self._rate_limited = False   # 429が続いたら当日は打ち切る
         # 2026-07-28: ログ抑制カウンタと直近の失敗種別。
         # last_error は呼び出し側が「404=恒久的な不在」と
         # 「429/予算枯渇=一時障害」を区別するために読む。
@@ -78,6 +85,7 @@ class DBRestClient:
             data_dir / "edinetdb_cache",
             getattr(cfg, "EDINETDB_DAILY_BUDGET", getattr(cfg, "EDINET_DAILY_BUDGET", 80)),
             "edinetdb",
+            min_interval=float(getattr(cfg, "EDINETDB_MIN_INTERVAL_SEC", 0.5)),
         )
 
     @classmethod
@@ -90,6 +98,7 @@ class DBRestClient:
             getattr(cfg, "FUDOSAN_DAILY_BUDGET", getattr(cfg, "FUDOSANDB_DAILY_BUDGET", 90)),
             "fudosandb",
             usage_endpoint=None,
+            min_interval=float(getattr(cfg, "FUDOSAN_MIN_INTERVAL_SEC", 0.5)),
         )
 
     @property
@@ -128,11 +137,23 @@ class DBRestClient:
             print(f"⚠️ {self.source_name} 日次台帳の保存失敗: {exc}")
 
     def _headers(self) -> dict[str, str]:
+        # 両ベンダーの公式案内は Authorization: Bearer。旧実装の X-API-Key でも
+        # 通っていた実績があるため、どちらか一方しか見ないサーバーでも
+        # 認証が成立するよう両方送る。
         return {
+            "Authorization": f"Bearer {self.api_key}",
             "X-API-Key": self.api_key,
             "User-Agent": "StockAnalyzer/1.0",
             "Accept": "application/json",
         }
+
+    def _wait_for_slot(self) -> None:
+        """直前の送信から min_interval 秒あけて 429 を予防する。"""
+        if self.min_interval <= 0:
+            return
+        elapsed = time.monotonic() - self._last_request_at
+        if 0 <= elapsed < self.min_interval:
+            time.sleep(self.min_interval - elapsed)
 
     def _record_call(self) -> None:
         """成功可否にかかわらず、実際のHTTP試行を保守的に1回記録する。"""
@@ -183,6 +204,9 @@ class DBRestClient:
             self._log_once("no_api_key", f"⏭️ {self.source_name}: APIキー未設定")
             self.last_error = "no_api_key"
             return None
+        if self._rate_limited:
+            self.last_error = "rate_limited"
+            return None
 
         url = f"{self.base_url}/{path.lstrip('/')}"
         for attempt in range(MAX_RETRIES + 1):
@@ -199,17 +223,37 @@ class DBRestClient:
             # 通信例外でもサーバー到達の有無を確定できないため、送信前に
             # 1試行として記録し、日次上限を越える再試行を防ぐ。
             self._record_call()
+            self._wait_for_slot()
             try:
                 getter = self.session.get if self.session is not None else requests.get
                 response = getter(
                     url, headers=self._headers(), params=params, timeout=self.timeout
                 )
             except requests.RequestException as exc:
+                self._last_request_at = time.monotonic()
                 self._log_once(
                     "net",
                     f"⚠️ {self.source_name} GET失敗 ({path}): {type(exc).__name__}")
                 self.last_error = "network"
                 return None
+            self._last_request_at = time.monotonic()
+
+            if response.status_code == 429:
+                # 429は「速すぎる」の合図。間隔を広げて数回だけ待ち、
+                # それでも続くなら当日は打ち切る。再試行を重ねるほど
+                # 日次予算を食い潰し、他モジュールの取得まで巻き添えになる
+                # （2026-08-27: fudosandb がこれで予算90を空にして0/45）。
+                self.min_interval = min(8.0, max(1.0, self.min_interval * 2))
+                if attempt == MAX_RETRIES:
+                    self._rate_limited = True
+                    self._log_once(
+                        "rate_limited",
+                        f"⏹️ {self.source_name}: HTTP 429が続くため"
+                        f"当日の取得を打ち切り ({path})")
+                    self.last_error = "rate_limited"
+                    return None
+                time.sleep(self.min_interval)
+                continue
 
             if response.status_code in (401, 403):
                 self._auth_failed = True
@@ -302,7 +346,13 @@ class DBRestClient:
         if budget_remaining(
             ledger.get("calls_used", 0), self.daily_budget, remote_remaining
         ) <= 0:
-            print(f"⏹️ {self.source_name} 日次予算{self.daily_budget}到達")
+            # 2026-07-28 の抑制対応から漏れており、ここだけ生printのままで
+            # 予算切れ後の呼び出しごとに同じ行を出し続けていた
+            # （2026-08-27 実測で20行以上、他の異常が埋もれる）。
+            self._log_once(
+                "budget",
+                f"⏹️ {self.source_name} 日次予算{self.daily_budget}到達")
+            self.last_error = "budget"
             return None
 
         payload = self._request(path, params)

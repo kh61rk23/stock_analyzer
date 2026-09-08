@@ -12,6 +12,11 @@ from typing import Iterable
 from db_rest_client import DBRestClient
 
 
+def _stop_ingest(client) -> bool:
+    """予算枯渇・レート制限に入ったか（以降の企業は必ず失敗するため周回を止める）。"""
+    return getattr(client, "last_error", None) in ("budget", "rate_limited")
+
+
 def _ratio(numerator, denominator):
     try:
         if numerator is None or denominator is None or float(denominator) == 0:
@@ -590,15 +595,24 @@ def run_edinetdb_ingest(
     for code in targets:
         company = by_edinet.get(code, {})
         company_code = _sec4(company.get("sec_code"))
+        # 予算枯渇・レート制限に入ったら以降の企業は必ず失敗する。
+        # 打ち切りが無かったため、2026-08-27 は予算切れ後も11社を回して
+        # failure だけを積み上げていた（成功0/11）。
+        if _stop_ingest(client):
+            break
         financials = client.get(f"/companies/{code}/financials", {"years": 5, "period": "annual"})
         if not isinstance(financials, list):
             failure += 1
+            if _stop_ingest(client):
+                break
             continue
         segments = client.get(f"/companies/{code}/segments", {"empty_as_200": "true"})
         if not isinstance(segments, list):
             # 予算枯渇や一時障害を空データと誤認すると、refresh期間中ずっと
             # segmentsが欠落する。成功台帳を進めず、次回に再試行させる。
             failure += 1
+            if _stop_ingest(client):
+                break
             continue
         fin_rows = [
             map_edinetdb_financials(item, edinet_code=code, company_code=company_code, now=now)
@@ -623,6 +637,8 @@ def run_edinetdb_ingest(
             if not isinstance(blocks, list):
                 # full text未取得を成功扱いせず、同じfetch_countで再試行する。
                 failure += 1
+                if _stop_ingest(client):
+                    break
                 continue
             text_rows = map_edinetdb_text_blocks(
                 code, blocks, latest_year,

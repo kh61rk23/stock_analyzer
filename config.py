@@ -1325,6 +1325,9 @@ EDINETDB_DOC_INDEX_LIMIT: int = 10
 # 構造的にほぼ常に0件になっていた（実測 inserted 0）。年次サイクルを跨ぐ。
 EDINETDB_DOC_INDEX_LOOKBACK_DAYS: int = 400
 EDINETDB_DOC_INDEX_RESERVE: int = 11  # /usage 1 + 開示10社
+# 連続GETが速すぎると429を誘発し、その再試行が日次予算を空にして
+# 全件失敗する（2026-08-27: 46コール消費で成功0/11）。送信間隔の下限。
+EDINETDB_MIN_INTERVAL_SEC: float = 0.5
 
 # D-②: P1 corporate real-estate enrichment; all missing data is neutral.
 ENABLE_FUDOSAN_INGEST: bool = True
@@ -1341,6 +1344,9 @@ FUDOSAN_REFRESH_DAYS: int = 365
 FUDOSAN_ROTATION_META: str = "fudosan_rotation_meta.json"
 FUDOSAN_HOLDINGS_TABLE: str = "corporate_holdings_p1"
 FUDOSAN_AREA_TABLE: str = "area_profile_p1"
+# 2026-08-27 は初回GETから429が返り、その再試行だけで予算90を空にして
+# 成功0/45だった。EdinetDBと同じく送信間隔の下限を設ける。
+FUDOSAN_MIN_INTERVAL_SEC: float = 0.5
 RE_BONUS_MIN: float = -2.0
 RE_BONUS_MAX: float = 3.0
 FUDOSANDB_BASE_URL: str = FUDOSAN_BASE_URL  # 後方互換
@@ -1807,6 +1813,10 @@ US_SCREENER_CATEGORIES: list = [
     "metaverse", "blockchain", "longevity", "supply_chain"
 ]
 US_SCREENER_TOP_N: int = 25
+# インサイダー(Form 4)照会は SEC EDGAR への逐次アクセスで1社あたり約2秒。
+# 通過全社に掛けるとフィルター処理だけで13分を超えるため、素点上位のみに絞る。
+# 0 で照会を完全に止める（insider_bonus は全社 0.0 = 補正なし）。
+US_INSIDER_MAX_TICKERS: int = 40
 
 # ==============================================================
 # BLOCK 22: ポジションサイズ設定 / ストレステスト / フェーズ4〜6 フラグ群
@@ -5266,6 +5276,9 @@ B5_US_FUNDAMENTAL_ROTATOR_DAILY_FETCH_LIMIT = 20  # DAILY_FETCH_LIMIT
 B5_US_FUNDAMENTAL_ROTATOR_REQUEST_DELAY = 0.12  # REQUEST_DELAY
 B5_US_FUNDAMENTAL_ROTATOR_REQUEST_TIMEOUT = 15  # REQUEST_TIMEOUT
 B5_PAID_MEDIA_SEARCHER_CSE_DEAD_LIMIT = 3  # _CSE_DEAD_LIMIT
+# Google CSE の無料枠は100クエリ/日。超過分は課金されるため、
+# quota切れの403を待たずにコード側で打ち切る（0で無制限）。
+B5_PAID_MEDIA_SEARCHER_CSE_CALL_LIMIT = 90  # _CSE_CALL_LIMIT
 B5_US_INSIDER_FORM4_SCRAPER_HTTP_TIMEOUT = 15  # _HTTP_TIMEOUT
 B5_US_INSIDER_FORM4_SCRAPER_FETCH_DELAY = 0.5  # _FETCH_DELAY
 B5_EDINET_CLIENT_DAILY_BUDGET = 80  # DAILY_BUDGET

@@ -457,11 +457,20 @@ def run_key_health(cfg) -> dict:
     g = lambda k: getattr(cfg, k, "") or ""
 
     _run("EDINET_API_KEY",       _probe_edinet,   g("EDINET_API_KEY"))
-    if getattr(cfg, "ENABLE_EDINETDB_INGEST", False):
+    # 2026-07-28: 既定値が他モジュールと食い違っていた。
+    #   edinetdb_ingestor.py:408  → getattr(..., True)
+    #   stock_analyzer_main.py:1407 → getattr(..., True)
+    #   ここだけ False で、「ingest は動いているのに health は dormant と表示」
+    #   という矛盾したログになっていた。True に揃える。
+    # なお現在の config は既定 "0"（=False）なので、日次分析側の ingest
+    # ステージ自体がスキップされている。EdinetDB から取りたい場合は
+    # 環境変数 ENABLE_EDINETDB_INGEST=1 を設定する必要がある。
+    if getattr(cfg, "ENABLE_EDINETDB_INGEST", True):
         _run("EDINETDB_API_KEY", _probe_edinetdb, g("EDINETDB_API_KEY"))
     else:
         entries["EDINETDB_API_KEY"] = _entry(
-            STATE_SKIPPED, "dormant（日次分析はBQ既存データを参照）"
+            STATE_SKIPPED,
+            "ingest無効（ENABLE_EDINETDB_INGEST=0）。BQ既存データのみ参照"
         )
     _run("FUDOSAN_API_KEY",      _probe_fudosan,  g("FUDOSAN_API_KEY"))
     _run("ESTAT_API_KEY",        _probe_estat,    g("ESTAT_API_KEY"))

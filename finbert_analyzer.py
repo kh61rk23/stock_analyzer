@@ -346,9 +346,12 @@ def analyze_sections(
             continue
 
         try:
-            # FinBERT の最大トークン長（512）に収まるよう先頭512文字を使用
-            truncated = text[:512]
-            result    = _nlp(truncated)[0]
+            # 文字数で切ってもトークン数の上限は守れない（日本語は1文字が
+            # 複数トークンになりうる）。2026-08-27 に text[:512] が
+            # 514トークンとなり tensor size mismatch で全滅していたため、
+            # BLOCK 2 と同じくトークナイザ側に切らせる。
+            result = _nlp(text[:MAX_TEXT_LEN * 4],
+                          truncation=True, max_length=MAX_TEXT_LEN)[0]
 
             raw_label = result.get("label", "NEUTRAL").upper()
             raw_score = float(result.get("score", 0.5))

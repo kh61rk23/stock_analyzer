@@ -1214,6 +1214,10 @@ def _calc_edinet_hr_bonus(securities_code: str) -> float:
 # BLOCK 7: 統合セクター分析（33 agent ファイル統合後の単一入口）
 # ==============================================================
 
+# 全業種のticker解決結果（1プロセス1回だけBQに問い合わせる）
+_SECTOR_TICKER_CACHE: dict | None = None
+
+
 def _normalize_ticker(t: str) -> str:
     t = str(t or "").strip()
     if not t:
@@ -1231,13 +1235,16 @@ def resolve_sector_tickers(sector_code: str, cfg, limit: int = 5) -> list[str]:
     sector_code = str(sector_code)
     limit = max(1, min(int(limit), 10))
 
-    # 1) BQ
+    # 1) BQ（33業種で33本のクエリを撃たないよう、初回に全業種を1本で取る）
+    global _SECTOR_TICKER_CACHE
     try:
         bq = _BQClient()
-        from_bq = bq.get_tickers_for_sector(sector_code, limit=limit)
+        if _SECTOR_TICKER_CACHE is None:
+            _SECTOR_TICKER_CACHE = bq.get_tickers_by_sector_bulk(limit=10) or {}
+        from_bq = list(_SECTOR_TICKER_CACHE.get(sector_code, []))[:limit]
         if from_bq:
             print(f"    📋 tickers[{sector_code}] source=BQ ({len(from_bq)}件)")
-            return from_bq[:limit]
+            return from_bq
     except Exception as e:
         print(f"    ⚠️  tickers[{sector_code}] BQ失敗: {str(e)[:60]}")
 

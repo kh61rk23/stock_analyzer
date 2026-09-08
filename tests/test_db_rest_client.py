@@ -71,7 +71,9 @@ def test_retryable_server_error_uses_exponential_backoff(tmp_path, monkeypatch):
         lambda *_args, **_kwargs: _Response(next(statuses), {"data": {"daily_remaining": 3}}),
     )
     monkeypatch.setattr(module.time, "sleep", waits.append)
-    client = module.DBRestClient("https://example.test/v1", "key", tmp_path, 5, "testdb")
+    # min_interval=0 で送信間隔の待ちを外し、再試行のバックオフだけを見る
+    client = module.DBRestClient("https://example.test/v1", "key", tmp_path, 5, "testdb",
+                                 min_interval=0)
 
     assert client.usage() == {"daily_remaining": 3}
     assert waits == [1, 2]
@@ -113,6 +115,70 @@ def test_retry_stops_before_exceeding_local_daily_budget(tmp_path, monkeypatch):
     assert client.get("/area-profile/13101") is None
     assert called == 1
     assert client.calls == 1
+
+
+def test_auth_headers_carry_bearer_and_legacy_key(tmp_path, monkeypatch):
+    """公式案内の Bearer と旧来の X-API-Key を両方送る"""
+    seen = {}
+
+    def fake_get(_url, headers=None, **_kwargs):
+        seen.update(headers or {})
+        return _Response(200, {"data": []})
+
+    monkeypatch.setattr(module.requests, "get", fake_get)
+    client = module.DBRestClient(
+        "https://example.test/v1", "k3y", tmp_path, 5, "fudosandb",
+        usage_endpoint=None, min_interval=0,
+    )
+    client.get("/corporate/real-estate-holdings")
+
+    assert seen["Authorization"] == "Bearer k3y"
+    assert seen["X-API-Key"] == "k3y"
+
+
+def test_rate_limit_stops_the_day_instead_of_burning_budget(tmp_path, monkeypatch):
+    """429が続いたら打ち切り、残り予算を後続モジュールに残す"""
+    called = 0
+
+    def fake_get(*_args, **_kwargs):
+        nonlocal called
+        called += 1
+        return _Response(429)
+
+    monkeypatch.setattr(module.requests, "get", fake_get)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    client = module.DBRestClient(
+        "https://example.test/v1", "key", tmp_path, 90, "fudosandb",
+        usage_endpoint=None, min_interval=0,
+    )
+
+    assert client.get("/corporate/real-estate-holdings") is None
+    assert client.last_error == "rate_limited"
+    burned = called
+    # 打ち切り後は1回もHTTPを出さず、予算も減らさない
+    for _ in range(20):
+        assert client.get("/corporate/real-estate-holdings") is None
+    assert called == burned
+    assert client.calls < 90
+
+
+def test_min_interval_spaces_out_requests(tmp_path, monkeypatch):
+    """連続GETの間に min_interval 秒の待ちを入れて429自体を防ぐ"""
+    waits = []
+    monkeypatch.setattr(
+        module.requests, "get",
+        lambda *_a, **_k: _Response(200, {"data": []}),
+    )
+    monkeypatch.setattr(module.time, "sleep", waits.append)
+    client = module.DBRestClient(
+        "https://example.test/v1", "key", tmp_path, 10, "fudosandb",
+        usage_endpoint=None, min_interval=0.5,
+    )
+
+    client.get("/a")
+    client.get("/b")
+    assert waits, "2回目の送信で間隔待ちが入っていない"
+    assert all(0 < w <= 0.5 for w in waits)
 
 
 def test_live_usage_returns_daily_remaining_when_key_is_available(tmp_path):

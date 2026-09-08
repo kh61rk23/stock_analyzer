@@ -916,10 +916,46 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
         _cat_data_us = _load_cat_us(cfg) or {}
     except Exception:
         pass
+
+    # ── [U-3] インサイダー照会をループ外へ出す ────────────────────
+    # calc_insider_bonus() は SEC EDGAR への逐次アクセス
+    # （_FETCH_DELAY=0.5秒/回）。ループ内で通過銘柄ごとに呼ぶと
+    # 371社で805秒かかっていた（2026-08-27 実測）。
+    # _apply_filter / _calc_score はどちらも純粋計算なので先に流し、
+    # 素点上位の銘柄に限ってまとめて取得する。
+    _filter_cache: dict = {}
+    _pass_ranked:  list = []
     for c in all_candidates:
         if not c.get("fetch_ok"):
             continue
-        ok, fails = _apply_filter(c)
+        _tk_f = str(c.get("ticker", ""))
+        _ok_f, _fails_f = _apply_filter(c)
+        _filter_cache[_tk_f] = (_ok_f, _fails_f)
+        if _ok_f and _tk_f:
+            _pass_ranked.append((_calc_score(c), _tk_f))
+
+    _insider_map: dict = {}
+    _ins_limit = int(getattr(cfg, "US_INSIDER_MAX_TICKERS", 40))
+    if _pass_ranked and _ins_limit > 0:
+        _pass_ranked.sort(key=lambda x: x[0], reverse=True)
+        _ins_targets = [t for _s, t in _pass_ranked[:_ins_limit]]
+        try:
+            from us_insider_form4_scraper import (
+                batch_calc_insider_bonuses as _batch_ins,
+            )
+            _insider_map = _batch_ins(
+                _ins_targets, cfg=cfg, max_tickers=_ins_limit
+            ) or {}
+        except Exception:
+            _insider_map = {}
+        print(f"    🕵️ インサイダー照会: 素点上位{len(_ins_targets)}社 "
+              f"/ 通過{len(_pass_ranked)}社")
+
+    for c in all_candidates:
+        if not c.get("fetch_ok"):
+            continue
+        ok, fails = _filter_cache.get(str(c.get("ticker", "")),
+                                      (False, []))
         c["pass_filters"] = ok
         c["fail_reasons"] = fails
         if ok:
@@ -931,9 +967,12 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
                 )
 
             # ── [Wave 3 - U-3] Form 4 インサイダーボーナス ───────
+            # 値はループ外の一括取得（_insider_map）から引くだけ。
+            # 対象外の銘柄は 0.0 = 補正なしで従来どおり。
             try:
-                from us_insider_form4_scraper import calc_insider_bonus as _ins_b
-                _ins_bonus = _ins_b(c.get("ticker", ""), cfg=cfg)
+                _ins_bonus = float(
+                    _insider_map.get(str(c.get("ticker", "")), 0.0)
+                )
                 if _ins_bonus != 0.0:
                     c["insider_bonus"]   = _ins_bonus
                     c["composite_score"] = round(

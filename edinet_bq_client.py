@@ -685,6 +685,55 @@ class EDINETBQClient:
         # E4 完了後に text_signal.py の計算結果を参照する実装に差し替える
         return 0.0
 
+    def get_tickers_by_sector_bulk(self, limit: int = 10) -> dict:
+        """
+        全業種の ticker を1クエリでまとめて返す（{sector_code: [ticker, ...]}）。
+
+        業種ごとに get_tickers_for_sector() を呼ぶと33本のクエリが走り、
+        実測で約5分・BQ課金も33回分かかっていた（2026-08-27）。
+        件数を絞る順序は ORDER BY ticker で固定する。元の LIMIT だけの
+        SQL は順序が未定義で、日によって選ばれる銘柄が変わりうるため。
+        """
+        lim = max(1, min(int(limit), 20))
+        sql = f"""
+        SELECT sector_code, ticker
+        FROM (
+            SELECT sector_code, ticker,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY sector_code ORDER BY ticker
+                   ) AS rn
+            FROM (
+                SELECT DISTINCT
+                       CAST(sector_code AS STRING) AS sector_code,
+                       ticker
+                FROM `{self.dataset}.ticker_subtheme_mapping`
+                WHERE ticker IS NOT NULL
+                  AND sector_code IS NOT NULL
+                  AND NOT STARTS_WITH(ticker, 'SECTOR_')
+            )
+        )
+        WHERE rn <= {lim}
+        """
+        out: dict = {}
+        try:
+            df = self.query_to_df(sql)
+            if df is None or df.empty:
+                return {}
+            if "sector_code" not in df.columns or "ticker" not in df.columns:
+                return {}
+            for code_raw, ticker_raw in zip(df["sector_code"], df["ticker"]):
+                code = str(code_raw or "").strip()
+                t    = str(ticker_raw or "").strip()
+                if not code or not t or t.upper().startswith("SECTOR_"):
+                    continue
+                out.setdefault(code, []).append(
+                    t if t.endswith(".T") else f"{t}.T"
+                )
+        except Exception as e:
+            print(f"[BQ] get_tickers_by_sector_bulk skip: {str(e)[:80]}")
+            return {}
+        return out
+
     def get_tickers_for_sector(self, sector_code: str, limit: int = 5) -> list[str]:
         """
         業種コードに属する ticker リストを返す。

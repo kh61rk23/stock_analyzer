@@ -5257,7 +5257,10 @@ def run_all_tasks(mode: str = "all") -> dict:
                     logger.add("ml_meta_dataset", "success",
                                f"{_snap['rows']}行追記（累計{_snap.get('total_rows', 0)}行）")
                 else:
-                    logger.add("ml_meta_dataset", "warn", "特徴量行なし（skip）")
+                    logger.add(
+                        "ml_meta_dataset", "warn",
+                        f"特徴量行なし（skip）: "
+                        f"{_snap.get('reason', '理由不明')}"[:100])
             else:
                 print("  ⚠️  ml/dataset_builder.py が見つかりません")
                 # 2026-07-25 B-2: ロード失敗が print だけで台帳に残らず、

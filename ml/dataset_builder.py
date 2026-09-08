@@ -158,7 +158,27 @@ def snapshot(cfg, results: dict) -> dict:
     rows = build_feature_rows(cfg, results, today)
     path = _dataset_path(cfg)
     if not rows:
-        return {"skipped": True, "rows": 0, "date": today, "path": str(path)}
+        # 空になる経路は3つ（sector_signalsが空 / componentsに数値が無い /
+        # 代表銘柄マップが引けない）。どれなのか運用ログから切り分けられないと
+        # 導入以来ずっと0行のまま気付けないため、内訳を必ず添える。
+        _ss  = ((results.get("signal_aggregator") or {}).get("sector_signals")
+                or {})
+        _rep = getattr(cfg, "SECTOR_REPRESENTATIVE_TICKERS", {}) or {}
+        _with_feat = sum(
+            1 for s in _ss.values()
+            if isinstance(s, dict) and any(
+                isinstance(v, (int, float))
+                for v in (s.get("components") or {}).values()
+            )
+        )
+        _matched = sum(1 for c in _ss if _rep.get(str(c)))
+        return {
+            "skipped": True, "rows": 0, "date": today, "path": str(path),
+            "reason": (f"sector_signals={len(_ss)} "
+                       f"特徴量あり業種={_with_feat} "
+                       f"代表銘柄が引けた業種={_matched} "
+                       f"代表銘柄マップ={len(_rep)}"),
+        }
 
     path.parent.mkdir(parents=True, exist_ok=True)
     # 既存を読み、同一日付の行は置き換え（冪等・再実行安全）

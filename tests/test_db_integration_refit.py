@@ -54,12 +54,36 @@ def test_edinet_ingest_skips_cleanly_without_optional_key():
     assert "API_KEY" in result["reason"]
 
 
-def test_daily_edinet_route_is_bq_read_only():
+def test_daily_edinet_route_uses_edinetdb_not_government_api():
+    """日次経路は EdinetDB を使い、退役した政府EDINET直取得は使わないこと。
+
+    2026-07-30（健太決定）で方針を一部変更した。
+    - 変更前: 日次は「BQ読み取り専用」で EdinetDB も叩かなかった
+    - 変更後: 日次でも EdinetDB を叩く（月次枠を使い切ったら自動スキップ）
+
+    **変わっていない部分**＝政府EDINET直取得（D-①で退役）は依然として無効。
+    ここが True に戻ると退役したAPIを叩き始めるので、その検査は残す。
+    """
     assert config.ENABLE_EDINET_BQ_ANALYSIS is True
     assert config.ENABLE_EDINET is False
-    assert config.ENABLE_EDINETDB_INGEST is False
-    assert "edinetdb_ingest" not in config.DAILY_MODULES
-    assert "edinet_doc_index" not in config.DAILY_MODULES
+    assert config.ENABLE_EDINET_DIRECT_FETCH is False   # 退役した政府API
+    # EdinetDB は日次で叩く（新方針）
+    assert config.ENABLE_EDINETDB_INGEST is True
+    assert "edinetdb_ingest" in config.DAILY_MODULES
+    assert "edinet_doc_index" in config.DAILY_MODULES
+
+
+def test_edinetdb_daily_budget_fits_monthly_guard():
+    """日次予算×30 が月次ガードを大きく超えないこと。
+
+    日次で叩く方針にしたため、日次予算が月次枠と整合していないと
+    月半ばで枠切れして残り期間まるごと取得が止まる。
+    """
+    daily = int(config.EDINETDB_DAILY_BUDGET)
+    monthly = int(config.EDINETDB_MONTHLY_GUARD)
+    assert daily * 28 <= monthly, (
+        f"日次{daily}×28={daily * 28} が月次ガード{monthly}を超過している。"
+        "月半ばで取得が止まるので日次予算を下げるか月次枠を上げること")
 
 
 def test_pruner_never_confirms_unknown_ticker_for_deletion():

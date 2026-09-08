@@ -221,6 +221,9 @@ def fetch_price_history(tickers: list) -> dict:
         print(f"    WARNING: 一括取得失敗 ({e}) → 個別取得にフォールバック")
         data = None
 
+    n_short   = 0   # データ点数不足
+    n_nodata  = 0   # 一括・個別ともに取得できず
+    n_error   = 0   # 例外
     for ticker in tickers:
         try:
             if data is not None and not data.empty:
@@ -228,8 +231,12 @@ def fetch_price_history(tickers: list) -> dict:
                     hist_close  = data["Close"]
                     hist_volume = data.get("Volume")
                 elif ticker in data.columns.get_level_values(0):
-                    hist_close  = data["Close"][ticker]
-                    hist_volume = data["Volume"][ticker] if "Volume" in data else None
+                    # group_by="ticker" の MultiIndex は
+                    # level0=ticker / level1=OHLCV。
+                    # data["Close"][ticker] は KeyError になる（level0にCloseが無い）
+                    frame       = data[ticker]
+                    hist_close  = frame["Close"]  if "Close"  in frame else None
+                    hist_volume = frame["Volume"] if "Volume" in frame else None
                 else:
                     hist_close = hist_volume = None
             else:
@@ -243,10 +250,12 @@ def fetch_price_history(tickers: list) -> dict:
                     hist_close  = hist["Close"]
                     hist_volume = hist["Volume"]
                 else:
+                    n_nodata += 1
                     continue
 
             hist_close  = hist_close.dropna()
             if len(hist_close) < MIN_DATA_POINTS:
+                n_short += 1
                 continue
 
             dates = [
@@ -261,11 +270,20 @@ def fetch_price_history(tickers: list) -> dict:
                            else []),
                 "dates":  dates,
             }
-        except Exception:
+        except Exception as exc:
+            n_error += 1
+            if n_error == 1:
+                print(f"    WARNING: 価格履歴の取得で例外 ({ticker}): "
+                      f"{type(exc).__name__}: {str(exc)[:80]}")
             continue
 
     ok = len(results)
     print(f"    OK: {ok}/{len(tickers)} 銘柄取得成功")
+    # 取得が全滅・大量失敗しても異常検知は続行できてしまうため、
+    # 内訳を必ず出して沈黙のうちに0件スキャンになるのを防ぐ
+    if ok < len(tickers):
+        print(f"    WARNING: 取得失敗 {len(tickers) - ok}件 "
+              f"（データなし:{n_nodata} 点数不足:{n_short} 例外:{n_error}）")
     return results
 
 
@@ -1069,9 +1087,15 @@ def run_anomaly_detector(cfg, results: dict, logger=None) -> dict:
         scan_result = run_anomaly_scan(cfg, results)
         ac = scan_result.get("anomaly_count", 0)
         sc = scan_result.get("scan_count", 0)
+        tc = len(scan_result.get("targets", {}))
+        # 対象があるのに1銘柄も価格を取れていない場合、価格・出来高の
+        # 異常検知は成立していない。success で埋めるとスコア由来の
+        # アラートだけが根拠不明のまま通知される（2026-08-27 実害）。
+        _status = "alert" if (tc > 0 and sc == 0) else "success"
+        _prefix = "価格取得0件（価格/出来高判定は無効） " if _status == "alert" else ""
         logger.add(
-            "anomaly_detector", "success",
-            f"スキャン:{sc}銘柄 異常:{ac}件 "
+            "anomaly_detector", _status,
+            f"{_prefix}スキャン:{sc}/{tc}銘柄 異常:{ac}件 "
             f"（複合:{len(scan_result.get('combined_anomalies',[]))} "
             f"価格:{len(scan_result.get('price_anomalies',[]))} "
             f"出来高:{len(scan_result.get('volume_anomalies',[]))} "

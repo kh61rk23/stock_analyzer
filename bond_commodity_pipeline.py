@@ -436,10 +436,14 @@ def fetch_commodity_prices() -> dict:
                         # 単一銘柄: Closeが直接Series
                         hist_close = data["Close"] if "Close" in data.columns else None
                     else:
-                        # 複数銘柄: data["Close"] がDataFrame、列名がティッカー
-                        close_df = data["Close"] if "Close" in data.columns else None
-                        if close_df is not None and hasattr(close_df, "columns") and ticker in close_df.columns:
-                            hist_close = close_df[ticker]
+                        # group_by="ticker" の MultiIndex は level0=ティッカー。
+                        # 旧実装は data["Close"] を見ており level0 に "Close" が
+                        # 無いため常に None となり、一括取得が丸ごと無駄になって
+                        # 全銘柄が個別取得へ落ちていた（2026-09-08 修正）。
+                        if ticker in data.columns.get_level_values(0):
+                            _sub = data[ticker]
+                            hist_close = (_sub["Close"]
+                                          if "Close" in _sub else None)
                         else:
                             hist_close = None
                 except Exception:

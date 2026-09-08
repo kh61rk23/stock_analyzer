@@ -19,7 +19,28 @@ class TestBuildDailyLedger:
                 _log("screener", "skipped")]
         led = ml.build_daily_ledger(tmp_cfg, logs)
         assert led["stats"] == {"success": 1, "error": 1,
-                                "skipped": 1, "total": 3}
+                                "skipped": 1, "warn": 0, "total": 3}
+
+    def test_size_tier_alias_is_not_reported_as_unwired(self, tmp_cfg):
+        """size_tier は size_decay_manager / cross_size_signal で記録される"""
+        tmp_cfg.DAILY_MODULES = ["size_tier"]
+        led = ml.build_daily_ledger(
+            tmp_cfg, [_log("size_decay_manager", "success"),
+                      _log("cross_size_signal", "success")])
+        assert "size_tier" not in led["unrecorded"]
+
+        # 本当に記録が無いときは従来どおり配線漏れとして挙げる
+        led_none = ml.build_daily_ledger(tmp_cfg, [_log("unrelated", "success")])
+        assert "size_tier" in led_none["unrecorded"]
+
+    def test_warn_and_alert_counted(self, tmp_cfg):
+        """warn / alert が success にも error にも入らず埋もれないこと"""
+        logs = [_log("gov", "success"), _log("edinetdb_ingest", "alert"),
+                _log("anomaly_detector", "warn")]
+        led = ml.build_daily_ledger(tmp_cfg, logs)
+        assert led["stats"]["warn"] == 2
+        assert led["stats"]["success"] == 1
+        assert led["stats"]["error"] == 0
 
     def test_old_logs_excluded(self, tmp_cfg):
         led = ml.build_daily_ledger(
