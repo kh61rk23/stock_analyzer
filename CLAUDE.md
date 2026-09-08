@@ -55,3 +55,49 @@ python3 maintenance_packet.py   # 全監査+台帳+直近変更を MAINTENANCE_P
 3. **producer/consumerキー不整合**: results の書き手と読み手でキー名が違う
    → results_schema --audit が検出
 4. **到達不能コード**: return の後ろに処理が残る → AST検査
+5. **mode名をモジュールキーとして渡す**: `_in_mode("weekly")` はモード名であり
+   DAILY/WEEKLY_MODULES のどちらにも無いため**常に False**。そのブロックは
+   一度も実行されない（2026-09 に求人票/役員転職/施設着工の3件が該当し、
+   対応する BQ テーブルが作成以来ずっと0行だった）
+   → `tests/test_bq_wiring.py` が機械検査する
+6. **外部APIの間隔なし連打**: 送信間隔を空けずGETを連発すると429を誘発し、
+   その再試行が日次予算を食い潰して全件失敗する。さらに予算切れパスで
+   `last_error` を立て忘れると呼び出し側の打ち切りが発火せず空振り周回する
+   （2026-09 に edinetdb 0/11・fudosandb 0/45 の実害）
+7. **yfinance の MultiIndex 逆参照**: `group_by="ticker"` の DataFrame は
+   level0=ticker。`data["Close"][ticker]` は KeyError になり except で
+   全銘柄が黙って捨てられる。正しくは `data[ticker]["Close"]`
+
+## データが入らない系の調査手順（BQ実データ起点）
+
+「DBに入るはずのデータが入っていない」を疑うときの定石。
+詳細な手順と判断基準は skill `stock-analyzer-refit` に記載。
+
+1. **BQの実測から入る**（推測から入らない）。MCPコネクタで各データセットの
+   `__TABLES__` を引き、行数と最終更新日を一覧化する。メタデータ参照なので
+   `totalBytesBilled=0`＝**課金されない**。
+   ```sql
+   SELECT table_id, row_count, DATE(TIMESTAMP_MILLIS(last_modified_time))
+   FROM `<project>.<dataset>.__TABLES__` ORDER BY row_count
+   ```
+   ※ プロジェクトは `stock-analyzer-edinet`。MCPのクエリでは
+     テーブル参照のバッククォートを外す（付けると引数が届かないことがある）
+2. 0行テーブルごとに、コード側に**書き込み処理があるか**を grep で分類する。
+   - 書き込み処理あり → **配線漏れ**（要修正）
+   - `edinet_bq_schema.py` にDDLがあるだけ → 予約テーブル（対応不要）
+   - `_p1` など後継テーブルが稼働中 → 旧テーブル（対応不要）
+3. 配線漏れは producer 側を疑う。**consumer だけ実装済み**というパターンが多い
+   （例: `base_agent.get_policy_support_bonus()` は配線済みなのに
+   `run_nedo_selection_scraper()` がどこからも呼ばれていなかった）
+4. **出力ファイルと永続化データの項目差分**を突き合わせる。md/json に出ている
+   のにDBにもJSONにも残らない項目は、その日を過ぎると永久に失われる
+   （2026-09 の銘柄md調査では14項目が該当。DB移管提案の決め手になった）
+
+## 課金ガード（Google Cloud）
+
+- BigQuery: `BQ_MAX_BYTES_BILLED`（既定10GB/クエリ）が全クエリに効く。
+  全テーブル合計は約20MBで無料枠1TBに対し十分小さい
+- **ループ内でBQを引かない**。業種ごとに引くと33クエリ×フルスキャンになる
+  （2026-09 に `get_tickers_by_sector_bulk()` で1本へ集約）
+- Google CSE: 無料枠100件/日。超過分は課金されるため
+  `B5_PAID_MEDIA_SEARCHER_CSE_CALL_LIMIT`（既定90）で打ち切る
