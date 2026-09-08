@@ -123,10 +123,27 @@ def build_signal_events(cfg) -> list[dict]:
     if sh:
         try:
             for date in sorted(sh.keys())[-30:]:   # 直近30営業日
-                for c in (sh[date] or {}).get("candidates", []):
-                    if not (isinstance(c, dict) and c.get("pass_filters")):
+                # screener_history の実体は {日付: [通過銘柄, ...]} のリスト。
+                # 旧実装は {"candidates": [...]} を期待して list に .get() を
+                # 呼び、AttributeError を except で握り潰して常に0件だった
+                # （BQ ontology.signal_event が作成以来ずっと0行だった原因）。
+                _day = sh.get(date)
+                if isinstance(_day, dict):
+                    _rows = _day.get("candidates") or []
+                elif isinstance(_day, list):
+                    _rows = _day
+                else:
+                    continue
+                for c in _rows:
+                    if not isinstance(c, dict):
+                        continue
+                    # 履歴に載っている時点で通過済み。pass_filters は
+                    # 履歴側に保存されないため、あるときだけ尊重する。
+                    if "pass_filters" in c and not c.get("pass_filters"):
                         continue
                     tk = str(c.get("ticker", ""))
+                    if not tk:
+                        continue
                     events.append({
                         "event_id": _eid("screener_pass", date, tk),
                         "fired_at": date,

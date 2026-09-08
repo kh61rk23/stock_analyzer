@@ -2903,6 +2903,45 @@ def run_all_tasks(mode: str = "all") -> dict:
             print(f"  ⚠️  政策レーダーエラー（スキップ）: {str(e)[:60]}")
     else:
         print("  ⏩ 政策レーダー: スキップ")
+
+    # ── [Wave 1 - I-2] NEDO採択情報 → edinet.policy_support（週次）────
+    # base_agent.get_policy_support_bonus() が読む側として既に配線済みだが、
+    # 書く側の run_nedo_selection_scraper() がどこからも呼ばれておらず、
+    # BQ edinet.policy_support が0行のままでボーナスが常時0だった
+    # （2026-09-09 配線。producer/consumer 不整合＝CLAUDE.mdパターン③）。
+    if getattr(cfg, "ENABLE_NEDO_SCRAPER", True) and _in_mode("nedo"):
+        try:
+            _nedo = _load_local_module(
+                "nedo_selection_scraper",
+                "/content/nedo_selection_scraper.py",
+                cfg.DRIVE_BASE / "nedo_selection_scraper.py",
+            )
+            if _nedo:
+                # BQ未接続環境では bq_client=None（スクレイプのみ）で続行する
+                try:
+                    from edinet_bq_client import EDINETBQClient as _NedoBQ
+                    _nedo_bq = _NedoBQ()
+                except Exception:
+                    _nedo_bq = None
+                _nedo_res = _nedo.run_nedo_selection_scraper(
+                    cfg, results, bq_client=_nedo_bq,
+                )
+                results["nedo_selection"] = _nedo_res
+                logger.add(
+                    "nedo_selection_scraper", "success",
+                    f"採択{_nedo_res.get('scraped_count', 0)}件 / "
+                    f"名寄せ{_nedo_res.get('matched_count', 0)}件 / "
+                    f"BQ={_nedo_res.get('bq_inserted', False)}",
+                )
+            else:
+                logger.add("nedo_selection_scraper", "warn",
+                           "nedo_selection_scraper.py が見つかりません")
+        except Exception as _nde:
+            logger.add("nedo_selection_scraper", "error", str(_nde)[:100])
+            print(f"  ⚠️  NEDO採択情報エラー（スキップ）: {str(_nde)[:60]}")
+    else:
+        print("  ⏩ NEDO採択情報: スキップ（週次以外）")
+
         # ── [Wave 3 - FE-7] Catalyst Calendar（WEEKLY）────────────────
     if _in_mode("catalyst_calendar"):
         try:
@@ -5341,7 +5380,7 @@ def run_all_tasks(mode: str = "all") -> dict:
 # ── [Wave 6 - I-1] 求人票モニター（週次バッチ）──────────────
     # 実行条件: ENABLE_JOB_POSTING_MONITOR=True かつ weeklyモードで月曜実行
     # TTL 30日以内はキャッシュ返却 → 外部HTTPアクセスなし
-    if getattr(cfg, "ENABLE_JOB_POSTING_MONITOR", True) and _in_mode("weekly"):
+    if getattr(cfg, "ENABLE_JOB_POSTING_MONITOR", True) and _in_mode("job_posting"):
         try:
             _jpm = _load_local_module(
                 "job_posting_monitor",
@@ -5375,7 +5414,7 @@ def run_all_tasks(mode: str = "all") -> dict:
     # ── [Wave 6 - I-3] 役員転職トラッカー（週次バッチ）──────────
     # 実行条件: ENABLE_EXECUTIVE_TRANSITION=True かつ weeklyモードで月曜実行
     # TTL 90日以内はキャッシュ返却 → EDINET APIアクセスなし
-    if getattr(cfg, "ENABLE_EXECUTIVE_TRANSITION", True) and _in_mode("weekly"):
+    if getattr(cfg, "ENABLE_EXECUTIVE_TRANSITION", True) and _in_mode("executive_transition"):
         try:
             _ett = _load_local_module(
                 "executive_transition_tracker",
@@ -5411,7 +5450,7 @@ def run_all_tasks(mode: str = "all") -> dict:
     # ── [Wave 6 - I-4] 施設着工モニター（週次バッチ）────────────
     # 実行条件: ENABLE_FACILITY_EXPANSION=True かつ weeklyモードで月曜実行
     # TTL 180日以内はキャッシュ返却 → 外部HTTPアクセスなし
-    if getattr(cfg, "ENABLE_FACILITY_EXPANSION", True) and _in_mode("weekly"):
+    if getattr(cfg, "ENABLE_FACILITY_EXPANSION", True) and _in_mode("facility_expansion"):
         try:
             _fem = _load_local_module(
                 "facility_expansion_monitor",

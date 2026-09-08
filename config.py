@@ -1619,6 +1619,17 @@ WEEKLY_MODULES = [
     "emerging_detector",        # Wave 6 - B: 萌芽テーマ検知
     "cluster_graph_exporter",   # Wave 6 - B: クラスター結果出力
     "factor_crowding",  # ★ RESEARCH-2追加
+    # 2026-09-09: 下記3件は stock_analyzer_main が _in_mode("weekly") で
+    # ゲートしていたが、"weekly" はモジュールキーではなくモード名のため
+    # 判定が常に False となり、週次実行でも一度も動いていなかった
+    # （BQ us.job_signal_cache / us.executive_transitions /
+    #   us.facility_signals が作成以来ずっと0行だった原因）。
+    "job_posting",           # Wave 6 - I-1: 求人票モニター
+    "executive_transition",  # Wave 6 - I-3: 役員転職トラッカー
+    "facility_expansion",    # Wave 6 - I-4: 施設着工モニター
+    # 2026-09-09: 読む側（base_agent.get_policy_support_bonus）は配線済みなのに
+    # 書く側が未配線で、BQ edinet.policy_support が0行のままだった。
+    "nedo",                  # Wave 1 - I-2: NEDO採択情報 → policy_support
 ]
 
 # ウィークリー実行の曜日（0=月曜 〜 6=日曜）
@@ -2246,6 +2257,9 @@ FINBERT_BATCH_SIZE: int   = 8                     # バッチサイズ（CPUメ�
 # BLOCK policy_radar: 政府答弁・官僚PDF先回り予測設定
 # ==============================================================
 ENABLE_POLICY_RADAR:         bool = True
+# NEDO採択情報スクレイパー（週次）。BQ edinet.policy_support への唯一の
+# 書き込み経路で、base_agent の政策支援ボーナスの前提データになる。
+ENABLE_NEDO_SCRAPER:         bool = True
 POLICY_RADAR_MAX_FEEDS:      int  = 10         # 取得する官庁RSS源の上限
 KOKKAI_SEARCH_KEYWORDS: list = [               # 国会議事録API検索語（上限5件）
     "半導体", "防衛費", "子育て支援", "インバウンド", "GX"
