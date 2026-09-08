@@ -87,6 +87,51 @@ def _statements(project: str) -> list[str]:
         f"ADD COLUMN IF NOT EXISTS auto_derived BOOL",
         f"ALTER TABLE `{project}.geopolitics.company_country_exposure` "
         f"ADD COLUMN IF NOT EXISTS review_flag BOOL",
+        # 2026-09-09 DB移管 Phase 1: スクリーナー結果の日次スナップショット。
+        # 銘柄mdに出ている指標の約半分（technical系・FCFマージン・D/E・
+        # 自己資本比率・配当利回り等）は screener_history.json の14項目に
+        # 含まれず、その日のmdを開く以外に参照する方法がなかった。
+        # ここを正本にして時系列で追えるようにする。
+        f"""CREATE TABLE IF NOT EXISTS `{project}.analytics.stock_snapshot` (
+          snapshot_date DATE NOT NULL,
+          ticker STRING NOT NULL,
+          market STRING,
+          name STRING,
+          sector_code STRING,
+          sector_name STRING,
+          composite_score FLOAT64,
+          sector_score FLOAT64,
+          value_score FLOAT64,
+          quality_score FLOAT64,
+          technical_score FLOAT64,
+          discovery_score FLOAT64,
+          per FLOAT64,
+          pbr FLOAT64,
+          roe FLOAT64,
+          roic FLOAT64,
+          fcf_margin FLOAT64,
+          debt_equity FLOAT64,
+          equity_ratio FLOAT64,
+          dividend_yield FLOAT64,
+          gross_margin FLOAT64,
+          op_margin FLOAT64,
+          market_cap_b FLOAT64,
+          avg_volume FLOAT64,
+          current_price FLOAT64,
+          rsi14 FLOAT64,
+          macd_crossup BOOL,
+          above_ma200 BOOL,
+          above_vwap BOOL,
+          vwap_20d FLOAT64,
+          week52_position_pct FLOAT64,
+          accrual_tier STRING,
+          size_tier STRING,
+          strategy_label STRING,
+          analyst_reco STRING,
+          signal_text STRING,
+          pass_filters BOOL,
+          ingested_at TIMESTAMP
+        ) PARTITION BY snapshot_date CLUSTER BY ticker, market""",
     ]
 
 

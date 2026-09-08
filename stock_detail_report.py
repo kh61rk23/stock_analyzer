@@ -414,6 +414,10 @@ def run_stock_detail_report(cfg, screener_result: dict, results: dict) -> dict:
 
     generated = 0
     paths = []
+    # ROIC / FCFマージン / D-E比率 / 自己資本比率 / 配当利回りは候補dictに無く
+    # ここで yfinance から取得している。mdに書くだけだと当日限りで失われるため、
+    # stock_snapshot_writer がBQへ残せるよう results に持ち回す（DB移管 Ph1）。
+    details: dict = {}
 
     for c in passed:
         ticker = c.get("ticker", "")
@@ -422,6 +426,8 @@ def run_stock_detail_report(cfg, screener_result: dict, results: dict) -> dict:
         print(f"      {ticker} レポート生成中...", end=" ")
 
         detail = _fetch_detail_data(ticker)
+        if detail:
+            details[ticker] = detail
         tech   = _get_technical_summary(ticker, tech_cache)
         sr     = _get_sr_summary(ticker, sr_result)
         edinet = _get_edinet_summary(ticker, edinet_db)
@@ -461,4 +467,5 @@ def run_stock_detail_report(cfg, screener_result: dict, results: dict) -> dict:
     print(f"    ✅ 詳細レポート生成完了: {generated}/{len(passed)}銘柄")
     return {"generated": generated, "paths": paths,
             "today_dir": str(dated_dir),
+            "details": details,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}

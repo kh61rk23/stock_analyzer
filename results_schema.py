@@ -123,6 +123,7 @@ SCHEMA: dict[str, list[str]] = {
     "policy_events_30d": ["stock_analyzer_main"],
     "policy_radar": ["stock_analyzer_main"],
     "nedo_selection": ["stock_analyzer_main"],
+    "stock_snapshot": ["stock_analyzer_main"],
     "policy_signals": ["stock_analyzer_main"],
     "politician_monitor": ["stock_analyzer_main"],
     "politician_scorer": ["stock_analyzer_main"],

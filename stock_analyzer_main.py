@@ -4228,6 +4228,41 @@ def run_all_tasks(mode: str = "all") -> dict:
         if not getattr(cfg, "ENABLE_US_SCREENER", False):
             print("  ⏩ 米国株スクリーニング: スキップ（ENABLE_US_SCREENER=False）")
 
+    # ── [DB移管 Ph1] 銘柄スナップショットをBQへ日次蓄積（両スクリーナー直後）──
+    # 銘柄mdに出ている指標の約半分（technical系・FCFマージン・D/E・
+    # 自己資本比率・配当利回り・sector_score・technical_score）は
+    # screener_history.json の14項目に含まれず、その日のmdを開く以外に
+    # 参照する方法がなかった（2026-09-09 調査）。ここを正本にする。
+    # md生成（上位30銘柄・JPのみ）には依存せず、通過銘柄の全件を残す。
+    if getattr(cfg, "ENABLE_STOCK_SNAPSHOT", True) and _in_mode("screener"):
+        try:
+            _ssw = _load_local_module(
+                "stock_snapshot_writer",
+                "/content/stock_snapshot_writer.py",
+                cfg.DRIVE_BASE / "stock_snapshot_writer.py",
+            )
+            if _ssw:
+                _snap_res = _ssw.run_stock_snapshot_writer(cfg, results)
+                results["stock_snapshot"] = _snap_res
+                if _snap_res.get("skipped"):
+                    logger.add("stock_snapshot", "skipped",
+                               str(_snap_res.get("reason", ""))[:80])
+                else:
+                    logger.add(
+                        "stock_snapshot",
+                        "success" if _snap_res.get("inserted") else "warn",
+                        f"JP{_snap_res.get('jp', 0)} / "
+                        f"US{_snap_res.get('us', 0)} / "
+                        f"計{_snap_res.get('rows', 0)}行 / "
+                        f"BQ={_snap_res.get('inserted', False)}",
+                    )
+            else:
+                logger.add("stock_snapshot", "warn",
+                           "stock_snapshot_writer.py が見つかりません")
+        except Exception as _sswe:
+            logger.add("stock_snapshot", "error", str(_sswe)[:100])
+            print(f"  ⚠️  スナップショット格納エラー（スキップ）: {str(_sswe)[:60]}")
+
     # ── [Wave0 Size Ph1] 規模分類マスター生成（両スクリーナーの直後）────
     # ★ 2026-07-27 X-1: sector 直後から本位置へ移設。
     #   results["screener"]（stock_screener）と results["us_screener"]
