@@ -135,12 +135,16 @@ class Ticker:
         self._kwargs = kwargs
 
     def _real(self):
+        # self.ticker の解決は lock の外で行う。lock 内で属性解決に失敗すると
+        # __getattr__ → _real() と戻ってきて同じ lock を再取得しにいき、
+        # threading.Lock は再入不可なのでデッドロックする。
+        key = self.ticker
         with _LOCK:
-            real = _TICKERS.get(self.ticker)
+            real = _TICKERS.get(key)
         if real is None:
-            real = _yf().Ticker(self.ticker, *self._args, **self._kwargs)
+            real = _yf().Ticker(key, *self._args, **self._kwargs)
             with _LOCK:
-                _TICKERS[self.ticker] = real
+                _TICKERS[key] = real
         return real
 
     @property
@@ -172,8 +176,14 @@ class Ticker:
         return df.copy() if hasattr(df, "copy") else df
 
     def __getattr__(self, name):
-        # __init__ で設定した属性より後に呼ばれるため、
-        # ここに来るのはラップしていない yfinance 側の属性だけ。
+        # 通常はラップしていない yfinance 側の属性（.financials 等）だけが
+        # ここへ来る。ただし __init__ を経ずに生成された場合（copy/pickle
+        # など）は self.ticker 自体が未設定で、_real() を呼ぶと
+        # 属性解決が再び __getattr__ へ戻り無限再帰・デッドロックになる。
+        # 自前の内部属性は委譲せず AttributeError を返して打ち切る。
+        if name.startswith("_") or name == "ticker":
+            raise AttributeError(
+                f"{type(self).__name__!s} has no attribute {name!r}")
         return getattr(self._real(), name)
 
 

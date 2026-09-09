@@ -13,21 +13,29 @@ sys.path.insert(0, str(REPO))
 
 
 @pytest.fixture(autouse=True)
-def _reset_yf_cache():
-    """yf_cache のプロセス内キャッシュをテストごとに捨てる。
+def _reset_process_caches():
+    """プロセス内キャッシュをテストごとに捨てる。
 
-    yf_cache は Ticker インスタンスと .info をモジュール変数に溜めるため、
-    残したままだと前のテストが掴んだ偽 yfinance が次のテストにも使われ、
-    monkeypatch した別の偽物が効かなくなる。
+    残したままだと前のテストが掴んだ偽オブジェクトや結果が次のテストにも
+    返ってしまい、monkeypatch した別の偽物が効かなくなる。
+      - yf_cache: Ticker インスタンスと .info をモジュール変数に溜める
+      - edinet_bq_client._RE_HOLDINGS_CACHE: 証券コード→保有不動産
     """
-    try:
-        import yf_cache
-    except Exception:
-        yield
-        return
-    yf_cache.clear()
+    def _clear():
+        try:
+            import yf_cache
+            yf_cache.clear()
+        except Exception:
+            pass
+        try:
+            import edinet_bq_client
+            edinet_bq_client._RE_HOLDINGS_CACHE.clear()
+        except Exception:
+            pass
+
+    _clear()
     yield
-    yf_cache.clear()
+    _clear()
 
 
 def load_module(name: str):

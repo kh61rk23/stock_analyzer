@@ -56,19 +56,25 @@ class EDINETBQClient:
     """
 
     _instance = None
+    # 2026-09-09: 業種分析を並列化したため、初回生成が複数スレッドから
+    # 同時に走りうる。lock が無いと _init_client()（認証・クライアント生成）が
+    # 並列数だけ実行され、片方の初期化途中のインスタンスを掴む恐れがある。
+    _init_lock = threading.Lock()
 
     def __new__(cls):
-        if cls._instance is None:
-            obj = super().__new__(cls)
-            obj._initialized = False
-            cls._instance = obj
-        return cls._instance
+        with cls._init_lock:
+            if cls._instance is None:
+                obj = super().__new__(cls)
+                obj._initialized = False
+                cls._instance = obj
+            return cls._instance
 
     def __init__(self):
-        if self._initialized:
-            return
-        self._init_client()
-        self._initialized = True
+        with type(self)._init_lock:
+            if self._initialized:
+                return
+            self._init_client()
+            self._initialized = True
 
     def _init_client(self):
         """認証初期化"""

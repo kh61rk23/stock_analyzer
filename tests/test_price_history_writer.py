@@ -80,6 +80,24 @@ class TestBuildRows:
             TODAY - timedelta(days=7))
         assert [r["ticker"] for r in rows] == ["C"]
 
+    def test_duplicate_index_does_not_drop_the_whole_ticker(self):
+        """index重複で to_dict("index") が例外を投げ、銘柄が丸ごと落ちていた"""
+        idx = pd.to_datetime([TODAY, TODAY])
+        df = pd.DataFrame({"Close": [100.0, 200.0]}, index=idx)
+        rows = w.build_price_rows({"X": df}, TODAY - timedelta(days=7))
+        assert len(rows) == 1, "重複indexで銘柄が丸ごと欠落している"
+        assert rows[0]["close"] == 200.0, "後の行（新しい取得結果）を採ること"
+
+    def test_timezone_aware_index_is_handled(self):
+        """yfinanceの日足は tz-aware で返ることがある"""
+        idx = pd.to_datetime(
+            [TODAY - timedelta(days=i) for i in range(3)][::-1]
+        ).tz_localize("America/New_York")
+        df = pd.DataFrame({"Close": [1.0, 2.0, 3.0]}, index=idx)
+        rows = w.build_price_rows({"AAPL": df}, TODAY - timedelta(days=7))
+        assert len(rows) == 3
+        assert all(len(r["trade_date"]) == 10 for r in rows)
+
     def test_max_rows_caps_output(self):
         rows = w.build_price_rows({"6501.T": _df(50)},
                                   TODAY - timedelta(days=60), max_rows=10)

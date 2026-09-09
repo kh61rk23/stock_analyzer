@@ -78,6 +78,11 @@ def build_price_rows(
         if not cols:
             continue
         try:
+            # to_dict("index") は index が重複すると ValueError を投げ、
+            # その銘柄の日足が丸ごと落ちる。同一日が2行来た場合は
+            # 後の行（＝より新しい取得結果）を採って先に潰しておく。
+            if getattr(df.index, "has_duplicates", False):
+                df = df[~df.index.duplicated(keep="last")]
             records = df.to_dict("index")
         except Exception:
             continue

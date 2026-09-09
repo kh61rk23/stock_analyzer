@@ -122,6 +122,19 @@ class TestTransparency:
         yfc.download(["AAPL"], period="1mo", extra=["a", "b"])
         assert yfc._calls["download"] == 1
 
+    def test_bare_instance_does_not_deadlock(self, yfc):
+        """__init__ を経ずに作られても無限再帰・デッドロックしない
+
+        _real() は self.ticker を解決するので、それ自体が __getattr__ に
+        戻ると _LOCK（再入不可）を二重取得してハングする。
+        内部属性は委譲せず AttributeError で打ち切ること。
+        """
+        bare = yfc.Ticker.__new__(yfc.Ticker)
+        with pytest.raises(AttributeError):
+            bare.info
+        with pytest.raises(AttributeError):
+            bare.ticker
+
     def test_clear_resets_everything(self, yfc):
         yfc.Ticker("6501.T").info
         yfc.clear()
