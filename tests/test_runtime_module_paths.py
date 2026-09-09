@@ -76,10 +76,11 @@ def test_daily_workflow_runs_edinet_after_provider_refresh():
     workflow = (repo / ".github/workflows/daily_run.yml").read_text(
         encoding="utf-8"
     )
-    # UTC 00:00 = JST 09:00。日曜のみ停止（Actions無料枠の節約。
-    # 土 09:00 JST は米国金曜の引け後にあたるため存置する）。
-    # 月曜は 1-6 に含まれるので weekly 昇格の判定は従来どおり効く。
-    assert 'cron: "0 0 * * 1-6"' in workflow
+    # UTC 00:17 = JST 09:17。UTC 00:00 ちょうどは混雑で毎日3〜4時間
+    # 遅延していたため分をずらした（2026-09-09）。
+    # ★ UTC 00:xx を維持すること。前倒しして 23:xx にすると JST月曜の回が
+    #   UTC では日曜になり、下の weekly 判定が一度も成立しなくなる。
+    assert 'cron: "17 0 * * 1-6"' in workflow
     assert '$(date -u +%u)" = "1"' in workflow
     assert 'ENABLE_EDINETDB_INGEST: "1"' in workflow
     assert "python setup_db_integration_bq.py" in workflow
