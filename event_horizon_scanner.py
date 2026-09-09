@@ -170,7 +170,7 @@ def _portfolio_earnings(cfg) -> list[dict]:
     events = []
     if tickers:
         try:
-            import yfinance as yf
+            import yf_cache as yf
             for tk in tickers[:30]:
                 try:
                     cal = yf.Ticker(tk).calendar

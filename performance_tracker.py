@@ -297,7 +297,7 @@ def _fetch_weekly_return(ticker: str, entry_date: str, exit_date: str) -> Option
         取得失敗時は None
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
 
         # 取得範囲: entry_date の1営業日前〜exit_date の1営業日後（バッファ）
         fetch_start = (datetime.strptime(entry_date, "%Y-%m-%d")

@@ -347,7 +347,7 @@ def fetch_earnings_dates(
 
     for ticker in tickers:
         try:
-            import yfinance as yf
+            import yf_cache as yf
             time.sleep(_FETCH_DELAY)
             t   = yf.Ticker(ticker)
             cal = t.calendar

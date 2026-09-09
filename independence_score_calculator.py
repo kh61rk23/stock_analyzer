@@ -321,7 +321,7 @@ def _fetch_price_returns(
         取得失敗時は ([], [], 0)
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
         end   = datetime.now()
         start = end - timedelta(days=int(window_days * 1.5))  # バッファ込みで取得
 

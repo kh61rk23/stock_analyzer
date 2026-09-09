@@ -165,7 +165,7 @@ def _fetch_exit_prices(records: list) -> dict:
         {ticker: {date_str: price_float}}
     """
     try:
-        import yfinance as yf  # type: ignore
+        import yf_cache as yf  # type: ignore
     except ImportError:
         return {}
 
@@ -213,7 +213,7 @@ def _fetch_benchmark_return(start_date: str, end_date: str) -> Optional[float]:
     ベンチマーク（日経225）の同期間リターン（%）を取得する。
     """
     try:
-        import yfinance as yf  # type: ignore
+        import yf_cache as yf  # type: ignore
         hist = yf.Ticker(BENCHMARK_TICKER).history(
             start=start_date, end=end_date, auto_adjust=True)
         if hist is None or len(hist) < 2:

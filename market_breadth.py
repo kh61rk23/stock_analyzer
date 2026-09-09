@@ -214,7 +214,7 @@ def _batch_fetch_prices(tickers: list, period: str = HISTORY_PERIOD) -> dict:
         取得失敗の銘柄は含まれない。
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
     except ImportError:
         return {}
 

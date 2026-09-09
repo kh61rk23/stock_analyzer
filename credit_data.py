@@ -427,7 +427,7 @@ def _fallback_via_yfinance(cfg) -> dict:
 
     records_dict = {}
     try:
-        import yfinance as yf
+        import yf_cache as yf
         for ticker in all_tickers[:30]:  # 上限30銘柄
             try:
                 info = yf.Ticker(ticker).info or {}

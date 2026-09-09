@@ -277,7 +277,7 @@ def calc_screener_hit_rate(cfg) -> dict:
     # スコア vs リターンのペアを収集（yfinanceで現在価格取得）
     pairs = []
     try:
-        import yfinance as yf
+        import yf_cache as yf
         import time
         for date_str, candidates in list(old_data.items())[-4:]:   # 最新4週分
             for c in (candidates if isinstance(candidates, list) else []):

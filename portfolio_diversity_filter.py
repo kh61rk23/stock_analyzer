@@ -129,7 +129,7 @@ def _fetch_returns(ticker: str, window_days: int = _CORR_WINDOW_DAYS) -> list[fl
         ※ 取得失敗時は空リスト
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
         time.sleep(_FETCH_DELAY)
         hist = yf.Ticker(ticker).history(
             period=f"{window_days + 10}d", auto_adjust=True

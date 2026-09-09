@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-09-09 00:35:49",
+  "generated_at": "2026-09-09 19:12:31",
   "source": "stock_analyzer_main.run_all_tasks（AST自動生成・手動編集禁止）",
-  "stage_count": 107,
+  "stage_count": 108,
   "stages": [
     {
       "order": 1388,
@@ -1612,7 +1612,22 @@
       ]
     },
     {
-      "order": 5613,
+      "order": 5603,
+      "modules": [
+        "price_history_writer"
+      ],
+      "enable_flags": [
+        "ENABLE_PRICE_HISTORY_WRITER"
+      ],
+      "mode_keys": [
+        "screener"
+      ],
+      "produces": [
+        "price_history"
+      ]
+    },
+    {
+      "order": 5643,
       "modules": [
         "module_ledger"
       ],

@@ -183,7 +183,7 @@ def _build_universe(cfg, results: dict = None) -> list[dict]:
 def _fetch_metrics(cfg, entry: dict, horizon: dict) -> Optional[dict]:
     """yfinance からチェーン/HVを取得しメトリクスを組む（失敗はNone）。"""
     try:
-        import yfinance as yf
+        import yf_cache as yf
         tk = entry["ticker"]
         t = yf.Ticker(tk)
         hist = t.history(period="3mo")

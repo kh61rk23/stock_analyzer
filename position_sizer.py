@@ -138,7 +138,7 @@ def calc_atr(ticker: str, period: int = ATR_PERIOD) -> Optional[dict]:
         取得失敗時は None
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
 
         end   = datetime.now()
         start = end - timedelta(days=period * 3)  # 余裕を持って取得

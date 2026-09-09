@@ -120,7 +120,7 @@ def fetch_rate_data(days: int = 90, max_retries: int = 2):
         pd.DataFrame | None  ※ 列=ticker, 行=日付
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
         import pandas as pd
     except ImportError:
         print("  ⚠️  yfinance/pandas 未インストール")

@@ -338,7 +338,7 @@ def fetch_bond_yields(fred_api_key: str) -> dict:
     FRED API 優先 → yfinance fallback。
     戻り値: {series_key: {"value": float, "date": str, "name": str}}
     """
-    import yfinance as yf  # type: ignore
+    import yf_cache as yf  # type: ignore
     results = {}
 
     if fred_api_key:
@@ -394,7 +394,7 @@ def fetch_commodity_prices() -> dict:
     全コモディティ先物・ETFの現在価格と1W/1M/3Mリターンを取得。
     戻り値: {commodity_key: {"price": float, "ret_1w": float, ...}}
     """
-    import yfinance as yf  # type: ignore
+    import yf_cache as yf  # type: ignore
 
     all_items = {}
     for cat_key, cat_data in COMMODITY_UNIVERSE.items():

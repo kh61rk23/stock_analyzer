@@ -204,7 +204,7 @@ def fetch_business_summary(ticker: str, cfg,
 
     # yfinance で事業概要取得
     try:
-        import yfinance as yf  # type: ignore
+        import yf_cache as yf  # type: ignore
         info = yf.Ticker(ticker).info or {}
         name        = info.get("shortName") or info.get("longName") or ticker
         summary_en  = info.get("longBusinessSummary", "")

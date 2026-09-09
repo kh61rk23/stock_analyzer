@@ -115,7 +115,7 @@ def fetch_price_safe(cfg, ticker: str,
 
     # ① yfinance
     def _yf():
-        import yfinance as yf
+        import yf_cache as yf
         h = yf.Ticker(ticker).history(period="5d", auto_adjust=True)
         if h is None or h.empty:
             return None

@@ -172,7 +172,7 @@ def fetch_macro_snapshot() -> dict:
     取得失敗時は None として辞書に格納（エラーで全体が止まらない設計）。
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
     except ImportError:
         print("  ⚠️  yfinance が未インストールです")
         return {}
@@ -5594,6 +5594,36 @@ def run_all_tasks(mode: str = "all") -> dict:
             print(f"  ⚠️  オントロジー出力エラー（スキップ）: {str(_oee)[:60]}")
     else:
         print("  ⏩ オントロジー出力: スキップ（週次モード外 or フラグOFF）")
+
+    # ── [PRICE-1] 株価日足をBQへ永続化（全モジュールの取得完了後）────
+    # yf_cache が実行中に集めた日足をまとめて書き出す。ここでの追加取得は
+    # 行わない。株価はどこにも保存されておらず（BQに時系列テーブルが無く、
+    # 50モジュールが個別にyfinanceを叩いては捨てていた）、事後検証が
+    # できなかったため（2026-09-09）。必ず取得側より後に置くこと。
+    if getattr(cfg, "ENABLE_PRICE_HISTORY_WRITER", True) and _in_mode("screener"):
+        try:
+            _phw = _load_local_module(
+                "price_history_writer",
+                "/content/price_history_writer.py",
+                cfg.DRIVE_BASE / "price_history_writer.py",
+            )
+            if _phw:
+                _price_res = _phw.run_price_history_writer(cfg, results)
+                results["price_history"] = _price_res
+                if _price_res.get("skipped"):
+                    logger.add("price_history", "skipped",
+                               str(_price_res.get("reason", ""))[:80])
+                else:
+                    logger.add(
+                        "price_history",
+                        "success" if _price_res.get("inserted") else "warn",
+                        f"{_price_res.get('tickers', 0)}銘柄 / "
+                        f"{_price_res.get('rows', 0)}行 / "
+                        f"BQ={_price_res.get('inserted', False)}",
+                    )
+        except Exception as _phwe:
+            logger.add("price_history", "error", str(_phwe)[:100])
+            print(f"  ⚠️  株価履歴格納エラー（スキップ）: {str(_phwe)[:60]}")
 
     # ── [PIPE-2] results スキーマ契約チェック（警告のみ） ──────
     try:

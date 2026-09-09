@@ -12,6 +12,24 @@ REPO = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO))
 
 
+@pytest.fixture(autouse=True)
+def _reset_yf_cache():
+    """yf_cache のプロセス内キャッシュをテストごとに捨てる。
+
+    yf_cache は Ticker インスタンスと .info をモジュール変数に溜めるため、
+    残したままだと前のテストが掴んだ偽 yfinance が次のテストにも使われ、
+    monkeypatch した別の偽物が効かなくなる。
+    """
+    try:
+        import yf_cache
+    except Exception:
+        yield
+        return
+    yf_cache.clear()
+    yield
+    yf_cache.clear()
+
+
 def load_module(name: str):
     """リポジトリ直下のモジュールを importlib でロードする。"""
     spec = importlib.util.spec_from_file_location(name, str(REPO / f"{name}.py"))

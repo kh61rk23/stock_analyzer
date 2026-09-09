@@ -156,7 +156,7 @@ def _fetch_earnings_history_extended(ticker: str, n_quarters: int = None) -> lis
         n_quarters = int(getattr(_cfg_es(), "CONSERVATISM_MIN_QUARTERS",
                                  CONSERVATISM_QUARTERS))
     try:
-        import yfinance as yf
+        import yf_cache as yf
         t    = yf.Ticker(ticker)
         hist = t.earnings_history
         if hist is None or (hasattr(hist, 'empty') and hist.empty):
@@ -212,7 +212,7 @@ def _fetch_earnings_history(ticker: str) -> list:
         取得失敗時は []
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
         t = yf.Ticker(ticker)
 
         # earnings_history（四半期EPS履歴）
@@ -406,7 +406,7 @@ def analyze_ticker(ticker: str) -> Optional[dict]:
         SurpriseResult dict | None（データ取得不可の場合）
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
         info = yf.Ticker(ticker).info or {}
         name = info.get("longName") or info.get("shortName") or ticker
     except Exception:

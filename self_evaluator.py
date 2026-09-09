@@ -144,7 +144,7 @@ def _save_perf_log(cfg, log: dict) -> None:
 def _fetch_return(ticker: str, entry_date: str, exit_date: str) -> Optional[float]:
     """entry → exit のリターン%を yfinance から取得する。"""
     try:
-        import yfinance as yf
+        import yf_cache as yf
         start = (datetime.strptime(entry_date, "%Y-%m-%d") - timedelta(days=2)).strftime("%Y-%m-%d")
         end   = (datetime.strptime(exit_date,  "%Y-%m-%d") + timedelta(days=5)).strftime("%Y-%m-%d")
         hist  = yf.Ticker(ticker).history(start=start, end=end, auto_adjust=True)

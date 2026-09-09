@@ -158,7 +158,7 @@ def _fetch_stock_data(ticker: str, usdjpy: float = 150.0) -> Optional[dict]:
         }
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
 
         t    = yf.Ticker(ticker)
         info = t.info or {}

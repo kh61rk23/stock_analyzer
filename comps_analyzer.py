@@ -62,7 +62,7 @@ def _fetch_sector_multiples(tickers: list) -> list:
         ]
     """
     try:
-        import yfinance as yf  # type: ignore
+        import yf_cache as yf  # type: ignore
     except ImportError:
         return []
 

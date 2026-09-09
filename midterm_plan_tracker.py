@@ -318,7 +318,7 @@ def _fetch_actuals_from_yfinance(
     """
     actuals = {}
     try:
-        import yfinance as yf
+        import yf_cache as yf
         info = yf.Ticker(ticker).info
         if not info:
             return actuals

@@ -137,7 +137,7 @@ def _fetch_option_chain(ticker: str) -> Optional[dict]:
         }
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
 
         t = yf.Ticker(ticker)
         expirations = t.options
@@ -205,7 +205,7 @@ def _fetch_vix_data() -> dict:
     VIX と VVIX の現在値・52週レンジを取得する。
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
 
         result = {}
         for name, ticker in [("vix", VIX_TICKER), ("vvix", VVIX_TICKER)]:
@@ -265,7 +265,7 @@ def _fetch_vix_term_structure() -> dict:
         }
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
         tickers = {
             "vix9d": VIX9D_TICKER,
             "vix":   VIX_TICKER,
@@ -349,7 +349,7 @@ def _fetch_skew_index() -> dict:
         }
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
         info  = yf.Ticker(SKEW_TICKER).info or {}
         price = (info.get("regularMarketPrice") or
                  info.get("previousClose"))
@@ -404,7 +404,7 @@ def detect_iv_spikes(
         }, ...]
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
     except ImportError:
         return []
 

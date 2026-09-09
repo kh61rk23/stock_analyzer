@@ -220,7 +220,7 @@ def _fetch_via_yfinance() -> Optional[dict]:
     ZQ = 30日物 FF 先物。ティッカー例: ZQH26 (2026年3月), ZQJ26 (4月)
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
         from datetime import date
 
         today = date.today()

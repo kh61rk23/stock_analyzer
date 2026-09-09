@@ -77,7 +77,7 @@ def _batch_liveness(tickers: list) -> dict:
     """
     out = {}
     try:
-        import yfinance as yf
+        import yf_cache as yf
         chunk = list(tickers)
         df = yf.download(chunk, period="1mo", group_by="ticker",
                          progress=False, threads=False)

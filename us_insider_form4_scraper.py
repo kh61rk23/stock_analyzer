@@ -569,7 +569,7 @@ def _calc_insider_bonus_yf(ticker: str, days: int | None = None) -> float:
     """
     try:
         days = _WINDOW_DAYS_DEFAULT if days is None else days
-        import yfinance as yf
+        import yf_cache as yf
         t    = yf.Ticker(ticker)
         raw  = t.get_insider_transactions()
         if raw is None or raw.empty:

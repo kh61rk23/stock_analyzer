@@ -46,7 +46,7 @@ def fetch_price_data(tickers: list, days: int = 180, max_retries: int = 2):
         pd.DataFrame | None  ※ 列=ticker、行=日付
     """
     try:
-        import yfinance as yf  # type: ignore
+        import yf_cache as yf  # type: ignore
         import pandas as pd  # type: ignore
     except ImportError:
         print("  ⚠️  yfinance/pandas 未インストール")

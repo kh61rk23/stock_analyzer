@@ -92,7 +92,7 @@ def _fetch_fcf_series(ticker: str) -> Optional[list]:
         [fcf_most_recent, fcf_2y_ago, fcf_3y_ago] または None
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
         t  = yf.Ticker(ticker)
         cf = t.cashflow   # 列=年、行=項目
 
@@ -137,7 +137,7 @@ def _fetch_dcf_inputs(ticker: str) -> dict:
         }
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
         t    = yf.Ticker(ticker)
         info = t.info or {}
 

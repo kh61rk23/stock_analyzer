@@ -751,7 +751,7 @@ def _yahoo_statement_series(statement, labels: list[str], n_quarters: int = 12) 
 def _fetch_yahoo_fundamentals(ticker: str, cik: int) -> Optional[dict]:
     """SEC companyfactsが404のADR等をYahooの四半期／年次値で補完する。"""
     try:
-        import yfinance as yf
+        import yf_cache as yf
 
         value = yf.Ticker(ticker)
         income = value.quarterly_income_stmt

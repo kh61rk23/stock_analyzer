@@ -165,7 +165,7 @@ def fetch_returns(
         リターンが取得できない銘柄は除外する。
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
     except ImportError:
         print("    ⚠️  yfinance 未インストール → クラウディング検知スキップ")
         return None

@@ -109,7 +109,7 @@ def build_order_tickets(allocations: dict, total_assets: float,
 def _fetch_closes(ticker: str, days: int = 300) -> list:
     """yfinanceで調整済み終値を取得（best-effort・失敗は空）。"""
     try:
-        import yfinance as yf
+        import yf_cache as yf
         h = yf.Ticker(ticker).history(period=f"{days}d", auto_adjust=True)
         if h is not None and len(h) > 0:
             return [float(c) for c in h["Close"].tolist()]

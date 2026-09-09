@@ -245,7 +245,7 @@ def fetch_quote(ticker: str, market: str, *,
 
     for attempt in range(attempts):
         try:
-            import yfinance as yf  # type: ignore
+            import yf_cache as yf  # type: ignore
 
             info = yf.Ticker(ticker).info or {}
             if not info:

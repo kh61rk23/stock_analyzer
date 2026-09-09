@@ -154,7 +154,7 @@ def _fetch_monthly_returns(ticker: str, years: int = LOOKBACK_YEARS) -> dict:
         例: {"2015-01": 2.5, "2015-02": -1.3, ...}
     """
     try:
-        import yfinance as yf  # type: ignore
+        import yf_cache as yf  # type: ignore
 
         end   = datetime.now()
         start = end.replace(year=end.year - years)

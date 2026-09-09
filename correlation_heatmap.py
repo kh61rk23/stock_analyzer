@@ -138,7 +138,7 @@ def _fetch_returns(tickers: list, lookback_days: int = LOOKBACK_DAYS) -> dict:
         {ticker: [float, ...]}  日次リターン（前日比%）のリスト
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
     except ImportError:
         return {}
 

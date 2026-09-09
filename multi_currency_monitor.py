@@ -182,7 +182,7 @@ SIGNAL_DELTA   = 5.0  # tailwind/headwind 1件あたりの補正点
 def _fetch_yfinance_rates() -> dict:
     """yfinance から全通貨ペアの最新レートを取得する。"""
     try:
-        import yfinance as yf
+        import yf_cache as yf
     except ImportError:
         return {}
 

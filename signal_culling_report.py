@@ -180,7 +180,7 @@ def fetch_forward_returns(panel: list, cfg) -> dict:
         return {}
     out: dict = {}
     try:
-        import yfinance as yf
+        import yf_cache as yf
     except ImportError:
         return {}
     for code in codes:

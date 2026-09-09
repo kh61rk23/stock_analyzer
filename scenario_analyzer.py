@@ -280,7 +280,7 @@ def load_portfolio_holdings(cfg) -> list:
 def _fetch_current_prices(holdings: list) -> list:
     """yfinance で現在価格を取得して holdings に注入する。"""
     try:
-        import yfinance as yf
+        import yf_cache as yf
     except ImportError:
         return holdings
 

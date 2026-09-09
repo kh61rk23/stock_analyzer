@@ -117,7 +117,7 @@ def _extract_jp_large_holdings(cfg, tickers: list) -> dict:
     holdings = {}
 
     try:
-        import yfinance as yf
+        import yf_cache as yf
         for ticker in tickers:
             if not ticker.endswith(".T"):
                 continue

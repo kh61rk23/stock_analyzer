@@ -306,7 +306,7 @@ def integrate_technical_score(candidate: dict, tech_result: dict) -> dict:
 
 def _fetch_ohlc(ticker: str) -> Optional[dict]:
     try:
-        import yfinance as yf
+        import yf_cache as yf
         t    = yf.Ticker(ticker)
         hist = t.history(period=HISTORY_PERIOD, auto_adjust=True)
         if hist is None or len(hist) < 30:

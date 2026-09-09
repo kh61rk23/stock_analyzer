@@ -22,7 +22,7 @@ import time
 def fetch_monthly_prices(tickers: list, months: int = 12, max_retries: int = 2):
     """月次終値 DataFrame を返す（列=ticker, 行=月次日付）。失敗時 None。"""
     try:
-        import yfinance as yf
+        import yf_cache as yf
         import pandas as pd
     except ImportError:
         print("  ⚠️  yfinance/pandas 未インストール"); return None
@@ -57,7 +57,7 @@ def fetch_monthly_prices(tickers: list, months: int = 12, max_retries: int = 2):
 def fetch_daily_prices(tickers: list, days: int = 5, max_retries: int = 2):
     """直近 N+10 日の日次終値 DataFrame を返す。失敗時 None。"""
     try:
-        import yfinance as yf
+        import yf_cache as yf
         import pandas as pd
     except ImportError:
         return None

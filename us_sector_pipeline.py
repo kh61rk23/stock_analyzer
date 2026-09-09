@@ -254,7 +254,7 @@ def fetch_etf_data(etf_symbols: list, days: int = 365) -> dict:
         }
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
         import pandas as pd
     except ImportError:
         print("  ⚠️  yfinance/pandas 未インストール")

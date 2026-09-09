@@ -46,7 +46,7 @@ def fetch_financials(tickers: list, max_retries: int = 2) -> list:
                   heldPercentInsiders, shortRatio, fullTimeEmployees
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
     except ImportError:
         print("  ⚠️  yfinance が未インストールです")
         return []

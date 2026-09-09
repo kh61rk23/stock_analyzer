@@ -290,7 +290,7 @@ def calc_vp_score(vp_data: dict) -> dict:
 
 def _fetch_ohlcv(ticker: str) -> Optional[dict]:
     try:
-        import yfinance as yf
+        import yf_cache as yf
         hist = yf.Ticker(ticker).history(period="6mo", auto_adjust=True)
         if hist is None or len(hist) < 20:
             return None

@@ -132,6 +132,21 @@ def _statements(project: str) -> list[str]:
           pass_filters BOOL,
           ingested_at TIMESTAMP
         ) PARTITION BY snapshot_date CLUSTER BY ticker, market""",
+        # 2026-09-09: 株価の永続化。従来は50モジュールが個別に yfinance を
+        # 叩くだけで、OHLCV はどこにも保存されていなかった（BQに時系列
+        # テーブルが存在しなかった）。yf_cache が実行内で集めた日足を
+        # ここへ落とし、事後検証と yfinance 障害時の参照元にする。
+        f"""CREATE TABLE IF NOT EXISTS `{project}.analytics.price_daily` (
+          trade_date DATE NOT NULL,
+          ticker STRING NOT NULL,
+          open FLOAT64,
+          high FLOAT64,
+          low FLOAT64,
+          close FLOAT64,
+          volume FLOAT64,
+          source STRING,
+          ingested_at TIMESTAMP
+        ) PARTITION BY trade_date CLUSTER BY ticker""",
     ]
 
 

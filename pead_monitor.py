@@ -175,7 +175,7 @@ def _fetch_volume_ratio(ticker: str) -> Optional[float]:
         float | None（取得失敗時は None）
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
         time.sleep(_FETCH_DELAY)
         hist = yf.Ticker(ticker).history(period="30d", auto_adjust=True)
         if hist is None or len(hist) < 5:
@@ -205,7 +205,7 @@ def _fetch_price_drift(ticker: str, window_days: int = _PRICE_DRIFT_WINDOW) -> f
         float: 変動率（例: 0.05 = +5%）
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
         time.sleep(_FETCH_DELAY * 0.5)
         hist = yf.Ticker(ticker).history(
             period=f"{window_days + 5}d", auto_adjust=True

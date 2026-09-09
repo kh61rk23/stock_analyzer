@@ -147,7 +147,7 @@ def _fetch_daily_returns(
     """
     _validate_return_window(lookback_days, min_observations)
     try:
-        import yfinance as yf
+        import yf_cache as yf
         current_dt = now or datetime.now()
         calendar_days = _calendar_days_for_trading_days(lookback_days)
         start = (current_dt - timedelta(days=calendar_days)).strftime("%Y-%m-%d")
@@ -186,7 +186,7 @@ def fetch_portfolio_data(
         }
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
     except ImportError:
         return {}
 

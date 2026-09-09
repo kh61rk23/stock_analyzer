@@ -229,7 +229,7 @@ def _fetch_us_etf_prices(
         失敗時は空 dict を返す（例外を投げない）
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
     except ImportError:
         print("    ⚠️  [corr] yfinance が未インストールです")
         return {}

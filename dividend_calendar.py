@@ -126,7 +126,7 @@ def _fetch_dividend_info(ticker: str, name: str, market: str) -> Optional[dict]:
       t.info:     forwardAnnualDividendYield / exDividendDate 等
     """
     try:
-        import yfinance as yf
+        import yf_cache as yf
 
         t    = yf.Ticker(ticker)
         info = t.info or {}

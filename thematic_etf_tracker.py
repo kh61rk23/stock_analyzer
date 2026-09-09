@@ -170,7 +170,7 @@ def _fetch_etf_momentum(ticker: str) -> Optional[dict]:
         取得失敗時は None
     """
     try:
-        import yfinance as yf # type: ignore # yfinance は外部依存のため、実行環境にない場合はこのモジュール全体をスキップする設計
+        import yf_cache as yf # type: ignore # yfinance は外部依存のため、実行環境にない場合はこのモジュール全体をスキップする設計
 
         t    = yf.Ticker(ticker)
         hist = t.history(period="6mo", interval="1d")
