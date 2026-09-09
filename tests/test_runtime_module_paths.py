@@ -82,13 +82,34 @@ def test_daily_workflow_runs_edinet_after_provider_refresh():
     #   UTC では日曜になり、下の weekly 判定が一度も成立しなくなる。
     assert 'cron: "17 0 * * 1-6"' in workflow
     assert '$(date -u +%u)" = "1"' in workflow
-    assert 'ENABLE_EDINETDB_INGEST: "1"' in workflow
     assert "python setup_db_integration_bq.py" in workflow
-    assert "run_edinetdb_ingest" in workflow
-    assert "run_doc_indexer" in workflow
-    assert workflow.index("run_edinetdb_ingest") < workflow.index("🚀 Run analyzer")
+    # BQスキーマ準備は本体より先。EdinetDB同期そのものは本体側で走る。
+    assert workflow.index("setup_db_integration_bq.py") < workflow.index(
+        "🚀 Run analyzer")
     assert not (repo / ".github/workflows/edinetdb_ingest.yml").exists()
     assert not (repo / "daily_run.yml").exists()
+
+
+def test_edinetdb_sync_is_not_duplicated_in_workflow():
+    """EdinetDB同期をワークフローから直接呼ばない（1日2回叩かない）
+
+    2026-09-09: 専用ステップと DAILY_MODULES の両方に存在し、
+    専用ステップが日次予算46をほぼ使い切ったあとに本体が走るため、
+    本体の edinetdb_ingest は毎回 success 0 / 予算到達で終わっていた。
+    """
+    import config
+
+    repo = Path(main.__file__).resolve().parent
+    workflow = (repo / ".github/workflows/daily_run.yml").read_text(
+        encoding="utf-8"
+    )
+    # コメントでの言及は許容するが、実際の呼び出し行があってはならない
+    for call in ("ingest = run_edinetdb_ingest(", "docs = run_doc_indexer("):
+        assert call not in workflow, (
+            f"{call} がワークフローに残っている。本体側と二重実行になる")
+    # 本体側の実行経路は生きていること
+    assert "edinetdb_ingest" in config.DAILY_MODULES
+    assert "edinet_doc_index" in config.DAILY_MODULES
 
 
 def test_all_schedulers_are_set_to_0900_jst():
