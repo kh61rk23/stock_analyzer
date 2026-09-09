@@ -9,6 +9,7 @@ edinet_bq_client.py
 
 from google.cloud import bigquery
 from google.oauth2 import service_account
+import threading
 import pandas as pd
 import os
 import json
@@ -39,6 +40,13 @@ except ImportError:
 # ============================================================
 # クライアント本体
 # ============================================================
+
+# 証券コード→保有不動産のプロセス内キャッシュ。
+# 業種分析が1銘柄ずつ引くN+1（最大165クエリ）で同じ銘柄を複数回
+# 参照するため。業種分析は並列実行されるので lock で保護する。
+_RE_HOLDINGS_CACHE: dict = {}
+_RE_HOLDINGS_LOCK = threading.Lock()
+
 
 class EDINETBQClient:
     """
@@ -640,34 +648,48 @@ class EDINETBQClient:
         return bundles
 
     def get_real_estate_holdings(self, securities_code: str) -> list[dict]:
-        """証券コードに対応する最新年度の企業保有不動産を返す。"""
+        """証券コードに対応する最新年度の企業保有不動産を返す。
+
+        2026-09-09: 業種分析から1銘柄ずつ呼ばれるN+1（業種あたり最大5社×
+        33業種＝最大165クエリ）で、そのたびに47,455行のテーブルを
+        スキャンしていた。同一プロセス内では結果をキャッシュし、
+        最新年度の抽出は相関サブクエリから QUALIFY へ置き換える
+        （サブクエリ側のスキャンが1回分まるごと減る）。
+        """
         code = "".join(
             char for char in str(securities_code).split(".")[0] if char.isdigit()
         )[:4]
         if not code:
             return []
+
+        with _RE_HOLDINGS_LOCK:
+            if code in _RE_HOLDINGS_CACHE:
+                return list(_RE_HOLDINGS_CACHE[code])
+
         sql = f"""
         SELECT h.*
         FROM `{self.project}.real_estate.corporate_holdings_p1` AS h
         JOIN `{self.dataset}.company` AS c USING (edinet_code)
         WHERE SUBSTR(c.sec_code, 1, 4) = @company_code
-          AND h.fiscal_year = (
-            SELECT MAX(h2.fiscal_year)
-            FROM `{self.project}.real_estate.corporate_holdings_p1` AS h2
-            WHERE h2.edinet_code = h.edinet_code
-          )
+        QUALIFY h.fiscal_year = MAX(h.fiscal_year) OVER (
+            PARTITION BY h.edinet_code
+        )
         ORDER BY h.facility_name
         """
         job_config = bigquery.QueryJobConfig(query_parameters=[
             bigquery.ScalarQueryParameter("company_code", "STRING", code)
         ])
         try:
-            return [dict(row.items()) for row in self.client.query(
+            rows = [dict(row.items()) for row in self.client.query(
                 sql, job_config=job_config
             ).result()]
         except Exception as exc:
             print(f"[BQ] get_real_estate_holdings({code}) skip: {str(exc)[:80]}")
             return []
+
+        with _RE_HOLDINGS_LOCK:
+            _RE_HOLDINGS_CACHE[code] = rows
+        return list(rows)
 
     def get_segment_bonus(self, securities_code: str) -> float:
         """
