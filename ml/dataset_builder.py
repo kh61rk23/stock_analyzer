@@ -24,6 +24,8 @@ REPO = Path(__file__).resolve().parent.parent
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from finance_logic import as_number as _as_number  # noqa: E402
+
 try:
     from config import JST  # type: ignore
 except Exception:  # pragma: no cover - config 無し環境
@@ -55,9 +57,16 @@ def build_feature_rows(cfg, results: dict, today: str) -> list:
         if not isinstance(sig, dict):
             continue
         comps = sig.get("components") or {}
-        # 有効なカテゴリ（None でない）が1つも無ければ蓄積しない
-        feat = {f"f_{cat}": v for cat, v in comps.items()
-                if isinstance(v, (int, float))}
+        # 有効なカテゴリ（None でない）が1つも無ければ蓄積しない。
+        # ★ isinstance(v, (int, float)) では numpy.float32 / numpy.int64 が
+        #   False になり、pandas由来のスコアが丸ごと弾かれる。
+        #   2026-09-09: これで「sector_signals=33 / 特徴量あり業種=0」となり
+        #   導入以来1行も蓄積されていなかった。float()変換の成否で判定する。
+        feat = {}
+        for cat, v in comps.items():
+            num = _as_number(v)
+            if num is not None:
+                feat[f"f_{cat}"] = num
         if not feat:
             continue
         for ticker in rep.get(str(sector_code), []):
@@ -167,7 +176,7 @@ def snapshot(cfg, results: dict) -> dict:
         _with_feat = sum(
             1 for s in _ss.values()
             if isinstance(s, dict) and any(
-                isinstance(v, (int, float))
+                _as_number(v) is not None
                 for v in (s.get("components") or {}).values()
             )
         )

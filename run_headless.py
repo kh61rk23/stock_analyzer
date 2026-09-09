@@ -22,8 +22,15 @@ import importlib.util
 import json
 import os
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+
+# Drive送信の並列数。1ファイルあたりネットワーク往復が支配的なので
+# 並列化がそのまま効く。Drive APIのクォータ（1000req/100秒/ユーザー）に
+# 対して十分小さい値にしておく。
+_UPLOAD_WORKERS = int(os.getenv("GDRIVE_UPLOAD_WORKERS", "8"))
 
 #指定されたパスにあるPythonファイルを、指定した名前のモジュールとして動的に読み込む関数
 def _load_module(name: str, path: Path):
@@ -183,22 +190,42 @@ def _upload_to_gdrive_oauth(client_id, client_secret, refresh_token,
         listing_cache[parent_id] = mapping
         return mapping
 
+    # google-api-python-client は httplib2 ベースでスレッドセーフでないため、
+    # 並列送信ではスレッドごとに独立した service を持つ。認証情報は
+    # 呼び出し前に refresh 済みで、以降は共有しても書き換えが起きない。
+    _tls = threading.local()
+    _map_lock = threading.Lock()
+
+    def _svc():
+        s = getattr(_tls, "service", None)
+        if s is None:
+            s = build("drive", "v3", credentials=creds)
+            _tls.service = s
+        return s
+
     #グーグルドライブにファイルを新規作成または更新（同期）する関数
     def _upload_file(local_path, parent_id):
         name    = local_path.name
-        mapping = _listing(parent_id)
+        mapping = _listing(parent_id)   # 送信前に直列で温めてある
         media   = MediaFileUpload(str(local_path))
-        if name in mapping:
-            service.files().update(
-                fileId=mapping[name], media_body=media).execute()
+        with _map_lock:
+            existing = mapping.get(name)
+        if existing:
+            _svc().files().update(
+                fileId=existing, media_body=media).execute()
         else:
-            created = service.files().create(
+            created = _svc().files().create(
                 body={"name": name, "parents": [parent_id]},
                 media_body=media, fields="id").execute()
-            mapping[name] = created["id"]
+            with _map_lock:
+                mapping[name] = created["id"]
 
+    # ── 送信対象の確定（ここは逐次）────────────────────────────
+    # フォルダIDの解決と既存一覧の取得は順序に依存するため直列に行い、
+    # ファイル本体の送信だけを並列化する。
     new_state: dict = {}
-    sent = skipped = failed = 0
+    pending: list = []          # [(key, local_path, parent_id), ...]
+    skipped = 0
     for local_base, remote_name in [(insight_dir, "insights"),
                                      (log_dir, "logs")]:
         if not Path(local_base).exists():
@@ -224,15 +251,37 @@ def _upload_to_gdrive_oauth(client_id, client_secret, refresh_token,
             pid = base_id
             for part in rel.parts[:-1]:
                 pid = _get_or_create_folder(part, pid)
+            _listing(pid)        # 一覧は送信前に直列で温めておく
+            pending.append((key, f, pid))
+
+    # ── 送信（並列）────────────────────────────────────────────
+    # 2026-09-09: 逐次送信では初回同期に31分かかっていた。1ファイルあたり
+    # ネットワーク往復が支配的で CPU はほぼ遊ぶため、並列化がそのまま効く。
+    sent = failed = 0
+    if pending:
+        print(f"  UPLOAD 送信対象 {len(pending)}件 "
+              f"/ 変更なし {skipped}件 → {_UPLOAD_WORKERS}並列で送信")
+        lock = threading.Lock()
+
+        def _send(item):
+            key, path, pid = item
             try:
-                _upload_file(f, pid)
-                sent += 1
+                _upload_file(path, pid)
+                return key, None
             except Exception as exc:
-                failed += 1
-                new_state.pop(key, None)   # 記録しない = 次回再送する
-                if failed <= 3:
-                    print(f"  WARNING アップロード失敗 ({key}): "
-                          f"{type(exc).__name__}: {str(exc)[:80]}")
+                return key, exc
+
+        with ThreadPoolExecutor(max_workers=_UPLOAD_WORKERS) as pool:
+            for key, exc in pool.map(_send, pending):
+                with lock:
+                    if exc is None:
+                        sent += 1
+                    else:
+                        failed += 1
+                        new_state.pop(key, None)  # 記録しない = 次回再送する
+                        if failed <= 3:
+                            print(f"  WARNING アップロード失敗 ({key}): "
+                                  f"{type(exc).__name__}: {str(exc)[:80]}")
 
     if state_path:
         try:

@@ -27,6 +27,8 @@ REPO = Path(__file__).resolve().parent.parent
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from finance_logic import as_number as _as_number  # noqa: E402
+
 
 # ── 純粋ロジック（pytest対象） ────────────────────────────────
 
@@ -50,7 +52,7 @@ def validate_table(table: dict, promote_ic: float = 0.02,
     if t < promote_t:
         return False, f"t {t:.2f} < 昇格基準 {promote_t}"
     for k, v in adj.items():
-        if not isinstance(v, (int, float)):
+        if _as_number(v) is None:
             return False, f"decile {k} の補正が数値でない"
         if abs(v) > max_pt:
             return False, f"decile {k} の補正 {v:+.1f}pt が上限 ±{max_pt}pt 超"
@@ -66,9 +68,9 @@ def predict_score(row: dict, coefs: dict) -> float:
     for name, w in coefs.items():
         if name == "_intercept":
             continue
-        v = row.get(name)
-        if isinstance(v, (int, float)):
-            y += float(w) * float(v)
+        v = _as_number(row.get(name))
+        if v is not None:
+            y += float(w) * v
     return y
 
 
@@ -100,11 +102,12 @@ def apply_corrections(candidates: list, deciles: dict, adjustments: dict,
         if tk not in deciles:
             continue
         adj = adjustments.get(str(deciles[tk]))
-        if not isinstance(adj, (int, float)) or adj == 0:
+        adj = _as_number(adj)
+        if adj is None or adj == 0:
             continue
         adj = max(-max_pt, min(max_pt, float(adj)))
         old = c.get("composite_score")
-        if not isinstance(old, (int, float)):
+        if _as_number(old) is None:
             continue
         c["composite_score"] = round(min(100.0, max(0.0, old + adj)), 1)
         c["ml_meta_correction"] = round(adj, 1)

@@ -1909,9 +1909,42 @@ def run_all_tasks(mode: str = "all") -> dict:
     if _macro_weights:
         # 重みを snapshot に埋め込んで sector_agents に伝達
         macro_snapshot_for_sector["_weights"] = _macro_weights
+    # ── 業種分析の取得部分だけを並列化（2026-09-09）──────────────
+    # 1業種あたり約20〜24秒（BQ・yfinance・EDINET待ちが大半）で、33業種の
+    # 逐次実行に12.3分かかっていた。待ち時間が支配的でCPUは遊ぶため
+    # 並列化がそのまま効く。後続の補正（債務サイクル/経済サイクル/横断
+    # シグナル等）は results への参照順に依存するので逐次のまま残す。
+    # SECTOR_ANALYSIS_WORKERS=1 で従来どおりの逐次実行に戻せる。
+    _sec_workers = max(1, int(getattr(cfg, "SECTOR_ANALYSIS_WORKERS", 4)))
+    _sec_raw: dict = {}
+    if _sec_workers > 1 and len(cfg.IMPLEMENTED_AGENTS) > 1:
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _run_one_sector(_code):
+            try:
+                return _code, run_sector_analysis(
+                    _code, macro_snapshot_for_sector)
+            except Exception as _e:      # 1業種の失敗を全体に波及させない
+                return _code, _e
+
+        print(f"  ⚡ 業種分析を{_sec_workers}並列で実行"
+              f"（{len(cfg.IMPLEMENTED_AGENTS)}業種・出力順は前後します）")
+        with ThreadPoolExecutor(max_workers=_sec_workers) as _pool:
+            for _c, _r in _pool.map(_run_one_sector, cfg.IMPLEMENTED_AGENTS):
+                _sec_raw[_c] = _r
+    else:
+        for _c in cfg.IMPLEMENTED_AGENTS:
+            try:
+                _sec_raw[_c] = run_sector_analysis(
+                    _c, macro_snapshot_for_sector)
+            except Exception as _e:
+                _sec_raw[_c] = _e
+
     for code in cfg.IMPLEMENTED_AGENTS:
         try:
-            res = run_sector_analysis(code, macro_snapshot_for_sector)
+            res = _sec_raw.get(code)
+            if isinstance(res, BaseException):
+                raise res
             sector_results[code] = res
             # ── [D-2] 債務サイクル一律補正 ──────────────────
             _dc_adj = macro_snapshot_for_sector.get("_debt_cycle_adj", 0.0)

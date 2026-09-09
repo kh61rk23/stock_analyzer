@@ -75,6 +75,29 @@ def _safe_float(v) -> Optional[float]:
         return None
 
 
+def as_number(v) -> Optional[float]:
+    """数値なら float で返す。bool・None・NaN・Inf・非数値は None。
+
+    ★ isinstance(v, (int, float)) で判定してはいけない。
+      numpy.float32 / numpy.int64 / numpy.int32 は Python の int/float の
+      サブクラスではないため isinstance が False になり、pandas 由来の値
+      （.sum() / .mean() の戻り値など）が丸ごと弾かれる。
+      2026-09-09: これが原因で ml/dataset_builder が
+      「sector_signals=33 なのに特徴量あり業種=0」となり、
+      ML特徴量が導入以来1行も蓄積されていなかった。
+      float() での変換は numpy 型も通るため、判定は変換の成否で行う。
+
+    bool を弾くのは、True/False が int のサブクラスであり
+    特徴量やスコアとして混入すると 1.0/0.0 に化けるため。
+    文字列も弾く（"80" のような値が数値として紛れ込むと、
+    型の取り違えを隠してしまう）。文字列を変換したい場合は
+    _safe_float を直接使うこと。
+    """
+    if v is None or isinstance(v, (bool, str, bytes)):
+        return None
+    return _safe_float(v)
+
+
 def _safe_int(v) -> Optional[int]:
     """None / 空文字を安全に int へ変換。変換不能は None を返す"""
     try:

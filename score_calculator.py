@@ -57,7 +57,7 @@ class JpSectorAdapter:
         # 1) 銘柄レベル: screener候補に composite_score があれば最優先
         for c in (results.get("screener") or {}).get("candidates", []) or []:
             if c.get("ticker") == ticker and \
-                    isinstance(c.get("composite_score"), (int, float)):
+                    _num(c.get("composite_score")) is not None:
                 return {"composite_score": float(c["composite_score"]),
                         "score_source": "jp_screener",
                         "components": {
@@ -69,7 +69,7 @@ class JpSectorAdapter:
         # 2) 業種レベル: sectors[sector_code].composite_score（-30..100）
         sec = (results.get("sectors") or {}).get(str(sector_code))
         if isinstance(sec, dict) and \
-                isinstance(sec.get("composite_score"), (int, float)):
+                _num(sec.get("composite_score")) is not None:
             return {"composite_score": float(sec["composite_score"]),
                     "score_source": "jp_sector_fallback",
                     "components": {"sector_score": sec.get("composite_score")}}
@@ -86,7 +86,7 @@ class UsSectorAdapter:
         for pool in (us.get("top_picks"), us.get("candidates")):
             for c in pool or []:
                 if c.get("ticker") == ticker and \
-                        isinstance(c.get("composite_score"), (int, float)):
+                        _num(c.get("composite_score")) is not None:
                     return {"composite_score": float(c["composite_score"]),
                             "score_source": "us_screener",
                             "components": {
@@ -110,11 +110,15 @@ def _clamp(v: float, lo: float, hi: float) -> float:
 
 
 def _num(v) -> float | None:
-    """有限な数値だけを float で返す（bool・NaN・Inf を弾く）。"""
-    if isinstance(v, bool) or not isinstance(v, (int, float)):
-        return None
-    f = float(v)
-    return f if math.isfinite(f) else None
+    """有限な数値だけを float で返す（bool・NaN・Inf を弾く）。
+
+    ★ isinstance(v, (int, float)) で判定していたが、numpy.float32 /
+      numpy.int64 は Python の int/float のサブクラスではないため
+      pandas 由来の composite_score が弾かれていた（2026-09-09）。
+      判定は finance_logic.as_number（float()変換の成否）に委譲する。
+    """
+    from finance_logic import as_number
+    return as_number(v)
 
 
 def _iter_candidates(results: dict, market: str):

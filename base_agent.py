@@ -10,6 +10,7 @@
 #   ④ build_insight_text(): 財務トレンド・配当・アナリスト情報セクション追加
 # ==============================================================
 
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -1215,7 +1216,10 @@ def _calc_edinet_hr_bonus(securities_code: str) -> float:
 # ==============================================================
 
 # 全業種のticker解決結果（1プロセス1回だけBQに問い合わせる）
+# 業種分析を並列実行すると同時に初期化されうるため lock で保護する
+# （無いと同じバルククエリが並列数だけ走る）。
 _SECTOR_TICKER_CACHE: dict | None = None
+_SECTOR_TICKER_LOCK = threading.Lock()
 
 
 def _normalize_ticker(t: str) -> str:
@@ -1239,9 +1243,12 @@ def resolve_sector_tickers(sector_code: str, cfg, limit: int = 5) -> list[str]:
     global _SECTOR_TICKER_CACHE
     try:
         bq = _BQClient()
-        if _SECTOR_TICKER_CACHE is None:
-            _SECTOR_TICKER_CACHE = bq.get_tickers_by_sector_bulk(limit=10) or {}
-        from_bq = list(_SECTOR_TICKER_CACHE.get(sector_code, []))[:limit]
+        with _SECTOR_TICKER_LOCK:
+            if _SECTOR_TICKER_CACHE is None:
+                _SECTOR_TICKER_CACHE = (
+                    bq.get_tickers_by_sector_bulk(limit=10) or {})
+            _cache = _SECTOR_TICKER_CACHE
+        from_bq = list(_cache.get(sector_code, []))[:limit]
         if from_bq:
             print(f"    📋 tickers[{sector_code}] source=BQ ({len(from_bq)}件)")
             return from_bq
