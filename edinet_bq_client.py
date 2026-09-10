@@ -47,6 +47,19 @@ except ImportError:
 _RE_HOLDINGS_CACHE: dict = {}
 _RE_HOLDINGS_LOCK = threading.Lock()
 
+# 最新期 financials の実行内キャッシュ（{company_code: dict}）。
+# get_latest_financials / get_financials_single は同じSQLを銘柄ごとに
+# 撃っており、1実行で 85本 × 2種 が走っていた（2026-09-10 課金実測）。
+_FIN_LATEST_CACHE: dict = {}
+_FIN_LATEST_LOCK = threading.Lock()
+
+
+def _fin_code(securities_code) -> str:
+    """証券コードを financials.company_code の表記（数字4桁）へ揃える。"""
+    return "".join(
+        ch for ch in str(securities_code or "").split(".")[0] if ch.isdigit()
+    )[:4]
+
 
 class EDINETBQClient:
     """
@@ -434,21 +447,7 @@ class EDINETBQClient:
         # ★ financials 正本スキーマの列は company_code / fiscal_year_end。
         #   旧コードは securities_code / period_end を参照し
         #   "Unrecognized name: securities_code" で常時 400 だった。
-        sql = f"""
-        SELECT *
-        FROM (
-            SELECT *,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY company_code
-                       ORDER BY fiscal_year_end DESC
-                   ) AS rn
-            FROM `{self.dataset}.financials`
-            WHERE company_code = '{securities_code}'
-        )
-        WHERE rn = 1
-        """
-        df = self.query_to_df(sql)
-        return df.drop(columns=["rn"]).to_dict("records")[0] if not df.empty else {}
+        return dict(self._latest_financials_cached(securities_code))
 
     def get_company_analysis_bundle(
         self,
@@ -697,6 +696,160 @@ class EDINETBQClient:
             _RE_HOLDINGS_CACHE[code] = rows
         return list(rows)
 
+    def prefetch_real_estate_holdings(self, securities_codes) -> int:
+        """複数銘柄の保有不動産を1クエリでまとめて取得しキャッシュへ載せる。
+
+        2026-09-10: BigQuery の課金実績（INFORMATION_SCHEMA.JOBS）を見ると
+        1実行あたり 482 クエリ / 6.9GB が課金されており、その内訳は
+        「1銘柄1クエリ」の N+1 が4種で 340 本を占めていた。
+        BQ は**参照テーブル1つにつき最低10MB**を課金するため、
+        実データが0行でも 2テーブルJOIN なら1本あたり20MB取られる。
+        つまりこの経路の費用は**データ量ではなくクエリ本数**で決まる。
+        85銘柄ぶんを1本に畳むと 1.7GB/実行 → 0.02GB/実行 になる。
+
+        取得できなかったコードにも空リストを入れる。入れないと
+        get_real_estate_holdings() 側が毎回キャッシュミスして
+        結局1銘柄1クエリに戻ってしまう。
+
+        Returns: キャッシュへ載せた銘柄コード数
+        """
+        codes = []
+        for raw in (securities_codes or []):
+            code = "".join(
+                ch for ch in str(raw).split(".")[0] if ch.isdigit()
+            )[:4]
+            if code:
+                codes.append(code)
+        codes = sorted(set(codes))
+        if not codes:
+            return 0
+
+        with _RE_HOLDINGS_LOCK:
+            todo = [c for c in codes if c not in _RE_HOLDINGS_CACHE]
+        if not todo:
+            return 0
+
+        sql = f"""
+        SELECT SUBSTR(c.sec_code, 1, 4) AS _company_code, h.*
+        FROM `{self.project}.real_estate.corporate_holdings_p1` AS h
+        JOIN `{self.dataset}.company` AS c USING (edinet_code)
+        WHERE SUBSTR(c.sec_code, 1, 4) IN UNNEST(@codes)
+        QUALIFY h.fiscal_year = MAX(h.fiscal_year) OVER (
+            PARTITION BY h.edinet_code
+        )
+        ORDER BY _company_code, h.facility_name
+        """
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ArrayQueryParameter("codes", "STRING", todo)
+        ])
+        grouped: dict = {c: [] for c in todo}
+        try:
+            for row in self.client.query(sql, job_config=job_config).result():
+                item = dict(row.items())
+                code = item.pop("_company_code", None)
+                if code in grouped:
+                    grouped[code].append(item)
+        except Exception as exc:
+            # 失敗時はキャッシュを汚さない（個別取得のフォールバックへ委ねる）
+            print(f"[BQ] prefetch_real_estate_holdings skip: {str(exc)[:80]}")
+            return 0
+
+        with _RE_HOLDINGS_LOCK:
+            for code, rows in grouped.items():
+                _RE_HOLDINGS_CACHE.setdefault(code, rows)
+        return len(grouped)
+
+    def _latest_financials_cached(self, securities_code) -> dict:
+        """最新期 financials を実行内キャッシュ経由で返す（単体フォールバック）。"""
+        code = _fin_code(securities_code)
+        if not code:
+            return {}
+        with _FIN_LATEST_LOCK:
+            if code in _FIN_LATEST_CACHE:
+                return _FIN_LATEST_CACHE[code]
+
+        sql = f"""
+        SELECT * EXCEPT(rn)
+        FROM (
+            SELECT *,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY company_code
+                       ORDER BY fiscal_year_end DESC
+                   ) AS rn
+            FROM `{self.dataset}.financials`
+            WHERE company_code = @company_code
+        )
+        WHERE rn = 1
+        """
+        try:
+            job_config = bigquery.QueryJobConfig(query_parameters=[
+                bigquery.ScalarQueryParameter("company_code", "STRING", code)
+            ])
+            rows = [dict(r.items())
+                    for r in self.client.query(sql, job_config=job_config).result()]
+        except Exception as exc:
+            print(f"[BQ] get_latest_financials({code}) skip: {str(exc)[:80]}")
+            return {}
+
+        row = rows[0] if rows else {}
+        with _FIN_LATEST_LOCK:
+            _FIN_LATEST_CACHE.setdefault(code, row)
+        return row
+
+    def prefetch_latest_financials(self, securities_codes) -> int:
+        """複数銘柄の最新期 financials を1クエリで先読みしてキャッシュへ載せる。
+
+        2026-09-10: get_latest_financials / get_financials_single が
+        銘柄ごとに同じSQLを撃っており、課金実測では
+        「PARTITION BY company_code」の形が2日で170本（85本/実行）走っていた。
+        BQ は参照テーブル1つにつき最低10MB課金のため、
+        financials が 0.3MB でも1本あたり10MBが課金される。
+        該当なしの銘柄も空dictで埋めて、キャッシュミスによる
+        単体クエリへの逆戻りを防ぐ。
+
+        Returns: キャッシュへ載せた銘柄コード数
+        """
+        codes = sorted({c for c in (_fin_code(x) for x in (securities_codes or []))
+                        if c})
+        if not codes:
+            return 0
+        with _FIN_LATEST_LOCK:
+            todo = [c for c in codes if c not in _FIN_LATEST_CACHE]
+        if not todo:
+            return 0
+
+        sql = f"""
+        SELECT * EXCEPT(rn)
+        FROM (
+            SELECT *,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY company_code
+                       ORDER BY fiscal_year_end DESC
+                   ) AS rn
+            FROM `{self.dataset}.financials`
+            WHERE company_code IN UNNEST(@codes)
+        )
+        WHERE rn = 1
+        """
+        grouped: dict = {c: {} for c in todo}
+        try:
+            job_config = bigquery.QueryJobConfig(query_parameters=[
+                bigquery.ArrayQueryParameter("codes", "STRING", todo)
+            ])
+            for row in self.client.query(sql, job_config=job_config).result():
+                item = dict(row.items())
+                code = _fin_code(item.get("company_code"))
+                if code in grouped:
+                    grouped[code] = item
+        except Exception as exc:
+            print(f"[BQ] prefetch_latest_financials skip: {str(exc)[:80]}")
+            return 0
+
+        with _FIN_LATEST_LOCK:
+            for code, row in grouped.items():
+                _FIN_LATEST_CACHE.setdefault(code, row)
+        return len(grouped)
+
     def get_segment_bonus(self, securities_code: str) -> float:
         """
         セグメント収益性ボーナスを返す（E3 統合後に実装が充実する）。
@@ -856,24 +1009,7 @@ class EDINETBQClient:
         """
         # ★ 正本列名 company_code / fiscal_year_end へ是正（旧 securities_code /
         #   period_end は存在せず 400 エラーだった）。
-        sql = f"""
-        SELECT *
-        FROM (
-            SELECT *,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY company_code
-                       ORDER BY fiscal_year_end DESC
-                   ) AS rn
-            FROM `{self.dataset}.financials`
-            WHERE company_code = '{securities_code}'
-        )
-        WHERE rn = 1
-        """
-        df = self.query_to_df(sql)
-        if df.empty:
-            return {}
-        row = df.drop(columns=["rn"], errors="ignore").iloc[0]
-        return row.to_dict()
+        return dict(self._latest_financials_cached(securities_code))
 
     # ----------------------------------------------------------
     # I-2: NEDO採択情報 / policy_support テーブル（Wave 1）

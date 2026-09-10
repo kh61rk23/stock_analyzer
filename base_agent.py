@@ -1229,6 +1229,43 @@ def _normalize_ticker(t: str) -> str:
     return t if t.endswith(".T") else f"{t}.T"
 
 
+def _prefetch_ticker_scoped_bq(sector_tickers: dict, cfg, bq) -> None:
+    """全業種のticker一覧をもとに、銘柄別BQ参照を一括で先読みする。
+
+    失敗しても本処理は止めない（個別取得のフォールバックが残っているため、
+    遅くなるだけで結果は変わらない）。
+    """
+    all_tickers = sorted({
+        str(t) for tickers in (sector_tickers or {}).values()
+        for t in (tickers or []) if str(t).strip()
+    })
+    if not all_tickers:
+        return
+
+    try:
+        n = bq.prefetch_real_estate_holdings(all_tickers)
+        if n:
+            print(f"    🏢 保有不動産を一括先読み: {n}銘柄（1クエリ）")
+    except Exception as exc:
+        print(f"    ⚠️  保有不動産の一括先読み失敗（個別取得へ）: {str(exc)[:60]}")
+
+    try:
+        n = bq.prefetch_latest_financials(all_tickers)
+        if n:
+            print(f"    📄 最新期財務を一括先読み: {n}銘柄（1クエリ）")
+    except Exception as exc:
+        print(f"    ⚠️  財務の一括先読み失敗（個別取得へ）: {str(exc)[:60]}")
+
+    try:
+        import importlib
+        _geo = importlib.import_module("geo_signal")
+        n = _geo.prefetch_exposures(all_tickers, market="JP", cfg=cfg)
+        if n:
+            print(f"    🌍 権益エクスポージャーを一括先読み: {n}銘柄（1クエリ）")
+    except Exception as exc:
+        print(f"    ⚠️  権益の一括先読み失敗（個別取得へ）: {str(exc)[:60]}")
+
+
 def resolve_sector_tickers(sector_code: str, cfg, limit: int = 5) -> list[str]:
     """
     業種別 ticker 解決（3段フォールバック）:
@@ -1247,6 +1284,13 @@ def resolve_sector_tickers(sector_code: str, cfg, limit: int = 5) -> list[str]:
             if _SECTOR_TICKER_CACHE is None:
                 _SECTOR_TICKER_CACHE = (
                     bq.get_tickers_by_sector_bulk(limit=10) or {})
+                # 全業種のtickerが確定した“この瞬間”だけが、1実行で触る
+                # 銘柄を全部知っている場所。以降の銘柄別BQ参照は
+                # ここでまとめて先読みしておく（N+1の解消）。
+                # BQは参照テーブル1つにつき最低10MB課金のため、費用は
+                # データ量ではなくクエリ本数で決まる（2026-09-10 実測:
+                # 482クエリ/実行・6.9GB課金のうち340本がこのN+1）。
+                _prefetch_ticker_scoped_bq(_SECTOR_TICKER_CACHE, cfg, bq)
             _cache = _SECTOR_TICKER_CACHE
         from_bq = list(_cache.get(sector_code, []))[:limit]
         if from_bq:

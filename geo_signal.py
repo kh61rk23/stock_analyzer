@@ -137,6 +137,89 @@ def _reset_daily_cache(cfg=None) -> None:
 # BLOCK 2: 権益エクスポージャー取得
 # ==============================================================
 
+def prefetch_exposures(tickers, market: str = "JP", cfg=None,
+                       project_id: str = "stock-analyzer-edinet") -> int:
+    """複数銘柄の権益エクスポージャーを1クエリでまとめてキャッシュへ載せる。
+
+    2026-09-10: _get_exposure_list() は銘柄ごとにBQを叩き、1実行で85本の
+    クエリが走っていた。BigQuery は**参照テーブル1つにつき最低10MB**を
+    課金するため、company_country_exposure が0行でも
+    2テーブルJOIN × 85本 = 約1.7GB/実行が課金されていた
+    （課金実測: 全体6.9GB/日のうちこの経路だけで1.7GB）。
+    費用がデータ量ではなくクエリ本数で決まる以上、束ねるのが唯一の対策。
+
+    ヒットしなかった銘柄にも空リストを入れる。入れないと
+    _get_exposure_list() が毎回キャッシュミスして元の1銘柄1クエリに戻る。
+
+    Returns: キャッシュへ載せた銘柄数（0 は「BQ未接続 or 対象なし」）
+    """
+    global _EXPOSURE_BQ_DISABLED, _EXPOSURE_BQ_ERROR
+    _reset_daily_cache(cfg)
+    _pid = getattr(cfg, "GEO_BQ_PROJECT_ID", project_id) if cfg else project_id
+
+    wanted = sorted({str(t).strip() for t in (tickers or []) if str(t).strip()})
+    todo = [t for t in wanted if f"{t}_{market}" not in _EXPOSURE_CACHE]
+    if not todo or _EXPOSURE_BQ_DISABLED:
+        return 0
+
+    raw_bq = _get_raw_bq(_pid)
+    if not raw_bq:
+        return 0
+
+    query = f"""
+    SELECT
+      e.ticker,
+      e.country_code,
+      e.exposure_type,
+      e.exposure_strength,
+      e.commodity_code,
+      IFNULL(r.composite_risk_score, 0.0) AS composite_risk_score
+    FROM `{_pid}.geopolitics.company_country_exposure` AS e
+    LEFT JOIN (
+      SELECT country_code, composite_risk_score
+      FROM (
+        SELECT country_code, composite_risk_score,
+               ROW_NUMBER() OVER (
+                 PARTITION BY country_code
+                 ORDER BY risk_date DESC
+               ) AS rn
+        FROM `{_pid}.geopolitics.country_risk_daily`
+      )
+      WHERE rn = 1
+    ) AS r ON e.country_code = r.country_code
+    WHERE e.market = @market
+      AND e.ticker IN UNNEST(@tickers)
+      AND (e.valid_to IS NULL OR e.valid_to > CURRENT_DATE())
+    ORDER BY e.ticker, e.exposure_strength DESC
+    """
+    try:
+        from google.cloud import bigquery as _bq
+        job_config = _bq.QueryJobConfig(query_parameters=[
+            _bq.ScalarQueryParameter("market", "STRING", market),
+            _bq.ArrayQueryParameter("tickers", "STRING", todo),
+        ])
+        grouped: dict = {t: [] for t in todo}
+        for row in raw_bq.query(query, job_config=job_config).result():
+            grouped.setdefault(row.ticker, []).append({
+                "country_code":         row.country_code,
+                "exposure_type":        row.exposure_type,
+                "exposure_strength":    float(row.exposure_strength or 0.0),
+                "commodity_code":       row.commodity_code,
+                "composite_risk_score": float(row.composite_risk_score or 0.0),
+            })
+    except Exception as exc:
+        # 個別取得と同じくサーキットブレーカーを立てる（同じ失敗を85回出さない）
+        _EXPOSURE_BQ_DISABLED = True
+        _EXPOSURE_BQ_ERROR    = str(exc)
+        print(f"  ⚠️  geo_signal exposure 一括取得 失敗（以降スキップ）: "
+              f"{str(exc)[:120]}")
+        return 0
+
+    for ticker, rows in grouped.items():
+        _EXPOSURE_CACHE.setdefault(f"{ticker}_{market}", rows)
+    return len(grouped)
+
+
 def _get_exposure_list(
     ticker: str,
     market: str,

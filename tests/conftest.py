@@ -20,6 +20,9 @@ def _reset_process_caches():
     返ってしまい、monkeypatch した別の偽物が効かなくなる。
       - yf_cache: Ticker インスタンスと .info をモジュール変数に溜める
       - edinet_bq_client._RE_HOLDINGS_CACHE: 証券コード→保有不動産
+      - edinet_bq_client._FIN_LATEST_CACHE: 証券コード→最新期financials
+      - geo_signal._EXPOSURE_CACHE: 銘柄→権益エクスポージャー
+      - base_agent._SECTOR_TICKER_CACHE: 業種→ticker（先読みの起点）
     """
     def _clear():
         try:
@@ -30,6 +33,18 @@ def _reset_process_caches():
         try:
             import edinet_bq_client
             edinet_bq_client._RE_HOLDINGS_CACHE.clear()
+            edinet_bq_client._FIN_LATEST_CACHE.clear()
+        except Exception:
+            pass
+        try:
+            import geo_signal
+            geo_signal._EXPOSURE_CACHE.clear()
+            geo_signal._EXPOSURE_BQ_DISABLED = False
+        except Exception:
+            pass
+        try:
+            import base_agent
+            base_agent._SECTOR_TICKER_CACHE = None
         except Exception:
             pass
 
