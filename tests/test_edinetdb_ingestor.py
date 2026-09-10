@@ -257,7 +257,17 @@ def test_ingest_does_not_advance_rotation_when_full_text_fetch_fails(
 
     assert result["success"] == 0
     assert result["failure"] == 1
-    assert "E02144" not in module._load_json(tmp_path / "rotation.json", {})
+    # 2026-09-10: 以前は「台帳に一切書かない」ことで再試行を担保していたが、
+    # それだと毎回失敗する企業が永久に優先度上位へ居座り、11枠のうち8枠を
+    # 同じ失敗の再試行が占め続けていた（2026-09-07/09/10 の3実行とも
+    # 対象の先頭6社が同一だった）。
+    # いまは失敗も記録するが **last_fetched は書かない**。
+    # 「取得済み扱いにしない」という本来の意図はこちらで担保する。
+    entry = module._load_json(tmp_path / "rotation.json", {}).get("E02144", {})
+    assert "last_fetched" not in entry, "失敗したのに取得済み扱いになっている"
+    assert entry.get("last_attempt"), "失敗が記録されず次回も同じ枠を消費する"
+    assert entry.get("fail_count") == 1
+    assert result["reasons"]["text_blocks"] == 1
 
 
 # ── BQ照合によるローテ台帳の補完（2026-07-30）────────────────────
@@ -314,3 +324,78 @@ def test_reconcile_noop_when_bq_empty():
     meta, filled = reconcile_meta_with_bq(dict(original), _COMPANIES, {})
     assert filled == 0
     assert meta == original
+
+
+# ── 失敗企業がローテーションを塞がないこと（2026-09-10）────────────
+#
+# last_fetched は成功時にしか書かれないため、毎回失敗する企業は
+# 永久に fresh にならず優先度P1/P2の先頭に居座っていた。実際
+# 2026-09-07 / 09-09 / 09-10 の3実行とも対象の先頭6社
+# （E01719/E36174/E02324/E03693/E04275/E37577）が同一で、
+# 11枠のうち8枠が同じ失敗の再試行に消えていた。
+
+from datetime import date, timedelta   # noqa: E402
+
+
+def _meta(code, *, last_attempt=None, fail_count=None, last_fetched=None):
+    info = {}
+    if last_attempt:
+        info["last_attempt"] = last_attempt
+    if fail_count is not None:
+        info["fail_count"] = fail_count
+    if last_fetched:
+        info["last_fetched"] = last_fetched
+    return {code: info}
+
+
+class TestFailureBackoff:
+    def test_recent_failure_is_skipped(self):
+        import edinetdb_ingestor as m
+        today = date(2026, 9, 10)
+        meta = _meta("E1", last_attempt="2026-09-10", fail_count=1)
+        got = m.select_ingest_targets(
+            [], [], [], ["E1", "E2"], meta, budget=30, today=today)
+        assert got == ["E2"], "直近で失敗した企業が再び枠を取っている"
+
+    def test_backoff_expires_and_the_company_returns(self):
+        import edinetdb_ingestor as m
+        today = date(2026, 9, 10)
+        meta = _meta("E1", last_attempt="2026-09-08", fail_count=1)
+        got = m.select_ingest_targets(
+            [], [], [], ["E1"], meta, budget=30, today=today)
+        assert got == ["E1"], "待機日数を過ぎても復帰していない"
+
+    def test_backoff_grows_with_consecutive_failures(self):
+        import edinetdb_ingestor as m
+        today = date(2026, 9, 10)
+        # 4連続失敗 → 2^3 = 8日待つ
+        meta = _meta("E1", last_attempt="2026-09-06", fail_count=4)
+        assert m.select_ingest_targets(
+            [], [], [], ["E1"], meta, budget=30, today=today) == []
+
+    def test_backoff_is_capped(self):
+        import edinetdb_ingestor as m
+        today = date(2026, 9, 10)
+        old = (today - timedelta(days=31)).isoformat()
+        meta = _meta("E1", last_attempt=old, fail_count=99)
+        assert m.select_ingest_targets(
+            [], [], [], ["E1"], meta, budget=30, today=today,
+            fail_backoff_max_days=30) == ["E1"], "上限を超えても復帰しない"
+
+    def test_success_still_uses_refresh_days_not_backoff(self):
+        import edinetdb_ingestor as m
+        today = date(2026, 9, 10)
+        meta = _meta("E1", last_fetched="2026-09-09")
+        assert m.select_ingest_targets(
+            [], [], [], ["E1"], meta, budget=30, today=today) == []
+
+    def test_priority_company_does_not_starve_the_queue(self):
+        """P1が常に失敗しても後続が回ること（今回の実害そのもの）"""
+        import edinetdb_ingestor as m
+        today = date(2026, 9, 10)
+        meta = {c: {"last_attempt": "2026-09-10", "fail_count": 3}
+                for c in ("E1", "E2", "E3")}
+        got = m.select_ingest_targets(
+            ["E1", "E2", "E3"], [], [], ["E4", "E5"], meta,
+            budget=30, today=today)
+        assert got == ["E4", "E5"], "失敗中のP1が枠を占有し続けている"

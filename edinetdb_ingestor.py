@@ -320,6 +320,7 @@ def select_ingest_targets(
     *,
     calls_per_company: int = 3,
     refresh_days: int = 180,
+    fail_backoff_max_days: int = 30,
     today: date | None = None,
 ) -> list[str]:
     """P1→P4順、重複排除、鮮度除外、予算上限で対象を返す純関数。"""
@@ -341,6 +342,28 @@ def select_ingest_targets(
         except ValueError:
             return False
 
+    def backing_off(code: str) -> bool:
+        """直近に失敗した企業を一定日数スキップする。
+
+        2026-09-10: last_fetched は**成功時にしか書かれない**ため、
+        毎回失敗する企業は永久に fresh にならず、優先度P1/P2の先頭に
+        居座って枠を塞いでいた。実際 2026-09-07/09/10 の3実行とも
+        先頭6社（E01719/E36174/E02324/E03693/E04275/E37577）が同一で、
+        11枠のうち8枠が同じ失敗の再試行に消えていた。
+        指数的に間隔を空け、EdinetDB側にデータが増えたら拾い直す。
+        """
+        info = meta.get(code) or {}
+        value = str(info.get("last_attempt") or "")[:10]
+        if not value:
+            return False
+        fails = int(info.get("fail_count") or 1)
+        # 1日 → 2 → 4 → 8 …（上限 fail_backoff_max_days）
+        wait = min(2 ** max(0, fails - 1), max(1, int(fail_backoff_max_days)))
+        try:
+            return (today - date.fromisoformat(value)).days < wait
+        except ValueError:
+            return False
+
     # P4だけは「未取得→最終取得が古い順」のFIFOにする。
     remaining_fifo = sorted(
         remaining or [],
@@ -354,7 +377,7 @@ def select_ingest_targets(
             if not code or code in seen:
                 continue
             seen.add(code)
-            if fresh(code):
+            if fresh(code) or backing_off(code):
                 continue
             selected.append(code)
             if len(selected) >= limit:
@@ -592,6 +615,39 @@ def run_edinetdb_ingest(
     if target_limit is not None:
         targets = targets[:max(0, int(target_limit))]
     success = failure = 0
+    # 2026-09-10: failure は4つの別原因（financials欠落 / segments欠落 /
+    # text-blocks欠落 / BQ MERGE例外）を1つの数字に潰しており、
+    # 台帳に「failure: 8」と出るだけで何が起きているか分からなかった。
+    # 内訳を数え、EdinetDB側にデータが無いだけの not_found は
+    # 障害ではなく "missing" として区別する。
+    reasons: dict = {"financials": 0, "segments": 0, "text_blocks": 0,
+                     "bq_merge": 0, "missing": 0}
+    today_str = date.today().isoformat()
+
+    def _note_attempt(code: str, company_code: str, *, missing: bool) -> None:
+        """失敗も台帳に残してローテーションを前へ進める。
+
+        last_fetched は成功時にしか書かれないため、毎回失敗する企業は
+        永久に「未取得」のまま優先度上位に居座り、枠を塞いでいた。
+        """
+        info = dict(meta.get(code) or {})
+        info["last_attempt"] = today_str
+        info["fail_count"] = int(info.get("fail_count") or 0) + 1
+        info["company_code"] = company_code or info.get("company_code")
+        if missing:
+            info.setdefault("missing_since", today_str)
+        meta[code] = info
+
+    def _record_failure(code: str, company_code: str, kind: str) -> None:
+        nonlocal failure
+        is_missing = getattr(client, "last_error", None) == "not_found"
+        if is_missing:
+            reasons["missing"] += 1
+        else:
+            reasons[kind] += 1
+        failure += 1
+        _note_attempt(code, company_code, missing=is_missing)
+
     for code in targets:
         company = by_edinet.get(code, {})
         company_code = _sec4(company.get("sec_code"))
@@ -602,17 +658,19 @@ def run_edinetdb_ingest(
             break
         financials = client.get(f"/companies/{code}/financials", {"years": 5, "period": "annual"})
         if not isinstance(financials, list):
-            failure += 1
+            # 予算枯渇・レート制限で落ちた分は「その企業の失敗」ではないので
+            # 台帳を進めない（次回そのまま再試行させる）。
             if _stop_ingest(client):
                 break
+            _record_failure(code, company_code, "financials")
             continue
         segments = client.get(f"/companies/{code}/segments", {"empty_as_200": "true"})
         if not isinstance(segments, list):
             # 予算枯渇や一時障害を空データと誤認すると、refresh期間中ずっと
             # segmentsが欠落する。成功台帳を進めず、次回に再試行させる。
-            failure += 1
             if _stop_ingest(client):
                 break
+            _record_failure(code, company_code, "segments")
             continue
         fin_rows = [
             map_edinetdb_financials(item, edinet_code=code, company_code=company_code, now=now)
@@ -636,9 +694,9 @@ def run_edinetdb_ingest(
             )
             if not isinstance(blocks, list):
                 # full text未取得を成功扱いせず、同じfetch_countで再試行する。
-                failure += 1
                 if _stop_ingest(client):
                     break
+                _record_failure(code, company_code, "text_blocks")
                 continue
             text_rows = map_edinetdb_text_blocks(
                 code, blocks, latest_year,
@@ -652,16 +710,31 @@ def run_edinetdb_ingest(
             bq.merge_rows("segments", seg_rows, ["segment_id"])
             bq.merge_rows("segment_finance", sf_rows, ["sf_id"])
             bq.merge_rows("text_analysis", text_rows, ["text_id"])
+            # 成功したら失敗カウンタを消す（バックオフを解除する）
             meta[code] = {
-                "last_fetched": date.today().isoformat(),
+                "last_fetched": today_str,
                 "fetch_count": fetch_count + 1, "company_code": company_code,
             }
             success += 1
-        except Exception:
+        except Exception as exc:
+            # 2026-09-10: ここは例外を完全に握り潰しており、BQ側の理由
+            # （スキーマ不一致・型不正など）が一切ログに出なかった。
+            print(f"    ⚠️  [edinetdb] BQ MERGE失敗 [{code}]: "
+                  f"{type(exc).__name__}: {str(exc)[:120]}")
+            reasons["bq_merge"] += 1
             failure += 1
+            _note_attempt(code, company_code, missing=False)
     _save_json(meta_path, meta)
+    if failure:
+        print(f"    ℹ️  [edinetdb] 失敗{failure}件の内訳: "
+              f"EdinetDBにデータ無し={reasons['missing']} / "
+              f"financials欠落={reasons['financials']} / "
+              f"segments欠落={reasons['segments']} / "
+              f"text-blocks欠落={reasons['text_blocks']} / "
+              f"BQ MERGE={reasons['bq_merge']}")
     return {
         "skipped": False, "success": success, "failure": failure,
+        "reasons": reasons,
         "targets": targets, "budget": daily_budget, "api_calls": client.calls,
     }
 
