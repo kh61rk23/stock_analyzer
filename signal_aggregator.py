@@ -1055,6 +1055,17 @@ def calc_signal_score(
                     "facility_signal":     f"設備投資弱気({score:.0f})",
                 }
                 risk_flags.append(label_map.get(cat, f"{cat}={score:.0f}"))
+        else:
+            # 2026-09-10: ここは else 節が無く indent=12 のまま
+            # `if score is not None:` の本体末尾に置かれていたため、
+            # 直前の components[cat] = round(score, 1) を毎回 None で
+            # 上書きしていた（2026-03-30 の初版以来）。
+            # signal_score は weighted_sum から算出済みなので表向きは
+            # 正常に見える一方、components を読む側だけが全滅していた:
+            #   ml/dataset_builder  → 「特徴量あり業種=0」で1行も蓄積されず
+            #   _pick_geo_alert     → components["geo_signal"] が float に
+            #                          ならず地政学アラートが一度も発火せず
+            #   週次レポートの内訳   → 全カテゴリ N/A 表示
             components[cat] = None   # データなし
 
     if weight_used < 1e-6:

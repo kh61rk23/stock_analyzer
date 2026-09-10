@@ -26,10 +26,14 @@ if str(REPO) not in sys.path:
 
 from finance_logic import as_number as _as_number  # noqa: E402
 
+# 2026-09-10: config.JST を追加するまで、この import は常に失敗して
+# JST = None になっており、日付スタンプはランナーのローカル時刻
+# （＝workflow の env TZ 頼み）で打たれていた。現在は config が SSOT。
 try:
     from config import JST  # type: ignore
-except Exception:  # pragma: no cover - config 無し環境
-    JST = None
+except Exception:  # pragma: no cover - config 無し環境（単体テスト）
+    from datetime import timedelta as _td, timezone as _tz
+    JST = _tz(_td(hours=9))
 
 
 # ── 純粋ロジック（pytest対象） ────────────────────────────────

@@ -127,7 +127,13 @@ def _default_price_getter(cfg):
     """本番用: yfinance→data_reliability フォールバックで {open, close} を返す。"""
     def get(ticker: str):
         try:
-            import yfinance as yf
+            # 2026-09-10: 実行内キャッシュ経由。日次パイプラインから
+            # 保有銘柄ごとに呼ばれるため、素の yfinance だと他モジュールが
+            # 既に取得済みの日足を取り直していた。
+            try:
+                import yf_cache as yf
+            except ImportError:  # pragma: no cover - 単体実行時のみ
+                import yfinance as yf
             h = yf.Ticker(ticker).history(period="5d", auto_adjust=True)
             if h is not None and len(h) > 0:
                 last = h.iloc[-1]

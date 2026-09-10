@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -445,7 +445,9 @@ def _write_to_bq(cfg, result: dict, segment_raw_name: str) -> None:
         _bq_mod = _imp.import_module("edinet_bq_client")
         bq = _bq_mod.EDINETBQClient()
 
-        now_str = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        # datetime.utcnow() は Python 3.12 で非推奨（tz-naive を返すため
+        # 後段で aware な値と比較すると TypeError になる）。
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         row = {
             "segment_raw_name": segment_raw_name,
             "sector_code":      result["sector_code"],

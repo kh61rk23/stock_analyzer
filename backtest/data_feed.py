@@ -102,7 +102,12 @@ class YFinanceFeed(InMemoryFeed):
         cache = cache_dir / f"{ticker.replace('.', '_')}.csv"
         rows, divs = [], {}
         try:
-            import yfinance as yf
+            # 2026-09-10: 実行内キャッシュ経由。バックテストは同じ銘柄を
+            # 戦略ごとに読み直すため、重複取得が実行時間に直結していた。
+            try:
+                import yf_cache as yf
+            except ImportError:  # pragma: no cover - 単体実行時のみ
+                import yfinance as yf
             h = yf.Ticker(ticker).history(start=start, end=end,
                                           auto_adjust=True, actions=True)
             if h is not None and len(h) > 0:

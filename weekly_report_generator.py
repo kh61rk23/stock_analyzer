@@ -39,12 +39,12 @@ from pathlib import Path
 def _pct(v, digits: int = 1) -> str:
     if v is None: return "N/A"
     try:    return f"{float(v)*100:.{digits}f}%"
-    except: return "N/A"
+    except (TypeError, ValueError): return "N/A"
 
 def _score(v) -> str:
     if v is None: return "N/A"
     try:    return f"{float(v):.0f}点"
-    except: return "N/A"
+    except (TypeError, ValueError): return "N/A"
 
 def _arrow(v) -> str:
     """数値の変化方向を矢印で表す"""
@@ -56,7 +56,7 @@ def _arrow(v) -> str:
         elif f < -0.02: return "↓↓"
         elif f < 0:    return "↓"
         else:          return "→"
-    except: return "→"
+    except (TypeError, ValueError): return "→"
 
 
 # ==============================================================
@@ -1168,12 +1168,23 @@ def _section_policy_radar(results: dict) -> list:
     if events:
         lines.append("### 📅 今後30日の政策イベント")
         lines.append("")
+        # 2026-09-10: ここは name / date_estimate / days_until / boost_active を
+        # 参照していたが、産出側（policy_radar._detect_events_30d）が返すのは
+        # label / keyword / sectors / direction / lead_days / source / link /
+        # detected_at で、参照キーが1つも存在しなかった。
+        # そのため policy_radar がイベントを1件でも返した週は
+        # KeyError: 'name' で週次レポート生成が丸ごと落ちていた
+        # （台帳 2026-09-07 weekly_report [error] 'name'）。
         for ev in events[:5]:
-            boost_icon = "⚡" if ev.get("boost_active") else "📌"
+            tailwind = str(ev.get("direction", "")) == "tailwind"
+            icon = "⚡" if tailwind else "📌"
+            lead = ev.get("lead_days")
+            lead_txt = f" / 想定リード{lead}日" if lead not in (None, "") else ""
+            sectors = [str(x) for x in (ev.get("sectors") or [])][:3]
             lines.append(
-                f"- {boost_icon} **{ev['name']}** "
-                f"（{ev['date_estimate']} / 残{ev['days_until']}日）"
-                + (f" → 恩恵業種: {', '.join(ev.get('sectors',[])[:3])}" if ev.get("boost_active") else "")
+                f"- {icon} **{ev.get('label') or ev.get('keyword') or '(無題)'}** "
+                f"（{'追い風' if tailwind else '逆風'}{lead_txt}）"
+                + (f" → 対象業種: {', '.join(sectors)}" if sectors else "")
             )
         lines.append("")
 

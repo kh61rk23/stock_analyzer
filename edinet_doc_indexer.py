@@ -136,17 +136,32 @@ def run_doc_indexer(days_back: int = 1, cfg=None) -> dict:
     since = (date.today() - timedelta(days=max(1, lookback))).isoformat()
     rows = []
     indexed_today = []
+    # 2026-09-10: なぜ0件なのかがログから分からず、doc_index が
+    # 2026-04-26 で止まっている原因（API側が空か／型フィルタで落ちているか）
+    # を切り分けられなかったため、内訳を数える。
+    stats = {"empty": 0, "filtered": 0, "no_data": 0}
     for code in targets:
         data = client.get(
             f"/companies/{code}/disclosures",
             {"since": since, "until": date.today().isoformat(), "types": "yuho"},
         )
         if data is None:
-            # 予算枯渇・一時障害。取得済み扱いにせず次回に回す。
-            if getattr(client, "last_error", None) == "budget":
+            # 予算枯渇・レート制限・一時障害。取得済み扱いにせず次回に回す。
+            # 2026-09-10: edinetdb_ingestor / fudosan_ingestor は
+            # ("budget", "rate_limited") の両方で打ち切るのに、ここだけ
+            # "budget" しか見ておらず、429 のサーキットブレーカ作動時に
+            # 残り全社を空振りしたまま「巡回済み」にせず抜けていた。
+            if getattr(client, "last_error", None) in ("budget", "rate_limited"):
                 break
+            stats["no_data"] += 1
             continue
-        rows.extend(build_doc_index_rows(data, by_code.get(code, {})))
+        items = _disclosure_items(data)
+        built = build_doc_index_rows(data, by_code.get(code, {}))
+        if not items:
+            stats["empty"] += 1
+        elif not built:
+            stats["filtered"] += 1
+        rows.extend(built)
         indexed_today.append(code)
     try:
         bq.merge_rows("doc_index", rows, ["doc_id"])
@@ -170,9 +185,15 @@ def run_doc_indexer(days_back: int = 1, cfg=None) -> dict:
             print(f"[doc_indexer] ⚠️ 巡回状況の保存失敗: {str(exc)[:60]}")
 
     result = {"skipped": False, "inserted": len(rows),
-              "targets": len(targets), "visited": len(indexed_today)}
+              "targets": len(targets), "visited": len(indexed_today),
+              **stats}
     print(f"[doc_indexer] ✅ EdinetDB由来 {len(rows)}件 MERGE "
           f"（巡回{len(indexed_today)}/{len(targets)}社・窓{lookback}日）")
+    if not rows and targets:
+        # 0件は「本当に開示が無い」のか「取り込み側で落としている」のかで
+        # 対処が正反対になる。内訳を出さないと次回も同じ判断ができない。
+        print(f"[doc_indexer] ℹ️ 0件の内訳: API空={stats['empty']}社 / "
+              f"型フィルタ除外={stats['filtered']}社 / 応答なし={stats['no_data']}社")
     return result
 
 

@@ -22,8 +22,18 @@ from typing import Optional
 
 import gspread
 import streamlit as st
-import yfinance as yf
 from google.oauth2.service_account import Credentials
+
+# 2026-09-10: 直 yfinance から実行内キャッシュ経由へ。
+# base_agent.fetch_financials() は本モジュールの fetch_stock_data() を
+# **最優先の取得経路**として銘柄ごとに呼ぶため、ここが素の yfinance の
+# ままだと 2026-09-09 の重複取得一掃が主経路だけ素通りしていた
+# （同一銘柄の .info / history を各モジュールが取り直す）。
+# yf_cache が無い環境（viewer 単体起動など）では素の yfinance に落ちる。
+try:
+    import yf_cache as yf
+except ImportError:  # pragma: no cover - viewer 単体起動時のみ
+    import yfinance as yf
 
 # ★ 2026-07-12: 日次バッチ（GitHub Actions・streamlitランタイム無し）から本モジュールが
 #   importされると @st.cache_data 呼出のたびに「No runtime found」WARNINGが大量出力される。

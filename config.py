@@ -21,7 +21,23 @@
 # ==============================================================
 
 import os
+from datetime import timedelta, timezone
 from pathlib import Path
+
+# ==============================================================
+# BLOCK 0-tz: タイムゾーン（SSOT）
+# ==============================================================
+# 本システムの「今日」は一貫して日本時間で判定する（週次実行の曜日判定・
+# 日付スタンプ・営業日判定がすべて JST 前提）。
+#
+# 2026-09-10 まで、この定数はどこにも存在せず、全モジュールが
+# `datetime.now()`（tz-naive）に依存し、正しさは workflow の
+# `TZ: Asia/Tokyo` という env 1行だけが担保していた。
+# ml/dataset_builder.py には `from config import JST` を試みる
+# try/except があったが JST が未定義のため常に except 側へ落ちており、
+# 「JST を使っているつもりのコード」が実際には走っていなかった。
+# 曜日・日付に依存する箇所はこの定数を明示的に渡すこと。
+JST = timezone(timedelta(hours=9))
 
 # ==============================================================
 # BLOCK 0: ディレクトリパス定数
@@ -2667,9 +2683,9 @@ POLITICIAN_TARGET_YEARS:     list  = []      # 例: [2024, 2025] で複数年取
 # 実行曜日（datetime.weekday(): 0=月 1=火 ... 4=金 6=日）
 POLITICIAN_RUN_WEEKDAYS: tuple[int, ...] = (1, 4)
 def is_politician_run_day(now=None) -> bool:
-    """火・金かどうかを判定（TZ=Asia/Tokyo 前提で datetime.now() を使う）"""
+    """火・金かどうかを判定（JST 固定。env の TZ 設定に依存しない）"""
     from datetime import datetime
-    dt = now or datetime.now()
+    dt = now or datetime.now(JST)
     return dt.weekday() in POLITICIAN_RUN_WEEKDAYS
 
 # ==============================================================
@@ -5213,7 +5229,7 @@ B4_ANOMALY_SEASON_LOOKBACK_YEARS = 10  # LOOKBACK_YEARS
 B4_ANOMALY_SEASON_CACHE_HOURS = 24 * 7  # CACHE_HOURS
 B4_BACKTESTER_HOLD_DAYS = 28  # HOLD_DAYS
 B4_BACKTESTER_LOOKBACK_DAYS = 90  # LOOKBACK_DAYS
-B4_CACHE_FRESHNESS_MANAGER_DEFAULT_HALF_LIFE_HOURS = {'yfinance_price': 4.0, 'options_monitor': 4.0, 'macro_snapshot': 24.0, 'us_8k': 20.0, 'policy_radar': 24.0, 'gov_data': 168.0, 'google_trends': 168.0, 'sentiment': 168.0, 'us_macro': 12.0, 'edinet': 720.0, 'sec_edgar': 720.0, 'rule_weights': 720.0, 'us_sector_mapping': 720.0, 'longterm_scenario': 168.0}  # DEFAULT_HALF_LIFE_HOURS
+B4_CACHE_FRESHNESS_MANAGER_DEFAULT_HALF_LIFE_HOURS = {'yfinance_price': 4.0, 'options_monitor': 26.0, 'macro_snapshot': 26.0, 'us_8k': 20.0, 'policy_radar': 26.0, 'gov_data': 168.0, 'google_trends': 168.0, 'sentiment': 168.0, 'us_macro': 26.0, 'edinet': 720.0, 'sec_edgar': 720.0, 'rule_weights': 720.0, 'longterm_scenario': 168.0}  # DEFAULT_HALF_LIFE_HOURS
 B4_CATALYST_CALENDAR_HISTORY_TTL_DAYS = 365  # _HISTORY_TTL_DAYS
 B4_CATALYST_CALENDAR_TRIPLE_WINDOW_DAYS = 14  # _TRIPLE_WINDOW_DAYS
 B4_CEO_EVALUATOR_SCORES_RETAIN_YEARS = 5  # SCORES_RETAIN_YEARS

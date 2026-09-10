@@ -49,22 +49,28 @@ from typing import Optional
 DEFAULT_HALF_LIFE_HOURS: dict[str, float] = {
     # 市場データ（価格・オプション）
     "yfinance_price":       4.0,
-    "options_monitor":      4.0,
-    "macro_snapshot":      24.0,
+    # 2026-09-10: 4.0h → 26.0h。options_monitor は日次モジュールで
+    # 1日1回しか書かれないのに半減期が4時間だったため、鮮度チェックが
+    # 走る実行開始時点では必ず「経過≒24h」で強制再取得判定になり、
+    # 71日間ずっとアラートに載り続けていた。実際の更新周期に合わせる
+    # （日次実行の遅延ぶんの余裕として+2h）。
+    "options_monitor":     26.0,
+    "macro_snapshot":      26.0,   # 同上（日次更新）
     "us_8k":               20.0,
-    "policy_radar":        24.0,
+    "policy_radar":        26.0,   # 同上（日次更新）
 
     # 中期データ（週次）
     "gov_data":           168.0,   # 7日
     "google_trends":      168.0,
     "sentiment":          168.0,
-    "us_macro":            12.0,   # 日次だが12時間キャッシュ
+    "us_macro":            26.0,   # 日次更新（旧12.0は実周期より短かった）
 
     # 長期データ（月次・四半期）
     "edinet":             720.0,   # 30日
     "sec_edgar":          720.0,   # 30日
     "rule_weights":       720.0,   # 30日
-    "us_sector_mapping":  720.0,   # 30日
+    # us_sector_mapping は書き手が存在しないため 2026-09-10 に監視対象から除外。
+    # （CACHE_FILE_MAP からも削除済み。復活させる際は両方に戻すこと）
     "longterm_scenario":  168.0,   # 週次更新
 }
 
@@ -294,19 +300,82 @@ def enrich_us_fundamental_with_freshness(
 # BLOCK 4: 全キャッシュ一括鮮度レポート
 # ==============================================================
 
-CACHE_FILE_MAP: dict[str, str] = {
-    "macro_snapshot":       "macro_snapshot_prev.json",
-    "gov_data":             "gov_cache/cpi.json",
-    "google_trends":        "trends_cache.json",
-    "sentiment":            "sentiment_cache.json",
-    "us_macro":             "us_macro_cache.json",
-    "policy_radar":         "policy_radar_cache.json",
-    "options_monitor":      "options_monitor_cache.json",
-    "us_8k":                "us_8k_cache.json",
-    "rule_weights":         "rule_weights.json",
-    "us_sector_mapping":    "us_sector_mapping.json",
-    "longterm_scenario":    "longterm_scenario_latest.json",
+# 2026-09-10: 本マップは「監視側が想像したパス」で書かれており、産出側の
+# 実態と5件ずれていた。その結果 cache_freshness は 2026-07-01 から
+# 71日連続で「強制再取得推奨」を出し続け、常時アラートのため
+# 誰も内容を見なくなっていた（オオカミ少年化）。実態は以下:
+#   macro_snapshot : 時刻キーが `_cached_at`（先頭アンダースコア）で未検出
+#   us_macro       : 保存先が CACHE_DIR、時刻キーは `_fetched_at`
+#   policy_radar   : 保存先が CACHE_DIR（DATA_DIR を見ていた）
+#   gov_data       : 実ファイルは gov_cache/data_{id}_{month}.json で
+#                    cpi.json は一度も生成されない
+#   us_sector_mapping : 書き手が存在しない（純粋な幽霊エントリ）
+# 値は「候補パスのリスト」にして DATA_DIR / CACHE_DIR の両方と
+# glob を許す。先に見つかったものを採る。
+CACHE_FILE_MAP: dict[str, list[str]] = {
+    "macro_snapshot":       ["macro_snapshot_prev.json"],
+    # e-Stat 由来は data_{統計ID}_{月}.json で溜まる。最新の1件を代表とする。
+    "gov_data":             ["gov_cache/data_*.json", "gov_cache/*.json"],
+    "google_trends":        ["trends_cache.json"],
+    "sentiment":            ["sentiment_cache.json"],
+    "us_macro":             ["us_macro_cache.json"],
+    "policy_radar":         ["policy_radar_cache.json"],
+    "options_monitor":      ["options_monitor_cache.json"],
+    "us_8k":                ["us_8k_cache.json"],
+    "rule_weights":         ["rule_weights.json"],
+    "longterm_scenario":    ["longterm_scenario_latest.json"],
 }
+
+# 保存日時として認識するキー。産出側がそれぞれ勝手に決めているため広く拾う。
+# 先頭アンダースコア付き（_cached_at / _fetched_at）が実際の多数派。
+_TS_KEYS = ("_cached_at", "cached_at", "_fetched_at", "fetched_at",
+            "_saved_at", "saved_at", "timestamp", "last_updated",
+            "generated_at", "generated", "updated_at")
+
+
+def _resolve_cache_file(patterns: list[str], search_dirs: list) -> "Path | None":
+    """候補パターンを DATA_DIR / CACHE_DIR の順に解決する。
+
+    glob を含む場合は更新時刻が最も新しいものを返す。
+    """
+    for pattern in patterns:
+        for base in search_dirs:
+            if not base:
+                continue
+            base = Path(base)
+            if any(ch in pattern for ch in "*?["):
+                hits = sorted(base.glob(pattern),
+                              key=lambda q: q.stat().st_mtime if q.exists() else 0,
+                              reverse=True)
+                if hits:
+                    return hits[0]
+            else:
+                cand = base / pattern
+                if cand.exists():
+                    return cand
+    return None
+
+
+def _extract_saved_at(path) -> "str | None":
+    """キャッシュ本体から保存日時を取り出す。
+
+    JSON に時刻キーが無い形式（macro_snapshot_prev のような素の指標dict）も
+    あるため、最後はファイル自身の mtime へフォールバックする。
+    「読めるのに時刻が分からない＝鮮度0」と誤判定させないための保険。
+    """
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        raw = None
+    if isinstance(raw, dict):
+        for key in _TS_KEYS:
+            value = raw.get(key)
+            if value:
+                return str(value)
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime).isoformat()
+    except OSError:
+        return None
 
 
 def get_freshness_report(
@@ -330,41 +399,38 @@ def get_freshness_report(
           }, ...
         }
     """
-    data_dir = Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
-    report   = {}
+    search_dirs = [getattr(cfg, "DATA_DIR", "stock_data/data"),
+                   getattr(cfg, "CACHE_DIR", "stock_data/cache")]
+    report = {}
 
-    for cache_type, filename in CACHE_FILE_MAP.items():
-        file_path = data_dir / filename
-        saved_at  = None
-
-        if file_path.exists():
-            try:
-                raw = json.loads(file_path.read_text(encoding="utf-8"))
-                # 保存日時キーを順に探す
-                saved_at = (
-                    raw.get("cached_at") or
-                    raw.get("_saved_at") or
-                    raw.get("timestamp") or
-                    raw.get("last_updated") or
-                    raw.get("generated_at")
-                )
-            except Exception:
-                pass
+    for cache_type, patterns in CACHE_FILE_MAP.items():
+        if isinstance(patterns, str):        # 旧形式（文字列1本）も受ける
+            patterns = [patterns]
+        file_path = _resolve_cache_file(patterns, search_dirs)
+        saved_at = _extract_saved_at(file_path) if file_path else None
 
         freshness = calc_freshness(saved_at, cache_type, cfg)
+        # 2026-09-10: 「まだ生成されていない」と「古い」を分ける。
+        # 両方とも force_refresh=True にしていたため、そもそも書き手が
+        # 走っていないだけのものが「強制再取得推奨」に混ざり、
+        # 本当に再取得すべきキャッシュが埋もれていた。
+        missing = file_path is None
         report[cache_type] = {
             "freshness":     freshness,
             "freshness_pct": round(freshness * 100, 1),
-            "stale":         freshness < STALE_THRESHOLD,
-            "force_refresh": freshness < IGNORE_THRESHOLD,
+            "stale":         (not missing) and freshness < STALE_THRESHOLD,
+            "force_refresh": (not missing) and freshness < IGNORE_THRESHOLD,
+            "missing":       missing,
             "saved_at":      saved_at,
-            "file":          filename,
+            "file":          str(file_path) if file_path else patterns[0],
         }
 
     if print_summary:
         stale_list   = [k for k, v in report.items() if v["stale"] and not v["force_refresh"]]
         refresh_list = [k for k, v in report.items() if v["force_refresh"]]
-        fresh_list   = [k for k, v in report.items() if not v["stale"]]
+        missing_list = [k for k, v in report.items() if v["missing"]]
+        fresh_list   = [k for k, v in report.items()
+                        if not v["stale"] and not v["missing"]]
 
         print(f"  📊 キャッシュ鮮度レポート:")
         print(f"     新鮮（{len(fresh_list)}件）: {', '.join(fresh_list[:5])}")
@@ -373,6 +439,9 @@ def get_freshness_report(
         if refresh_list:
             print(f"     強制再取得推奨（{len(refresh_list)}件）: "
                   f"{', '.join(refresh_list[:5])}")
+        if missing_list:
+            print(f"     未生成（{len(missing_list)}件・書き手が未実行）: "
+                  f"{', '.join(missing_list[:5])}")
 
     return report
 

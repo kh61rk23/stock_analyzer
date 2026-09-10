@@ -202,20 +202,37 @@ def build_theme_entities(cfg) -> list[dict]:
                 "heat_score": None,
                 "updated_at": _NOW,
             })
+    # 2026-09-10: ここは cluster_phase_cache["clusters"] を dict とみなして
+    # .items() を呼んでいたが、technology_cluster_engine が書き出す実体は
+    # **list**（build_cluster_phase_cache の docstring 参照）。
+    # そのため週次実行のたびに 'list' object has no attribute 'items' で
+    # ontology_export 全体が落ち、ontology.signal_event / decision_event が
+    # テーブル作成（2026-06-23）以来ずっと0行だった。
+    # 参照キー（name / tickers / phase_score）も実体に存在しないため、
+    # 実際の列（cluster_id / sectors / avg_score）に合わせる。
     cl = _load_json(Path(cfg.CACHE_DIR) / "cluster_phase_cache.json")
-    if isinstance(cl, dict):
-        for cid, body in (cl.get("clusters", cl) or {}).items():
-            if not isinstance(body, dict):
-                continue
-            themes.append({
-                "theme_id": _eid("cluster", cid),
-                "theme_name": str(body.get("name", cid)),
-                "theme_type": "tech_cluster",
-                "market": str(body.get("market", "")),
-                "member_tickers": list(body.get("tickers", []))[:50],
-                "heat_score": body.get("phase_score"),
-                "updated_at": _NOW,
-            })
+    clusters = cl.get("clusters") if isinstance(cl, dict) else None
+    if isinstance(clusters, dict):        # 将来 dict 形式に戻っても壊さない
+        clusters = list(clusters.values())
+    for body in (clusters or []):
+        if not isinstance(body, dict):
+            continue
+        cid = str(body.get("cluster_id") or "")
+        if not cid:
+            continue
+        themes.append({
+            "theme_id": _eid("cluster", cid),
+            # クラスターに人間可読名は無いので、代表技術ノードを名前にする。
+            "theme_name": (", ".join(str(x) for x in
+                                     (body.get("centroid_nodes") or [])[:3])
+                           or cid),
+            "theme_type": "tech_cluster",
+            "market": str(body.get("market", "")),
+            # member は銘柄ではなく業種コード（クラスタリングの単位が業種）。
+            "member_tickers": [str(x) for x in (body.get("sectors") or [])][:50],
+            "heat_score": body.get("avg_score"),
+            "updated_at": _NOW,
+        })
     return themes
 
 
