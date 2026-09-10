@@ -1257,6 +1257,13 @@ def _prefetch_ticker_scoped_bq(sector_tickers: dict, cfg, bq) -> None:
         print(f"    ⚠️  財務の一括先読み失敗（個別取得へ）: {str(exc)[:60]}")
 
     try:
+        n = bq.prefetch_company_analysis_bundles(all_tickers)
+        if n:
+            print(f"    📚 業種分析バンドルを一括先読み: {n}銘柄（1クエリ）")
+    except Exception as exc:
+        print(f"    ⚠️  バンドルの一括先読み失敗（個別取得へ）: {str(exc)[:60]}")
+
+    try:
         import importlib
         _geo = importlib.import_module("geo_signal")
         n = _geo.prefetch_exposures(all_tickers, market="JP", cfg=cfg)

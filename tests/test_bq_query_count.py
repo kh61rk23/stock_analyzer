@@ -125,3 +125,51 @@ class TestExposurePrefetch:
     def test_no_bq_client_is_a_noop(self, monkeypatch):
         monkeypatch.setattr(geo_signal, "_get_raw_bq", lambda *_a, **_k: None)
         assert geo_signal.prefetch_exposures(["6501.T"], market="JP") == 0
+
+
+class TestBundlePrefetch:
+    """業種分析バンドルは業種ごとに呼ばれる（33本/実行）"""
+
+    def test_prefetch_issues_one_query(self):
+        fake = _FakeBQ()
+        c = _client(fake)
+        n = c.prefetch_company_analysis_bundles(
+            [f"{6000 + i}.T" for i in range(60)])
+        assert len(fake.calls) == 1
+        assert n == 60
+
+    def test_per_sector_calls_do_not_query_after_prefetch(self):
+        """先読み後は業種ごとの呼び出しでクエリが増えないこと"""
+        fake = _FakeBQ()
+        c = _client(fake)
+        all_tickers = [f"{6000 + i}.T" for i in range(60)]
+        c.prefetch_company_analysis_bundles(all_tickers)
+        before = len(fake.calls)
+        for i in range(0, 60, 2):          # 30業種ぶんの呼び出しを模す
+            c.get_company_analysis_bundle(all_tickers[i:i + 2], max_companies=2)
+        assert len(fake.calls) == before, "業種ごとにクエリが走っている"
+
+    def test_max_companies_still_caps_the_result(self):
+        rows = [_FakeRow({"company_code": f"{6000 + i}", "company": None,
+                          "financials": None, "texts": None,
+                          "gov_meta": {"submit_date": "2026-09-10"}})
+                for i in range(5)]
+        fake = _FakeBQ(rows)
+        c = _client(fake)
+        out = c.get_company_analysis_bundle(
+            [f"{6000 + i}.T" for i in range(5)], max_companies=2)
+        assert len(out) <= 2, "max_companies の上限が効いていない"
+
+    def test_unknown_codes_are_cached_as_absent(self):
+        fake = _FakeBQ()
+        c = _client(fake)
+        c.prefetch_company_analysis_bundles(["9999.T"])
+        before = len(fake.calls)
+        assert c.get_company_analysis_bundle(["9999.T"]) == {}
+        assert len(fake.calls) == before
+
+    def test_invalid_tickers_are_dropped(self):
+        fake = _FakeBQ()
+        c = _client(fake)
+        assert c.prefetch_company_analysis_bundles(["bad", "", None]) == 0
+        assert fake.calls == []

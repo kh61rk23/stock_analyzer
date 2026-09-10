@@ -53,6 +53,11 @@ _RE_HOLDINGS_LOCK = threading.Lock()
 _FIN_LATEST_CACHE: dict = {}
 _FIN_LATEST_LOCK = threading.Lock()
 
+# 業種分析バンドルの実行内キャッシュ（{company_code: payload}）。
+# get_company_analysis_bundle() は業種ごとに呼ばれるため33本走っていた。
+_BUNDLE_CACHE: dict = {}
+_BUNDLE_LOCK = threading.Lock()
+
 
 def _fin_code(securities_code) -> str:
     """証券コードを financials.company_code の表記（数字4桁）へ揃える。"""
@@ -461,19 +466,68 @@ class EDINETBQClient:
         doc_index を1本のパラメータ化クエリで参照する。
         """
         bounded = max(1, min(20, int(max_companies)))
+        requested = self._normalize_bundle_targets(tickers, limit=bounded)
+        if not requested:
+            return {}
+
+        # 2026-09-10: 業種ごとに呼ばれるため1実行で33本走り、課金実測では
+        # この形だけで 1.77GB/実行を占めていた（BQは参照テーブル1つにつき
+        # 最低10MB課金＝5テーブル参照で1本あたり50MB）。
+        # 先読み済みならクエリを撃たず、未取得ぶんだけ引く。
+        with _BUNDLE_LOCK:
+            missing = [pair for pair in requested if pair[0] not in _BUNDLE_CACHE]
+        if missing:
+            self._query_bundles(missing)
+
+        out = {}
+        with _BUNDLE_LOCK:
+            for code, ticker in requested:
+                payload = _BUNDLE_CACHE.get(code)
+                if payload:
+                    out[ticker] = dict(payload, ticker=ticker)
+        return out
+
+    @staticmethod
+    def _normalize_bundle_targets(tickers, limit: int | None = None) -> list:
+        """[(4桁コード, ticker)] へ正規化する（重複排除・順序保持）。"""
         requested: list[tuple[str, str]] = []
         seen = set()
-        for raw in tickers:
+        for raw in (tickers or []):
             ticker = str(raw or "").strip()
             code = "".join(ch for ch in ticker.split(".")[0] if ch.isdigit())[:4]
             if len(code) != 4 or code in seen:
                 continue
             seen.add(code)
             requested.append((code, ticker if "." in ticker else f"{code}.T"))
-            if len(requested) >= bounded:
+            if limit is not None and len(requested) >= limit:
                 break
+        return requested
+
+    def prefetch_company_analysis_bundles(self, tickers) -> int:
+        """全銘柄ぶんの業種分析バンドルを1クエリで先読みする。
+
+        業種ごとの get_company_analysis_bundle() が33本のクエリを撃つのを
+        1本へ畳むための入口。該当行が無いコードも空で埋めて、
+        キャッシュミスによる個別クエリへの逆戻りを防ぐ。
+
+        Returns: キャッシュへ載せた銘柄コード数
+        """
+        requested = self._normalize_bundle_targets(tickers)
+        with _BUNDLE_LOCK:
+            missing = [pair for pair in requested if pair[0] not in _BUNDLE_CACHE]
+        if not missing:
+            return 0
+        try:
+            self._query_bundles(missing)
+        except Exception as exc:
+            print(f"[BQ] prefetch_company_analysis_bundles skip: {str(exc)[:80]}")
+            return 0
+        return len(missing)
+
+    def _query_bundles(self, requested: list) -> None:
+        """[(code, ticker)] を1クエリで引き、_BUNDLE_CACHE を埋める。"""
         if not requested:
-            return {}
+            return
 
         sql = f"""
         WITH requested AS (
@@ -584,7 +638,8 @@ class EDINETBQClient:
             return (end / start) ** (1 / 3) - 1
 
         ticker_by_code = dict(requested)
-        bundles = {}
+        # 該当行が無いコードも空で埋める（埋めないと毎回引き直しになる）
+        bundles = {code: None for code, _ in requested}
         rows = self.client.query(sql, job_config=job_config).result()
         for row in rows:
             record = plain(row)
@@ -624,7 +679,7 @@ class EDINETBQClient:
                     "fair" if score >= 40 else "poor"
                 )
             ticker = ticker_by_code.get(code, f"{code}.T")
-            bundles[ticker] = {
+            bundles[code] = {
                 "ticker": ticker,
                 "company_name": company.get("company_name") or ticker,
                 "analysis": {
@@ -650,7 +705,9 @@ class EDINETBQClient:
                 "gov_meta": gov_meta,
                 "data_source": "bigquery_edinet",
             }
-        return bundles
+        with _BUNDLE_LOCK:
+            for code, payload in bundles.items():
+                _BUNDLE_CACHE.setdefault(code, payload)
 
     def get_real_estate_holdings(self, securities_code: str) -> list[dict]:
         """証券コードに対応する最新年度の企業保有不動産を返す。

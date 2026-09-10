@@ -21,6 +21,7 @@ def _reset_process_caches():
       - yf_cache: Ticker インスタンスと .info をモジュール変数に溜める
       - edinet_bq_client._RE_HOLDINGS_CACHE: 証券コード→保有不動産
       - edinet_bq_client._FIN_LATEST_CACHE: 証券コード→最新期financials
+      - edinet_bq_client._BUNDLE_CACHE: 証券コード→業種分析バンドル
       - geo_signal._EXPOSURE_CACHE: 銘柄→権益エクスポージャー
       - base_agent._SECTOR_TICKER_CACHE: 業種→ticker（先読みの起点）
     """
@@ -34,6 +35,7 @@ def _reset_process_caches():
             import edinet_bq_client
             edinet_bq_client._RE_HOLDINGS_CACHE.clear()
             edinet_bq_client._FIN_LATEST_CACHE.clear()
+            edinet_bq_client._BUNDLE_CACHE.clear()
         except Exception:
             pass
         try:
