@@ -39,10 +39,14 @@ python3 maintenance_packet.py   # 全監査+台帳+直近変更を MAINTENANCE_P
 
 ## このシステムの構造（30秒）
 
-- エントリ: GitHub Actions（毎朝JST6:00 / 月曜のみ自動でweeklyモード）→ run_headless.py → stock_analyzer_main.run_all_tasks()
+- エントリ: GitHub Actions（cron "17 0 * * 1-6" = 月〜土 09:17 JST / 月曜のみ自動でweeklyモード）
+  → run_headless.py → stock_analyzer_main.run_all_tasks()
+  ※ 日曜は市場が動かないため停止（Actions 無料枠 2,000分/月の節約）。
+    UTC 00:00 ちょうどはジョブが集中し実測で3〜4時間の遅延が出るため :17 へずらしてある。
+    **前倒し（UTC 23:40 等）は不可** — JST月曜の回が UTC では日曜になり weekly 判定が壊れる。
 - 設定SSOT: config.py（BLOCK 0〜39・他moduleをimportしない）
-- パイプライン宣言: pipeline_registry.json（89ステージ・AST自動生成・手動編集禁止）
-- データ契約: results_schema.py（127キー）
+- パイプライン宣言: pipeline_registry.json（108ステージ・AST自動生成・手動編集禁止）
+- データ契約: results_schema.py（145キー）
 - 観測性: module_ledger.py（実行台帳・連続失敗アラート・配線漏れ検出）
 - 投資部連携: agent_packet_exporter.py → Obsidian vault（B-investment）
 - ローカル同期: obsidian_sync.py（GitHub→Mac→iCloud vault / launchd は setup/ 参照）
@@ -67,6 +71,20 @@ python3 maintenance_packet.py   # 全監査+台帳+直近変更を MAINTENANCE_P
 7. **yfinance の MultiIndex 逆参照**: `group_by="ticker"` の DataFrame は
    level0=ticker。`data["Close"][ticker]` は KeyError になり except で
    全銘柄が黙って捨てられる。正しくは `data[ticker]["Close"]`
+8. **インデント1段による自己上書き**: `else:` を伴わない後始末行が
+   成功側ブロックの末尾に紛れ込み、直前に入れた値を毎回潰す。
+   集計値（signal_score 等）は先に算出済みのため**表向きは正常に見え**、
+   その内訳を読む側だけが全滅する。2026-09 に signal_aggregator の
+   `components[cat] = None` が該当し、初版から5ヶ月半のあいだ
+   ml_meta が0行・地政学アラートが未発火だった
+   → 「集計値は出ているのに内訳が空」を疑う。
+     `tests/test_signal_components_survive.py` が機械検査する
+9. **監視側が実態からずれて常時アラート**: 鮮度・SLA・死活の監視が
+   産出側のパス／キー／更新周期とずれると、毎日アラートが出続けて
+   誰も見なくなる（オオカミ少年化）。2026-09 に cache_freshness が
+   71日連続 alert（パス3件・時刻キー1件・半減期1件のズレ）
+   → 監視項目を足すときは**産出側の実ファイルを1度は開いて確認**する。
+     「未生成」と「陳腐化」は別状態として扱うこと
 
 ## データが入らない系の調査手順（BQ実データ起点）
 
@@ -95,9 +113,43 @@ python3 maintenance_packet.py   # 全監査+台帳+直近変更を MAINTENANCE_P
 
 ## 課金ガード（Google Cloud）
 
-- BigQuery: `BQ_MAX_BYTES_BILLED`（既定10GB/クエリ）が全クエリに効く。
-  全テーブル合計は約20MBで無料枠1TBに対し十分小さい
-- **ループ内でBQを引かない**。業種ごとに引くと33クエリ×フルスキャンになる
-  （2026-09 に `get_tickers_by_sector_bulk()` で1本へ集約）
+**大原則: BigQuery の費用は「データ量」ではなく「クエリ本数」で決まる。**
+BQ は**参照テーブル1つにつき最低10MB**を課金する。本システムの全テーブル
+合計は約69MB（2026-09-10 実測・最大は edinet.text_analysis の 54.5MB）で
+無料枠 1TB/月 に対し十分小さいため、スキャン量が問題になることはまず無い。
+効くのは本数だけである。
+
+実測での確認方法（**INFORMATION_SCHEMA は課金されない**）:
+
+```sql
+-- 日別の課金バイトとクエリ本数
+SELECT DATE(creation_time) d, COUNT(*) jobs,
+       ROUND(SUM(total_bytes_billed)/POW(1024,3), 3) gb_billed,
+       ROUND(SUM(total_bytes_processed)/POW(1024,3), 3) gb_processed
+FROM `region-asia-northeast1`.INFORMATION_SCHEMA.JOBS_BY_PROJECT
+WHERE creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
+  AND job_type = 'QUERY'
+GROUP BY d ORDER BY d DESC
+```
+
+`gb_billed` が `gb_processed` を大きく上回っていたら10MB下限が支配的、
+すなわち**N+1が残っている**サイン（2026-09-10 時点で 6.9GB vs 3.0GB だった）。
+本数の内訳は同じテーブルを `GROUP BY query の先頭130文字` で集計する。
+※ `ontology` と `us` データセットは location=US のため
+  `region-us`.INFORMATION_SCHEMA を別途見る。
+
+- `BQ_MAX_BYTES_BILLED`（既定10GB/クエリ）が全クエリに効く。
+  これは**事故を止めるだけ**で、本数由来の費用には効かない
+- **ループ内でBQを引かない**。銘柄・業種ごとに引くと本数がそのまま費用になる。
+  集約済みの入口（2026-09）:
+  - `get_tickers_by_sector_bulk()` — 業種ticker 33本 → 1本
+  - `prefetch_real_estate_holdings()` — 保有不動産 85本 → 1本
+  - `prefetch_latest_financials()` — 最新期財務 85本 → 1本
+  - `prefetch_company_analysis_bundles()` — 業種分析バンドル 33本 → 1本
+  - `geo_signal.prefetch_exposures()` — 権益 85本 → 1本
+  先読みの起点は `base_agent.resolve_sector_tickers()` の業種ticker一括解決
+  直後。1実行で触る銘柄が全部確定する唯一の場所なので、銘柄別のBQ参照を
+  足すときはここに先読みを追加する。**該当行が無い銘柄も空で埋めること**
+  （埋めないとキャッシュミスで個別クエリに逆戻りする）
 - Google CSE: 無料枠100件/日。超過分は課金されるため
   `B5_PAID_MEDIA_SEARCHER_CSE_CALL_LIMIT`（既定90）で打ち切る

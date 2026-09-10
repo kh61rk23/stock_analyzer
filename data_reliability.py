@@ -228,11 +228,23 @@ def run_data_sla_check(cfg, results: dict) -> dict:
     data_dir  = Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
 
     # 既定の検査対象（config側 DATA_SLA_TARGETS で上書き/追加可能）
+    #
+    # 2026-09-10: news / financials の既定パスが産出側と食い違っており、
+    # 2026-07-12 から毎日「SLA違反:2件」を出し続けていた（実体は
+    # ファイルが古いのではなく、**そもそも存在しないパスを見ていた**）。
+    #   news       : 実体は news_cache/news_{日付}.json というディレクトリ。
+    #                `news_cache.json` というファイルは生成されない
+    #   financials : CACHE_DIR/edinet は旧ローテーション（ENABLE_EDINET_
+    #                ROTATION=False で退役済み）。現行の取り込みは
+    #                edinetdb_ingestor で、状態は
+    #                DATA_DIR/edinetdb_rotation_meta.json に日次で書かれる
+    # 「監視が実態からずれて常時アラート」はオオカミ少年化して
+    # 本物の違反を隠すため、実ファイルに合わせる。
     if not targets:
         targets = {
             "price":      str(data_dir / "score_history.json"),
-            "news":       str(data_dir / "news_cache.json"),
-            "financials": str(cache_dir / "edinet"),
+            "news":       str(data_dir / "news_cache"),
+            "financials": str(data_dir / "edinetdb_rotation_meta.json"),
         }
 
     violations, checked = [], 0
@@ -262,8 +274,10 @@ def run_data_sla_check(cfg, results: dict) -> dict:
               "violation_count": len(violations),
               "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M")}
     if violations:
+        # 「古い(stale)」と「無い(missing)」は対処が別物なので区別して出す。
+        # missing は配線漏れ・パス誤りの可能性が高い。
         print(f"    ⚠️  [data_sla] SLA違反 {len(violations)}件: "
-              + ", ".join(v["kind"] for v in violations))
+              + ", ".join(f"{v['kind']}({v['status']})" for v in violations))
     else:
         print(f"    ✅ [data_sla] SLA違反なし（{checked}対象）")
     return report

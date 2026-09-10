@@ -367,150 +367,33 @@ jobs:
         run: |
             git config user.name  "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add stock_data/data/dashboard/ 2>/dev/null || true
-            git add stock_data/data/score_history.json 2>/dev/null || true
-            git add stock_data/data/screener_history.json 2>/dev/null || true
-            git add stock_data/data/performance_history.json 2>/dev/null || true
-            git add stock_data/data/fed_calendar_cache.json 2>/dev/null || true
-            git add stock_data/data/edinet_db/ 2>/dev/null || true
-            git add stock_data/data/edinet_cache/ 2>/dev/null || true
-            git add stock_data/data/edinetdb_cache/ 2>/dev/null || true
-            git add stock_data/data/edinetdb_company_cache.json 2>/dev/null || true
-            git add stock_data/data/edinetdb_rotation_meta.json 2>/dev/null || true
-            git add stock_data/data/fudosandb_cache/ 2>/dev/null || true
-            git add stock_data/data/fudosan_rotation_meta.json 2>/dev/null || true
-            # Drive差分同期の署名台帳。消えても全件送り直すだけだが、
-            # 永続化しないと毎回2000件超の全件アップロードに戻る
-            git add stock_data/data/gdrive_sync_state.json 2>/dev/null || true
-            git add stock_data/data/biz_summary_cache/ 2>/dev/null || true
-            git add stock_data/data/imf_cache.json 2>/dev/null || true
-            # 全レポートの正本は config.INSIGHT_DIR (= stock_data/insights)。
-            # runner内だけに残さず、業種・月次・backtestを含めて永続化する。
+            # ── 2026-09-10: 個別列挙（git add 126行）をディレクトリ単位へ集約 ──
+            # 列挙方式は「新しい成果物を足したら1行追記する」運用が前提だが、
+            # 実際には追記漏れと実態とのズレが溜まっていた（棚卸し時点で
+            # 118パス中46パスが実在せず、うち下記は明確な誤りだった）:
+            #   - stock_data/data/edinet.policy_support
+            #       … BQのテーブル名がファイルパス欄に混入していた
+            #   - stock_data/data/us_macro_cache.json
+            #       … 実際の保存先は stock_data/cache/（＝一度も永続化されず、
+            #         毎回のCI実行が素のチェックアウトから始まっていた）
+            #   - stock_data/data/policy_radar_cache.json
+            #       … 同上（cache/ 側の行が別にあるため実害はなかった）
+            #   - stock_data/data/us_sector_mapping.json
+            #       … 書き手が存在しない
+            # また gov_cache/ は列挙自体が無く永続化されていなかった。
+            #
+            # stock_data/ 配下は全体で約25MBしかなく、重量物
+            # （models/ と data/us_fundamentals_db/）は .gitignore 済みなので、
+            # ディレクトリごと add しても増える分は実行の成果物だけになる。
+            # 新しい状態ファイルを足しても、ここを触らずに永続化される。
+            git add stock_data/data/ 2>/dev/null || true
+            git add stock_data/cache/ 2>/dev/null || true
             git add stock_data/insights/ 2>/dev/null || true
             git add stock_data/logs/ 2>/dev/null || true
-            git add stock_data/data/earnings_surprise_cache.json 2>/dev/null || true
-            git add stock_data/data/multi_currency_cache.json 2>/dev/null || true
-            git add stock_data/data/portfolio_holdings.csv 2>/dev/null || true
-            git add stock_data/data/dashboard/correlation_heatmap.csv 2>/dev/null || true
-            git add stock_data/data/dashboard/correlation_high_pairs.csv 2>/dev/null || true
-            git add stock_data/data/correlation_latest.json 2>/dev/null || true
-            git add stock_data/data/dashboard/position_sizing_*.csv 2>/dev/null || true
-            git add stock_data/data/credit_data_cache.json 2>/dev/null || true
-            git add stock_data/data/market_breadth_cache.json 2>/dev/null || true
-            git add stock_data/data/technical_scorer_cache.json 2>/dev/null || true
-            git add stock_data/data/insider_monitor_cache.json 2>/dev/null || true
-            git add stock_data/data/dividend_calendar_cache.json 2>/dev/null || true
-            git add stock_data/data/anomaly_season_cache.json 2>/dev/null || true
-            git add stock_data/data/options_monitor_cache.json 2>/dev/null || true
-            git add stock_data/data/support_resistance_cache.json 2>/dev/null || true
-            git add stock_data/data/volume_profile_cache.json 2>/dev/null || true
-            git add stock_data/data/rule_weights.json 2>/dev/null || true
-            git add stock_data/data/jp_us_bridge_cache.json 2>/dev/null || true
-            git add stock_data/data/edinet_quality_cache.json 2>/dev/null || true
-            git add stock_data/data/backtest_results.json 2>/dev/null || true
-            git add stock_data/data/comps_analyzer_cache.json 2>/dev/null || true
-            git add stock_data/insights/screener/detail_latest/ 2>/dev/null || true
-            git add stock_data/data/performance_log.json 2>/dev/null || true
-            git add stock_data/data/screener_sector_heatmap_cache.json 2>/dev/null || true
-            git add "stock_data/insights/screener/backtest_*.md" 2>/dev/null || true
-            git add stock_data/data/portfolio_optimizer_cache.json 2>/dev/null || true
-            git add "stock_data/insights/screener/dcf_*.md" 2>/dev/null || true
-            git add stock_data/data/cycle_phase_history.json 2>/dev/null || true
-            git add stock_data/data/rule_weights.json 2>/dev/null || true
-            git add stock_data/data/cross_sector_signal_history.json || true # R-1 履歴保存実装後に有効化
-            # 個別US財務JSONはrun内キャッシュ（.gitignore対象）。永続正本はus.fundamentals BQ。
-            git add stock_data/data/us_fundamentals_meta.json 2>/dev/null || true
-            git add stock_data/data/us_cik_map.json 2>/dev/null || true
-            git add stock_data/data/tdnet_notified.json 2>/dev/null || true
-            git add stock_data/data/investment_journal.json 2>/dev/null || true
-            git add stock_data/data/score_drift_log.json 2>/dev/null || true
-            git add stock_data/data/shareholder_history.json 2>/dev/null || true
-            git add stock_data/data/score_drift_log.json 2>/dev/null || true
-            git add stock_data/data/ceo_scores.json 2>/dev/null || true
-            git add stock_data/data/macro_snapshot_prev.json 2>/dev/null || true
-            git add stock_data/data/signal_history.json 2>/dev/null || true
-            git add stock_data/data/alpha_attribution.json 2>/dev/null || true
-            git add stock_data/data/midterm_plans.json 2>/dev/null || true
-            git add stock_data/data/ic_tracker.json 2>/dev/null || true
-            git add stock_data/data/longterm_scenario_latest.json 2>/dev/null || true
-            git add stock_data/data/regime_state.json 2>/dev/null || true
-            git add stock_data/data/hmm_model_state.json 2>/dev/null || true
-            git add stock_data/data/trends_cache.json 2>/dev/null || true
-            git add stock_data/data/ml_feature_importance.json 2>/dev/null || true
-            git add stock_data/data/ml_corrections_latest.json 2>/dev/null || true
-            git add stock_data/data/sentiment_cache.json 2>/dev/null || true
-            git add stock_data/data/policy_radar_cache.json 2>/dev/null || true
-            git add stock_data/data/us_fundamentals_meta.json 2>/dev/null || true
-            git add stock_data/data/us_cik_map.json 2>/dev/null || true
-            git add stock_data/data/us_macro_cache.json 2>/dev/null || true
-            git add stock_data/data/us_8k_cache.json 2>/dev/null || true
-            git add stock_data/data/cross_sector_signal_history.json 2>/dev/null || true
-            git add stock_data/data/us_sector_mapping.json 2>/dev/null || true
-            git add stock_data/data/crowding_history.json 2>/dev/null || true
-            git add stock_data/data/jp_us_sector_corr_cache.json 2>/dev/null || true
-            git add stock_data/data/sector_rotation_cache.json 2>/dev/null || true
-            git add stock_data/data/citation_cache.json 2>/dev/null || true
-            git add stock_data/data/pearl_candidates.json 2>/dev/null || true
-            git add stock_data/data/pearl_history.json 2>/dev/null || true
-            git add stock_data/data/direction_momentum.json 2>/dev/null || true
-            git add stock_data/data/smart_money_trail.json 2>/dev/null || true
-            git add stock_data/data/size_tier_master.json 2>/dev/null || true
-            git add stock_data/data/edinet.policy_support 2>/dev/null || true
-            git add stock_data/cache/politician_history.json 2>/dev/null || true
-            git add stock_data/cache/event_cache.json 2>/dev/null || true
-            git add stock_data/cache/pead_candidates.json 2>/dev/null || true
-            git add stock_data/cache/latent_pearl_cache.json 2>/dev/null || true
-            git add stock_data/cache/deep_dive_history.json 2>/dev/null || true
-            git add stock_data/cache/nedo_cache.json 2>/dev/null || true
-            git add stock_data/cache/policy_medium_cache.json 2>/dev/null || true
-            git add stock_data/cache/congress/ 2>/dev/null || true
-            git add stock_data/cache/institutional/ 2>/dev/null || true
-            git add stock_data/cache/hiring/ 2>/dev/null || true
-            git add stock_data/cache/executive/ 2>/dev/null || true
-            git add stock_data/cache/facility/ 2>/dev/null || true
-            git add stock_data/cache/segment/ 2>/dev/null || true
-            git add stock_data/data/dcf_valuation_cache.json 2>/dev/null || true
-            # ── Wave 2 - Size Ph2 キャッシュ ──────────────────────────
-            git add stock_data/cache/size_decay_state.json 2>/dev/null || true
-            git add stock_data/cache/nano_evaluation_queue.json 2>/dev/null || true
-            git add stock_data/cache/size_composite_scores.json 2>/dev/null || true
-            # ── Wave 2 - FE-4 Ignition Detector キャッシュ ────────────
-            git add stock_data/cache/ignition_alerts.json 2>/dev/null || true
-            git add stock_data/cache/ignition_history.json 2>/dev/null || true
-            # ── Wave 5 - E4 テキストシグナルキャッシュ ────────────
-            git add stock_data/cache/text_signal_cache.json 2>/dev/null || true
-            git add stock_data/cache/text_extractor/ 2>/dev/null || true
-            # ── Wave 5 - Idea3-P3 policy_radar 文意判定キャッシュ ──
-            git add stock_data/cache/policy_radar_cache.json 2>/dev/null || true
-            # ── Wave 7: 新規キャッシュファイル ────────────────────
-            git add stock_data/cache/standardization_cache.json 2>/dev/null || true
-            git add stock_data/cache/academic_conf_cache.json 2>/dev/null || true
-            git add stock_data/cache/midterm_plan_cache.json 2>/dev/null || true
-            git add stock_data/cache/size_decay_state.json 2>/dev/null || true
-            git add stock_data/cache/nano_evaluation_queue.json 2>/dev/null || true
-            git add stock_data/cache/cross_size_signal_cache.json 2>/dev/null || true
-            git add stock_data/cache/independence_scores.json 2>/dev/null || true
-            git add stock_data/cache/latent_pearl_cache.json 2>/dev/null || true
-            git add stock_data/cache/pearl_backtest_log.json 2>/dev/null || true
-            # ── Wave R0〜R5: 状態ファイル永続化（2026-07-12追加）──────
-            # これらは日次で蓄積・更新される「状態」。永続化しないと毎朝リセットされ
-            # 蓄積(ML特徴量/S2口座/DD peak/hotnessベースライン/繰越キュー)が始まらない。
-            git add stock_data/data/edinet_retry_queue.json 2>/dev/null || true
-            git add stock_data/data/exit_engine_baseline.json 2>/dev/null || true
-            git add stock_data/data/dd_state.json 2>/dev/null || true
-            git add stock_data/paper/ 2>/dev/null || true
-            git add stock_data/cache/taxonomy/ 2>/dev/null || true
-            git add stock_data/data/ml_dataset/ 2>/dev/null || true
-            # ── GDELT「最後に取れた値」永続キャッシュ（2026-07-17追加・Issue J-1）──
-            git add stock_data/cache/gdelt_instability_cache.json 2>/dev/null || true
-            # ── 月次ランナーの成果物（2026-07-25 B-5追加）──────────
-            # 提案系の注文票と月次ループの実行状況。insights/ は上で add 済み。
             git add stock_data/orders/ 2>/dev/null || true
-            git add stock_data/monthly_loop_status.json 2>/dev/null || true
-            # 実行間隔の判定に使う状態ファイル。これが永続化されないと
-            # 毎回「初回」扱いになり、30日間隔・隔週間隔が効かなくなる。
-            git add stock_data/data/geo_exposure_state.json 2>/dev/null || true
-            git add stock_data/data/deliberation_state.json 2>/dev/null || true
+            git add stock_data/paper/ 2>/dev/null || true
+            git add stock_data/ontology/ 2>/dev/null || true
+            git add stock_data/*.json 2>/dev/null || true
             git diff --cached --quiet || git commit -m "auto: daily update $(date '+%Y-%m-%d')"
             # 2026-07-16是正: 未ステージ変更が残ると pull --rebase が
             # 「You have unstaged changes」で失敗し、リモートが先行している日は
