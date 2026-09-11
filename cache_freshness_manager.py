@@ -57,7 +57,14 @@ DEFAULT_HALF_LIFE_HOURS: dict[str, float] = {
     "options_monitor":     26.0,
     "macro_snapshot":      26.0,   # 同上（日次更新）
     "us_8k":               20.0,
-    "policy_radar":        26.0,   # 同上（日次更新）
+    # 2026-09-11: 26.0h → 720.0h。policy_radar は日次で「実行」されるが、
+    # 実際にキャッシュを書き直すのは POLICY_RADAR_INTENT_CACHE_TTL_DAYS
+    # （config: 30日）を過ぎたときだけで、それまでは
+    # 「✅ キャッシュ利用 (0秒)」で即返す＝ファイルの timestamp が
+    # 30日間まったく動かない。26h を基準にすると構造的に必ず
+    # 「強制再取得推奨」になり、cache_freshness の常時アラートが残り続ける。
+    # モジュール実体の更新周期（30日）に合わせる。
+    "policy_radar":       720.0,
 
     # 中期データ（週次）
     "gov_data":           168.0,   # 7日

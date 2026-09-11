@@ -254,7 +254,20 @@ class EDINETBQClient:
         USING (
           SELECT
             {source_columns}
-          FROM UNNEST(JSON_QUERY_ARRAY(PARSE_JSON(@rows_json))) AS row
+          -- 2026-09-11: wide_number_mode => 'round' は必須。
+          -- 既定の 'exact' は「FLOAT64/NUMERICへ正確に往復できない数値」が
+          -- 1つでもあると **JSON文書ごと** 400 で弾く。実測エラー:
+          --   Invalid input: Input number: 0.057161 cannot round-trip
+          --   through string representation; error in PARSE_JSON expression
+          -- ROEや利益率など小数5〜6桁の財務比率は日常的にこれに該当し、
+          -- 2026-09-11 の実行では edinet.financials のMERGE 11社中6社が
+          -- これで落ちていた（0.057161 / -0.137364 / 0.081948 /
+          -- 60026484.18059 / 0.071943 / 0.07093）。
+          -- 取り出しは SAFE_CAST(JSON_VALUE(...)) ＝文字列経由なので、
+          -- 'round' にしても抽出値の精度は落ちない（実測で往復一致を確認）。
+          FROM UNNEST(JSON_QUERY_ARRAY(
+            PARSE_JSON(@rows_json, wide_number_mode => 'round')
+          )) AS row
         ) AS S
         ON {on_clause}
         {matched_clause}

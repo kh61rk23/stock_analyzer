@@ -46,7 +46,13 @@ pytrends>=4.9.0
 xgboost>=1.7.0
 
 # 感情分析（RESEARCH-5）
-transformers>=4.30.0
+# 2026-09-11: 上限なしの >=4.30.0 だったため CI が transformers 6.0.1 を
+# 取得し、v6 でトップレベルの `pipeline` エクスポートが無くなったことで
+#   cannot import name 'pipeline' from 'transformers'
+# となり FinBERT が丸ごと無効化されていた（実行は success のまま進むため
+# 出力が中立値で埋まるだけで、気づけるのはログの警告1行だけだった）。
+# メジャー更新を自動で踏まないよう上限を付ける。
+transformers>=4.30.0,<6
 sentence-transformers
 torch>=2.0.0
 

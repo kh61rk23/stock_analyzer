@@ -49,6 +49,9 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+# transformers の import 失敗理由（版差かインストール漏れかを区別するため）
+_IMPORT_ERROR: str = ""
+
 # analyze_sections 用シングルトン pipeline キャッシュ
 _FINBERT_PIPELINE = None
 
@@ -117,12 +120,26 @@ def _model_cache_dir(cfg) -> Path:
 
 
 def _try_import_transformers():
-    """transformers をインポートする。失敗時は None。"""
+    """transformers の pipeline を取得する。失敗時は None。
+
+    2026-09-11: トップレベルの `from transformers import pipeline` だけを
+    見ており、transformers 6.0.1 でこのエクスポートが無くなった際に
+    「未インストール」と誤って報告していた（実際にはインストール済みで、
+    シンボルの置き場所が変わっただけ）。配置換えに耐えるよう副モジュール
+    も試し、失敗時は本当の理由を残す。
+    """
+    global _IMPORT_ERROR
     try:
         from transformers import pipeline as hf_pipeline
         return hf_pipeline
-    except ImportError:
-        return None
+    except ImportError as exc:
+        _IMPORT_ERROR = str(exc)[:160]
+    try:
+        from transformers.pipelines import pipeline as hf_pipeline
+        return hf_pipeline
+    except ImportError as exc:
+        _IMPORT_ERROR = str(exc)[:160]
+    return None
 
 
 def load_finbert_pipeline(cfg):
@@ -135,8 +152,11 @@ def load_finbert_pipeline(cfg):
     """
     hf_pipeline = _try_import_transformers()
     if hf_pipeline is None:
-        print("    ⚠️  transformers 未インストール → スキップ")
-        print("    → requirements.txt に transformers>=4.30.0 を追加してください")
+        # 「未インストール」と決めつけない。実際には版差でシンボルが
+        # 移動しただけのことがあり、原因を取り違えると調査が空振りする。
+        print(f"    ⚠️  transformers の pipeline を取得できません → スキップ")
+        print(f"    → 理由: {_IMPORT_ERROR or 'transformers 未インストール'}")
+        print("    → requirements.txt は transformers>=4.30.0,<6 を想定")
         return None, None
 
     model_name = getattr(cfg, "FINBERT_MODEL_NAME", FINBERT_MODELS[0])

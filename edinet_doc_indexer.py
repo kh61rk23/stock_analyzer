@@ -41,21 +41,61 @@ def _disclosure_items(data) -> list[dict]:
     return []
 
 
+# 有報と判別できる語（この語を含めば採用）
+_YUHO_TOKENS = ("yuho", "annual", "有価証券報告", "asr")
+# 明らかに有報ではない語（この語を含めば除外）
+# ※ EdinetDB の適時開示スラッグ（disclosure_*）や四半期・訂正の類。
+_NOT_YUHO_TOKENS = (
+    "quarter", "四半期", "semi", "半期", "interim",
+    "extraordinary", "臨時", "correction", "訂正",
+    "holding", "大量保有", "treasury", "自己株",
+    "disclosure_", "monthly", "月次",
+)
+
+
+def is_annual_report(raw_type: str) -> bool:
+    """開示種別が有価証券報告書かを判定する。
+
+    2026-09-11: ここは「既知の有報語を含まなければ除外」という
+    ホワイトリスト判定だった。しかし呼び出し側は API に
+    `types=yuho` を渡しており**サーバ側で既に絞り込まれている**のに、
+    その上で我々が管理していない語彙を当てにいっていたため、
+    実測で 9社/9社 が全て除外され doc_index が 2026-04-26 から
+    1件も増えていなかった（台帳 2026-09-11: filtered=9）。
+    既知の非有報だけを除外し、未知の語彙はサーバの絞り込みを信じて通す。
+    """
+    text = str(raw_type or "").lower()
+    if not text:
+        return True                      # 種別欄が無い＝サーバの絞り込みに従う
+    if any(token in text for token in _NOT_YUHO_TOKENS):
+        return False
+    if any(token in text for token in _YUHO_TOKENS):
+        return True
+    return True                          # 未知の語彙は落とさない（実測で要確認）
+
+
 def build_doc_index_rows(
     data,
     company: dict,
     *,
     now: str | None = None,
+    seen_types: set | None = None,
 ) -> list[dict]:
-    """EdinetDB disclosure objectを既存doc_index列へ変換する純関数。"""
+    """EdinetDB disclosure objectを既存doc_index列へ変換する純関数。
+
+    seen_types を渡すと、観測した開示種別の文字列を積む。
+    語彙が想定と違ったときにログから特定できるようにするため。
+    """
     now = now or datetime.now(timezone.utc).isoformat()
     rows = []
     for item in _disclosure_items(data):
         doc_id = str(_first(item, "doc_id", "docId", "docID") or "").strip()
+        raw_type = str(_first(item, "type", "document_type", "doc_type", "category") or "")
+        if seen_types is not None:
+            seen_types.add(raw_type or "(種別欄なし)")
         if not doc_id:
             continue
-        raw_type = str(_first(item, "type", "document_type", "doc_type", "category") or "")
-        if raw_type and not any(token in raw_type.lower() for token in ("yuho", "annual", "有価証券")):
+        if not is_annual_report(raw_type):
             continue
         rows.append({
             "doc_id": doc_id,
@@ -140,6 +180,7 @@ def run_doc_indexer(days_back: int = 1, cfg=None) -> dict:
     # 2026-04-26 で止まっている原因（API側が空か／型フィルタで落ちているか）
     # を切り分けられなかったため、内訳を数える。
     stats = {"empty": 0, "filtered": 0, "no_data": 0}
+    seen_types: set = set()
     for code in targets:
         data = client.get(
             f"/companies/{code}/disclosures",
@@ -156,7 +197,8 @@ def run_doc_indexer(days_back: int = 1, cfg=None) -> dict:
             stats["no_data"] += 1
             continue
         items = _disclosure_items(data)
-        built = build_doc_index_rows(data, by_code.get(code, {}))
+        built = build_doc_index_rows(data, by_code.get(code, {}),
+                                     seen_types=seen_types)
         if not items:
             stats["empty"] += 1
         elif not built:
@@ -194,6 +236,10 @@ def run_doc_indexer(days_back: int = 1, cfg=None) -> dict:
         # 対処が正反対になる。内訳を出さないと次回も同じ判断ができない。
         print(f"[doc_indexer] ℹ️ 0件の内訳: API空={stats['empty']}社 / "
               f"型フィルタ除外={stats['filtered']}社 / 応答なし={stats['no_data']}社")
+        if seen_types:
+            # 語彙が想定と違うと静かに全滅するので、実物を必ず出す。
+            print("[doc_indexer] ℹ️ 観測した開示種別: "
+                  + ", ".join(sorted(seen_types)[:12]))
     return result
 
 

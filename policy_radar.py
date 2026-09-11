@@ -34,7 +34,7 @@
 #   }
 #
 # 【キャッシュ】
-#   CACHE_DIR/policy_radar_cache.json  TTL: 24時間
+#   CACHE_DIR/policy_radar_cache.json  TTL: POLICY_RADAR_INTENT_CACHE_TTL_DAYS（30日）
 #   CACHE_DIR/pdf_url_cache.json       TTL: PDF_URL_CACHE_TTL_DAYS (30日)
 #   CACHE_DIR/policy_radar_cumulative.json  累積スコア（恒久保持・上位件で削除）
 #
@@ -1145,7 +1145,7 @@ def run_policy_radar(cfg, results: Optional[dict] = None) -> dict:
     print("\n  🎯 [policy_radar] 政策レーダー 開始...")
     t0 = datetime.now()
 
-    # ── キャッシュ確認（24時間以内） ─────────────────────────
+    # ── キャッシュ確認（POLICY_RADAR_INTENT_CACHE_TTL_DAYS＝既定30日以内）──
     cached = _load_radar_cache(cfg)
     if cached:
         elapsed = (datetime.now() - t0).seconds

@@ -5,11 +5,24 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import re
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
 from db_rest_client import DBRestClient
+
+
+def _brief_error(exc: Exception, limit: int = 240) -> str:
+    """例外メッセージからURLを畳んで、理由の部分だけを残す。
+
+    google-cloud-bigquery の例外は
+    `400 GET https://bigquery.googleapis.com/.../queries/<uuid>?...: <理由>`
+    という形で、素朴に先頭を切るとURLだけが残って理由が消える。
+    """
+    text = " ".join(str(exc).split())
+    text = re.sub(r"https?://\S+", "<url>", text)
+    return text[:limit]
 
 
 def _stop_ingest(client) -> bool:
@@ -719,8 +732,13 @@ def run_edinetdb_ingest(
         except Exception as exc:
             # 2026-09-10: ここは例外を完全に握り潰しており、BQ側の理由
             # （スキーマ不一致・型不正など）が一切ログに出なかった。
+            # 2026-09-11: 先頭120文字だと google-cloud-bigquery が差し込む
+            # `400 GET https://bigquery.googleapis.com/.../queries/<uuid>?...`
+            # だけで埋まり、肝心の理由が毎回切り落とされていた
+            # （実際 PARSE_JSON の round-trip エラーを1日見落とした）。
+            # URLを畳んでから出す。
             print(f"    ⚠️  [edinetdb] BQ MERGE失敗 [{code}]: "
-                  f"{type(exc).__name__}: {str(exc)[:120]}")
+                  f"{type(exc).__name__}: {_brief_error(exc)}")
             reasons["bq_merge"] += 1
             failure += 1
             _note_attempt(code, company_code, missing=False)
