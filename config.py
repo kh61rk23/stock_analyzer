@@ -1517,7 +1517,13 @@ ENABLE_NEWS: bool = True          # ニュースRSS取得の有効化
 # Google Custom Search API（有料メディア記事検索）
 GOOGLE_CSE_API_KEY: str = os.getenv("GOOGLE_CSE_API_KEY", "")   # ★ 2026-06-10 環境変数化（GitHub Secrets 登録済み）
 GOOGLE_CSE_ID:      str = "033b43821c3a5442b"   # cse.google.com で取得
-ENABLE_PAID_MEDIA_SEARCH: bool = True  # API設定後に True に変更
+# 2026-09-11: True → False。Google CSE API が 403 を返し続けており
+# （2026-07-14 以降の全実行で毎回きっかり3回失敗 → _CSE_DEAD_LIMIT で打ち切り）、
+# 有料メディア検索は一度も結果を返していなかった。403の原因は
+# quota超過・キー無効・請求設定のいずれかだが、キーは GitHub Secret のため
+# 手元で検証できない。無駄な失敗呼び出しを止めるため既定を False にする。
+# キーを点検・復旧したら True に戻すこと。
+ENABLE_PAID_MEDIA_SEARCH: bool = False
 
 # Step C: 個別株スクリーニング設定
 SCREEN_TOP_N_SECTORS: int   = 7      # スクリーニング対象業種数（スコア上位N）

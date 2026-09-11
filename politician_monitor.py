@@ -48,6 +48,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
@@ -60,26 +61,68 @@ from typing import Optional
 # ==============================================================
 
 # US下院 STOCK Act PTR インデックスXML URL
-# 形式: {year}FD.xml = その年の全PTR一覧（ファイルID・氏名・URL）
+# 形式: {year}FD.xml = その年の全PTR一覧（DocID・氏名・FilingType）
+#
+# 2026-09-11: 旧 ptr-pdfs/{year}/{year}FD.xml は2026年分も2025年分も404で、
+# 2026-07 以降の全実行で議員取引が0件だった。現行は financial-pdfs/ 配下。
+# 実測: 2026年分 434KB / Member 1,615件（うち FilingType=P のPTRが384件）。
 _PTR_INDEX_URL_TMPL = (
-    "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/{year}/{year}FD.xml"
+    "https://disclosures-clerk.house.gov/public_disc/financial-pdfs/{year}FD.xml"
 )
+# 個別開示は **PDFのみ** で提供される（.xml は存在しない）。
 _PTR_DETAIL_URL_TMPL = (
-    "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/{year}/{fileid}.xml"
+    "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/{year}/{fileid}.pdf"
 )
 
-# 上院 eFD（Electronic Financial Disclosure）Periodic Transaction Report URL
-# Wave 3 - Policy Ph2: 上院データ取得ロジック追加
-_SENATE_EFD_SEARCH_URL = (
-    "https://efts.senate.gov/LATEST/search-index"
-    "?q=%22Periodic+Transaction+Report%22"
-    "&dateRange=custom&startdt={start}&enddt={end}"
+# PDF本文から1取引を切り出す。実データの並びは
+#   Amazon.com, Inc. - Common Stock / (AMZN) [ST] / S (partial)
+#   / 03/16/2026 03/16/2026 / $1,001 - $15,000
+# 金額が行をまたぐ（"$15,001 -" 改行 "$50,000"）ことがあるため、
+# 照合前に空白を1つへ潰してから当てる。
+# 銘柄コードが数字始まりのもの（米国債のCUSIP "91282CGJ4" 等）は
+# 株式ではないので拾わない。
+_PTR_TX_RE = re.compile(
+    r"\(([A-Z][A-Z0-9.\-]{0,9})\)\s*\[(\w{2,4})\]\s*"
+    r"([PSE])\s*(\(partial\))?\s*"
+    r"(\d{2}/\d{2}/\d{4})\s+(\d{2}/\d{2}/\d{4})\s*"
+    r"(\$[\d,]+\s*-\s*\$[\d,]+|Over\s+\$[\d,]+)",
+    re.IGNORECASE,
 )
-# 上院 eFD 個別開示取得（CIK番号相当のファイルID から直接取得）
-_SENATE_EFD_FILING_URL = (
-    "https://efts.senate.gov/LATEST/search-index"
-    "?q={senator_name}&forms=ptr&dateRange=custom&startdt={start}&enddt={end}"
-)
+# 資産名は「(TICKER) [」の直前にある。ただし実データでは
+# "Ferguson Enterprises Inc." 改行 "Stock" のように行を跨ぐため、
+# 直前2行までを候補にして連結する（1行だけ見ると "Stock" になる）。
+_PTR_ASSET_RE = re.compile(
+    r"(?:([^\n]{0,80})\n)?([^\n]{0,80}?)\s*\(([A-Z][A-Z0-9.\-]{0,9})\)\s*\[")
+
+# 資産名の前段に紛れ込む表ヘッダ・前取引の残骸を落とす
+_PTR_ASSET_NOISE = re.compile(
+    r"(\$[\d,]+|\d{2}/\d{2}/\d{4}|Gains >|\$200\?|^[PSE]$|\(partial\)"
+    r"|Amount|Cap\.|Notification|Date|Owner Asset|Transaction|Type|ID)",
+    re.IGNORECASE)
+
+
+def _clean_asset_name(prev_line: str, line: str) -> str:
+    """(TICKER) 直前の1〜2行から資産名を組み立てる。"""
+    parts = []
+    for chunk in (prev_line or "", line or ""):
+        chunk = " ".join(chunk.split())
+        if not chunk or _PTR_ASSET_NOISE.search(chunk):
+            parts = [] if chunk and _PTR_ASSET_NOISE.search(chunk) else parts
+            continue
+        parts.append(chunk)
+    name = " ".join(parts).strip(" -")
+    # 直前行の取引種別カラム（"S" "P" が連結した "SP" 等）が
+    # 資産名の頭に混ざることがあるので落とす
+    return re.sub(r"^[PSE]{1,2}\s+", "", name).strip(" -")
+
+# 2026-09-11: 上院 eFD の取得経路を撤去した。
+# 参照していた efts.senate.gov は **DNS解決すらできないホスト**で
+# （SEC の efts.sec.gov を模した形跡があり、実在した記録がない）、
+# 実装以来ずっと空振りしていた。実在する efdsearch.senate.gov は
+# 利用規約同意のセッションCookieを要求するため 403 で、
+# 同じ作りでは取得できない。復活させる場合は別実装が必要。
+# スコアリング側（_score_senate_transaction / 委員会係数）は
+# politician_history.json に残る既存の上院データを再スコアするため残置。
 
 # 取引規模（House開示カテゴリ）→ size_score マッピング
 _SIZE_SCORE_MAP = {
@@ -293,70 +336,6 @@ def _save_event_cache(cfg, data: dict) -> None:
 # BLOCK 2.5: 上院データ取得（Wave 3 - Policy Ph2）
 # ==============================================================
 
-def _fetch_senate_ptr_records(
-    days: int = 30,
-    cfg=None,
-) -> list[dict]:
-    """
-    上院 eFD から Periodic Transaction Reports のレコードを取得する。
-
-    Senate eFD API が利用不可の場合は空リストを返す（全停止防止）。
-
-    Args:
-        days: 取得対象日数（直近 N 日）
-        cfg:  config モジュール（None 可）
-
-    Returns:
-        [
-          {
-            "name":             str,   # 議員氏名
-            "chamber":          "senate",
-            "file_id":          str,
-            "transaction_date": str,
-            "asset":            str,
-            "gics_sector":      str,
-            "type":             str,   # "P" | "S"
-            "amount":           str,   # size カテゴリ
-            "committees":       list,
-          }, ...
-        ]
-    """
-    try:
-        end_dt   = datetime.now()
-        start_dt = end_dt - timedelta(days=days)
-        start    = start_dt.strftime("%Y-%m-%d")
-        end      = end_dt.strftime("%Y-%m-%d")
-
-        url = _SENATE_EFD_SEARCH_URL.format(start=start, end=end)
-        raw = _fetch_url(url)
-        if not raw:
-            return []
-
-        import json as _json
-        data = _json.loads(raw.decode("utf-8"))
-        hits = data.get("hits", {}).get("hits", [])
-
-        records = []
-        for hit in hits:
-            src = hit.get("_source", {})
-            records.append({
-                "name":             src.get("senator_name", src.get("name", "")),
-                "chamber":          "senate",
-                "file_id":          str(hit.get("_id", "")),
-                "transaction_date": src.get("transaction_date", end),
-                "asset":            src.get("asset_name", ""),
-                "gics_sector":      src.get("sector", ""),
-                "type":             src.get("type", "P"),
-                "amount":           src.get("amount", "1"),
-                "committees":       src.get("committees", []),
-            })
-        return records
-
-    except Exception as e:
-        print(f"    ⚠️  上院PTR取得エラー（スキップ）: {str(e)[:60]}")
-        return []
-
-
 def _score_senate_transaction(tx: dict, cfg=None) -> dict:
     """
     上院取引を Ph2 スコアリングする。
@@ -407,6 +386,7 @@ def _fetch_ptr_index(year: int) -> list[dict]:
         return []
 
     records = []
+    skipped_non_ptr = 0
     # 一般的な要素名 <FilingData> または <Member>
     for elem in root.iter():
         tag = elem.tag.lower()
@@ -414,15 +394,32 @@ def _fetch_ptr_index(year: int) -> list[dict]:
             file_id = (
                 _find_text(elem, ["DocID", "FileID", "ID"])
             )
-            name = (
-                _find_text(elem, ["Name", "MemberName", "LastName"])
-            )
+            # 2026-09-11: インデックスは年次報告(W/C/X/D/A/H/T)も含む全提出の
+            # 一覧で、PTRのPDFが存在するのは FilingType=P だけ。
+            # 絞り込まずに回すと 1,615件中 1,231件が404になり、
+            # リトライ込みで無駄な通信が数千回に膨らむ。
+            filing_type = (_find_text(elem, ["FilingType", "Type"]) or "").strip().upper()
+            if filing_type and filing_type != "P":
+                skipped_non_ptr += 1
+                continue
+            # 2026-09-11: 氏名は単一の <Name> ではなく <First>/<Last> に
+            # 分かれている。旧実装は "Name"/"MemberName"/"LastName" しか
+            # 見ておらず、全件で name="" になっていた（議員名が取れないと
+            # 委員会係数が常に 1.0 になり、スコアが実質無効化される）。
+            name = _find_text(elem, ["Name", "MemberName"])
+            if not name:
+                first = (_find_text(elem, ["First", "FirstName"]) or "").strip()
+                last  = (_find_text(elem, ["Last", "LastName"]) or "").strip()
+                name  = " ".join(x for x in (first, last) if x)
             if file_id:
                 records.append({
                     "file_id": file_id.strip(),
                     "name":    (name or "").strip(),
                     "year":    year,
                 })
+    if skipped_non_ptr:
+        print(f"    ℹ️  [politician] PTR以外の提出 {skipped_non_ptr}件を除外 "
+              f"→ 対象 {len(records)}件")
     return records
 
 
@@ -442,9 +439,15 @@ def _find_text(elem, tag_candidates: list[str]) -> Optional[str]:
 
 def _fetch_ptr_detail(file_id: str, year: int) -> list[dict]:
     """
-    個別PTR XMLを取得し、取引リストを返す。
-    返り値: [{"asset": str, "type": str, "amount": str,
-               "transaction_date": str, "sector": str, ...}, ...]
+    個別PTRのPDFを取得し、取引リストを返す。
+
+    2026-09-11: 下院は個別開示を **PDFでしか配信しておらず**、旧実装が
+    前提にしていた .xml は存在しない（実測で404）。そのため仮に
+    インデックスが取れても取引明細は常に0件になる作りだった。
+    PDFはテキスト埋め込み済みでOCR不要のため PyMuPDF で解析する。
+
+    返り値: [{"asset","ticker","transaction_type","amount",
+              "transaction_date","sector","comment","file_id","year"}, ...]
     """
     url = _PTR_DETAIL_URL_TMPL.format(year=year, fileid=file_id)
     content = _fetch_url(url)
@@ -452,42 +455,41 @@ def _fetch_ptr_detail(file_id: str, year: int) -> list[dict]:
         return []
 
     try:
-        root = ET.fromstring(content)
-    except ET.ParseError:
+        import fitz  # PyMuPDF（requirements.txt に既存）
+    except ImportError:
+        print("    \u26a0\ufe0f  [politician] PyMuPDF \u672a\u5c0e\u5165\u306e\u305f\u3081\u53d6\u5f15\u660e\u7d30\u3092\u89e3\u6790\u3067\u304d\u307e\u305b\u3093")
         return []
 
+    try:
+        with fitz.open(stream=content, filetype="pdf") as doc:
+            raw = "\n".join(page.get_text() for page in doc)
+    except Exception as e:
+        print(f"    \u26a0\ufe0f  [politician] PDF\u89e3\u6790\u5931\u6557 ({file_id}): {str(e)[:60]}")
+        return []
+
+    # 資産名は改行位置に依存するので、空白を潰す前のテキストから拾う
+    asset_by_ticker = {}
+    for m in _PTR_ASSET_RE.finditer(raw):
+        name = _clean_asset_name(m.group(1), m.group(2))
+        if name:
+            asset_by_ticker[m.group(3)] = name
+    flat = " ".join(raw.split())
+
     transactions = []
-    # 取引要素を探す（<Transaction> または <NewHoldingData>）
-    for tx_elem in root.iter():
-        tag = tx_elem.tag.lower()
-        if tag not in ("transaction", "newholdingdata", "ptr"):
-            continue
-
-        asset = _find_text(tx_elem, ["AssetName", "Asset", "Description"])
-        tx_type = _find_text(tx_elem, ["TransactionType", "Type", "TxType"])
-        amount  = _find_text(tx_elem, ["Amount", "AmountRange", "TxAmount"])
-        tx_date = _find_text(tx_elem, [
-            "TransactionDate", "Date", "TxDate", "ReportDate"
-        ])
-        ticker  = _find_text(tx_elem, ["Ticker", "Symbol", "TickerSymbol"])
-        sector  = _find_text(tx_elem, ["Sector", "Industry", "AssetType"])
-        comment = _find_text(tx_elem, ["Comment", "Notes", "Description"])
-
-        if not asset:
-            continue
-
+    for g in _PTR_TX_RE.finditer(flat):
+        ticker, sec_type, tx_type, _partial, tx_date, _notify, amount = g.groups()
         transactions.append({
-            "asset":            (asset or "").strip(),
-            "ticker":           (ticker or "").strip(),
-            "transaction_type": (tx_type or "").strip().lower(),
-            "amount":           (amount or "").strip(),
-            "transaction_date": (tx_date or "").strip(),
-            "sector":           (sector or "").strip(),
-            "comment":          (comment or "").strip(),
+            "asset":            asset_by_ticker.get(ticker, ticker),
+            "ticker":           ticker,
+            # score_transaction() は "p" / "s" の完全一致で売買を判定する
+            "transaction_type": tx_type.lower(),
+            "amount":           " ".join(amount.split()),
+            "transaction_date": tx_date,
+            "sector":           sec_type,
+            "comment":          "",
             "file_id":          file_id,
             "year":             year,
         })
-
     return transactions
 
 
@@ -850,42 +852,13 @@ def run_politician_monitor(cfg) -> dict:
     history["transactions"] = existing_txs + truly_new
     _save_politician_history(cfg, history)
 
-    # ── 6.5. 上院データ取得・スコアリング（Wave 3 - Policy Ph2） ─
-    senate_txs:   list[dict] = []
+    # ── 6.5. 上院データ取得は 2026-09-11 に撤去 ──────────────
+    # efts.senate.gov がDNS不在で、実装以来一度もレコードを返して
+    # いなかった（毎回「上院PTRデータなし」を出すだけだった）。
+    # なお当時の実装は history 保存（上の行）より後で truly_new を
+    # 伸ばしており、仮に取得できても保存されない配線でもあった。
+    senate_txs: list[dict] = []
     senate_errors = 0
-    try:
-        enable_senate = bool(getattr(cfg, "ENABLE_SENATE_MONITOR", True))
-        if enable_senate:
-            senate_days = int(getattr(cfg, "POLITICIAN_SENATE_WINDOW_DAYS", 30))
-            print(f"    🏛️  上院PTR取得中（直近{senate_days}日）...")
-            senate_records = _fetch_senate_ptr_records(senate_days, cfg)
-
-            if senate_records:
-                print(f"    上院レコード: {len(senate_records)}件取得")
-                # 既存 history にない取引のみ処理
-                existing_senate_ids = {
-                    t.get("file_id") for t in existing_txs
-                    if t.get("chamber") == "senate"
-                }
-                new_senate = [
-                    r for r in senate_records
-                    if r.get("file_id") not in existing_senate_ids
-                ]
-                for rec in new_senate[:100]:
-                    try:
-                        scored = _score_senate_transaction(rec, cfg)
-                        senate_txs.append(scored)
-                    except Exception:
-                        senate_errors += 1
-
-                if senate_txs:
-                    print(f"    🏛️  上院新規取引: {len(senate_txs)}件スコアリング完了")
-                    # メイン取引リストに統合
-                    truly_new.extend(senate_txs)
-            else:
-                print(f"    ⚠️  上院PTRデータなし（eFD API未対応 or 取得失敗）")
-    except Exception as e:
-        print(f"    ⚠️  上院データ統合エラー（スキップ）: {str(e)[:60]}")
 
     # ── 7. 高スコア取引を抽出 ──────────────────────────────────
     min_score = int(getattr(cfg, "ALERT_POLITICIAN_MIN_SCORE", 60))

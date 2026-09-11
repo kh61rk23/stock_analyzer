@@ -28,9 +28,10 @@
 #   composite\_score に score_adj を直接加算（jp_us_sector_bridge.py 経由）
 #
 # 【上院データソース】
-#   Senate eFD (Electronic Financial Disclosure) の Public API を使用。
-#   URL: https://efts.senate.gov/LATEST/search-index?...（設定可能）
-#   フォールバック: politician_history.json の既存 Senate データを再スコア
+#   2026-09-11 以降、上院データの新規取得は行わない
+#   （efts.senate.gov が DNS不在。実在する efdsearch.senate.gov は
+#     利用規約同意のセッションCookieを要求するため同じ作りでは取得不可）。
+#   politician_history.json に残る既存 Senate データの再スコアのみ行う。
 #
 # 【依存】
 #   politician_monitor.py（スコアリング関数を拡張して再利用）
@@ -41,12 +42,11 @@
 from __future__ import annotations
 
 import json
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
-from urllib.request import Request, urlopen
-from urllib.error import URLError
+# 2026-09-11: urllib / time は上院 eFD への通信でのみ使っていた。
+# その経路を撤去したため import も落とす。
 
 from config_sync import sync_module_constants
 
@@ -54,17 +54,12 @@ from config_sync import sync_module_constants
 # BLOCK 0: 定数
 # ==============================================================
 
-# 上院 eFD 公開 URL（設定で上書き可能）
-_SENATE_EFD_URL = (
-    "https://efts.senate.gov/LATEST/search-index"
-    "?q=%22Periodic+Transaction+Report%22"
-    "&dateRange=custom&startdt={start}&enddt={end}"
-)
-
-_SENATE_PTR_INDEX = (
-    "https://www.congress.gov/api/v3/member"
-    "?format=json&api_key={api_key}&limit=20"
-)
+# 2026-09-11: 上院 eFD への通信を撤去した。
+# efts.senate.gov は DNS 解決できないホストで、実装以来一度も
+# レコードを返していない。以後は politician_history.json に残る
+# 既存の上院データを再スコアする経路（get_senate_transactions）だけを使う。
+# _SENATE_PTR_INDEX（congress.gov member API）はどこからも参照されて
+# いなかったため同時に撤去。
 
 # 上院委員会 → committee_multiplier（最大 1.8）
 _SENATE_COMMITTEE_MULTIPLIER: dict[str, float] = {
@@ -410,68 +405,6 @@ def score_transaction_ph2(
 # BLOCK 4: 上院データ取得
 # ==============================================================
 
-def _fetch_senate_ptr(
-    start_date: str,
-    end_date:   str,
-    cfg=None,
-) -> list[dict]:
-    """
-    上院 eFD (Electronic Financial Disclosure) から
-    Periodic Transaction Reports を取得する。
-
-    【注意】
-    Senate eFD の公開 XML/JSON API が利用可能な場合はそのエンドポイントを使用。
-    API が非公開・変更された場合は politician_history.json の
-    既存 Senate エントリをリスコアリングするフォールバックを使用する。
-
-    Args:
-        start_date: "YYYY-MM-DD" 形式
-        end_date:   "YYYY-MM-DD" 形式
-        cfg:        config モジュール（None 可）
-
-    Returns:
-        [{"politician": str, "chamber": "senate",
-          "transaction_date": str, "asset": str, ...}, ...]
-    """
-    try:
-        # 設定から Senate PTR URL を取得
-        senate_url_tmpl = str(
-            getattr(cfg, "SENATE_PTR_URL", _SENATE_EFD_URL)
-        )
-        url = senate_url_tmpl.format(start=start_date, end=end_date)
-
-        req = Request(url, headers={
-            "User-Agent": "stock_analyzer research@example.com",
-            "Accept": "application/json, */*",
-        })
-        with urlopen(req, timeout=15) as resp:
-            raw = resp.read().decode("utf-8")
-
-        data = json.loads(raw)
-        hits = data.get("hits", {}).get("hits", [])
-
-        result = []
-        for hit in hits:
-            src = hit.get("_source", {})
-            result.append({
-                "politician":        src.get("senator_name", src.get("name", "")),
-                "chamber":           "senate",
-                "transaction_date":  src.get("transaction_date", ""),
-                "asset":             src.get("asset_name", ""),
-                "gics_sector":       src.get("sector", ""),
-                "type":              src.get("type", "P"),
-                "amount":            src.get("amount", "1"),
-                "file_id":           src.get("id", ""),
-            })
-        return result
-
-    except (URLError, json.JSONDecodeError):
-        # API 不可 → フォールバック（後述）
-        return []
-    except Exception:
-        return []
-
-
 def get_senate_transactions(
     days:   int   = 30,
     cfg=None,
@@ -484,17 +417,12 @@ def get_senate_transactions(
         list[dict]: 上院取引リスト（空の場合あり）
     """
     try:
-        end_dt   = datetime.now()
-        start_dt = end_dt - timedelta(days=days)
+        start_dt = datetime.now() - timedelta(days=days)
         start    = start_dt.strftime("%Y-%m-%d")
-        end      = end_dt.strftime("%Y-%m-%d")
 
-        # ── ① eFD API から取得 ───────────────────────────────
-        senate_txs = _fetch_senate_ptr(start, end, cfg)
-        if senate_txs:
-            return senate_txs
-
-        # ── ② フォールバック: politician_history.json の Senate データ ──
+        # ── politician_history.json の Senate データを再スコア ──
+        # 2026-09-11: 旧①「eFD API から取得」は efts.senate.gov が
+        # DNS不在で常に空を返していたため撤去。既存履歴のみを扱う。
         try:
             cache_dir = Path(getattr(cfg, "CACHE_DIR", "/tmp"))
             p = cache_dir / "politician_history.json"

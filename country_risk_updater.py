@@ -27,7 +27,7 @@
 #        4: 退避してください（レベル4）
 #
 #   ③ 米国国務省 旅行警告 RSS
-#      URL: https://travel.state.gov/content/travel/en/traveladvisories/RSS.xml
+#      URL: https://travel.state.gov/_res/rss/TAsTWs.xml（2026-09-11 移設対応）
 #      用途: 渡航警告レベル（1〜4）の自動抽出
 #      レベル定義:
 #        1: Exercise Normal Precautions
@@ -77,9 +77,16 @@ from urllib.error import URLError, HTTPError
 MOFA_RSS_URL = "https://www.anzen.mofa.go.jp/rss/anzen_outer.xml"
 
 # 米国国務省RSSのURL
-STATE_DEPT_RSS_URL = (
-    "https://travel.state.gov/content/travel/en/traveladvisories/RSS.xml"
-)
+# 2026-09-11: 旧URL（/content/travel/en/traveladvisories/RSS.xml）は
+# 404ページへ転送された上で403を返すようになっており、2026-07-14 以降の
+# 全実行で「国務省RSS: 取得失敗」となっていた。
+# 当時は「travel.state.gov が GitHub Actions IP を恒常的に拒否」と
+# 診断されていたが、自宅IPからの疎通テストでも同じ結果になったため
+# IPブロックではなく**フィードの移設**だった。
+# 現行の配信先は /_res/rss/TAsTWs.xml（Travel Advisories & Travel Warnings）。
+# 216件・全てタイトルに "Level 1〜4" を含み、_parse_state_dept_rss() が
+# 無改造で36カ国を抽出できることを実測で確認済み。
+STATE_DEPT_RSS_URL = "https://travel.state.gov/_res/rss/TAsTWs.xml"
 
 # GDELT Doc API（国名検索・Themes=UNREST）
 # クエリ設計: 国名 AND (UNREST OR MILITARY OR CONFLICT) の件数×Goldsteinスコア
