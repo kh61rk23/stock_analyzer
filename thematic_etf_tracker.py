@@ -40,6 +40,7 @@
 # 【呼出】from thematic_etf_tracker import run_thematic_etf_tracker
 # ==============================================================
 
+import json
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -391,6 +392,71 @@ def _calc_paper_weight(paper: dict, ss_data: dict) -> float:
     return round(weight, 3)
 
 
+# ArXiv論文の持ち越しキャッシュ
+# 2026-09-12: etf_tracker は **日次**、arxiv_monitor は **週次** なのに、
+# 論文データを results["arxiv"]（その実行のメモリ上）からしか受け取って
+# いなかった。そのため月曜以外は arxiv_result が None になり、
+# 全8テーマが中立の 50 に落ちていた（実測 2026-09-07 月曜は
+# 100/50/100/50/50/100/100 と動き、他の曜日は一律50）。
+# 論文は「直近4週 vs その前4週」で比較する性質上、直近の週次取得分を
+# 持ち越して使うのが正しい。取得できた日に保存し、無い日は読み出す。
+_ARXIV_CACHE_FILE = "arxiv_papers_cache.json"
+# 何日前までの取得分を使うか。arxiv は週次なので1回飛んでも耐える2週間。
+# これより古いと「直近4週」バケットが空になり比較が壊れる。
+_ARXIV_CACHE_MAX_AGE_DAYS = 14
+
+
+def _arxiv_cache_path(cfg) -> Path:
+    base = Path(getattr(cfg, "CACHE_DIR", "stock_data/cache")) if cfg \
+        else Path("stock_data/cache")
+    return base / _ARXIV_CACHE_FILE
+
+
+def _extract_papers(arxiv_result) -> list:
+    """arxiv_result から論文リストを取り出す（キー名の揺れを吸収）。"""
+    if not isinstance(arxiv_result, dict):
+        return []
+    for key in ("papers", "new_papers_list", "all_papers"):
+        v = arxiv_result.get(key)
+        if isinstance(v, list) and v:
+            return v
+    return []
+
+
+def _save_arxiv_papers(cfg, papers: list) -> None:
+    """週次で取れた論文を持ち越し用に保存する。"""
+    if not papers:
+        return
+    try:
+        p = _arxiv_cache_path(cfg)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({
+            "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "papers": papers,
+        }, ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        print(f"    ⚠️  ArXiv論文キャッシュ保存失敗: {str(e)[:60]}")
+
+
+def _load_arxiv_papers(cfg) -> list:
+    """持ち越したArXiv論文を読む。古すぎる場合は使わない。"""
+    try:
+        p = _arxiv_cache_path(cfg)
+        if not p.exists():
+            return []
+        data = json.loads(p.read_text(encoding="utf-8"))
+        saved = datetime.strptime(str(data.get("saved_at", ""))[:19],
+                                  "%Y-%m-%d %H:%M:%S")
+        age = (datetime.now() - saved).days
+        if age > _ARXIV_CACHE_MAX_AGE_DAYS:
+            print(f"    ⚠️  ArXiv論文キャッシュが{age}日前 → 使用しない")
+            return []
+        papers = data.get("papers")
+        return papers if isinstance(papers, list) else []
+    except Exception:
+        return []
+
+
 def _calc_arxiv_trend_score(theme: dict, arxiv_result: Optional[dict],
                              enable_semantic_scholar: bool = False) -> tuple:
     """
@@ -405,12 +471,7 @@ def _calc_arxiv_trend_score(theme: dict, arxiv_result: Optional[dict],
     if not arxiv_result or not isinstance(arxiv_result, dict):
         return 50.0, empty_detail
 
-    papers = []
-    for key in ("papers", "new_papers_list", "all_papers"):
-        v = arxiv_result.get(key)
-        if isinstance(v, list):
-            papers = v
-            break
+    papers = _extract_papers(arxiv_result)
 
     if not papers:
         return 50.0, empty_detail
@@ -603,7 +664,8 @@ def run_thematic_etf_tracker(cfg, arxiv_result: Optional[dict] = None) -> dict:
     Args:
         cfg          : config モジュール
         arxiv_result : results["arxiv"] の dict（週次取得済み）
-                       None の場合は ArXivスコアを 50（中立）で代替
+                       本モジュールは日次、arxiv_monitor は週次のため、
+                       渡されなかった日は前回取得分（キャッシュ）を使う。
 
     Returns:
         {
@@ -618,6 +680,24 @@ def run_thematic_etf_tracker(cfg, arxiv_result: Optional[dict] = None) -> dict:
 
     top_n   = getattr(cfg, "ETF_TOP_N", 3)
     themes  = getattr(cfg, "ETF_THEME_IDS", None)   # None = 全テーマ実行
+
+    # 2026-09-12: 本モジュールは日次、arxiv_monitor は週次。
+    # 週次で取れた日は保存し、取れなかった日は前回分を読み出す。
+    # これが無いと月曜以外は全テーマが ArXiv=50（中立）に固定され、
+    # 熱量スコアの4割が死んだ状態になっていた。
+    _fresh = _extract_papers(arxiv_result)
+    if _fresh:
+        _save_arxiv_papers(cfg, _fresh)
+        print(f"    📚 ArXiv論文: 今回取得 {len(_fresh)}件")
+    else:
+        _carried = _load_arxiv_papers(cfg)
+        if _carried:
+            arxiv_result = {"papers": _carried}
+            print(f"    📚 ArXiv論文: 前回取得分を使用 {len(_carried)}件"
+                  f"（arxiv_monitor は週次のため）")
+        else:
+            print("    ⚠️  ArXiv論文が無いため全テーマ中立（50）で算出"
+                  "（週次 arxiv_monitor の実行後に解消）")
 
     target_themes = THEME_DEFINITIONS
     if themes:

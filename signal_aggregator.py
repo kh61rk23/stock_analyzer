@@ -175,9 +175,51 @@ def _extract_technical_score(results: dict, code: str) -> Optional[float]:
     return round(sum(scores)/len(scores), 1) if scores else None
 
 
+# 週次モジュールの成果を日次から読むための共通フォールバック
+# 2026-09-12: signal_aggregator は日次だが、23カテゴリのうち複数は
+# **週次モジュール**の産出に依存している。results からしか読んでいない
+# 抽出器は、月曜以外は必ず None を返し、その分だけ weight_used が減って
+# スコアの土台が痩せていた（cluster_phase だけは以前からキャッシュを
+# 読んでおり、扱いが不統一だった）。
+# 各モジュールはキャッシュを永続化しているので、それを読みにいく。
+_WEEKLY_CACHE_MAX_AGE_DAYS = 14   # 週次が1回飛んでも耐える。それ以上は使わない
+
+
+def _load_weekly_cache(results: dict, filename: str) -> dict:
+    """DATA_DIR/CACHE_DIR から週次キャッシュを読む。古すぎる場合は空。"""
+    from pathlib import Path
+    cfg = results.get("_cfg")
+    bases = [getattr(cfg, "DATA_DIR", "stock_data/data"),
+             getattr(cfg, "CACHE_DIR", "stock_data/cache")]
+    for base in bases:
+        try:
+            path = Path(base) / filename
+            if not path.exists():
+                continue
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                continue
+            stamp = str(data.get("timestamp") or data.get("cached_at")
+                        or data.get("_cached_at") or "")[:19]
+            if stamp:
+                try:
+                    saved = datetime.fromisoformat(stamp)
+                    if (datetime.now() - saved).days > _WEEKLY_CACHE_MAX_AGE_DAYS:
+                        continue
+                except ValueError:
+                    pass
+            return data
+        except Exception:
+            continue
+    return {}
+
+
 def _extract_breadth_score(results: dict, code: str) -> Optional[float]:
     """D: market_breadth の JP スコアを業種共通で使う（+/- 補正あり）。"""
-    mb = results.get("market_breadth", {})
+    # market_breadth は週次モジュール。日次実行では results に載らないので
+    # 前回のキャッシュへ落とす（従来はここで必ず None を返していた）。
+    mb = results.get("market_breadth") or _load_weekly_cache(
+        results, "market_breadth_cache.json")
     if not mb:
         return None
     base  = mb.get("breadth_score_jp", 50.0)
@@ -205,7 +247,9 @@ def _extract_options_score(results: dict, code: str) -> Optional[float]:
 
 def _extract_anomaly_score(results: dict, code: str) -> Optional[float]:
     """F: anomaly_season の現在月スコアを返す（中立50 + 補正）。"""
-    as_r = results.get("anomaly_season", {})
+    # anomaly_season も週次。同上でキャッシュへ落とす。
+    as_r = results.get("anomaly_season") or _load_weekly_cache(
+        results, "anomaly_season_cache.json")
     if not as_r:
         return None
     adj = as_r.get("adjustments", {}).get(code, 0)
