@@ -399,3 +399,62 @@ class TestFailureBackoff:
             ["E1", "E2", "E3"], [], [], ["E4", "E5"], meta,
             budget=30, today=today)
         assert got == ["E4", "E5"], "失敗中のP1が枠を占有し続けている"
+
+
+# ── データ無しを障害として数えない（2026-09-12）────────────────
+#
+# EdinetDB側にそもそも当該企業のデータが無い（404）のはこちらの障害では
+# ないのに failure に混ぜていたため、実問題が0でも台帳が alert になり
+# （2026-09-12 実測: failure 2 = missing 2 / bq_merge 0）、
+# 本当に直すべき失敗が埋もれていた。
+
+class TestMissingIsNotAFailure:
+    def _run(self, tmp_path, monkeypatch, *, error):
+        import edinetdb_ingestor as module
+
+        class FakeRest:
+            def __init__(self, *a, **k):
+                self.calls = 0
+                self.last_error = None
+
+            def usage(self):
+                return {"daily_remaining": 20, "monthly_remaining": 200}
+
+            def get(self, path, params=None):
+                self.calls += 1
+                if path == "/companies":
+                    return [{"edinet_code": "E1", "sec_code": "10000", "name": "T"}]
+                self.last_error = error
+                return None
+
+        class FakeBQ:
+            def merge_rows(self, *a, **k):
+                return True
+
+        monkeypatch.setattr(module, "DBRestClient", FakeRest)
+        monkeypatch.setattr("edinet_bq_client.EDINETBQClient", FakeBQ)
+        cfg = SimpleNamespace(
+            ENABLE_EDINETDB_INGEST=True, EDINETDB_API_KEY="key",
+            EDINETDB_DAILY_BUDGET=20, EDINETDB_REFRESH_DAYS=180,
+            EDINETDB_TEXTBLOCK_EVERY_N=1, EDINETDB_ROTATION_META="rotation.json",
+            DATA_DIR=tmp_path, SECTOR_REPRESENTATIVE_TICKERS={"a": ["1000.T"]},
+        )
+        return module.run_edinetdb_ingest(cfg, target_limit=1)
+
+    def test_not_found_counts_as_missing_not_failure(self, tmp_path, monkeypatch):
+        r = self._run(tmp_path, monkeypatch, error="not_found")
+        assert r["missing"] == 1
+        assert r["failure"] == 0, "データ無しを障害に数えている"
+        assert r["reasons"]["missing"] == 1
+
+    def test_real_error_still_counts_as_failure(self, tmp_path, monkeypatch):
+        r = self._run(tmp_path, monkeypatch, error="server_error")
+        assert r["failure"] == 1
+        assert r["missing"] == 0
+
+    def test_ledger_status_is_success_when_only_missing(self, tmp_path, monkeypatch):
+        """台帳の判定式（stock_analyzer_main と同じ形）で success になること"""
+        r = self._run(tmp_path, monkeypatch, error="not_found")
+        status = ("skipped" if r.get("skipped")
+                  else ("success" if not r.get("failure") else "alert"))
+        assert status == "success"

@@ -1411,6 +1411,10 @@ def run_all_tasks(mode: str = "all") -> dict:
                 results["edinetdb_ingest"] = _edi.run_edinetdb_ingest(cfg)
                 source_ingest_done["edinet"] = True
                 value = results["edinetdb_ingest"]
+                # 2026-09-12: value["failure"] には「EdinetDBにデータ無し」
+                # （404）が混ざっており、こちらの障害が0でも alert が鳴って
+                # いた。missing を分離したので、実問題だけで判定する。
+                # データ無しのみの場合は success（件数は note に残る）。
                 logger.add(
                     "edinetdb_ingest",
                     "skipped" if value.get("skipped") else (

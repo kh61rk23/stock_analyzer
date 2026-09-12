@@ -627,7 +627,7 @@ def run_edinetdb_ingest(
     targets = _plan_targets(companies, cfg, meta, company_budget)
     if target_limit is not None:
         targets = targets[:max(0, int(target_limit))]
-    success = failure = 0
+    success = failure = missing = 0
     # 2026-09-10: failure は4つの別原因（financials欠落 / segments欠落 /
     # text-blocks欠落 / BQ MERGE例外）を1つの数字に潰しており、
     # 台帳に「failure: 8」と出るだけで何が起きているか分からなかった。
@@ -652,13 +652,23 @@ def run_edinetdb_ingest(
         meta[code] = info
 
     def _record_failure(code: str, company_code: str, kind: str) -> None:
-        nonlocal failure
+        """失敗を記録する。
+
+        2026-09-12: EdinetDB側にそもそも当該企業のデータが無い（404）のは
+        こちらの障害ではなく正常な結果なので `failure` に数えない。
+        従来は混ぜていたため、実問題が0でも台帳が alert になり
+        （2026-09-12 実測: failure 2 = missing 2 / bq_merge 0）、
+        本当に直すべき失敗が埋もれていた。
+        `missing` は reasons と戻り値で別建てにする。
+        """
+        nonlocal failure, missing
         is_missing = getattr(client, "last_error", None) == "not_found"
         if is_missing:
             reasons["missing"] += 1
+            missing += 1
         else:
             reasons[kind] += 1
-        failure += 1
+            failure += 1
         _note_attempt(code, company_code, missing=is_missing)
 
     for code in targets:
@@ -743,8 +753,8 @@ def run_edinetdb_ingest(
             failure += 1
             _note_attempt(code, company_code, missing=False)
     _save_json(meta_path, meta)
-    if failure:
-        print(f"    ℹ️  [edinetdb] 失敗{failure}件の内訳: "
+    if failure or missing:
+        print(f"    ℹ️  [edinetdb] 失敗{failure}件 / データ無し{missing}件の内訳: "
               f"EdinetDBにデータ無し={reasons['missing']} / "
               f"financials欠落={reasons['financials']} / "
               f"segments欠落={reasons['segments']} / "
@@ -752,6 +762,8 @@ def run_edinetdb_ingest(
               f"BQ MERGE={reasons['bq_merge']}")
     return {
         "skipped": False, "success": success, "failure": failure,
+        # EdinetDBにデータが無いだけのものは障害ではないので別建てにする
+        "missing": missing,
         "reasons": reasons,
         "targets": targets, "budget": daily_budget, "api_calls": client.calls,
     }
