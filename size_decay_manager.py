@@ -474,6 +474,15 @@ def run_size_decay_manager(cfg=None, force_refresh: bool = False) -> dict:
                 "cached": True,
             }
 
+    # 2026-09-12: このマスタは size_tier_classifier（週次）が生成するが、
+    # 同モジュールは results["screener"] / ["us_screener"] を入力とするため
+    # **本モジュールより後**に実行される（順序は変更できない）。
+    # したがって参照するのは常に「前回の週次実行が残したファイル」であり、
+    # 永続化されていることが前提になる。
+    # 2026-09-11 まで workflow の git add が DATA_DIR 側の誤ったパスを
+    # 指しており一度も永続化されていなかったため、毎回ここが空になり
+    # 「マスタデータなし → スキップ」が出続けていた（同じ理由で
+    # independence_score も「評価対象: 0 銘柄」だった）。
     master = _load_json("size_tier_master.json", cfg) or {"jp": {}, "us": {}}
     entries = []
     for m in ("jp", "us"):
@@ -483,7 +492,9 @@ def run_size_decay_manager(cfg=None, force_refresh: bool = False) -> dict:
             entries.append(d)
 
     if not entries:
-        print("    ⚠️  マスタデータなし → スキップ")
+        # 「無い」のか「前回の週次がまだ回っていない」のかを区別できる形で出す
+        print("    ⏩ 規模マスタ未取得 → スキップ"
+              "（size_tier_classifier の週次実行後に生成／要永続化）")
         return {"decay_state": {}, "nano_queue": {}, "stats": {}, "cached": False}
 
     decay_lambdas = getattr(cfg, "SIZE_DECAY_LAMBDAS", _DEFAULT_DECAY_LAMBDAS)

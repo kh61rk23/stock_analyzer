@@ -1254,7 +1254,12 @@ GOV_VEGPRICE_API = "https://api.cultivationdata.net/yasai_kakaku?div=all&type=cs
 #   GitHub Actions は Secrets→run_headless.py の ENV_MAP 経由で注入（従来から登録済み）。
 #   Colab / ローカル手動実行時は os.environ に設定してから起動すること。
 #   旧キーはコードに露出していたため失効・再発行を推奨。
-EDINET_API_KEY: str = os.getenv("EDINET_API_KEY", "")      # 金融庁 EDINET
+# 2026-09-12: 金融庁 EDINET API（EDINET_API_KEY）を撤去した。
+#   直取得の経路は ENABLE_EDINET_ROTATION / ENABLE_EDINET_DIRECT_FETCH /
+#   ENABLE_EXECUTIVE_TRANSITION がいずれも False で既に停止しており、
+#   有報の構造化データは EdinetDB（下の EDINETDB_API_KEY）で賄えている。
+#   キーが未設定のまま api_key_health に「⬜ 未設定」として毎回出続けて
+#   いたため、欄ごと削除して一本化する。
 EDINETDB_API_KEY: str = os.getenv("EDINETDB_API_KEY", "")  # 民間 EdinetDB
 FUDOSAN_API_KEY: str = os.getenv("FUDOSAN_API_KEY", "")
 ESTAT_API_KEY: str = os.getenv("ESTAT_API_KEY", "")
@@ -5376,6 +5381,7 @@ B5_US_SECTOR_BRIDGE_ENHANCED_REQUEST_DELAY = 0.12  # REQUEST_DELAY
 B5_US_SECTOR_BRIDGE_ENHANCED_REQUEST_TIMEOUT = 10  # REQUEST_TIMEOUT
 B5_API_KEY_HEALTH_STATE_LIMITED = 'limited'  # STATE_LIMITED
 B5_API_KEY_HEALTH_PROBE_TIMEOUT = 5  # PROBE_TIMEOUT
+B5_API_KEY_HEALTH_PROBE_TIMEOUT_SLOW = 15  # PROBE_TIMEOUT_SLOW
 B5_POSITION_SIZER_FETCH_DELAY = 0.3  # FETCH_DELAY
 B5_STOCK_DETAIL_REPORT_FETCH_DELAY = 0.25  # FETCH_DELAY
 B5_COUNTRY_RISK_UPDATER_FETCH_TIMEOUT = 20  # _FETCH_TIMEOUT

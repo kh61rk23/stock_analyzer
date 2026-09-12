@@ -3,7 +3,7 @@
 Government EDINET XBRL/HTML downloads were retired by D-①-1.  The ingestor
 writes normalised analysis to ``edinet.text_analysis`` every configured run;
 this consumer never contacts the government endpoint and therefore keeps
-``EDINET_API_KEY`` dormant.
+``EDINET_API_KEY`` removed (2026-09-12, EdinetDB only).
 """
 from __future__ import annotations
 

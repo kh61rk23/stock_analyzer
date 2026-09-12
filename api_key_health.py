@@ -32,6 +32,7 @@ from config_sync import sync_module_constants
 _CFG_CONST_MAP = {
     'B5_API_KEY_HEALTH_STATE_LIMITED': 'STATE_LIMITED',
     'B5_API_KEY_HEALTH_PROBE_TIMEOUT': 'PROBE_TIMEOUT',
+    'B5_API_KEY_HEALTH_PROBE_TIMEOUT_SLOW': 'PROBE_TIMEOUT_SLOW',
 }
 
 STATE_LIMITED = "limited"  # ⚠️ レート制限・quota・判定不能
@@ -50,6 +51,17 @@ _SUMMARY_ORDER = [STATE_ALIVE, STATE_DEAD, STATE_LIMITED, STATE_SKIPPED, STATE_U
 
 # プローブ全体のタイムアウト（秒/コール）
 PROBE_TIMEOUT = 5
+
+# 遅い相手向けのタイムアウト（秒/コール）
+# 2026-09-12: e-Stat のプローブが 2026-07 以降ずっと
+# 「⚠️ 判定不能（通信エラー・タイムアウト）」を出し続けていた。
+# しかし同じ実行で本体の gov_pipeline は「政府統計取得完了: 14/8」で
+# 成功しており、キーは生きている＝プローブ側の偽陽性だった。
+# 原因は getStatsList（統計カタログの一覧）が limit=1 でも重く、
+# 米国のランナーから日本の政府APIを叩くと 5 秒に収まらないこと
+# （手元の日本からの実測では 0.2〜0.5 秒で返る）。
+# 常時⚠️は本物の異常を埋もれさせるため、相手に合わせた値にする。
+PROBE_TIMEOUT_SLOW = 15
 
 
 # ==============================================================
@@ -143,7 +155,7 @@ def prev_business_day(today: Optional[_dt.date] = None) -> _dt.date:
 def build_summary(entries: dict) -> str:
     """
     判定結果 dict（{key_name: {"state": ...}}）から grep しやすいサマリ1行を生成する。
-    例: 「🔑 [key_health] ✅6 ❌2 ⚠️1 ⏭️2 | ❌: EDINET_API_KEY, DEEPL_API_KEY」
+    例: 「🔑 [key_health] ✅6 ❌2 ⚠️1 ⏭️2 | ❌: EDINETDB_API_KEY, DEEPL_API_KEY」
     """
     counts = {s: 0 for s in _SUMMARY_ORDER}
     dead_keys = []
@@ -170,7 +182,7 @@ def build_summary(entries: dict) -> str:
 def format_detail(name: str, state: str, message: str = "") -> str:
     """
     詳細行を生成する。例:
-      「🔑 EDINET_API_KEY: ❌ HTTP 401（失効の疑い・再発行が必要）」
+      「🔑 EDINETDB_API_KEY: ❌ HTTP 401（失効の疑い・再発行が必要）」
     message にはキー値・その一部を含めないこと（呼び出し側の責務）。
     """
     icon = ICON.get(state, ICON[STATE_LIMITED])
@@ -203,11 +215,6 @@ def _requests():
 def _entry(state: str, message: str) -> dict:
     return {"state": state, "icon": ICON.get(state, ICON[STATE_LIMITED]),
             "message": message}
-
-
-def _probe_edinet(key: str) -> dict:
-    """D-⑧: secret is retained dormant; do not call the retired government API."""
-    return _entry(STATE_UNSET, "dormant（EdinetDB 一本化のため照会しない）")
 
 
 def _probe_edinetdb(key: str) -> dict:
@@ -265,7 +272,7 @@ def _probe_estat(key: str) -> dict:
         resp = req.get(
             "https://api.e-stat.go.jp/rest/3.0/app/json/getStatsList",
             params={"appId": key, "limit": 1},
-            timeout=PROBE_TIMEOUT,
+            timeout=PROBE_TIMEOUT_SLOW,
         )
         status_field = None
         has_auth_error = False
@@ -456,7 +463,6 @@ def run_key_health(cfg) -> dict:
 
     g = lambda k: getattr(cfg, k, "") or ""
 
-    _run("EDINET_API_KEY",       _probe_edinet,   g("EDINET_API_KEY"))
     # 2026-07-28: 既定値が他モジュールと食い違っていた。
     #   edinetdb_ingestor.py:408  → getattr(..., True)
     #   stock_analyzer_main.py:1407 → getattr(..., True)

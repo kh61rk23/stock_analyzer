@@ -35,7 +35,7 @@
 #              EXECUTIVE_TRANSITION_THRESHOLD /
 #              EXECUTIVE_CACHE_TTL_DAYS /
 #              EXECUTIVE_CACHE_PATH /
-#              EDINET_API_KEY / EDINET_LOOKBACK_DAYS)
+#              EDINET_LOOKBACK_DAYS)※政府EDINET APIは2026-09-12に撤去
 #   requests / re（標準ライブラリ）
 #
 # 【呼び出し方（stock_analyzer_main.py から）】
@@ -574,12 +574,21 @@ def run_executive_transition_tracker(cfg, results: dict) -> dict:
         )
         return {**cache, "cached": True}
 
-    api_key        = getattr(cfg, "EDINET_API_KEY", "")
     skill_keywords = getattr(cfg, "EXECUTIVE_SKILL_KEYWORDS", {})
     threshold      = int(getattr(cfg, "EXECUTIVE_TRANSITION_THRESHOLD", 2))
 
+    # 2026-09-12: 政府EDINET APIキーを撤去したため、本モジュールの
+    # 取得経路（/documents.json を日付ごとに最大400回叩いてHTMLの
+    # 役員略歴を解析する実装）はもう動かせない。ENABLE_EXECUTIVE_
+    # TRANSITION は既に False で、BQ us.executive_transitions は
+    # 作成（2026-07-04）以来0行＝一度も稼働していない。
+    # 復活させる場合は EdinetDB の役員一覧（officerName / officialTitle /
+    # sharesHeld 等の構造化データ）へ作り直すこと。HTML解析より確実で
+    # API呼び出しも1社1回で済む。
+    api_key = ""
     if not api_key:
-        print("    ⚠️  [exec_transition] EDINET_API_KEY 未設定 → スキップ")
+        print("    ⏩ [exec_transition] 政府EDINET API撤去のため停止"
+              "（復活にはEdinetDB役員APIへの移行が必要）")
         return {
             "skipped":        True,
             "sector_boosts":  {},

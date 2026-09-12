@@ -71,9 +71,12 @@ def download_xbrl_zip(doc_id: str) -> Optional[bytes]:
     # 無認証でリクエストしており、キーがあっても 401 で全滅する構造だった。
     # 認証方式は既存流儀（edinet_client.py / api_key_health.py と同じ
     # Ocp-Apim-Subscription-Key ヘッダ）に統一。
-    api_key = os.getenv("EDINET_API_KEY", "")
+    # 2026-09-12: 政府EDINET APIキーは撤去済み（EdinetDBへ一本化）。
+    # 本モジュールは ENABLE_EDINET_DIRECT_FETCH=False で退役済みだが、
+    # 誤って有効化された場合に無言で動き出さないよう空を返す。
+    api_key = ""
     if not api_key:
-        print(f"[fetcher] {doc_id}: EDINET_API_KEY 未設定のためスキップ（再発行後に自動復旧）")
+        print(f"[fetcher] {doc_id}: 政府EDINET APIは撤去済みのためスキップ")
         return None
     headers = {"Ocp-Apim-Subscription-Key": api_key}
 

@@ -43,16 +43,11 @@ GCSE_ENDPOINT = "https://www.googleapis.com/customsearch/v1"
 # queries: 追加で発行するキーワード（業種テーマ別）
 # dateRestrict: d1=過去1日, d2=過去2日
 PAID_MEDIA_SOURCES = [
-    {
-        "id":          "bloomberg",
-        "name":        "Bloomberg",
-        "site":        "bloomberg.com",
-        "priority":    "S",
-        "lang":        "en",
-        "num":         10,
-        "dateRestrict": "d2",
-        "queries":     ["markets", "economy", "Japan stocks"],
-    },
+    # 2026-09-12: Bloomberg を対象から削除した。
+    # CSE 経由で bloomberg.com の記事が取れたことが一度もなく
+    # （2026-07-14 以降の全実行で「CSE HTTP 403: bloomberg.com」）、
+    # 先頭に置いていたため _CSE_DEAD_LIMIT(3) の消費だけを担っていた。
+    # 復活させる場合は、まず CSE キーの403を解消してから戻すこと。
     {
         "id":          "nikkei_jp",
         "name":        "日経新聞（日本語版）",

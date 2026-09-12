@@ -842,9 +842,7 @@ if __name__ == "__main__":
 
     print("=== EdinetClient v3.0 単体テスト ===")
     db_key  = getattr(cfg, "EDINETDB_API_KEY", "")
-    gov_key = getattr(cfg, "EDINET_API_KEY", "")
     print(f"EdinetDB APIキー: {'あり' if db_key else 'なし'}")
-    print(f"政府EDINET APIキー: {'あり' if gov_key else 'なし'}")
 
     data_dir  = getattr(cfg, "DATA_DIR", Path("/tmp"))
     cache_dir = Path(data_dir) / "edinet_cache"

@@ -25,7 +25,6 @@
 #   ALERT_GMAIL_TO        送信先アドレス（同じアドレスでも可）
 #   ALERT_LINE_TOKEN      LINE Messaging API チャネルアクセストークン（任意）
 #   ALERT_LINE_USER_ID    通知先 LINE ユーザーID（任意）
-#   EDINET_API_KEY        EDINET API キー（任意）
 #   POLICY_FRED_API_KEY   FRED API キー（任意）
 #   BQ_PROJECT_ID         BigQuery プロジェクト ID
 #   BQ_CREDENTIALS        BigQuery サービスアカウント JSON（文字列）
@@ -211,7 +210,6 @@ jobs:
         env:
           BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
           BQ_PROJECT_ID:  ${{ secrets.BQ_PROJECT_ID }}
-          EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
           EDINETDB_API_KEY: ${{ secrets.EDINETDB_API_KEY }}
           STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
         run: |
@@ -307,7 +305,6 @@ jobs:
           ALERT_GMAIL_TO:       ${{ secrets.ALERT_GMAIL_TO }}
           ALERT_LINE_TOKEN:     ${{ secrets.ALERT_LINE_TOKEN }}
           ALERT_LINE_USER_ID:   ${{ secrets.ALERT_LINE_USER_ID }}
-          EDINET_API_KEY:       ${{ secrets.EDINET_API_KEY }}
           POLICY_FRED_API_KEY:  ${{ secrets.POLICY_FRED_API_KEY }}
           ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
           GOOGLE_CSE_API_KEY:   ${{ secrets.GOOGLE_CSE_API_KEY }}

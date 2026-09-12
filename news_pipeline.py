@@ -564,6 +564,13 @@ def run_news_pipeline(cfg) -> dict:
     print(f"  📡 {len(RSS_FEEDS)}フィードを取得中...")
     articles = fetch_all_feeds(RSS_FEEDS, cfg)
     # 有料メディア記事を Google CSE で補完
+    # 2026-09-12: 無効時はこの if で関数ごと呼ばれず、paid_media_searcher 側の
+    # スキップ表示（「⏩ 有料メディア検索: スキップ」）にも到達しないため、
+    # ワークフローのログ上は「何も起きていない」ようにしか見えなかった。
+    # 止めていることが実行ログから判るよう、ここで明示する。
+    if not getattr(cfg, "ENABLE_PAID_MEDIA_SEARCH", False):
+        print("  ⏩ 有料メディア検索（Google CSE）: スキップ"
+              "（ENABLE_PAID_MEDIA_SEARCH=False / APIキー要点検）")
     if getattr(cfg, "ENABLE_PAID_MEDIA_SEARCH", False):
         try:
             import importlib.util, sys

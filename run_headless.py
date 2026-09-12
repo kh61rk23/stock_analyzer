@@ -9,7 +9,7 @@
 #   既存:
 #     ALERT_GMAIL_FROM / ALERT_GMAIL_PASSWORD / ALERT_GMAIL_TO
 #     ALERT_LINE_TOKEN / ALERT_LINE_USER_ID（任意）
-#     EDINET_API_KEY / POLICY_FRED_API_KEY（任意）
+#     POLICY_FRED_API_KEY（任意）
 #   追加（v2.0）:
 #     GOOGLE_OAUTH_CLIENT_ID      : OAuthクライアントID
 #     GOOGLE_OAUTH_CLIENT_SECRET  : OAuthクライアントシークレット
@@ -52,7 +52,6 @@ def apply_env_overrides(cfg):
         "ALERT_GMAIL_TO":             "ALERT_GMAIL_TO",
         "ALERT_LINE_TOKEN":           "ALERT_LINE_TOKEN",
         "ALERT_LINE_USER_ID":         "ALERT_LINE_USER_ID",
-        "EDINET_API_KEY":             "EDINET_API_KEY",
         "EDINETDB_API_KEY":           "EDINETDB_API_KEY",
         "FUDOSAN_API_KEY":            "FUDOSAN_API_KEY",
         "POLICY_FRED_API_KEY":        "POLICY_FRED_API_KEY",

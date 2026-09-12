@@ -71,11 +71,11 @@ def test_detail_and_entries_never_leak_key_value():
     # format_detail / build_summary の出力に生キーが混ざらない設計であること
     secret = "xkey-9999-should-not-appear"
     entries = {
-        "EDINET_API_KEY": {"state": kh.STATE_DEAD, "message": "HTTP 401（失効の疑い）"},
+        "EDINETDB_API_KEY": {"state": kh.STATE_DEAD, "message": "HTTP 401（失効の疑い）"},
         "DEEPL_API_KEY": {"state": kh.STATE_ALIVE, "message": "HTTP 200（正常）"},
     }
     summary = kh.build_summary(entries)
-    detail = kh.format_detail("EDINET_API_KEY", kh.STATE_DEAD, "HTTP 401（失効の疑い）")
+    detail = kh.format_detail("EDINETDB_API_KEY", kh.STATE_DEAD, "HTTP 401（失効の疑い）")
     assert secret not in summary
     assert secret not in detail
 
@@ -85,7 +85,7 @@ def test_build_summary_counts_and_dead_list():
     entries = {
         "A": {"state": kh.STATE_ALIVE},
         "B": {"state": kh.STATE_ALIVE},
-        "EDINET_API_KEY": {"state": kh.STATE_DEAD},
+        "EDINETDB_API_KEY": {"state": kh.STATE_DEAD},
         "DEEPL_API_KEY": {"state": kh.STATE_DEAD},
         "C": {"state": kh.STATE_LIMITED},
         "D": {"state": kh.STATE_SKIPPED},
@@ -98,7 +98,7 @@ def test_build_summary_counts_and_dead_list():
     assert "⚠️1" in summary
     assert "⏭️2" in summary
     # 失効キーは名前でリストされ、原因特定を即可能にする
-    assert "❌: DEEPL_API_KEY, EDINET_API_KEY" in summary
+    assert "❌: DEEPL_API_KEY, EDINETDB_API_KEY" in summary
 
 
 def test_build_summary_no_dead():
@@ -130,7 +130,9 @@ def test_run_key_health_unset_keys_do_not_crash():
 
     result = kh.run_key_health(_Cfg())
     entries = result["entries"]
-    assert entries["EDINET_API_KEY"]["state"] == kh.STATE_UNSET
+    # 2026-09-12: EDINET_API_KEY は撤去済み（EdinetDBへ一本化）。
+    assert "EDINET_API_KEY" not in entries, "撤去したキーが監視に残っている"
+    assert entries["EDINETDB_API_KEY"]["state"] == kh.STATE_UNSET
     assert entries["FUDOSAN_API_KEY"]["state"] == kh.STATE_UNSET
     assert entries["ANTHROPIC_API_KEY"]["state"] == kh.STATE_SKIPPED
     assert entries["GOOGLE_OAUTH"]["state"] == kh.STATE_SKIPPED
