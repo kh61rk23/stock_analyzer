@@ -346,8 +346,11 @@ def format_ledger_section(cfg) -> list:
         return []
     s = ledger.get("stats", {})
     lines = ["## 📒 モジュール実行台帳（システム健全性）", ""]
+    # 2026-09-14: 週次レポートは当日の台帳確定（実行の最後）より前に作られる
+    # ため、ここに出るのは常に「前回実行」の台帳。日付だけだと当日分に見え、
+    # 9/14 のメールでは「2026-09-12: 成功66」と古い数字が当日分のように出ていた。
     lines.append(
-        f"- {ledger.get('date', '')}: "
+        f"- 直近の確定台帳（{ledger.get('date', '')} 実行分）: "
         f"成功 **{s.get('success', 0)}** / 失敗 **{s.get('error', 0)}** / "
         f"スキップ {s.get('skipped', 0)}"
     )

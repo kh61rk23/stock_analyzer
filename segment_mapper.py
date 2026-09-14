@@ -45,6 +45,9 @@ from __future__ import annotations
 import json
 import time
 from datetime import datetime, timedelta, timezone
+
+# GEMINI_API_KEY 未設定の警告を1実行1回に抑えるためのフラグ
+_GEMINI_WARNED = False
 from pathlib import Path
 from typing import Optional
 
@@ -340,7 +343,12 @@ def _map_by_gemini(
     """
     api_key = getattr(cfg, "GEMINI_API_KEY", "")
     if not api_key:
-        print("    ⚠️  [segment_mapper] GEMINI_API_KEY 未設定 → Gemini スキップ")
+        # 2026-09-14: セグメントごとに毎回出しており、9/14 のログでは同じ警告が
+        # 63行並んで他の警告を埋もれさせていた。未設定は実行中に変わらないので1回だけ。
+        global _GEMINI_WARNED
+        if not _GEMINI_WARNED:
+            print("    ⚠️  [segment_mapper] GEMINI_API_KEY 未設定 → Gemini スキップ（以降は表示省略）")
+            _GEMINI_WARNED = True
         return None
 
     # 業種リスト文字列（プロンプト用）

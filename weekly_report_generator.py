@@ -601,23 +601,35 @@ def _section_us_sectors(results: dict) -> list:
     top3   = us.get("top3",    [])
     bottom3 = us.get("bottom3", [])
 
+    # 2026-09-14: top3/bottom3 は us_sector_pipeline がスコア順に並べたもので、
+    # 週間パフォーマンス順ではない（見出しが実態と違っていた）。
     if top3:
-        lines.append(f"**週間パフォーマンス上位**: {' ＞ '.join(top3[:3])}")
+        lines.append(f"**スコア上位**: {' ＞ '.join(top3[:3])}")
     if bottom3:
-        lines.append(f"**週間パフォーマンス下位**: {' ＜ '.join(bottom3[:3])}")
+        lines.append(f"**スコア下位**: {' ＜ '.join(bottom3[:3])}")
 
     # 上位セクターの詳細
+    # 2026-09-14: sector_list の要素は {"sector": {...}, "score_result": {...}} の
+    # 入れ子だが、ここは name / composite_score / return_1w / trend を直接
+    # 読んでいた。どれも存在しないため、9/14 の週次メールでは
+    # 「|  | 0 | N/A |  |」の空行が並んでいた。週次リターンは算出されて
+    # いないので、実在する1ヶ月リターン（%値）とリスク区分を出す。
     if sector_list:
         lines.append("")
-        lines.append("| セクター | スコア | 週次リターン | 傾向 |")
-        lines.append("|---------|-------|------------|-----|")
+        lines.append("| セクター | スコア | 1ヶ月リターン | リスク |")
+        lines.append("|---------|-------|--------------|-------|")
         for s in sector_list[:5]:
-            sname  = s.get("name", s.get("ticker", ""))
-            score  = s.get("composite_score", s.get("score", 0))
-            ret1w  = s.get("return_1w", s.get("perf_1w"))
-            trend  = s.get("trend", "")
-            ret_s  = f"{ret1w:+.1f}%" if ret1w is not None else "N/A"
-            lines.append(f"| {sname} | {score:.0f} | {ret_s} | {trend} |")
+            sec   = s.get("sector") if isinstance(s.get("sector"), dict) else {}
+            sr    = s.get("score_result") if isinstance(s.get("score_result"), dict) else s
+            etf   = sr.get("etf_data") or {}
+            name  = sec.get("name_ja") or s.get("name", "")
+            code  = sec.get("etf") or s.get("ticker", "")
+            sname = f"{name}（{code}）" if name and code else (name or code)
+            score = sr.get("score", s.get("composite_score", 0)) or 0
+            ret1m = etf.get("ret_1m")
+            risk  = sr.get("risk_level", "")
+            ret_s = f"{ret1m:+.1f}%" if ret1m is not None else "N/A"
+            lines.append(f"| {sname} | {score:.0f} | {ret_s} | {risk} |")
     lines.append("")
     return lines
 
@@ -801,7 +813,11 @@ def _section_screener(results: dict) -> list:
         ra    = c.get("risk_adjusted_score", score)
         per_s = f"{c['per']:.1f}x"  if c.get("per")  else "N/A"
         pbr_s = f"{c['pbr']:.2f}x"  if c.get("pbr")  else "N/A"
-        roe_s = _pct(c.get("roe"))
+        # 2026-09-14: stock_screener は roe を「%値」（14.3）で格納する
+        # （round(roe * 100, 1)）。_pct() は比率→% 変換なので二重に100倍され、
+        # Fuji Electric が「ROE 1430.0%」と表示されていた。
+        _roe = c.get("roe")
+        roe_s = f"{float(_roe):.1f}%" if _roe is not None else "N/A"
         dy_s  = _pct(c.get("dividend_yield"))
         rec   = c.get("rec_key", "N/A")
         # ボラ調整後スコアが元スコアより大幅に低い場合に ▼ マークを表示
@@ -1045,10 +1061,14 @@ def _section_macro(results: dict) -> list:
                     continue
                 label = info.get("label") or info.get("bank") or ticker
                 chg   = info.get("change_pt", 0)
-                chg_s = f"（{chg:+.3f}%pt）" if chg else ""
+                # 2026-09-14: 為替（JPY=X 等）にも一律で % を付けており
+                # 「USD/JPY（JPY=X）: 154.482%」と出ていた。
+                _is_fx = "=X" in str(ticker) or "/" in str(label)
+                _unit, _chg_unit = ("", "") if _is_fx else ("%", "%pt")
+                chg_s = f"（{chg:+.3f}{_chg_unit}）" if chg else ""
                 asof  = info.get("date", "")
                 asof_s = f" [{asof}]" if asof else ""
-                lines.append(f"  {label}（{ticker}）: {val}%{chg_s}{asof_s}")
+                lines.append(f"  {label}（{ticker}）: {val}{_unit}{chg_s}{asof_s}")
             lines.append("")
 
     # マクロシグナル（macro結果から）
@@ -1948,6 +1968,29 @@ def _section_pearl_ranking(results: dict, cfg=None) -> list:
             ))
         except Exception:
             pass
+
+    # 2026-09-14: pearl_candidates.json は日次で追記され TTL 7日で残るため、
+    # 同じ銘柄が日付違いで複数行入る。9/14 の週次メールでは MSGM×2 /
+    # HESAY×3 / IDEXY×3 / TCEHY×3 / RELY×2 と重複掲載され、下の
+    # 「発見: 計261銘柄」も水増しされていた。銘柄ごとに1行へ畳む
+    # （日付の新しい方を優先し、同日なら高スコア側）。
+    _best: dict = {}
+    for c in candidates:
+        _t = c.get("ticker") or c.get("code")
+        if not _t:
+            continue
+        _stamp = str(c.get("date") or c.get("scored_at") or c.get("updated_at")
+                     or c.get("saved_at") or c.get("timestamp") or "")
+        _key = (_stamp, float(c.get("pearl_score", 0) or 0))
+        if _t not in _best or _key > _best[_t][0]:
+            _best[_t] = (_key, c)
+    if _best:
+        _tier_order = {"SS": 0, "S": 1, "A": 2, "B": 3}
+        candidates = sorted(
+            (v[1] for v in _best.values()),
+            key=lambda x: (_tier_order.get(x.get("pearl_tier", "B"), 9),
+                           -float(x.get("pearl_score", 0) or 0)),
+        )
 
     if not candidates:
         return []
@@ -2961,7 +3004,8 @@ def _section_action_guide(results: dict) -> list:
             score  = c.get("composite_score", 0)
             reason_parts = []
             if c.get("per") and c["per"] < 20:        reason_parts.append(f"PER割安({c['per']:.1f}x)")
-            if c.get("roe") and c["roe"] >= 0.10:     reason_parts.append(f"ROE高({c['roe']*100:.0f}%)")
+            # roe は %値（上の表と同じ理由）。0.10 判定だと ROE 0.2% でも「ROE高」になっていた。
+            if c.get("roe") and c["roe"] >= 10:       reason_parts.append(f"ROE高({c['roe']:.0f}%)")
             if c.get("analyst_upside") and c["analyst_upside"] >= 0.15:
                 reason_parts.append(f"上昇余地({c['analyst_upside']*100:+.0f}%)")
             if c.get("dividend_yield") and c["dividend_yield"] >= 0.03:
@@ -3591,13 +3635,6 @@ def generate_weekly_report(cfg, results: dict) -> dict:
     except Exception:
         pass
 
-    # フッター
-    sections.append([
-        "---",
-        f"*自動生成: stock_analyzer_main.py | {today}*",
-        "",
-    ])
-
     # Wave 6 - G-X: 資源権益・地政学影響セクション
     # 2026-07-28 バグ修正: sections は「行リストのリスト」であり、末尾の結合が
     #   "\n".join(line for sec in sections for line in sec)
@@ -3629,6 +3666,16 @@ def generate_weekly_report(cfg, results: dict) -> dict:
             f"{str(_gx_err)[:80]}*",
             "",
         ])
+
+    # フッター
+    # 2026-09-14: フッターを地政学（G-X）節より前に積んでいたため、
+    # 週次メールでは「自動生成: …」の後ろに地政学節が付く並びになっていた。
+    # 必ず最後に置く。
+    sections.append([
+        "---",
+        f"*自動生成: stock_analyzer_main.py | {today}*",
+        "",
+    ])
 
     # Markdown全文結合
     report_md = "\n".join(line for sec in sections for line in sec)
@@ -3813,7 +3860,7 @@ def build_weekly_email_html(report_md: str, summary: dict) -> str:
   <!-- フッター -->
   <div style="padding:14px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;">
     <p style="margin:0;font-size:11px;color:#9ca3af;">
-      データソース: yfinance / EdinetDB / 金融庁EDINET / IMF / DeepL
+      データソース: yfinance / EdinetDB / IMF / DeepL
       &nbsp;|&nbsp; stock_analyzer_main.py より自動送信
     </p>
   </div>

@@ -249,7 +249,11 @@ def _write_to_bq(rows: list[dict], cfg) -> tuple[bool, int]:
 
     try:
         project = getattr(cfg, "BQ_PROJECT_ID", "stock-analyzer-edinet")
-        dataset = getattr(cfg, "BQ_DATASET",    "taxonomy")
+        # 2026-09-14: 書込先は taxonomy データセット固定。cfg.BQ_DATASET は
+        # EdinetDB 用の既定データセット（"edinet"）で、これを流用したため
+        # 存在しない edinet.company_taxonomy_map を指して毎週 404 になっていた。
+        # 行の列は taxonomy.company_taxonomy_map の実スキーマと一致を確認済み。
+        dataset = "taxonomy"
 
         # staging table への INSERT → MERGE の2段階
         # staging は company_taxonomy_map と同スキーマの一時領域として利用

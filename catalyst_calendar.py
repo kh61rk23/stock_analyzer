@@ -27,7 +27,7 @@
 #   → LINE最優先通知（alert_notifier.py トリガー㉔）
 #
 # 【生成キャッシュ】
-#   catalyst_calendar.json   TTL: 30日
+#   catalyst_calendar.json   TTL: 前日生成分まで（FOMC 元リストが変われば即破棄）
 #   catalyst_history.json    TTL: 365日
 #
 # 【呼び出しパターン（stock_analyzer_main.py WEEKLY_MODULES から）】
@@ -72,11 +72,31 @@ _TRIPLE_THRESHOLD         = 3     # 3種類以上でTriple Catalyst発動
 _TRIPLE_WINDOW_DAYS       = 14    # Triple判定ウィンドウ（日）
 
 # 2026年 Fed FOMC 日程（議決日）
-_FED_FOMC_2026 = [
+# 2026-09-14: 本リストと fed_calendar_fetcher.FOMC_MEETINGS_2026 が別々に
+# 手書きされており、8回中4回（7月・9月・10/11月・12月）が食い違っていた。
+# 同じ 9/14 のメールで日次は「FOMC 1日後」、週次は「2026-09-17（3日後）」と
+# 矛盾して出ていたのはこのため。fed_calendar_fetcher を正本とし
+# （会合初日＋1日＝議決日）、取り込めない環境だけ下の旧リストに落とす。
+_FED_FOMC_2026_FALLBACK = [
     "2026-01-29", "2026-03-19", "2026-05-07",
     "2026-06-18", "2026-07-30", "2026-09-17",
     "2026-10-29", "2026-12-17",
 ]
+
+
+def _fomc_decision_dates_2026() -> list:
+    """fed_calendar_fetcher の会合初日から議決日（翌日）を組み立てる。"""
+    try:
+        from fed_calendar_fetcher import FOMC_MEETINGS_2026 as _starts
+        from datetime import datetime as _dt, timedelta as _td
+        out = [(_dt.strptime(d, "%Y-%m-%d") + _td(days=1)).strftime("%Y-%m-%d")
+               for d in _starts]
+        return out or list(_FED_FOMC_2026_FALLBACK)
+    except Exception:
+        return list(_FED_FOMC_2026_FALLBACK)
+
+
+_FED_FOMC_2026 = _fomc_decision_dates_2026()
 
 # 2026年 BOJ 政策決定会合（発表日）
 _BOJ_MEETINGS_2026 = [
@@ -144,7 +164,7 @@ def _cache_dir(cfg=None) -> Path:
 
 
 def _load_calendar_cache(cfg=None) -> dict:
-    """catalyst_calendar.json を読み込む。TTL(30日)切れは空 dict。"""
+    """catalyst_calendar.json を読み込む。前日より古い、または FOMC 元リストが変わった場合は空 dict。"""
     try:
         p = _cache_dir(cfg) / "catalyst_calendar.json"
         if not p.exists():
@@ -154,7 +174,15 @@ def _load_calendar_cache(cfg=None) -> dict:
             return {}
         gen = raw.get("generated", "0000-00-00")
         cutoff = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-        return raw if gen >= cutoff else {}
+        if gen < cutoff:
+            return {}
+        # 2026-09-14: FOMC 日程の元リストが変わったら、期限内でも捨てる。
+        # 同日に日程を FRB 公式へ是正したが、当日生成のキャッシュ（旧日付
+        # 2026-09-17 入り）がリポジトリにコミット済みで、翌 9/15 の実行が
+        # それを再利用すると FOMC 当日にも誤った日付が出続けるところだった。
+        if raw.get("fomc_source") != list(_FED_FOMC_2026):
+            return {}
+        return raw
     except Exception:
         return {}
 
@@ -165,7 +193,8 @@ def _save_calendar_cache(data: dict, cfg=None) -> None:
         p = _cache_dir(cfg) / "catalyst_calendar.json"
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(
-            json.dumps({**data, "generated": datetime.now().strftime("%Y-%m-%d")},
+            json.dumps({**data, "generated": datetime.now().strftime("%Y-%m-%d"),
+                        "fomc_source": list(_FED_FOMC_2026)},
                        ensure_ascii=False, indent=2),
             encoding="utf-8",
         )

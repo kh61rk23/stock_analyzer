@@ -457,7 +457,9 @@ def detect_volume_anomaly(ticker: str, hist: dict) -> Optional[dict]:
         "latest_volume": round(latest_vol, 0),
         "date":         latest_date,
         "methods":      method,
-        "summary":      f"出来高急増 {ratio:.1f}倍 (Z={last_z:.2f})",
+        # 2026-09-14: Z の絶対値で検出するため 0.3倍（減少）もここに来るのに、
+        # 常に「出来高急増」と書いていた。
+        "summary":      f"出来高{'急増' if ratio >= 1 else '急減'} {ratio:.1f}倍 (Z={last_z:.2f})",
     }
 
 

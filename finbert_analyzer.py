@@ -416,12 +416,19 @@ def _get_or_init_pipeline():
     if _FINBERT_PIPELINE is not None:
         return _FINBERT_PIPELINE
 
-    from transformers import pipeline as hf_pipeline
+    # 2026-09-14: ここだけ `from transformers import pipeline` を直書きしており、
+    # 9/11 に import 経路を _try_import_transformers() へ集約した修正が
+    # 効いていなかった。9/14 の実行では本体の FinBERT（load_finbert_pipeline）は
+    # 同じ transformers 5.17 でロードに成功したのに、有報セクション分析
+    # （analyze_sections）だけ「cannot import name 'pipeline'」で落ちていた。
+    hf_pipeline = _try_import_transformers()
+    if hf_pipeline is None:
+        raise ImportError(_IMPORT_ERROR or "transformers の pipeline を取得できません")
     _FINBERT_PIPELINE = hf_pipeline(
         "sentiment-analysis",
         model       = "ProsusAI/finbert",
         tokenizer   = "ProsusAI/finbert",
-        return_all_scores = False,
+        # return_all_scores は transformers 5 系で廃止（既定の top_k=1 と同じ出力）
         device      = -1,   # CPU実行（GPU未搭載環境対応）
     )
     return _FINBERT_PIPELINE

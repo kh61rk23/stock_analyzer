@@ -416,7 +416,11 @@ def _extract_papers(arxiv_result) -> list:
     """arxiv_result から論文リストを取り出す（キー名の揺れを吸収）。"""
     if not isinstance(arxiv_result, dict):
         return []
-    for key in ("papers", "new_papers_list", "all_papers"):
+    # 2026-09-14: 既読を除いた "papers"（新着のみ）を先に採っていたが、
+    # トレンドは「直近4週 vs その前4週」の比較なので母集団は全件が必要。
+    # 既読除外は窓ごとに不均一に件数を削り、9/14 は量子=0 / AI=11 のような
+    # 極端値を出していた。全件（all_papers）を優先する。
+    for key in ("all_papers", "papers", "new_papers_list"):
         v = arxiv_result.get(key)
         if isinstance(v, list) and v:
             return v

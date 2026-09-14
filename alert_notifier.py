@@ -616,8 +616,11 @@ def extract_alerts(cfg, results: dict) -> list:
                     z_s = f" Z={z:.2f}" if z is not None else ""
                     # 複合異常は価格+出来高の両根拠を表示
                     sub = []
+                    # 2026-09-14: anomaly_detector は price_change を既に「%値」で
+                    # 格納する（round(last_chg * 100, 2)）。ここで更に *100 して
+                    # いたため -11.38% が -1138.0% と表示されていた。
                     if a.get("price_change"):
-                        sub.append(f"価格{a['price_change']*100:+.1f}%")
+                        sub.append(f"価格{a['price_change']:+.1f}%")
                     if a.get("volume_ratio"):
                         sub.append(f"出来高{a['volume_ratio']:.1f}倍")
                     detail = f"({', '.join(sub)})" if sub else ""
@@ -635,10 +638,14 @@ def extract_alerts(cfg, results: dict) -> list:
                     atype = a.get("anomaly_type", "")
                     if atype == "volume":
                         ratio = a.get("volume_ratio") or a.get("spike_ratio")
-                        extra = f" {ratio:.1f}倍急増" if ratio else ""
+                        # 2026-09-14: 0.3倍（Z=-2.57）を「急増」と表示していた。
+                        # 出来高異常は Z の絶対値で拾うので、減少側もここに来る。
+                        _vol_word = "急増" if (ratio or 0) >= 1 else "急減"
+                        extra = f" {ratio:.1f}倍{_vol_word}" if ratio else ""
                     elif atype == "price":
                         chg = a.get("price_change")
-                        extra = f" {chg*100:+.1f}%" if chg is not None else ""
+                        # price_change は既に%値（上の複合異常と同じ理由で *100 しない）
+                        extra = f" {chg:+.1f}%" if chg is not None else ""
                     elif atype == "score":
                         extra = f" スコア急変"
                     else:
@@ -1936,7 +1943,7 @@ def build_message(alerts: list, mode: str = "line") -> str:
   <!-- フッター -->
   <div style="padding:16px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;">
     <p style="margin:0;font-size:11px;color:#9ca3af;">
-      stock_analyzer_main.py より自動送信 | データソース: yfinance / EdinetDB / 金融庁EDINET / IMF
+      stock_analyzer_main.py より自動送信 | データソース: yfinance / EdinetDB / IMF
     </p>
   </div>
 </div>

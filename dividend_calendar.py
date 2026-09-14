@@ -168,7 +168,20 @@ def _fetch_dividend_info(ticker: str, name: str, market: str) -> Optional[dict]:
 
         # 配当額
         div_amount = info.get("lastDividendValue") or info.get("dividendRate") or 0
-        div_yield  = info.get("dividendYield") or info.get("forwardDividendYield") or 0
+        # 2026-09-14: yfinance の dividendYield は「%値」（2.62 = 2.62%）で返る
+        # ようになっており、下の yield_pct で更に *100 して 8306.T を
+        # 「利回262.0%」、7203.T を「利回330.0%」と表示していた。
+        # 比率で返る trailingAnnualDividendYield を優先し、無ければ %値として扱う。
+        _ttm_yield = info.get("trailingAnnualDividendYield")
+        _pct_yield = info.get("dividendYield") or info.get("forwardDividendYield")
+        if _ttm_yield:
+            div_yield = float(_ttm_yield)
+        elif _pct_yield:
+            div_yield = float(_pct_yield) / 100.0
+        else:
+            div_yield = 0
+        if div_yield and not (0 < div_yield <= 0.30):
+            div_yield = 0   # 30%超はデータ異常として捨てる
 
         # 次回決算日
         earnings_date = None
@@ -246,12 +259,14 @@ def format_dividend_alert_text(result: dict) -> str:
     urgent   = result.get("urgent_7d", [])
 
     lines = [f"📅 配当権利確定カレンダー（30日以内: {len(upcoming)}銘柄）"]
+    # 2026-09-14: 銘柄名が取れないと name にティッカーが入り、
+    # 「8306.T 8306.T: …」と二重に表示されていた。同一なら1回だけ出す。
 
     if urgent:
         lines.append(f"\n🚨 緊急（7日以内）:")
         for ev in urgent:
             lines.append(
-                f"  {ev['ticker']} {ev['name'][:14]}: "
+                f"  {ev['ticker']}{'' if ev['name'] in ('', ev['ticker']) else ' ' + ev['name'][:14]}: "
                 f"{ev['ex_date']} ({_fmt_days(ev['days_until'])}) "
                 f"配当{ev['dividend_amount']:.0f} 利回{ev['yield_pct']:.1f}%"
             )
@@ -262,7 +277,7 @@ def format_dividend_alert_text(result: dict) -> str:
             lines.append(f"\n📆 今後30日以内:")
             for ev in sorted(non_urgent, key=lambda x: x["days_until"])[:8]:
                 lines.append(
-                    f"  {ev['ticker']} {ev['name'][:14]}: "
+                    f"  {ev['ticker']}{'' if ev['name'] in ('', ev['ticker']) else ' ' + ev['name'][:14]}: "
                     f"{ev['ex_date']} ({_fmt_days(ev['days_until'])}) "
                     f"利回{ev['yield_pct']:.1f}%"
                 )

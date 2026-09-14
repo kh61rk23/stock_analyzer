@@ -4813,30 +4813,6 @@ def run_all_tasks(mode: str = "all") -> dict:
             print(f"  ⚠️  ポートフォリオ最適化エラー: {str(e)[:80]}")
     else:
         print("  ⏩ ポートフォリオ最適化: スキップ（週次以外）")
-    # ── Step F: 週次投資判断レポート ─────────────────────────────
-    if getattr(cfg, "ENABLE_WEEKLY_REPORT", True) and _in_mode("weekly_report"):
-        print("\n  📊 週次投資判断レポート生成 (Step F)...")
-        try:
-            _wr = _load_local_module(
-                "weekly_report_generator",
-                "/content/weekly_report_generator.py",
-                cfg.DRIVE_BASE / "weekly_report_generator.py",
-            )
-            if _wr:
-                wr_result = _wr.run_weekly_report(cfg, results)
-                results["weekly_report"] = wr_result
-                if not wr_result.get("skipped"):
-                    logger.add("weekly_report", "success",
-                               f"レポート生成: {wr_result.get('report_path','')}")
-            else:
-                print("  ⚠️  weekly_report_generator.py が見つかりません")
-        except Exception as e:
-            logger.add("weekly_report", "error", str(e)[:100])
-            print(f"  ⚠️  週次レポートエラー: {str(e)[:80]}")
-    else:
-        if not getattr(cfg, "ENABLE_WEEKLY_REPORT", True):
-            print("  ⏩ 週次レポート: スキップ（ENABLE_WEEKLY_REPORT=False）")
-    
     # ── [3-2] 相関ヒートマップ計算（C-4） ──────────────────────────
     if getattr(cfg, "ENABLE_CORRELATION_HEATMAP", True) and _in_mode("excel_export"):
         try:
@@ -5631,6 +5607,39 @@ def run_all_tasks(mode: str = "all") -> dict:
             print(f"  ⚠️  オントロジー出力エラー（スキップ）: {str(_oee)[:60]}")
     else:
         print("  ⏩ オントロジー出力: スキップ（週次モード外 or フラグOFF）")
+
+    # ── [Step F] 週次投資判断レポート（週次の全モジュール完了後に生成）──
+    # 2026-09-14: 本ブロックは signal_aggregator / inference / job_posting /
+    # facility_expansion / ontology_export / position_sizer より前に置かれており、
+    # それらの結果を読むセクションが毎週「データなし」になっていた
+    # （9/14 実測: 週次レポート 14:19:41 に対し signal_aggregator 14:20:16、
+    #  job_posting 14:20:59。メール本文の「業種別 地政学シグナルスコア:
+    #  signal_aggregator データなし」「人材投資シグナル: データなし」の実体）。
+    # results["weekly_report"] を後続が読むことは無いので、末尾へ移す。
+    # ── Step F: 週次投資判断レポート ─────────────────────────────
+    if getattr(cfg, "ENABLE_WEEKLY_REPORT", True) and _in_mode("weekly_report"):
+        print("\n  📊 週次投資判断レポート生成 (Step F)...")
+        try:
+            _wr = _load_local_module(
+                "weekly_report_generator",
+                "/content/weekly_report_generator.py",
+                cfg.DRIVE_BASE / "weekly_report_generator.py",
+            )
+            if _wr:
+                wr_result = _wr.run_weekly_report(cfg, results)
+                results["weekly_report"] = wr_result
+                if not wr_result.get("skipped"):
+                    logger.add("weekly_report", "success",
+                               f"レポート生成: {wr_result.get('report_path','')}")
+            else:
+                print("  ⚠️  weekly_report_generator.py が見つかりません")
+        except Exception as e:
+            logger.add("weekly_report", "error", str(e)[:100])
+            print(f"  ⚠️  週次レポートエラー: {str(e)[:80]}")
+    else:
+        if not getattr(cfg, "ENABLE_WEEKLY_REPORT", True):
+            print("  ⏩ 週次レポート: スキップ（ENABLE_WEEKLY_REPORT=False）")
+    
 
     # ── [PRICE-1] 株価日足をBQへ永続化（全モジュールの取得完了後）────
     # yf_cache が実行中に集めた日足をまとめて書き出す。ここでの追加取得は

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -80,6 +81,7 @@ def build_doc_index_rows(
     *,
     now: str | None = None,
     seen_types: set | None = None,
+    seen_keys: set | None = None,
 ) -> list[dict]:
     """EdinetDB disclosure objectを既存doc_index列へ変換する純関数。
 
@@ -89,11 +91,21 @@ def build_doc_index_rows(
     now = now or datetime.now(timezone.utc).isoformat()
     rows = []
     for item in _disclosure_items(data):
-        doc_id = str(_first(item, "doc_id", "docId", "docID") or "").strip()
+        doc_id = str(_first(item, "doc_id", "docId", "docID", "document_id",
+                            "documentId", "edinet_doc_id") or "").strip()
+        if not doc_id:
+            # 2026-09-14: 観測語彙は "yuho"（型フィルタは通過）なのに 9社/9社 が
+            # 除外されていた＝落ちていたのは書類IDの欠落側だった。汎用キーは
+            # EDINET 書類管理番号（S100XXXX 形式）に見えるときだけ採用する。
+            _cand = str(_first(item, "id", "doc_code", "code") or "").strip()
+            if re.match(r"^S[0-9A-Z]{7}$", _cand):
+                doc_id = _cand
         raw_type = str(_first(item, "type", "document_type", "doc_type", "category") or "")
         if seen_types is not None:
             seen_types.add(raw_type or "(種別欄なし)")
         if not doc_id:
+            if seen_keys is not None:
+                seen_keys.update(str(k) for k in item.keys())
             continue
         if not is_annual_report(raw_type):
             continue
@@ -181,6 +193,7 @@ def run_doc_indexer(days_back: int = 1, cfg=None) -> dict:
     # を切り分けられなかったため、内訳を数える。
     stats = {"empty": 0, "filtered": 0, "no_data": 0}
     seen_types: set = set()
+    seen_keys: set = set()
     for code in targets:
         data = client.get(
             f"/companies/{code}/disclosures",
@@ -198,7 +211,7 @@ def run_doc_indexer(days_back: int = 1, cfg=None) -> dict:
             continue
         items = _disclosure_items(data)
         built = build_doc_index_rows(data, by_code.get(code, {}),
-                                     seen_types=seen_types)
+                                     seen_types=seen_types, seen_keys=seen_keys)
         if not items:
             stats["empty"] += 1
         elif not built:
@@ -240,6 +253,10 @@ def run_doc_indexer(days_back: int = 1, cfg=None) -> dict:
             # 語彙が想定と違うと静かに全滅するので、実物を必ず出す。
             print("[doc_indexer] ℹ️ 観測した開示種別: "
                   + ", ".join(sorted(seen_types)[:12]))
+        if seen_keys:
+            # 書類IDが取れなかった行の実キー。次回ログでキー名を確定させる。
+            print("[doc_indexer] ℹ️ 書類ID欠落行のキー: "
+                  + ", ".join(sorted(seen_keys)[:20]))
     return result
 
 

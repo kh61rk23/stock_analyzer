@@ -105,6 +105,25 @@ def fetch_financials(tickers: list, max_retries: int = 2) -> list:
                         return None
                     return v if lo <= v <= hi else None
 
+                def _div_yield():
+                    """配当利回りを比率（0.04 = 4%）で返す。
+
+                    2026-09-14: yfinance の dividendYield は「%値」（2.62 = 2.62%）で
+                    返るようになっており、比率前提の 0.0〜0.30 判定をそのまま通すと
+                    0.17%（SoftBank Group）が 0.17 → 17% の高配当として日次メールに
+                    載り、逆に 2.62%（MUFG）は 2.62 > 0.30 で欠損扱いになっていた。
+                    比率で返る trailingAnnualDividendYield を優先し、無ければ
+                    dividendYield を %値として 1/100 する。
+                    """
+                    ttm = _fv("trailingAnnualDividendYield", 0.0, 0.30)
+                    if ttm:
+                        return ttm
+                    pct = _f("dividendYield")
+                    if pct is None:
+                        return None
+                    v = pct / 100.0
+                    return v if 0.0 <= v <= 0.30 else None
+
                 # アナリスト推奨（1.0=強気買い〜5.0=強気売り）
                 rec_mean = _f("recommendationMean")
                 rec_key  = info.get("recommendationKey", "")
@@ -174,7 +193,7 @@ def fetch_financials(tickers: list, max_retries: int = 2) -> list:
                     "debt_to_equity":      _f("debtToEquity"),
 
                     # ── 配当 ──────────────────────────────────────
-                    "dividend_yield":  _fv("dividendYield", 0.0, 0.30),
+                    "dividend_yield":  _div_yield(),
                     "dividend_rate":   _f("dividendRate"),
                     "payout_ratio":    _fv("payoutRatio", 0.0, 2.0),
                     "div_yield_5y_avg":    _f("fiveYearAvgDividendYield"),
