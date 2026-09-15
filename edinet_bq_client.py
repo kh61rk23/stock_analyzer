@@ -562,7 +562,11 @@ class EDINETBQClient:
           FROM (
             SELECT f.*,
               ROW_NUMBER() OVER (
-                PARTITION BY f.company_code, f.fiscal_year_end
+                -- 2026-09-15: EdinetDB の年次レコードは期末日を持たず fiscal_year_end が
+                -- 全行 NULL。期末日で区切ると会社ごとに1グループへ潰れて最新1行しか
+                -- 残らず、5年分あっても時系列・CAGR が作れていなかった。会計年度で区切る。
+                PARTITION BY f.company_code,
+                             COALESCE(f.fiscal_year, EXTRACT(YEAR FROM f.fiscal_year_end))
                 ORDER BY f.updated_at DESC
               ) AS rn
             FROM `{self.dataset}.financials` AS f
@@ -583,7 +587,8 @@ class EDINETBQClient:
               investing_cf AS cf_investing,
               free_cf AS free_cf,
               capex AS capex
-            ) ORDER BY fiscal_year_end DESC LIMIT 6) AS financials
+            ) ORDER BY COALESCE(fiscal_year, EXTRACT(YEAR FROM fiscal_year_end)) DESC
+              LIMIT 6) AS financials
           FROM financial_latest
           GROUP BY company_code
         ),
@@ -683,6 +688,10 @@ class EDINETBQClient:
                     risk_factors.extend(points[:5])
 
             years = [item.get("fiscal_year") for item in financial_rows]
+            # 期末日が無い（EdinetDB 年次レコードの仕様）ときは会計年度で表示する。
+            # None のまま渡すとレポートに「期末: None」と出ていた。
+            if gov_meta and not gov_meta.get("period_end") and years and years[-1]:
+                gov_meta = {**gov_meta, "period_end": f"FY{years[-1]}"}
             revenue = [item.get("revenue") for item in financial_rows]
             operating_income = [item.get("operating_income") for item in financial_rows]
             score = company.get("credit_score")
@@ -844,7 +853,8 @@ class EDINETBQClient:
             SELECT *,
                    ROW_NUMBER() OVER (
                        PARTITION BY company_code
-                       ORDER BY fiscal_year_end DESC
+                       -- 2026-09-15: 期末日は全行NULL（EdinetDB年次レコードの仕様）。会計年度で最新を選ぶ
+                       ORDER BY COALESCE(fiscal_year, EXTRACT(YEAR FROM fiscal_year_end)) DESC, updated_at DESC
                    ) AS rn
             FROM `{self.dataset}.financials`
             WHERE company_code = @company_code
@@ -894,7 +904,8 @@ class EDINETBQClient:
             SELECT *,
                    ROW_NUMBER() OVER (
                        PARTITION BY company_code
-                       ORDER BY fiscal_year_end DESC
+                       -- 2026-09-15: 期末日は全行NULL（EdinetDB年次レコードの仕様）。会計年度で最新を選ぶ
+                       ORDER BY COALESCE(fiscal_year, EXTRACT(YEAR FROM fiscal_year_end)) DESC, updated_at DESC
                    ) AS rn
             FROM `{self.dataset}.financials`
             WHERE company_code IN UNNEST(@codes)
@@ -1049,7 +1060,8 @@ class EDINETBQClient:
             SELECT *,
                    ROW_NUMBER() OVER (
                        PARTITION BY company_code
-                       ORDER BY fiscal_year_end DESC
+                       -- 2026-09-15: 期末日は全行NULL（EdinetDB年次レコードの仕様）。会計年度で最新を選ぶ
+                       ORDER BY COALESCE(fiscal_year, EXTRACT(YEAR FROM fiscal_year_end)) DESC, updated_at DESC
                    ) AS rn
             FROM `{self.dataset}.financials`
             WHERE company_code IN ({in_clause})
@@ -1201,40 +1213,50 @@ class EDINETBQClient:
             ]
             エラー時は空リストを返す（例外を外に投げない）
         """
-        try:
-            code_safe = str(securities_code).replace("'", "''")
-            sql = f"""
-            SELECT
-                securities_code,
-                company_name,
-                project_name,
-                adoption_date,
-                project_type,
-                support_amount_m,
-                match_confidence,
-                CAST(scraped_at AS STRING) AS scraped_at
-            FROM `{self.dataset}.policy_support`
-            WHERE securities_code   = '{code_safe}'
-              AND match_confidence  >= {min_confidence}
-              AND (
-                    adoption_date IS NULL
-                    OR adoption_date = ''
-                    OR SAFE.PARSE_DATE('%Y-%m-%d', adoption_date)
-                       >= DATE_SUB(CURRENT_DATE(), INTERVAL {days_back} DAY)
-                  )
-            ORDER BY adoption_date DESC
-            LIMIT 50
-            """
-            df = self.query_to_df(sql)
-            if df.empty:
-                return []
-            return df.to_dict("records")
-        except Exception as e:
-            print(
-                f"[BQClient] get_policy_support_adoptions 失敗 "
-                f"({securities_code}): {e}"
-            )
+        # base_agent は ticker（"6501.T"）のまま渡すため4桁に揃えてから照合する
+        code = str(securities_code or "").strip().upper()
+        if code.endswith(".T"):
+            code = code[:-2]
+        if not code:
             return []
+        # 2026-09-16: 業種ごとに上位5社×33業種を1件ずつ引くと BQ が約165本になる
+        # （1本10MB下限）。policy_support は小さいので初回に1本で全件を読み、
+        # 以後はメモリから返す（シングルトンなので実行中は使い回される）。
+        key = (int(days_back), float(min_confidence))
+        cache = self.__dict__.setdefault("_policy_support_cache", {})
+        if key not in cache:
+            by_code: dict = {}
+            try:
+                sql = f"""
+                SELECT
+                    REGEXP_REPLACE(UPPER(securities_code), r'\\.T$', '') AS code_key,
+                    securities_code,
+                    company_name,
+                    project_name,
+                    adoption_date,
+                    project_type,
+                    support_amount_m,
+                    match_confidence,
+                    CAST(scraped_at AS STRING) AS scraped_at
+                FROM `{self.dataset}.policy_support`
+                WHERE IFNULL(securities_code, '') != ''
+                  AND match_confidence  >= {key[1]}
+                  AND (
+                        adoption_date IS NULL
+                        OR adoption_date = ''
+                        OR SAFE.PARSE_DATE('%Y-%m-%d', adoption_date)
+                           >= DATE_SUB(CURRENT_DATE(), INTERVAL {key[0]} DAY)
+                      )
+                ORDER BY adoption_date DESC
+                """
+                df = self.query_to_df(sql)
+                for rec in ([] if df is None or df.empty else df.to_dict("records")):
+                    by_code.setdefault(str(rec.pop("code_key", "") or ""), []).append(rec)
+            except Exception as e:
+                # 失敗も記録して、同じ実行内で銘柄ごとに再試行しない
+                print(f"[BQClient] get_policy_support_adoptions 失敗: {e}")
+            cache[key] = by_code
+        return list(cache[key].get(code, []))[:50]
 
     def get_policy_support_bonus(
         self,
@@ -1398,7 +1420,8 @@ class EDINETBQClient:
             NORMALIZE_AND_CASEFOLD(raw_text),
             NORMALIZE_AND_CASEFOLD(@query)
           ) > 0
-        ORDER BY fiscal_year_end DESC, section_type
+        -- fiscal_year_end は取込時に NULL のことが多いので、取得の新しい順で補う
+        ORDER BY fiscal_year_end DESC, updated_at DESC, section_type
         LIMIT @limit
         """
         job_config = bigquery.QueryJobConfig(query_parameters=[

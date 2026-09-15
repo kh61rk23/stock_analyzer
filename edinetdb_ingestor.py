@@ -130,6 +130,52 @@ def map_edinetdb_financials(
     }
 
 
+def map_edinetdb_doc_index(
+    row: dict,
+    company: dict,
+    *,
+    edinet_code: str = "",
+    company_code: str = "",
+    now: str | None = None,
+) -> dict | None:
+    """財務の年次レコードから doc_index 行を作る（追加のAPI呼び出しなし）。
+
+    2026-09-15: EdinetDB の年次財務レコードは EDINET 書類ID（doc_id / docID）と
+    提出日時（submit_date_time / submitDateTime）を持つ。BQ financials にも
+    1,647行・340社ぶん本物の書類IDが入っていたのに、doc_index は別の開示
+    エンドポイント（doc_id が空で返る）に頼っており 2026-04-26 から1件も
+    増えていなかった。同じ応答から作れば呼び出しは増えない。
+    書類IDが EDINET 形式（S1xxxxxx）でない合成IDの年度は作らない。
+    """
+    now = now or datetime.now(timezone.utc).isoformat()
+    doc_id = str(_field(row, "doc_id", "docId", "docID") or "").strip()
+    if not re.match(r"^S1[0-9A-Z]{6}$", doc_id):
+        return None
+    submitted = str(_field(row, "submit_date_time", "submitDateTime",
+                           "submit_date", "submitDate") or "")[:10]
+    try:
+        disclosure_date = date.fromisoformat(submitted).isoformat()
+    except ValueError:
+        disclosure_date = None
+    standard = str(_field(row, "accounting_standard", "accountingStandard")
+                   or company.get("accounting_standard") or "").upper()
+    return {
+        "doc_id": doc_id,
+        "company_code": company_code or None,
+        "edinet_code": edinet_code or None,
+        "company_name": company.get("name") or company.get("name_ja"),
+        "doc_type": "有価証券報告書",
+        "fiscal_year_end": _explicit_date(row),
+        "disclosure_date": disclosure_date,
+        "xbrl_available": True,
+        "html_available": False,
+        "fetched_flag": True,
+        "fetched_at": now,
+        "ifrs_flag": standard == "IFRS",
+        "updated_at": now,
+    }
+
+
 def _field(row: dict, *names):
     for name in names:
         if name in row and row[name] is not None:
@@ -628,6 +674,7 @@ def run_edinetdb_ingest(
     if target_limit is not None:
         targets = targets[:max(0, int(target_limit))]
     success = failure = missing = 0
+    doc_index_rows = 0
     # 2026-09-10: failure は4つの別原因（financials欠落 / segments欠落 /
     # text-blocks欠落 / BQ MERGE例外）を1つの数字に潰しており、
     # 台帳に「failure: 8」と出るだけで何が起きているか分からなかった。
@@ -699,6 +746,14 @@ def run_edinetdb_ingest(
             map_edinetdb_financials(item, edinet_code=code, company_code=company_code, now=now)
             for item in financials if isinstance(item, dict)
         ]
+        # 書類一覧は同じ財務応答から作る（追加のAPI呼び出しなし）
+        doc_rows = [
+            r for r in (
+                map_edinetdb_doc_index(item, company, edinet_code=code,
+                                       company_code=company_code, now=now)
+                for item in financials if isinstance(item, dict)
+            ) if r
+        ]
         latest_year = max(
             [row.get("fiscal_year") for row in fin_rows if row.get("fiscal_year") is not None],
             default=None,
@@ -739,6 +794,14 @@ def run_edinetdb_ingest(
                 "fetch_count": fetch_count + 1, "company_code": company_code,
             }
             success += 1
+            # 書類一覧の MERGE 失敗は財務取込の成否に影響させない
+            if doc_rows:
+                try:
+                    bq.merge_rows("doc_index", doc_rows, ["doc_id"])
+                    doc_index_rows += len(doc_rows)
+                except Exception as _doc_exc:
+                    print(f"    ⚠️  [edinetdb] doc_index MERGE失敗 [{code}]: "
+                          f"{_brief_error(_doc_exc)}")
         except Exception as exc:
             # 2026-09-10: ここは例外を完全に握り潰しており、BQ側の理由
             # （スキーマ不一致・型不正など）が一切ログに出なかった。
@@ -764,6 +827,7 @@ def run_edinetdb_ingest(
         "skipped": False, "success": success, "failure": failure,
         # EdinetDBにデータが無いだけのものは障害ではないので別建てにする
         "missing": missing,
+        "doc_index_rows": doc_index_rows,
         "reasons": reasons,
         "targets": targets, "budget": daily_budget, "api_calls": client.calls,
     }

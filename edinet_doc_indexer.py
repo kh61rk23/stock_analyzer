@@ -82,6 +82,7 @@ def build_doc_index_rows(
     now: str | None = None,
     seen_types: set | None = None,
     seen_keys: set | None = None,
+    doc_id_by_year: dict | None = None,
 ) -> list[dict]:
     """EdinetDB disclosure objectを既存doc_index列へ変換する純関数。
 
@@ -110,6 +111,12 @@ def build_doc_index_rows(
                            str(item.get("pdf_url") or ""))
             if _m:
                 doc_id = _m.group(1)
+        if not doc_id and doc_id_by_year:
+            # 同じ企業・年度の書類IDを BQ financials から補う（run_doc_indexer が渡す）
+            try:
+                doc_id = str(doc_id_by_year.get(int(_first(item, "fiscal_year", "fiscalYear"))) or "")
+            except (TypeError, ValueError):
+                pass
         raw_type = str(_first(item, "type", "document_type", "doc_type", "category") or "")
         if seen_types is not None:
             seen_types.add(raw_type or "(種別欄なし)")
@@ -130,7 +137,9 @@ def build_doc_index_rows(
             "doc_type": "有価証券報告書",
             "fiscal_year_end": _as_date(_first(item, "fiscal_year_end", "period_end")),
             "disclosure_date": _as_date(
-                _first(item, "published_at", "disclosure_date", "submit_date", "filed_at")
+                # 2026-09-15: 実応答の開示日キーは "date"（候補に無く常に NULL になっていた）
+                _first(item, "published_at", "disclosure_date", "submit_date", "filed_at",
+                       "date", "submit_date_time")
             ),
             "xbrl_available": False,
             "html_available": False,
@@ -140,6 +149,35 @@ def build_doc_index_rows(
             "updated_at": now,
         })
     return rows
+
+
+def _load_doc_ids_from_financials(bq, codes) -> dict:
+    """{edinet_code: {fiscal_year: doc_id}} を BQ financials から1クエリで作る。
+
+    2026-09-15: 開示エンドポイントの行は doc_id が空で返る（キー date / doc_id /
+    fiscal_year / pdf_url / title / type、doc_id の値だけ空）。同じ企業・年度の
+    EDINET 書類IDは財務取込で BQ financials に入っているので、そこから補う。
+    """
+    out: dict = {}
+    codes = [str(c) for c in (codes or []) if c]
+    if not codes:
+        return out
+    try:
+        from google.cloud import bigquery
+        sql = f"""
+        SELECT edinet_code, fiscal_year, doc_id
+        FROM `{bq.dataset}.financials`
+        WHERE edinet_code IN UNNEST(@codes)
+          AND fiscal_year IS NOT NULL
+          AND REGEXP_CONTAINS(doc_id, r'^S1[0-9A-Z]{{6}}$')
+        """
+        job = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ArrayQueryParameter("codes", "STRING", codes)])
+        for r in bq.client.query(sql, job_config=job).result():
+            out.setdefault(str(r["edinet_code"]), {})[int(r["fiscal_year"])] = str(r["doc_id"])
+    except Exception as exc:
+        print(f"[doc_indexer] ⚠️ 財務からの書類ID補完に失敗: {str(exc)[:60]}")
+    return out
 
 
 def run_doc_indexer(days_back: int = 1, cfg=None) -> dict:
@@ -189,6 +227,7 @@ def run_doc_indexer(days_back: int = 1, cfg=None) -> dict:
         bq = EDINETBQClient()
     except Exception as exc:
         return {"skipped": True, "reason": f"BQ unavailable: {type(exc).__name__}", "inserted": 0}
+    doc_ids = _load_doc_ids_from_financials(bq, targets)
 
     # 2026-07-30: 取得窓を days_back（既定7日）から専用設定へ変更。
     # 有価証券報告書は**年1回**しか提出されないため、7日窓で types=yuho を
@@ -224,7 +263,8 @@ def run_doc_indexer(days_back: int = 1, cfg=None) -> dict:
             continue
         items = _disclosure_items(data)
         built = build_doc_index_rows(data, by_code.get(code, {}),
-                                     seen_types=seen_types, seen_keys=seen_keys)
+                                     seen_types=seen_types, seen_keys=seen_keys,
+                                     doc_id_by_year=doc_ids.get(code))
         if not items:
             stats["empty"] += 1
         elif not built:

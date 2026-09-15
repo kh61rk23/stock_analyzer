@@ -73,7 +73,9 @@ AV_API_KEY_ENV = "ALPHAVANTAGE_API_KEY"
 
 # ── EDINET DB 設定 ─────────────────────────────────────────────
 # edinetdb.jp — 全上場企業3848社の財務データ REST API（毎日8:00 JST更新）
-EDINET_DB_API_KEY = "REDACTED_EDINETDB"
+# 2026-09-15: API キーが平文で直書きされていた（git 履歴にも残る）。
+# 他モジュールと同じく環境変数（GitHub Secrets → run_headless.py の ENV_MAP）から読む。
+EDINET_DB_API_KEY = os.getenv("EDINETDB_API_KEY", "")
 EDINET_DB_BASE    = "https://edinetdb.jp/v1"
 EDINET_DB_TIMEOUT = 10   # リクエストタイムアウト（秒）
 

@@ -586,7 +586,9 @@ def build_insight_text(
                     oi_str = " → ".join(
                         f"{int(v/1e8):,}億" if v else "N/A" for v in oi[-3:]
                     )
-                    lines.append(f"📈 売上高({years[-3] if len(years)>=3 else ''}〜): {rev_str}")
+                    # 2026-09-15: 年が3件未満だと「売上高(〜)」と空欄になっていた
+                    _from = years[-3] if len(years) >= 3 else (years[0] if years else "")
+                    lines.append(f"📈 売上高({_from}〜): {rev_str}")
                     lines.append(f"📊 営業利益: {oi_str}")
                     cagr_parts = []
                     if rev_cagr is not None: cagr_parts.append(f"売上CAGR: {rev_cagr*100:+.1f}%/年")
@@ -596,8 +598,9 @@ def build_insight_text(
             # 政府EDINET メタ
             if gov:
                 lines.append(
-                    f"📋 有報: {gov.get('submit_date','N/A')} 提出 "
-                    f"| 期末: {gov.get('period_end','N/A')}"
+                    # キーがあって値が None のとき get(key, 'N/A') は None を返し「None」と表示される
+                    f"📋 有報: {gov.get('submit_date') or 'N/A'} 提出 "
+                    f"| 期末: {gov.get('period_end') or 'N/A'}"
                 )
             lines.append("")
 

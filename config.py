@@ -2305,6 +2305,9 @@ ENABLE_POLICY_RADAR:         bool = True
 # NEDO採択情報スクレイパー（週次）。BQ edinet.policy_support への唯一の
 # 書き込み経路で、base_agent の政策支援ボーナスの前提データになる。
 ENABLE_NEDO_SCRAPER:         bool = True
+# 2026-09-15: 公募一覧（状況＝決定）から1回にたどる決定ページの上限。
+# 固定URL方式を廃止し一覧から自動発見するため、巡回数の上限だけを持つ。
+NEDO_DECISION_MAX_PAGES:     int  = 20
 POLICY_RADAR_MAX_FEEDS:      int  = 10         # 取得する官庁RSS源の上限
 KOKKAI_SEARCH_KEYWORDS: list = [               # 国会議事録API検索語（上限5件）
     "半導体", "防衛費", "子育て支援", "インバウンド", "GX"

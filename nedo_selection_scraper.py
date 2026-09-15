@@ -51,6 +51,7 @@ from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urljoin
 
 
 # ==============================================================
@@ -73,18 +74,18 @@ FUZZY_THRESHOLD  = 0.82    # SequenceMatcher 採用閾値（0.0〜1.0）
 REQUEST_TIMEOUT  = 20
 REQUEST_INTERVAL = 1.5     # スクレイプ間隔（秒）NEDO サーバー負荷軽減
 
-# デフォルトスクレイプ対象URL（config.py の NEDO_ADOPTION_URLS で上書き可能）
-# 実際の採択結果ページURL（プロジェクトごとに変わるため、定期的に更新が必要）
-_DEFAULT_NEDO_URLS: list[str] = [
-    # グリーンイノベーション基金事業
-    "https://www.nedo.go.jp/koubo/FF2_100077.html",
-    # 省エネルギー技術開発（年度ごとにURLが変わるため要確認）
-    "https://www.nedo.go.jp/koubo/FF2_100095.html",
-    # ムーンショット型研究開発事業
-    "https://www.nedo.go.jp/koubo/FF2_100104.html",
-    # Connected Industries（AI・IoT活用）
-    "https://www.nedo.go.jp/koubo/FF2_100062.html",
-]
+# 2026-09-15: 旧実装は採択結果ページのURLを4件固定で持っていたが、4件とも
+# 削除済み（HTTP 404）で、BQ edinet.policy_support は作成以来0行だった。
+# NEDO の決定ページは案件ごとに URL が変わり（SR3_ / CD3_ / EF3_ …）固定リストは
+# 必ず腐るため、公募一覧を「状況＝決定」で絞った一覧から毎回たどる。
+# config.NEDO_ADOPTION_URLS を設定した場合だけ、それを優先する。
+_NEDO_DECISION_LIST_URL = "https://www.nedo.go.jp/form/event.php?f=koubo.html&state=10000175"
+_NEDO_BASE_URL = "https://www.nedo.go.jp/"
+_DEFAULT_NEDO_URLS: list[str] = []   # 互換のため残す（空＝一覧から自動発見）
+
+# 決定ページで社名とみなす法人格の目印
+_ORG_MARKERS: tuple = ("株式会社", "合同会社", "有限会社", "（株）", "(株)", "㈱",
+                       "Inc.", "Corporation", "Co., Ltd", "LLC")
 
 # 採択ページで会社名を示す列ヘッダーの候補（優先順）
 _COMPANY_HEADER_PATTERNS: list[str] = [
@@ -199,6 +200,19 @@ def _is_valid_company_name(name: str) -> bool:
 # BLOCK 2: 会社名マップ構築（名寄せ用データソース）
 # ==============================================================
 
+def _to_jp_code(code) -> str:
+    """"6501.T" / "6501" / "130A.T" を4桁の証券コードに揃える。日本株以外は ""。
+
+    2026-09-16: スクリーナー候補の ticker（"6501.T"）をそのまま格納しており、
+    base_agent の照合（ticker そのまま）と edinet.company 由来の4桁コードが
+    行ごとに食い違ってボーナスが付かない組み合わせがあった。
+    """
+    s = str(code or "").strip().upper()
+    if s.endswith(".T"):
+        s = s[:-2]
+    return s if re.fullmatch(r"[0-9][0-9A-Z]{3}", s) else ""
+
+
 def _build_company_name_map(
     results:   dict,
     bq_client=None,
@@ -222,7 +236,7 @@ def _build_company_name_map(
         screener = results.get("screener", {})
         candidates = screener.get("candidates", screener.get("passed", []))
         for c in candidates:
-            code = str(c.get("ticker", c.get("code", "")) or "")
+            code = _to_jp_code(c.get("ticker", c.get("code", "")))
             name = str(c.get("name", c.get("company_name", "")) or "")
             if code and name:
                 normalized = _normalize_company_name(name)
@@ -234,20 +248,17 @@ def _build_company_name_map(
     # ── Source 2: BigQuery financials テーブル ─────────────────
     if bq_client is not None and len(name_map) < 100:
         try:
+            # 2026-09-15: 旧クエリは edinet.financials に存在しない列
+            # （securities_code / company_name / period_end）を引いており、例外を
+            # 握り潰して名寄せ辞書が画面上の約26社だけになっていた。
+            # 社名と証券コードを持つ edinet.company（約3,800社）から作る。
+            _ds = getattr(bq_client, "dataset", "edinet")
             df = bq_client.query_to_df(
-                """
-                SELECT securities_code, company_name
-                FROM (
-                    SELECT securities_code, company_name,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY securities_code
-                               ORDER BY period_end DESC
-                           ) AS rn
-                    FROM `edinet.financials`
-                    WHERE company_name IS NOT NULL
-                      AND securities_code IS NOT NULL
-                )
-                WHERE rn = 1
+                f"""
+                SELECT SUBSTR(sec_code, 1, 4) AS securities_code, name AS company_name
+                FROM `{_ds}.company`
+                WHERE name IS NOT NULL AND sec_code IS NOT NULL
+                  AND NOT IFNULL(is_delisted, FALSE)
                 LIMIT 5000
                 """
             )
@@ -314,6 +325,10 @@ def match_company_to_code(
     best_partial_len = 0
     for known_name, code in name_map.items():
         if not known_name:
+            continue
+        # 2026-09-15: 3文字以下の社名での包含一致は別会社への誤結合が多い
+        # （例: 「アトム」が多数の社名に含まれる）。部分一致は4文字以上に限る。
+        if min(len(known_name), len(normalized_target)) < 4:
             continue
         if known_name in normalized_target or normalized_target in known_name:
             # 長いマッチを優先（例: "トヨタ"より"トヨタ自動車"を優先）
@@ -442,6 +457,132 @@ def _parse_amount(text: str) -> Optional[float]:
     except Exception:
         pass
     return None
+
+
+def _fetch_bytes(url: str) -> Optional[bytes]:
+    """添付PDFなどをバイト列で取得する。失敗時は None。"""
+    try:
+        import requests
+        time.sleep(REQUEST_INTERVAL)
+        resp = requests.get(url, headers=_HEADERS, timeout=REQUEST_TIMEOUT)
+        if resp.status_code == 200:
+            return resp.content
+        print(f"    ⚠️  HTTP {resp.status_code}: {url[:80]}")
+    except Exception as e:
+        print(f"    ⚠️  取得失敗: {url[:60]}... ({str(e)[:50]})")
+    return None
+
+
+def _pdf_text(data: bytes) -> str:
+    """PDF本文をテキスト化する（PyMuPDF・requirements 既存）。"""
+    try:
+        import fitz
+        with fitz.open(stream=data, filetype="pdf") as doc:
+            return "\n".join(page.get_text() for page in doc)
+    except Exception:
+        return ""
+
+
+def _extract_org_names(text: str) -> list[str]:
+    """本文・PDFテキストから法人格付きの社名を抜き出す。
+
+    NEDO の実施予定先一覧は「株式会社アトム」「KDDI株式会社」のように社名が
+    独立した行で並ぶ。テーマ名の途中に句読点で区切られた断片が混ざるため、
+    法人格の目印を含む短い断片だけを採る（大学・国研は上場企業の名寄せ対象外）。
+    """
+    names: list[str] = []
+    for line in re.split(r"[\r\n]+", text or ""):
+        for part in re.split(r"[、，／]|\s{2,}", line):
+            name = part.strip(" 　・●○‐－-:：\t")
+            if not name or len(name) > 60:
+                continue
+            if not any(marker in name for marker in _ORG_MARKERS):
+                continue
+            # 「A株式会社（幹事）」のような末尾の役割注記を落とす
+            name = re.sub(r"[（(][^）()]{0,12}[）)]$", "", name).strip()
+            if _is_valid_company_name(name) and name not in names:
+                names.append(name)
+    return names
+
+
+def discover_decision_urls(max_pages: int = 20, fetch=None) -> list[str]:
+    """公募一覧（状況＝決定）から決定ページのURLを新しい順に集める。"""
+    fetch = fetch or _fetch_page
+    html = fetch(_NEDO_DECISION_LIST_URL)
+    if not html:
+        return []
+    urls: list[str] = []
+    for href in re.findall(r'href="(/koubo/[A-Z]{2}\d_\d{6}\.html)"', html):
+        url = urljoin(_NEDO_BASE_URL, href)
+        if url not in urls:
+            urls.append(url)
+    return urls[:max(0, int(max_pages))]
+
+
+def parse_nedo_decision_page(html: str, source_url: str = "",
+                             fetch_bytes=None) -> list[dict]:
+    """「実施体制の決定」ページから実施予定先（社名）を抜き出す。
+
+    2026-09-15 実測の2形式に対応する:
+      ① 本文の「N．実施予定先」見出し直下に社名（例: SR3_100022）
+      ② 添付PDF「資料1：実施予定先一覧」に表で社名（例: CD3_100434）
+    """
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        print("    ⚠️  beautifulsoup4 が未インストールです（pip install beautifulsoup4）")
+        return []
+    soup = BeautifulSoup(html or "", "html.parser")
+    h1 = soup.find("h1")
+    title = h1.get_text(" ", strip=True) if h1 else ""
+    title = re.sub(r"^(決定|公募|予告)\s*", "", title)
+
+    date_text = ""
+    date_p = soup.find("p", class_="text-right")
+    for candidate in (date_p.get_text(" ", strip=True) if date_p else "",
+                      soup.get_text(" ", strip=True)):
+        m = re.search(r"(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日", candidate)
+        if m:
+            date_text = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+            break
+    project_type = _infer_project_type(source_url + " " + title)
+
+    names: list[str] = []
+    for heading in soup.find_all(["h2", "h3", "h4"]):
+        if not re.search(r"実施予定先|採択先|委託先|助成先", heading.get_text()):
+            continue
+        chunk = []
+        for sib in heading.find_next_siblings():
+            if sib.name in ("h2", "h3", "h4"):
+                break
+            chunk.append(sib.get_text("\n", strip=True))
+        names.extend(_extract_org_names("\n".join(chunk)))
+
+    if fetch_bytes is not None:
+        for a in soup.find_all("a", href=True):
+            label = a.get_text(" ", strip=True)
+            if "審査委員" in label or not a["href"].lower().endswith(".pdf"):
+                continue
+            if not re.search(r"実施予定先|採択(結果|先|事業|テーマ)?(一覧)?", label):
+                continue
+            data = fetch_bytes(urljoin(source_url or _NEDO_BASE_URL, a["href"]))
+            if data:
+                names.extend(_extract_org_names(_pdf_text(data)))
+
+    records, seen = [], set()
+    for name in names:
+        if name in seen:
+            continue
+        seen.add(name)
+        records.append({
+            "raw_company_name": name,
+            "project_name":     title[:200],
+            "adoption_date":    date_text,
+            "project_type":     project_type,
+            "support_amount_m": None,
+            "source_url":       source_url,
+        })
+    return records
 
 
 def parse_nedo_html(
@@ -750,10 +891,9 @@ def run_nedo_selection_scraper(
             return cached
 
     # ── URLリストの取得 ──────────────────────────────────────────
-    url_list: list[str] = (
-        getattr(cfg, "NEDO_ADOPTION_URLS", None)
-        or _DEFAULT_NEDO_URLS
-    )
+    url_list: list[str] = list(getattr(cfg, "NEDO_ADOPTION_URLS", None) or [])
+    if not url_list:
+        url_list = discover_decision_urls(int(getattr(cfg, "NEDO_DECISION_MAX_PAGES", 20)))
     print(f"    📡 対象URL: {len(url_list)}件")
 
     # ── スクレイピング ────────────────────────────────────────────
@@ -765,7 +905,10 @@ def run_nedo_selection_scraper(
             print(f"    🌐 取得中: {url[:70]}...")
             html = _fetch_page(url)
             if html:
-                page_records = parse_nedo_html(html, source_url=url)
+                page_records = parse_nedo_decision_page(
+                    html, source_url=url, fetch_bytes=_fetch_bytes)
+                if not page_records:          # 表形式の旧ページ向けの解析に落とす
+                    page_records = parse_nedo_html(html, source_url=url)
                 all_raw_records.extend(page_records)
                 urls_succeeded += 1
                 print(
@@ -824,8 +967,10 @@ def run_nedo_selection_scraper(
     bq_inserted = False
     if bq_client is not None and bq_rows:
         try:
-            bq_inserted = bq_client.insert_rows(
-                "policy_support", bq_rows
+            # 2026-09-15: 週次で同じ決定ページを取り直すため、追記（insert）だと
+            # 同じ採択が毎週重複して積まれボーナスが水増しされる。出典URL×社名で冪等に MERGE。
+            bq_inserted = bq_client.merge_rows(
+                "policy_support", bq_rows, ["source_url", "raw_company_name"]
             )
             if bq_inserted:
                 print(
