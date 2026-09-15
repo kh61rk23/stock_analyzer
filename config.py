@@ -2681,6 +2681,10 @@ BM_DETECTION_THRESHOLDS: dict = {
 # ==============================================================
 ENABLE_POLITICIAN_MONITOR:   bool  = True
 ALERT_POLITICIAN_MIN_SCORE:  int   = 60      # この点数以上でLINE即時通知
+# 2026-09-15: 高スコア議員取引アラート／JP波及補正に使う取引の鮮度（日）。
+# 「新規」は履歴に無いという意味でしかなく、初回は年初以降の全取引が新規になる。
+# STOCK Act の開示期限は取引から最大45日のため、余裕を見て60日。
+POLITICIAN_ALERT_MAX_AGE_DAYS: int = 60
 ALERT_BUFFETT_THRESHOLD:     bool  = True    # 著名委員会所属議員を優先スコアリング
 POLITICIAN_HISTORY_MAX_ROWS: int   = 5000    # historian_history.json 最大保持行数
 

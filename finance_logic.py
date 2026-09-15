@@ -232,6 +232,22 @@ def fix_div_yield(raw) -> Optional[float]:
     return v / 100.0 if v > 1.0 else v
 
 
+def _yf_yield_ratio(info: dict) -> Optional[float]:
+    """yfinance の info から配当利回りを比率（0.04 = 4%）で返す。
+
+    2026-09-15: yfinance の dividendYield は常に「%値」（0.19 = 0.19%）で返る。
+    比率で返る trailingAnnualDividendYield を優先し、無ければ %値として 1/100 する。
+    """
+    ttm = _safe_float(info.get("trailingAnnualDividendYield"))
+    if ttm is not None and 0 < ttm <= 0.30:
+        return ttm
+    pct = _safe_float(info.get("dividendYield"))
+    if pct is None:
+        return None
+    v = pct / 100.0
+    return v if 0 <= v <= 0.30 else None
+
+
 def compute_div_yield(info: dict, is_jp: bool, price) -> Optional[float]:
     """
     配当利回り計算 — 銘柄タイプ対応版
@@ -240,12 +256,17 @@ def compute_div_yield(info: dict, is_jp: bool, price) -> Optional[float]:
         ① dividendRate（年間配当額 $）/ 現在株価 を優先使用
            yfinance は US 株で dividendYield を稀に誤値（40%等）で返すため
            dividendRate から算出するほうが正確
-        ② フォールバック: dividendYield（小数）。30%超は異常値として補正
+        ② フォールバック: _yf_yield_ratio()（trailingAnnualDividendYield 優先）
     日本株:
-        fix_div_yield() でパーセント表記を正規化（従来通り）
+        _yf_yield_ratio()（2026-09-15 に fix_div_yield から切替）
     """
+    # 2026-09-15: fix_div_yield() の「1.0 以下なら比率」判定では、%値で返る
+    # 1% 未満の銘柄が100倍に誤読され、SoftBank Group（0.19%）が「19.0%」、
+    # Recruit（0.16%）が「16.0%」の高配当として日次メールに載っていた
+    # （9/14 の base_agent 側の修正は、先に通る data_bridge 経路に効いていなかった）。
+    # fix_div_yield は Alpha Vantage の比率値にも使うため関数自体は変えない。
     if is_jp:
-        return fix_div_yield(info.get("dividendYield"))
+        return _yf_yield_ratio(info)
 
     # ── 米国株 ──────────────────────────────────────────────────
     # 優先①: dividendRate / price
@@ -259,18 +280,8 @@ def compute_div_yield(info: dict, is_jp: bool, price) -> Optional[float]:
     except Exception:
         pass
 
-    # 優先②: dividendYield（小数）
-    try:
-        v = _safe_float(info.get("dividendYield"))
-        if v is None:
-            return None
-        if v > 0.30:               # 30%超 → %表記の可能性
-            v = v / 100.0
-        if v > 0.30 or v < 0:     # それでも異常なら無効
-            return None
-        return v
-    except Exception:
-        return None
+    # 優先②: yfinance の利回り欄（%値。0.30 以下を比率とみなす旧判定は同じ誤読を起こす）
+    return _yf_yield_ratio(info)
 
 
 # ==============================================================

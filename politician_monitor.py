@@ -259,6 +259,22 @@ def _cache_dir(cfg) -> Path:
     return d
 
 
+def _to_iso_date(value) -> str:
+    """取引日を "YYYY-MM-DD" に正規化する。解釈できなければ元の文字列を返す。
+
+    2026-09-15: 下院PTRのPDFは "03/16/2026"（MM/DD/YYYY）で日付を持つ。
+    ISO 前提の文字列比較（期限切れ判定・鮮度判定）と混ざると
+    "03/.." < "2026-.." で常に古い扱いになるため、入口と比較の両方で揃える。
+    """
+    s = str(value or "").strip()
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(s[:10], fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return s
+
+
 def _load_politician_history(cfg) -> dict:
     """
     politician_history.json を読み込む。
@@ -284,8 +300,13 @@ def _save_politician_history(cfg, history: dict) -> None:
 
         txs = history.get("transactions", [])
         # TTL を超えた古い取引を削除
+        # 2026-09-15: 取引日が PDF 由来の "MM/DD/YYYY" になっており、ISO の cutoff と
+        # 文字列比較すると "03/16/2026" < "2026-03-19" で**全件が期限切れ**として
+        # 消えていた（9/15 実行後の politician_history.json は transactions=0件）。
+        # 履歴が空のため毎回同じ届出が「新規」になり、同じ高スコアアラートが
+        # 日次で繰り返される状態だった。比較前に ISO へ揃える。
         txs = [t for t in txs
-               if t.get("transaction_date", "9999") >= cutoff]
+               if (_to_iso_date(t.get("transaction_date")) or "9999") >= cutoff]
         # 行数上限
         if len(txs) > max_rows:
             txs = txs[-max_rows:]
@@ -484,7 +505,7 @@ def _fetch_ptr_detail(file_id: str, year: int) -> list[dict]:
             # score_transaction() は "p" / "s" の完全一致で売買を判定する
             "transaction_type": tx_type.lower(),
             "amount":           " ".join(amount.split()),
-            "transaction_date": tx_date,
+            "transaction_date": _to_iso_date(tx_date),   # 履歴・鮮度判定と形式を揃える
             "sector":           sec_type,
             "comment":          "",
             "file_id":          file_id,
@@ -689,8 +710,18 @@ def detect_new_transactions(
     """
     fetched のうち existing にない新規取引を返す。
     """
-    existing_keys = {_make_tx_key(t) for t in existing}
-    return [t for t in fetched if _make_tx_key(t) not in existing_keys]
+    # 2026-09-15: 既存との比較だけで、同じ回の取得分どうしの重複は素通しだった。
+    # 修正届出（同一取引の再提出）が同じ回に入ると二重に「新規」になり、
+    # 9/15 の日次メールで「[98pt] Josh Gottheimer 買: Microsoft」が2行並んでいた。
+    seen = {_make_tx_key(t) for t in existing}
+    out = []
+    for t in fetched:
+        key = _make_tx_key(t)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(t)
+    return out
 
 
 # ==============================================================
@@ -862,9 +893,15 @@ def run_politician_monitor(cfg) -> dict:
 
     # ── 7. 高スコア取引を抽出 ──────────────────────────────────
     min_score = int(getattr(cfg, "ALERT_POLITICIAN_MIN_SCORE", 60))
+    # 2026-09-15: 「新規」は“履歴に無い”という意味でしかなく、初回や履歴が空だった間は
+    # 年初以降の全取引が新規扱いになる（9/15 は 1,808件・高スコア93件）。
+    # 数ヶ月前の売買で今日の業種スコアを補正しないよう、取引日の鮮度で絞る。
+    max_age = int(getattr(cfg, "POLITICIAN_ALERT_MAX_AGE_DAYS", 60))
+    age_cut = (datetime.now() - timedelta(days=max_age)).strftime("%Y-%m-%d")
     high_score_trades = [
         t for t in truly_new
         if t.get("score", 0) >= min_score
+        and (_to_iso_date(t.get("transaction_date")) or "9999") >= age_cut
     ]
     high_score_trades.sort(key=lambda x: x.get("score", 0), reverse=True)
 

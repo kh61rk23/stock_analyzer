@@ -1331,10 +1331,14 @@ def extract_alerts(cfg, results: dict) -> list:
                 lines = []
                 for t in high_trades[:5]:
                     direction = "買" if t.get("direction") == "buy" else "売"
+                    # 2026-09-15: 取引日を併記。無いと別日の同銘柄取引が重複に見え、
+                    # 古い取引かどうかもメールから判別できなかった。
+                    _td = t.get("transaction_date", "")
                     lines.append(
                         f"  [{t.get('score', 0):.0f}pt] "
                         f"{t.get('politician', '')[:16]} "
                         f"{direction}: {t.get('asset', '')[:30]}"
+                        + (f"（取引日 {_td}）" if _td else "")
                     )
                 jp_signals = pm_result.get("jp_sector_signals", {})
                 if jp_signals:

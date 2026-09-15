@@ -100,12 +100,25 @@ def build_doc_index_rows(
             _cand = str(_first(item, "id", "doc_code", "code") or "").strip()
             if re.match(r"^S[0-9A-Z]{7}$", _cand):
                 doc_id = _cand
+        if not doc_id:
+            # 2026-09-15: 前日追加の診断で、書類IDが取れなかった行のキーは
+            # date / doc_id / fiscal_year / pdf_url / title / type と判明した。
+            # doc_id 列はあるのに**値が空**で、9社/9社がここで落ちていた
+            # （doc_index が 2026-04-26 から1件も増えていない真因）。
+            # EDINET の PDF URL には書類管理番号（S1xxxxxx）が含まれるので、そこから補う。
+            _m = re.search(r"(?<![0-9A-Za-z])(S1[0-9A-Z]{6})(?![0-9A-Za-z])",
+                           str(item.get("pdf_url") or ""))
+            if _m:
+                doc_id = _m.group(1)
         raw_type = str(_first(item, "type", "document_type", "doc_type", "category") or "")
         if seen_types is not None:
             seen_types.add(raw_type or "(種別欄なし)")
         if not doc_id:
             if seen_keys is not None:
                 seen_keys.update(str(k) for k in item.keys())
+                # 値の実物も1件ぶん残す（キー名だけでは空か型違いか判別できない）
+                seen_keys.add(f"例:doc_id={item.get('doc_id')!r}")
+                seen_keys.add(f"例:pdf_url={str(item.get('pdf_url'))[:70]}")
             continue
         if not is_annual_report(raw_type):
             continue
