@@ -30,7 +30,7 @@
 #   edinet_quality_score が高い → quality_score に最大 +8pt ボーナス
 #   edinet_quality_score が低い → quality_score に最大 -8pt ペナルティ
 #
-# 【依存】edinet_rotation_manager.py / config.py
+# 【依存】edinet_bq_client.py（EdinetDB 取込データ） / config.py
 # ==============================================================
 
 from __future__ import annotations
@@ -77,10 +77,10 @@ _CFG_CONST_MAP = {
 
 def calc_edinet_quality_score(analysis: dict) -> dict:
     """
-    EDINET rotation_manager が蓄積した analysis データから
+    EdinetDB 由来の analysis データ（_analysis_from_bundle の出力）から
     edinet_quality_score（0〜100）を算出する。
 
-    analysis の構造（edinet_rotation_manager.load_db() の ticker_analysis[ticker]）:
+    analysis の構造（2026-09-17 以前は edinet_rotation_manager.load_db() の形）:
       {
         "credit_score":   "AA",   # EDINET DB の信用格付け
         "credit_rating":  "A+",
@@ -193,30 +193,57 @@ def calc_edinet_quality_score(analysis: dict) -> dict:
 # BLOCK 2: screener通過銘柄のEDINET品質スコアを一括取得
 # ==============================================================
 
+def _analysis_from_bundle(bundle: dict) -> dict:
+    """EdinetDB の業種分析バンドルを calc_edinet_quality_score の入力形に直す。"""
+    analysis = (bundle or {}).get("analysis") or {}
+    fin = (bundle or {}).get("financials") or {}
+    out: dict = {}
+    if analysis.get("credit_score") is not None:
+        out["credit_score"] = analysis["credit_score"]
+    if fin.get("revenue_cagr") is not None:
+        out["revenue_growth"] = fin["revenue_cagr"]
+    # 年度は古い順に並ぶ。最新年度の当期純利益 ÷ 純資産で ROE を出す
+    net_income = (fin.get("net_income") or [None])[-1]
+    equity = (fin.get("equity") or [None])[-1]
+    try:
+        if net_income is not None and equity is not None and float(equity) > 0:
+            out["roe"] = float(net_income) / float(equity)
+    except (TypeError, ValueError):
+        pass
+    return out
+
+
 def build_edinet_quality_cache(cfg, tickers: list) -> dict:
     """
     screener 通過銘柄の edinet_quality_score を一括計算する。
-    edinet_rotation_manager の load_db() を参照。
+
+    2026-09-17: 読み先を旧EDINET API の蓄積DB（edinet_rotation_manager.load_db）から
+    BigQuery の EdinetDB 取込データ（信用スコア・売上CAGR・ROE）へ付け替えた。
+    旧DBは廃止済みで空のうえ、ファイル名は EDINET コードなのに ticker で引いており、
+    毎日「EDINET品質付与: 0/10銘柄」だった。業種分析と同じ先読みキャッシュを使うため、
+    EdinetDB API の追加呼び出しは無い。
 
     Returns:
         {ticker: {"edinet_quality_score": float, "edinet_bonus": float, ...}}
     """
     quality_cache = {}
+    if not tickers:
+        return quality_cache
     try:
         import importlib, sys
         sys.path.insert(0, str(Path(__file__).parent))
-        erm = importlib.import_module("edinet_rotation_manager")
-        db  = erm.load_db(cfg)
-        analysis_data = db.get("analysis", {})
-
-        for ticker in tickers:
-            analysis = analysis_data.get(ticker)
-            if analysis:
-                quality_cache[ticker] = calc_edinet_quality_score(analysis)
-            # analysisがない場合はデフォルト（スキップ）
+        ebq = importlib.import_module("edinet_bq_client")
+        bundles = ebq.EDINETBQClient().get_company_analysis_bundle(
+            list(tickers), max_companies=len(tickers)
+        )
     except Exception as e:
         print(f"    ⚠️  EDINET品質スコア取得失敗: {str(e)[:60]}")
+        return quality_cache
 
+    for ticker in tickers:
+        analysis = _analysis_from_bundle(bundles.get(ticker) or {})
+        if analysis:
+            quality_cache[ticker] = calc_edinet_quality_score(analysis)
     return quality_cache
 
 

@@ -507,14 +507,20 @@ def _calc_debt_cycle_score(cfg, results: dict) -> dict:
 
 def _calc_sector_tier(sector_results: dict, results: dict) -> dict:
     """
-    sector_results の composite_score と momentum を元に
+    sector_results の composite_score の順位と momentum を元に
     各業種を TOP / MID / BOT の3段階に分類する。
+
+    2026-09-17: 固定閾値（65点以上TOP / 45点未満BOT）では、補正前の途中スコアで
+    判定していたこともあり 33業種中30業種が BOT になり、スクリーナーの対象が
+    毎日3業種前後に絞られていた（最終スコアでも27業種がBOT）。健太の判断により
+    スコア順位で上位 SECTOR_TIER_TOP_SHARE を TOP、下位 SECTOR_TIER_BOT_SHARE を
+    BOT、残りを MID とする（33業種なら 11 / 11 / 11）。
 
     Returns:
         {sector_code: "TOP" / "MID" / "BOT"}
     """
-    top_thresh  = getattr(cfg, "SECTOR_TIER_TOP_THRESHOLD",  65.0)
-    mid_thresh  = getattr(cfg, "SECTOR_TIER_MID_THRESHOLD",  45.0)
+    top_share   = float(getattr(cfg, "SECTOR_TIER_TOP_SHARE", 1 / 3))
+    bot_share   = float(getattr(cfg, "SECTOR_TIER_BOT_SHARE", 1 / 3))
     up_slope    = getattr(cfg, "SECTOR_TIER_UPGRADE_SLOPE",   2.5)
     down_slope  = getattr(cfg, "SECTOR_TIER_DOWNGRADE_SLOPE", -2.5)
     crisis_max  = getattr(cfg, "SECTOR_TIER_CRISIS_MAX_TOP",  3)
@@ -526,21 +532,35 @@ def _calc_sector_tier(sector_results: dict, results: dict) -> dict:
     # momentumスロープ取得（momentum_factor の結果）
     momentum_res = results.get("momentum", {})
 
+    def _score(item):
+        try:
+            return float(item[1].get("composite_score", 0) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    ranked = sorted(
+        ((c, r) for c, r in sector_results.items() if isinstance(r, dict)),
+        key=_score, reverse=True,
+    )
+    n_ranked = len(ranked)
+    n_top = int(round(n_ranked * top_share))
+    n_bot = int(round(n_ranked * bot_share))
+    rank_of = {code: i for i, (code, _) in enumerate(ranked)}
+
     tier = {}
     for code, res in sector_results.items():
         if not isinstance(res, dict):
             tier[code] = "BOT"
             continue
 
-        score = float(res.get("composite_score", 0))
-
-        # ── 基本分類 ──────────────────────────────────────
-        if score >= top_thresh:
+        # ── 基本分類（順位） ──────────────────────────────
+        rank = rank_of[code]
+        if rank < n_top:
             t = "TOP"
-        elif score >= mid_thresh:
-            t = "MID"
-        else:
+        elif rank >= n_ranked - n_bot:
             t = "BOT"
+        else:
+            t = "MID"
 
         # ── momentum による格上げ/格下げ ─────────────────
         slope = None
@@ -3210,7 +3230,18 @@ def run_all_tasks(mode: str = "all") -> dict:
             )
             if _sc:
                 sector_res = results.get("sectors", {})
+                # 2026-09-17: GAP-2 の格付けは補正途中のスコアで計算されている。
+                # スクリーナー対象を決める直前に、その時点のスコア順位で付け直す。
                 sector_tier = results.get("sector_tier", {})
+                if sector_res:
+                    try:
+                        sector_tier = _calc_sector_tier(sector_res, results)
+                        results["sector_tier"] = sector_tier
+                        for _code, _t in sector_tier.items():
+                            if isinstance(sector_res.get(_code), dict):
+                                sector_res[_code]["sector_tier"] = _t
+                    except Exception as _tre:
+                        print(f"    ⚠️  sector_tier 再計算エラー（前回値を使用）: {_tre}")
 
                 # ── [GAP-2] BOT_TIER 業種を screener 対象から除外 ──
                 if sector_tier:
@@ -3880,7 +3911,10 @@ def run_all_tasks(mode: str = "all") -> dict:
             logger.add("shareholder_analyzer", "error", str(e)[:100])
             print(f"  ⚠️  株主構成分析エラー: {str(e)[:80]}")
     else:
-        print("  ⏩ 株主構成分析: スキップ")
+        # 2026-09-17: 読み先の旧EDINET API蓄積DBが廃止され毎日「0銘柄」だったため停止。
+        # skipped を残さないと台帳の「記録なし」に出続ける。
+        print("  ⏩ 株主構成分析: スキップ（ENABLE_SHAREHOLDER_ANALYZER=False / 株主データ源なし）")
+        logger.add("shareholder_analyzer", "skipped", "株主データ源なし（旧EDINET API廃止）")
     # ── [I-3] 経営者スコア算出 ──────────────────────────────────
     if getattr(cfg, "ENABLE_CEO_EVALUATOR", True) and _in_mode("screener"):
         try:
@@ -4356,17 +4390,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                 # ── [問題C] sector_tier を results に含めて渡す ─────
                 # sector_tier が未確定の場合は sector composite_score から簡易計算
                 if "sector_tier" not in results and results.get("sectors"):
-                    _top_th = getattr(cfg, "SECTOR_TIER_TOP_THRESHOLD", 65.0)
-                    _bot_th = getattr(cfg, "SECTOR_TIER_MID_THRESHOLD",  45.0)
-                    results["sector_tier"] = {
-                        code: (
-                            "TOP" if sec.get("composite_score", 0) >= _top_th else
-                            "BOT" if sec.get("composite_score", 0) <  _bot_th else
-                            "MID"
-                        )
-                        for code, sec in results["sectors"].items()
-                        if isinstance(sec, dict)
-                    }
+                    results["sector_tier"] = _calc_sector_tier(results["sectors"], results)
                 erm_result = _erm.run_edinet_rotation(cfg, results)
                 results["edinet_rotation"] = erm_result
                 logger.add("edinet_rotation", "success",

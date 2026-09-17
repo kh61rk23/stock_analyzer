@@ -2108,7 +2108,9 @@ MIDTERM_ACHIEVEMENT_RISK:  float = 0.70   # 70%未満（最終2年前時点）�
 # ==============================================================
 # BLOCK P-4: 株主構成分析設定
 # ==============================================================
-ENABLE_SHAREHOLDER_ANALYZER: bool   = True
+# 2026-09-17: 読み先の旧EDINET API蓄積DBが廃止され毎日0銘柄だったため停止（健太の判断）。
+# 再開するには EdinetDB 等から大株主データを取り込む経路が必要。
+ENABLE_SHAREHOLDER_ANALYZER: bool   = False
 FOREIGN_INVESTOR_SPIKE_PCT:  float  = 3.0   # 外国人持株前年比+3%以上でアラート
 ACTIVIST_HOLDINGS_THRESHOLD: float  = 0.05  # 単一外国人/機関が5%超でアクティビスト参戦
 SHAREHOLDER_SCORE_TOP_N:     int    = 10    # analysis 対象の上位 N 銘柄
@@ -2130,9 +2132,10 @@ TDNET_MONITOR_CATEGORIES: list = [
 # ==============================================================
 # BLOCK GAP-2: sector_tier 動的切り替え設定
 # ==============================================================
-SECTOR_TIER_TOP_THRESHOLD:  float = 65.0   # TOP_TIER: この値以上
-SECTOR_TIER_MID_THRESHOLD:  float = 45.0   # MID_TIER: この値以上 TOP未満
-# この値未満は BOT_TIER（screener対象外）
+# 2026-09-17: 固定閾値（65/45点）では33業種中27〜30業種がBOTになりスクリーナー対象が
+# 3〜6業種に偏ったため、スコア順位の割合で分ける方式に変更（健太の判断）。
+SECTOR_TIER_TOP_SHARE:      float = 1 / 3  # 上位この割合を TOP_TIER
+SECTOR_TIER_BOT_SHARE:      float = 1 / 3  # 下位この割合を BOT_TIER（screener対象外）。残りが MID
 
 # momentumによるtier格上げ条件（slope pt/週）
 SECTOR_TIER_UPGRADE_SLOPE:   float =  2.5  # MID→TOPに格上げ

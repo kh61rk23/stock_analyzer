@@ -210,3 +210,72 @@ class TestOptionsDiagnostics:
         reasons = {}
         assert m._fetch_metrics(types.SimpleNamespace(), {"ticker": "SPY"}, {}, reasons) is None
         assert reasons == {"例外:RuntimeError": 1}
+
+
+# ── 業種格付け: 固定閾値で 33業種中30業種が BOT（スクリーナー対象外）だった ─────
+class TestSectorTierRank:
+    def test_rank_thirds(self, monkeypatch):
+        import stock_analyzer_main as main
+        monkeypatch.setattr(main, "cfg", types.SimpleNamespace(
+            SECTOR_TIER_TOP_SHARE=1 / 3, SECTOR_TIER_BOT_SHARE=1 / 3))
+        sectors = {f"{1001 + i}": {"composite_score": float(40 - i)} for i in range(33)}
+        tier = main._calc_sector_tier(sectors, {})
+        assert sum(t == "TOP" for t in tier.values()) == 11
+        assert sum(t == "MID" for t in tier.values()) == 11
+        assert sum(t == "BOT" for t in tier.values()) == 11
+        # 全業種が45点未満でも上位は TOP（旧: 全部 BOT）
+        assert tier["1001"] == "TOP" and tier["1033"] == "BOT"
+
+    def test_momentum_upgrade_still_applies(self, monkeypatch):
+        import stock_analyzer_main as main
+        monkeypatch.setattr(main, "cfg", types.SimpleNamespace())
+        sectors = {c: {"composite_score": s} for c, s in
+                   (("A", 90.0), ("B", 50.0), ("C", 10.0))}
+        tier = main._calc_sector_tier(
+            sectors, {"momentum": {"B": {"slope_per_week": 5.0}}})
+        assert tier == {"A": "TOP", "B": "TOP", "C": "BOT"}
+
+    def test_config_uses_shares(self):
+        import config
+        assert config.SECTOR_TIER_TOP_SHARE == 1 / 3
+        assert config.SECTOR_TIER_BOT_SHARE == 1 / 3
+        assert not hasattr(config, "SECTOR_TIER_TOP_THRESHOLD")
+
+
+# ── スクリーナー品質ボーナス: 廃止済みの旧EDINET蓄積DBを読んで毎日 0/10 だった ─────
+class TestEdinetQualityFromBundle:
+    def _bundle(self):
+        return {"analysis": {"credit_score": 85},
+                "financials": {"revenue_cagr": 0.10,
+                               "net_income": [80.0, 100.0], "equity": [900.0, 1000.0]}}
+
+    def test_analysis_from_bundle(self):
+        import screener_feedback_loop as m
+        out = m._analysis_from_bundle(self._bundle())
+        assert out == {"credit_score": 85, "revenue_growth": 0.10, "roe": 0.1}
+        assert m._analysis_from_bundle({}) == {}
+
+    def test_build_cache_uses_bq_bundles(self, monkeypatch):
+        import screener_feedback_loop as m
+        calls = []
+
+        class FakeClient:
+            def get_company_analysis_bundle(self, tickers, max_companies=2):
+                calls.append((tuple(tickers), max_companies))
+                return {"6504.T": TestEdinetQualityFromBundle()._bundle()}
+
+        monkeypatch.setitem(sys.modules, "edinet_bq_client",
+                            types.SimpleNamespace(EDINETBQClient=FakeClient))
+        cache = m.build_edinet_quality_cache(types.SimpleNamespace(), ["6504.T", "6594.T"])
+        assert list(cache) == ["6504.T"]
+        assert cache["6504.T"]["edinet_bonus"] > 0
+        assert calls == [(("6504.T", "6594.T"), 2)]
+
+
+class TestShareholderAnalyzerDisabled:
+    def test_flag_off_and_skip_is_logged(self):
+        import pathlib
+        import config
+        assert config.ENABLE_SHAREHOLDER_ANALYZER is False
+        src = (pathlib.Path(__file__).resolve().parent.parent / "stock_analyzer_main.py").read_text(encoding="utf-8")
+        assert 'logger.add("shareholder_analyzer", "skipped"' in src
