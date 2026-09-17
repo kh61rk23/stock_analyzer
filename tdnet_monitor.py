@@ -51,7 +51,8 @@ from __future__ import annotations
 import json
 import re
 import urllib.request
-from datetime import datetime, timedelta
+from urllib.parse import urljoin
+from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Optional
@@ -139,7 +140,8 @@ class _TDnetListParser(HTMLParser):
             self._td_link  = ""
         elif tag == "a" and self._in_td:
             href = attrs_dict.get("href", "")
-            if href and "tdnet" in href.lower():
+            # 一覧の表題リンクは "140120260917xxxxxx.pdf" のような相対パス
+            if href and not href.startswith(("javascript:", "#")):
                 self._td_link = href
 
     def handle_endtag(self, tag):
@@ -158,7 +160,8 @@ class _TDnetListParser(HTMLParser):
             self._cell_buf += data.strip()
 
 
-def _fetch_tdnet_page(date_str: str, timeout: int = 15) -> Optional[str]:
+def _fetch_tdnet_page(date_str: str, timeout: int = 15, page: int = 1,
+                      quiet: bool = False) -> Optional[str]:
     """
     TDnet の開示一覧ページ HTML を取得する。
 
@@ -170,7 +173,7 @@ def _fetch_tdnet_page(date_str: str, timeout: int = 15) -> Optional[str]:
         HTML文字列。取得失敗時は None。
     """
     url = (f"https://www.release.tdnet.info/inbs/"
-           f"I_list_001_{date_str}.html")
+           f"I_list_{int(page):03d}_{date_str}.html")
     try:
         req = urllib.request.Request(
             url,
@@ -189,7 +192,8 @@ def _fetch_tdnet_page(date_str: str, timeout: int = 15) -> Optional[str]:
             raw = resp.read()
             return raw.decode(charset, errors="replace")
     except Exception as e:
-        print(f"    ⚠️  TDnet 取得失敗 ({date_str}): {str(e)[:60]}")
+        if not quiet:
+            print(f"    ⚠️  TDnet 取得失敗 ({date_str} p{int(page)}): {str(e)[:60]}")
         return None
 
 
@@ -218,8 +222,12 @@ def _parse_tdnet_rows(html: str, date_str: str) -> list[dict]:
             title_s = cells[3][0]  # "自己株式取得に関するお知らせ"
             url_s   = cells[3][1]  # URL（あれば）
 
-            # コードが4桁数字かチェック
-            if not re.match(r"^\d{4}$", code_s.strip()):
+            # 2026-09-17: TDnet のコード欄は "67580" / "130A0" の5桁（末尾0）で、
+            # 4桁数字だけを通す判定により全行が捨てられ毎日「解析行数: 0件」だった。
+            code_s = code_s.strip().upper()
+            if re.match(r"^[0-9][0-9A-Z]{3}0$", code_s):
+                code_s = code_s[:4]
+            if not re.match(r"^[0-9][0-9A-Z]{3}$", code_s):
                 continue
 
             # 時刻フォーマット検証
@@ -238,6 +246,36 @@ def _parse_tdnet_rows(html: str, date_str: str) -> list[dict]:
             continue
 
     return items
+
+
+TDNET_MAX_LIST_PAGES = 15   # 1ページ100件。決算集中日でも1,500件まで
+
+
+def _tdnet_target_days(now: datetime) -> list:
+    """前営業日（土日を飛ばす）と本日の JST 日付を古い順に返す。"""
+    jst = timezone(timedelta(hours=9))
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    today = now.astimezone(jst).date()
+    prev = today - timedelta(days=1)
+    while prev.weekday() >= 5:
+        prev -= timedelta(days=1)
+    return [prev, today]
+
+
+def _fetch_tdnet_day_rows(day) -> list:
+    """1日分の開示一覧を全ページ読む（100件未満のページで終わり）。"""
+    date_str = day.strftime("%Y%m%d")
+    rows: list = []
+    for page in range(1, TDNET_MAX_LIST_PAGES + 1):
+        html = _fetch_tdnet_page(date_str, page=page, quiet=page > 1)
+        if html is None:
+            break
+        page_rows = _parse_tdnet_rows(html, day.strftime("%Y-%m-%d"))
+        rows.extend(page_rows)
+        if len(page_rows) < 100:
+            break
+    return rows
 
 
 # ==============================================================
@@ -272,10 +310,10 @@ def _build_event(row: dict, category: str) -> dict:
     テーブル行 dict から TDnetEvent 形式に変換する。
     ticker は "{code}.T" 形式に統一。
     """
-    base_url = "https://www.release.tdnet.info"
     url = row["url"]
     if url and not url.startswith("http"):
-        url = base_url + url
+        # 一覧ページ（/inbs/I_list_...）からの相対パス
+        url = urljoin("https://www.release.tdnet.info/inbs/", url)
 
     return {
         "ticker":   f"{row['code']}.T",
@@ -463,26 +501,22 @@ def run_tdnet_monitor(cfg, results: dict = None) -> dict:
 
     print("\n  📢 TDnetモニター 開始...")
     t0       = datetime.now()
-    today    = t0.strftime("%Y%m%d")
-    today_s  = t0.strftime("%Y-%m-%d")
 
-    # ── Step 1: HTML 取得 ────────────────────────────────────
-    html = _fetch_tdnet_page(today)
-    if html is None:
-        # 取得失敗時は前営業日にフォールバック
-        prev_day = (t0 - timedelta(days=1)).strftime("%Y%m%d")
-        html = _fetch_tdnet_page(prev_day)
-        today = prev_day
-        today_s = (t0 - timedelta(days=1)).strftime("%Y-%m-%d")
-
-    if html is None:
-        print("    ⚠️  TDnet HTML 取得失敗 → スキップ")
+    # ── Step 1-2: HTML 取得・行解析 ──────────────────────────
+    # 2026-09-17: 本日分の1ページ目だけを読んでいた。実行は JST 9〜14時台で、
+    # 決算など大半の開示は前営業日の15時以降に出るため**一度も読まれず**、
+    # 100件を超える日は2ページ目以降も落ちていた。前営業日と本日の全ページを読む
+    # （通知済みキャッシュで重複は除外される）。日付は JST で決める。
+    rows: list[dict] = []
+    days = _tdnet_target_days(datetime.now(timezone.utc))
+    for day in days:
+        rows.extend(_fetch_tdnet_day_rows(day))
+    today_s = days[-1].strftime("%Y-%m-%d")
+    if not rows:
+        print("    ⚠️  TDnet HTML 取得失敗または開示0件 → スキップ")
         return {"skipped": True, "events": [], "total": 0,
                 "timestamp": t0.strftime("%Y-%m-%d %H:%M:%S")}
-
-    # ── Step 2: 行解析 ───────────────────────────────────────
-    rows = _parse_tdnet_rows(html, today_s)
-    print(f"    解析行数: {len(rows)}件")
+    print(f"    解析行数: {len(rows)}件 （{' / '.join(d.strftime('%m-%d') for d in days)}）")
 
     # ── Step 3: イベント分類 ────────────────────────────────
     all_events: list[dict] = []

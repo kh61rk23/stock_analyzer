@@ -180,8 +180,18 @@ def _build_universe(cfg, results: dict = None) -> list[dict]:
     return list(uni.values())[:cap]
 
 
-def _fetch_metrics(cfg, entry: dict, horizon: dict) -> Optional[dict]:
-    """yfinance からチェーン/HVを取得しメトリクスを組む（失敗はNone）。"""
+def _fetch_metrics(cfg, entry: dict, horizon: dict,
+                   reasons: Optional[dict] = None) -> Optional[dict]:
+    """yfinance からチェーン/HVを取得しメトリクスを組む（失敗はNone）。
+
+    2026-09-17: Actions で「ユニバース10 / 取得成功0」が続いていたが、失敗理由を
+    握り潰していて切り分けられなかった。reasons に理由別の件数を積む。
+    """
+    def _fail(reason: str):
+        if reasons is not None:
+            reasons[reason] = reasons.get(reason, 0) + 1
+        return None
+
     try:
         import yf_cache as yf
         tk = entry["ticker"]
@@ -190,11 +200,11 @@ def _fetch_metrics(cfg, entry: dict, horizon: dict) -> Optional[dict]:
         closes = list(hist["Close"].dropna()) if len(hist) else []
         spot = float(closes[-1]) if closes else 0
         if spot <= 0:
-            return None
+            return _fail("価格なし")
         hv = calc_hv(closes, int(getattr(cfg, "OPTIONS_HV_WINDOW_DAYS", 20)))
         expiries = list(t.options or [])
         if not expiries:
-            return None
+            return _fail("満期一覧なし")
         # 最も近い「20日以上先」の満期（短すぎる満期はノイズ）
         expiry = next(
             (e for e in expiries
@@ -206,6 +216,9 @@ def _fetch_metrics(cfg, entry: dict, horizon: dict) -> Optional[dict]:
         atm_p = puts.iloc[(puts["strike"] - spot).abs().argsort()[:1]]
         iv = float((atm_c["impliedVolatility"].iloc[0]
                     + atm_p["impliedVolatility"].iloc[0]) / 2)
+        if not iv >= 0.01:
+            # 米国の取引時間外は ATM の IV が 0.0001 等で返り「割安」と誤判定するため除外
+            return _fail("IV欠損")
         straddle = float(atm_c["lastPrice"].iloc[0] + atm_p["lastPrice"].iloc[0])
         # 満期前イベント（同一ticker決算 or 高重要度マクロ）
         event = None
@@ -230,8 +243,8 @@ def _fetch_metrics(cfg, entry: dict, horizon: dict) -> Optional[dict]:
             "expiry": expiry,
             "bearish_context": False,
         }
-    except Exception:
-        return None
+    except Exception as e:
+        return _fail(f"例外:{type(e).__name__}")
 
 
 # ==============================================================
@@ -244,8 +257,9 @@ def run_options_advisor(cfg, results: dict = None) -> dict:
     horizon = (results or {}).get("event_horizon", {})
     universe = _build_universe(cfg, results)
     suggestions, metrics_list = [], []
+    fail_reasons: dict = {}
     for entry in universe:
-        m = _fetch_metrics(cfg, entry, horizon)
+        m = _fetch_metrics(cfg, entry, horizon, fail_reasons)
         if not m:
             continue
         # 弱気文脈: 縮退モード or 当該業種ドリフト（簡易判定）
@@ -278,6 +292,9 @@ def run_options_advisor(cfg, results: dict = None) -> dict:
 
     print(f"    ✅ ユニバース{len(universe)} / 取得成功{len(metrics_list)} "
           f"/ 提案{len(suggestions)}件")
+    if fail_reasons:
+        print("    ⚠️  取得失敗の内訳: "
+              + " ".join(f"{k}:{v}" for k, v in sorted(fail_reasons.items())))
     return {
         "suggestions": suggestions,
         "universe": [u["ticker"] for u in universe],

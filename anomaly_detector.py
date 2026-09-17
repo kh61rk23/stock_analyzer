@@ -28,7 +28,7 @@
 
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -400,6 +400,22 @@ def detect_price_anomaly(ticker: str, hist: dict) -> Optional[dict]:
     }
 
 
+def _session_incomplete(ticker: str, bar_date: str, now=None) -> bool:
+    """bar_date の足が、その市場でまだ引けていない当日足かを返す。"""
+    from zoneinfo import ZoneInfo
+    now = now or datetime.now(timezone.utc)
+    t = str(ticker or "").upper()
+    if t.endswith(".T") or t in ("^N225", "^TOPX", "1306.T"):
+        zone, close = "Asia/Tokyo", (15, 30)
+    elif t.endswith("=F"):
+        zone, close = "America/New_York", (17, 0)
+    else:
+        zone, close = "America/New_York", (16, 0)
+    local = now.astimezone(ZoneInfo(zone))
+    return (str(bar_date)[:10] == local.date().isoformat()
+            and (local.hour, local.minute) < close)
+
+
 def detect_volume_anomaly(ticker: str, hist: dict) -> Optional[dict]:
     """
     出来高異常を検出する。
@@ -425,6 +441,13 @@ def detect_volume_anomaly(ticker: str, hist: dict) -> Optional[dict]:
         return None
     avg_vol   = sum(baseline_vols) / len(baseline_vols)
     ratio     = latest_vol / avg_vol if avg_vol > 0 else 0.0
+
+    # 2026-09-17: 実行は取引時間中（JST 9〜14時台）なので当日足の出来高は途中経過。
+    # 9/17 は 3401.T が 0.3倍「急減」HIGH と出たが引け後の確定値は 0.8倍、
+    # 原油・金先物も 0.1〜0.2倍と出ていた。確定前の足での「急減」は判定しない
+    # （途中経過で既に平均を大きく上回る「急増」は本物なので残す）。
+    if ratio < 1.0 and dates and _session_incomplete(ticker, dates[-1]):
+        return None
 
     # B. Z スコア
     z_list    = _zscore(volume[-VOLUME_LOOKBACK:])

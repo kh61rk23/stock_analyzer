@@ -136,6 +136,21 @@ def _cfg_es():
             _CFG_CACHE = False   # 再試行しない印
     return _CFG_CACHE or None
 
+def _row_quarter(row):
+    """earnings_history の行から四半期末日を取り出す。
+
+    2026-09-17: yfinance の earnings_history は四半期日付を**インデックス**に持ち
+    （列は epsActual / epsEstimate / epsDifference / surprisePercent のみ）、
+    row.get("quarter") は常に None だった。quarter が全行 "" になり新しい順の
+    並べ替えが効かず、yfinance の古い順のまま history[0] を「直近」として扱っていた
+    （6674.T は直近3四半期が上振れなのに最古の下振れで -2pt、6594.T は逆に +2pt）。
+    """
+    dt = row.get("quarter") or row.get("Quarter")
+    if dt is None and hasattr(row.name, "strftime"):
+        dt = row.name
+    return dt
+
+
 def _fetch_earnings_history_extended(ticker: str, n_quarters: int = None) -> list:
     """
     [I-2] 直近 n_quarters 四半期の EPS 予想 vs 実績を取得する（保守度計算用）。
@@ -167,7 +182,7 @@ def _fetch_earnings_history_extended(ticker: str, n_quarters: int = None) -> lis
             try:
                 est = row.get("epsEstimate") or row.get("EPSEstimate")
                 act = row.get("epsActual")   or row.get("EPSActual")
-                dt  = row.get("quarter")     or row.get("Quarter")
+                dt  = _row_quarter(row)
                 if est is None or act is None:
                     continue
                 est_f = float(est)
@@ -237,7 +252,7 @@ def _fetch_earnings_history(ticker: str) -> list:
             try:
                 est = row.get("epsEstimate") or row.get("EPSEstimate")
                 act = row.get("epsActual")   or row.get("EPSActual")
-                dt  = row.get("quarter")     or row.get("Quarter")
+                dt  = _row_quarter(row)
                 if est is None or act is None:
                     continue
                 est_f = float(est)

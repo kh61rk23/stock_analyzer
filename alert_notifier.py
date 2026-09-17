@@ -195,8 +195,12 @@ def extract_alerts(cfg, results: dict) -> list:
                     if isinstance(x[1], dict) else 0,
                 reverse=True,
             )
+            # 2026-09-17: 投資に関係しない記事（事件・事故など）は出さない。
+            # 判定は news_pipeline が付ける investment_relevant を使う。
+            def _relevant(a):
+                return a.get("investment_relevant") is not False
             for code, _ in sorted_secs[:5]:
-                arts = by_sector.get(code, [])
+                arts = [a for a in by_sector.get(code, []) if _relevant(a)]
                 if arts:
                     a = arts[0]
                     t = a["title"][:60]
@@ -209,6 +213,8 @@ def extract_alerts(cfg, results: dict) -> list:
             for a in top_articles:
                 if len(lines) >= max_n:
                     break
+                if not _relevant(a):
+                    continue
                 t = a["title"][:60]
                 if t not in shown_titles:
                     lines.append(f"  [{a['source']}] {t}")
@@ -300,7 +306,9 @@ def extract_alerts(cfg, results: dict) -> list:
                     line += f"\n    {r_icon} 信用スコア: {cs}/100"
                     risks = analysis.get("risk_factors", [])
                     if risks:
-                        line += f"\n    ⚠️  主要リスク: {risks[0][:60]}"
+                        # 2026-09-17: 有報の個別リスク見出しを上位3件並べる
+                        #（従来は本文の先頭文＝全社共通の前置きが出ていた）
+                        line += f"\n    ⚠️  主要リスク: {' / '.join(str(x) for x in risks[:3])[:80]}"
                 fin = tdata.get("financials", {})
                 if fin:
                     rev_cagr = fin.get("revenue_cagr")

@@ -66,6 +66,57 @@ def _fin_code(securities_code) -> str:
     )[:4]
 
 
+# 有報「事業等のリスク」の項目見出し: "（1）市場リスク…" "(2) 事業環境　…" "①　信用リスク…"
+_RISK_HEADING = re.compile(r"(?:[（(]\s*[0-9０-９]{1,2}\s*[)）]|[①-⑳])[\s　]*([^。（(①-⑳]{2,60})")
+# 見出しでも個別リスクではないもの（管理体制の説明・他節への参照）
+_RISK_NOT_ITEM = ("リスクマネジメント", "リスク管理", "体制", "プロセス", "ガバナンス",
+                  "リスク要因", "」", "参照", "注記", "考え方")
+_RISK_BOILERPLATE = ("有価証券報告書に記載した", "以下のとおり", "以下の通り", "次のとおり",
+                     "判断したもの", "将来に関する事項")
+
+
+def _extract_risk_points(raw_text: str, limit: int = 5) -> list:
+    """有報「事業等のリスク」から個別リスクの見出しを抜き出す。
+
+    2026-09-17: 本文を「。」で区切った先頭文をそのまま出しており、日次メールの
+    主要リスクが「３ 【事業等のリスク】有価証券報告書に記載した事業の状況…」という
+    全社共通の前置きになっていた。本文は見出しと本文が改行なしで連結されているため、
+    見出し番号の直後から「全角空白」または最後の「リスク」までを見出しとする。
+    見出しが取れない書式では、前置きの定型文を除いた文を返す。
+    """
+    text = str(raw_text or "")
+    points: list = []
+    for m in _RISK_HEADING.finditer(text):
+        body = m.group(1)
+        head = re.split(r"[\s　]", body, maxsplit=1)[0]
+        if any(word in head for word in _RISK_NOT_ITEM):
+            continue
+        cut = head[:40].rfind("リスク")
+        if cut >= 0:
+            head = head[:cut + 3]
+        elif len(head) == len(body) or len(head) > 30:
+            # 見出しの終わりが判別できない（例: "①自動車市場の競争激化世界の…"）は採らない
+            continue
+        head = head.strip(" 　・:：")
+        if len(head) < 2 or head == "リスク":
+            continue
+        if head not in points:
+            points.append(head)
+        if len(points) >= limit:
+            return points
+    if points:
+        return points
+    text = re.sub(r"^[\s0-9０-９]*【[^】]{0,20}】", "", text.strip())
+    for part in re.split(r"[\r\n]+|(?<=。)", text):
+        part = part.strip(" 　・ー-")
+        if len(part) < 4 or any(word in part for word in _RISK_BOILERPLATE):
+            continue
+        points.append(part)
+        if len(points) >= limit:
+            break
+    return points
+
+
 class EDINETBQClient:
     """
     BigQueryクライアント（シングルトン設計）。
@@ -680,12 +731,7 @@ class EDINETBQClient:
                 ):
                     business_summary = raw_text[:1000]
                 if "リスク" in section_type or "risk" in lowered:
-                    points = [
-                        part.strip(" 　・ー-")
-                        for part in re.split(r"[\r\n]+|(?<=。)", raw_text)
-                        if part.strip(" 　・ー-")
-                    ]
-                    risk_factors.extend(points[:5])
+                    risk_factors.extend(_extract_risk_points(raw_text))
 
             years = [item.get("fiscal_year") for item in financial_rows]
             # 期末日が無い（EdinetDB 年次レコードの仕様）ときは会計年度で表示する。
