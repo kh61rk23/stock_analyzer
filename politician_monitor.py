@@ -843,7 +843,12 @@ def run_politician_monitor(cfg) -> dict:
         }
 
     # ── 4. 差分: 既存にない file_id を対象に詳細取得 ──────────
-    existing_file_ids = {t.get("file_id") for t in existing_txs}
+    # 2026-09-19: 取得済みの判定を「履歴に残っている取引の file_id」だけで行っていた。
+    # 取引日が保存期限（180日）より古い届出は保存時に取引ごと消えるため、翌日また
+    # 「未取得」になり、毎日同じ古い届出200件を取り直して「新規1,775件」と数えていた
+    # （9/18 実行後の履歴に残った file_id は74件のみ）。処理済み file_id を別に持つ。
+    processed_ids = {str(x) for x in history.get("processed_file_ids", [])}
+    existing_file_ids = {t.get("file_id") for t in existing_txs} | processed_ids
 
     # 未取得の PTR レコードのみ処理（最大200件/回 でAPI負荷を抑制）
     new_records = [
@@ -867,6 +872,8 @@ def run_politician_monitor(cfg) -> dict:
             for tx in detail_txs:
                 scored = score_transaction(tx, name, cfg)
                 all_fetched_txs.append(scored)
+            if file_id:
+                processed_ids.add(str(file_id))
             # レート制限対策
             if (i + 1) % 10 == 0:
                 time.sleep(1.0)
@@ -881,6 +888,7 @@ def run_politician_monitor(cfg) -> dict:
 
     # ── 6. ヒストリーに追記して保存 ────────────────────────────
     history["transactions"] = existing_txs + truly_new
+    history["processed_file_ids"] = sorted(processed_ids)[-20000:]
     _save_politician_history(cfg, history)
 
     # ── 6.5. 上院データ取得は 2026-09-11 に撤去 ──────────────

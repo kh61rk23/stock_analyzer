@@ -559,18 +559,24 @@ def detect_score_anomalies(results: dict) -> list:
         direction = None
         reason   = []
 
+        # 2026-09-19: スコアの「水準」だけで HIGH を付けており、構造的に低い業種
+        # （繊維 0点・食料品 1.4点など、Z=-1.2〜-1.3）が毎日 HIGH の「スコア急変」として
+        # 異常検知の上位を占めていた。水準だけなら low、業種間の外れ値（|Z|≥2）を
+        # 伴うときに medium、極端な水準かつ外れ値のときだけ high にする。
+        # （前日比の急変は detect_score_jumps が別に判定している）
+        is_outlier = abs(z) >= Z_THRESHOLD_MEDIUM
         if score >= SCORE_TOP_THRESHOLD:
-            severity  = "high" if score >= 85 else "medium"
+            severity  = "high" if (score >= 85 and is_outlier) else "low"
             direction = "high"
             reason.append(f"スコア={score:.1f}（上位閾値{SCORE_TOP_THRESHOLD}）")
         elif score <= SCORE_BOTTOM_THRESHOLD:
-            severity  = "high" if score <= 20 else "medium"
+            severity  = "high" if (score <= 20 and is_outlier) else "low"
             direction = "low"
             reason.append(f"スコア={score:.1f}（下位閾値{SCORE_BOTTOM_THRESHOLD}）")
 
-        if abs(z) >= Z_THRESHOLD_MEDIUM:
+        if is_outlier:
             z_direction = "high" if z > 0 else "low"
-            if severity is None:
+            if severity in (None, "low"):
                 severity  = "medium"
                 direction = z_direction
             reason.append(f"Zスコア={z:.2f}（業種間外れ値）")

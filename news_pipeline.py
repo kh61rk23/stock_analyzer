@@ -9,7 +9,7 @@
 #   ④ alert_notifier.py と連携してGmailに組み込み
 #
 # 【情報源カテゴリ】
-#   優先度S: Reuters / AP / NHK / Nikkei Asia / CNBC / SEC EDGAR 8-K
+#   優先度S: NHK / Nikkei Asia / CNBC / SEC EDGAR 8-K / Fed / ECB / 日銀 / 財務省
 #   優先度A: Mining.com / World Nuclear News / Electrek / Quantum Insider
 #
 # 【出力スキーマ】
@@ -40,29 +40,11 @@ from typing import Optional
 # BLOCK 0: RSSフィード定義
 # ==============================================================
 
+# 2026-09-19: 0件が続いていたフィードを単体で疎通確認し、URL変更は付け替え（財務省・
+# Arabian Business・Globes）、SEC は SEC_USER_AGENT で取得、配信終了・403継続は削除
+# （Reuters×2・AP・日経ヘッドライン＝ドメイン消滅 / OpenSecrets＝403 / BIS FSI＝3日連続0件）。
 RSS_FEEDS = [
     # ── 優先度S: 速報性・信頼性 最高位 ──────────────────────
-    {
-        "id":       "reuters_business",
-        "name":     "Reuters Business",
-        "url":      "https://feeds.reuters.com/reuters/businessNews",
-        "priority": "S",
-        "lang":     "en",
-    },
-    {
-        "id":       "reuters_markets",
-        "name":     "Reuters Markets",
-        "url":      "https://feeds.reuters.com/reuters/marketsNews",
-        "priority": "S",
-        "lang":     "en",
-    },
-    {
-        "id":       "ap_business",
-        "name":     "AP Business",
-        "url":      "https://feeds.apnews.com/rss/apf-business",
-        "priority": "S",
-        "lang":     "en",
-    },
     {
         "id":       "nhk_business",
         "name":     "NHK ビジネス",
@@ -127,16 +109,11 @@ RSS_FEEDS = [
         "priority": "A",
         "lang":     "en",
     },
-    {
-        "id":       "nikkei_jp",
-        "name":     "日経新聞（ヘッドライン）",
-        "url":      "https://feeds.nikkei.com/business.rss",
-        "priority": "A",
-        "lang":     "ja",
-    },
     # ── 優先度S: 公的機関・一次情報源 ───────────────────────
     {
         "id":       "sec_edgar_8k",
+        # SEC は連絡先入りの User-Agent 以外を 403 で拒否する（他のSECモジュールと同じ設定を使う）
+        "user_agent_cfg": "SEC_USER_AGENT",
         "name":     "SEC EDGAR 8-K",
         "url":      "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&dateb=&owner=include&count=40&search_text=&output=atom",
         "priority": "S",
@@ -166,16 +143,9 @@ RSS_FEEDS = [
     {
         "id":       "mof_press",
         "name":     "財務省 報道発表",
-        "url":      "https://www.mof.go.jp/rss/release.xml",
+        "url":      "https://www.mof.go.jp/news.rss",
         "priority": "S",
         "lang":     "ja",
-    },
-    {
-        "id":       "bis_press",
-        "name":     "BIS（国際決済銀行）",
-        "url":      "https://www.bis.org/doclist/bis_fsi_publs.rss",
-        "priority": "S",
-        "lang":     "en",
     },
     # ── 優先度A: テーマ・地域専門 ────────────────────────────
     {
@@ -195,14 +165,14 @@ RSS_FEEDS = [
     {
         "id":       "arabian_business",
         "name":     "Arabian Business",
-        "url":      "https://www.arabianbusiness.com/rss",
+        "url":      "https://www.arabianbusiness.com/feed",
         "priority": "A",
         "lang":     "en",
     },
     {
         "id":       "globes_en",
         "name":     "Globes（イスラエル英語版）",
-        "url":      "https://en.globes.co.il/en/rss",
+        "url":      "https://www.globes.co.il/webservice/rss/rssfeeder.asmx/FeederNode?iID=942",
         "priority": "A",
         "lang":     "en",
     },
@@ -210,13 +180,6 @@ RSS_FEEDS = [
         "id":       "hindu_business",
         "name":     "The Hindu Business Line",
         "url":      "https://www.thehindubusinessline.com/feeder/default.rss",
-        "priority": "A",
-        "lang":     "en",
-    },
-    {
-        "id":       "opensecrets",
-        "name":     "OpenSecrets（政治資金）",
-        "url":      "https://www.opensecrets.org/news/feed",
         "priority": "A",
         "lang":     "en",
     },
@@ -307,7 +270,8 @@ HIGH_IMPORTANCE_KEYWORDS = [
 # BLOCK 2: RSS取得
 # ==============================================================
 
-def _fetch_feed(feed_def: dict, timeout: int = 15) -> list:
+def _fetch_feed(feed_def: dict, timeout: int = 15,
+                user_agent: Optional[str] = None) -> list:
     """
     1つのRSSフィードを取得してArticleリストを返す。
     requests で生XML取得 → feedparser に渡す方式。
@@ -324,7 +288,7 @@ def _fetch_feed(feed_def: dict, timeout: int = 15) -> list:
         return []
 
     headers = {
-        "User-Agent": (
+        "User-Agent": user_agent or (
             "Mozilla/5.0 (compatible; StockAnalyzer/1.0; "
             "+https://github.com/stockanalyzer)"
         )
@@ -390,7 +354,8 @@ def fetch_all_feeds(feeds: list, cfg) -> list:
     for feed in feeds:
         if enabled_ids is not None and feed["id"] not in enabled_ids:
             continue
-        arts = _fetch_feed(feed)
+        ua_key = feed.get("user_agent_cfg")
+        arts = _fetch_feed(feed, user_agent=getattr(cfg, ua_key, None) if ua_key else None)
         all_articles.extend(arts)
         print(f"    [{feed['priority']}] {feed['name']}: {len(arts)}件")
         time.sleep(0.5)  # レート制限対策
@@ -455,6 +420,13 @@ NON_INVESTMENT_KEYWORDS = [
 ]
 
 
+# 通販のセール告知（Electrek の "e-bikes up to $807 off" など）。表題で判定する。
+_SHOPPING_DEAL = re.compile(
+    r"(\$[\d,.]+|\d+\s*%)\s*off\b|\bnew (all-time )?low\b|\bfree bundle\b|\bcoupon\b",
+    re.IGNORECASE,
+)
+
+
 def is_investment_relevant(article: dict) -> bool:
     """記事が投資判断に関係するかを返す（2026-09-17 追加）。
 
@@ -465,6 +437,8 @@ def is_investment_relevant(article: dict) -> bool:
     業種・業界ニュース（鉱山の新規発見、EVの新型車など）は 2 で残る。
     """
     title = str(article.get("title", "") or "")
+    if _SHOPPING_DEAL.search(title):
+        return False   # 2026-09-19: 9/19 の注目ニュースに電動自転車のセール告知が入っていた
     text = title + " " + str(article.get("summary", "") or "")
     economic = any(_keyword_hit(kw, text) for kw in INVESTMENT_KEYWORDS)
     if not economic and any(_keyword_hit(kw, title) for kw in NON_INVESTMENT_KEYWORDS):

@@ -655,7 +655,8 @@ def extract_alerts(cfg, results: dict) -> list:
                         # price_change は既に%値（上の複合異常と同じ理由で *100 しない）
                         extra = f" {chg:+.1f}%" if chg is not None else ""
                     elif atype == "score":
-                        extra = f" スコア急変"
+                        # 業種スコアの水準・業種間の外れ値（前日比の急変は別アラート）
+                        extra = " スコア水準"
                     else:
                         extra = ""
                     lines.append(

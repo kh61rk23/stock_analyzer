@@ -50,14 +50,16 @@ MIN_DATA_POINTS = 5      # 最低データ点数（これ未満はモメンタ�
 SCORE_CEILING   = 100.0  # composite_score 上限
 SCORE_FLOOR     = -30.0  # composite_score 下限（ペナルティ込み）
 
-# モメンタム調整幅（点/日スロープ → 加算点数）のしきい値
-# 業種スコアの1日あたり変化の実態: 0.5〜3点/日程度を想定
+# モメンタム調整幅（点/週スロープ → 加算点数）のしきい値
+# 2026-09-17: 表の値（2.5 / 1.0）を点/週のスロープと比較しており、各行の
+# コメント（週7点 / 週3.5点）の半分以下の変化で「強い加速」になっていた。
+# 33業種中25〜28業種が毎日 ±10点の補正を受けていたため、コメントどおり点/週に揃える。
 MOMENTUM_TIERS = [
-    #  (slope_threshold, adjustment, label)
-    ( 2.5,  10, "強い上昇加速"),   # 週7点超のペース
-    ( 1.0,   5, "上昇継続"),       # 週3.5〜7点のペース
-    (-1.0,   0, "横ばい"),         # ±週3.5点未満
-    (-2.5,  -5, "下落継続"),       # 週3.5〜7点下落のペース
+    #  (slope_per_week_threshold, adjustment, label)
+    ( 7.0,  10, "強い上昇加速"),   # 週7点超のペース
+    ( 3.5,   5, "上昇継続"),       # 週3.5〜7点のペース
+    (-3.5,   0, "横ばい"),         # ±週3.5点未満
+    (-7.0,  -5, "下落継続"),       # 週3.5〜7点下落のペース
     (-999, -10, "強い下落加速"),   # 週7点超の下落ペース
 ]
 
@@ -104,6 +106,7 @@ def _extract_series(history: dict, sector_code: str,
     today   = datetime.now().date()
     cutoff  = today - timedelta(days=days)
     series  = []
+    net_series = []   # モメンタム補正を差し引いたスコア（2026-09-17 以降に記録）
 
     for date_str, day_data in history.items():
         try:
@@ -119,8 +122,12 @@ def _extract_series(history: dict, sector_code: str,
         if entry is None:
             continue
 
+        momentum_adj = None
         if isinstance(entry, dict):
-            score = entry.get("score") or entry.get("composite_score")
+            score = entry.get("score")
+            if score is None:
+                score = entry.get("composite_score")
+            momentum_adj = entry.get("momentum_adj")
         elif isinstance(entry, (int, float)):
             score = float(entry)
         else:
@@ -131,6 +138,14 @@ def _extract_series(history: dict, sector_code: str,
 
         days_ago = (today - d).days
         series.append((float(days_ago), float(score)))
+        if momentum_adj is not None:
+            net_series.append((float(days_ago), float(score) - float(momentum_adj)))
+
+    # 2026-09-17: 保存スコアには前日までのモメンタム補正（±10点）が含まれ、補正が
+    # 翌日の傾きを押し上げる自己強化になっていた。補正額を記録した日が十分あれば、
+    # 補正を除いた系列だけで傾きを測る（記録前と混ぜると段差が偽の傾きになるため混ぜない）。
+    if len(net_series) >= MIN_DATA_POINTS:
+        series = net_series
 
     # 古い順にソート（days_ago 降順 = 日付昇順）
     series.sort(key=lambda x: -x[0])
@@ -162,23 +177,21 @@ def calc_sector_velocity(history: dict, sector_code: str,
     if len(series) < MIN_DATA_POINTS:
         return None
 
-    # x = days_ago の逆数（時刻順 t=0,1,2,...に変換）
-    n = len(series)
-    # t=0 が最古, t=n-1 が最新
-    t_vals = list(range(n))
-    s_vals = [s for (_, s) in series]  # days_agoソート済み（古い順）
-
-    # 最小二乗法: slope = (n*Σts - Σt*Σs) / (n*Σt² - (Σt)²)
-    sum_t  = sum(t_vals)
-    sum_s  = sum(s_vals)
-    sum_ts = sum(t * s for t, s in zip(t_vals, s_vals))
-    sum_t2 = sum(t * t for t in t_vals)
-
-    denom = n * sum_t2 - sum_t ** 2
-    if denom == 0:
+    # 2026-09-17: 従来は「データ点の番号」を時間軸にした最小二乗法だった。
+    #   - 休場・欠測日（例: 8/27→9/7 の11日空き）を1日として数え、傾きを過大に出す
+    #   - 週1回の一時的な落ち込み（9/9・9/12 に電気機器 88→75点など）に引きずられる
+    # 実日数を時間軸にした Theil–Sen 推定（2点間の傾きの中央値）に変更する。
+    slopes = []
+    for i in range(len(series)):
+        for j in range(i + 1, len(series)):
+            dt = series[i][0] - series[j][0]   # days_ago の差 = 経過日数
+            if dt > 0:
+                slopes.append((series[j][1] - series[i][1]) / dt)
+    if not slopes:
         return 0.0
-
-    slope = (n * sum_ts - sum_t * sum_s) / denom
+    slopes.sort()
+    mid = len(slopes) // 2
+    slope = slopes[mid] if len(slopes) % 2 else (slopes[mid - 1] + slopes[mid]) / 2
     return round(slope, 4)
 
 

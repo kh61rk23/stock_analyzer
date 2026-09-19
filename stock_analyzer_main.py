@@ -773,6 +773,8 @@ def _append_score_history(cfg, sector_results: dict) -> None:
                 today_data[code] = {
                     "score": round(float(score), 1),
                     "risk":  risk,
+                    # 翌日以降のモメンタム計算で自分の補正を差し引くために残す
+                    "momentum_adj": float(r.get("momentum_adjustment", 0.0) or 0.0),
                 }
         if today_data:
             history[today] = today_data
