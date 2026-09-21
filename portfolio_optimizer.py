@@ -87,9 +87,15 @@ def load_portfolio(cfg) -> list:
         [{"ticker", "name", "quantity": int, "avg_cost_jpy": float,
           "sector_code", "market"}, ...]
     """
+    # 2026-09-21: 実ファイルはリポジトリ直下の data/portfolio_holdings.csv にあり
+    # （exit_rule_engine / scenario_analysis は cfg.PORTFOLIO_HOLDINGS_PATH 経由で読めている）、
+    # ここだけ候補に無く毎週「portfolio_holdings.csv なし」でスキップしていた。
+    base_dir = Path(__file__).parent
     candidates = [
+        Path(getattr(cfg, "PORTFOLIO_HOLDINGS_PATH", base_dir / "data" / "portfolio_holdings.csv")),
         Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / "portfolio_holdings.csv",
-        Path(__file__).parent / "portfolio_holdings.csv",
+        base_dir / "data" / "portfolio_holdings.csv",
+        base_dir / "portfolio_holdings.csv",
     ]
     for p in candidates:
         if not p.exists():

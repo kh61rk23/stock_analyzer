@@ -205,6 +205,10 @@ def append_screener_history(cfg, screener_result: dict) -> None:
                 "roe":             c.get("roe"),
                 "market_cap_b":    c.get("market_cap_b"),
                 "avg_volume":      c.get("avg_volume"),
+                # 2026-09-21: backtester はエントリー価格と通過フラグを見るが
+                # どちらも保存しておらず、バックテスト・自己評価が常に0件だった
+                "current_price":   c.get("current_price"),
+                "pass_filters":    True,
             }
             for c in candidates
             if c.get("pass_filters")

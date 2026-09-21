@@ -212,3 +212,58 @@ class TestTaxonomySectorWeights:
         src = (pathlib.Path(__file__).resolve().parent.parent / "edinet_bq_client.py").read_text(encoding="utf-8")
         assert "def get_taxonomy_scores_bulk" in src
         assert "company_id IN UNNEST(@codes)" in src
+
+
+# ── 週次モジュールの読み先・実行順のずれ（9/21 の週次ログ） ─────────────
+class TestWeeklyWiring:
+    def test_score_history_is_read_from_data_dir(self, tmp_path):
+        import json as _json
+        import types as _types
+        import score_history_io as m
+        (tmp_path / "score_history.json").write_text(
+            _json.dumps({"2026-09-19": {"1016": {"score": 80.0}}}), encoding="utf-8")
+        out = m.load_score_history(_types.SimpleNamespace(DATA_DIR=str(tmp_path)))
+        assert out == {"2026-09-19": {"1016": {"score": 80.0}}}
+
+    def test_portfolio_optimizer_reads_configured_holdings(self, tmp_path):
+        import types as _types
+        import portfolio_optimizer as m
+        csv_path = tmp_path / "portfolio_holdings.csv"
+        csv_path.write_text("ticker,name,quantity,avg_cost_jpy,sector_code,market\n"
+                            "6501.T,日立,100,3000,1016,JP\n", encoding="utf-8")
+        cfg = _types.SimpleNamespace(PORTFOLIO_HOLDINGS_PATH=str(csv_path),
+                                     DATA_DIR=str(tmp_path / "none"))
+        out = m.load_portfolio(cfg)
+        assert [h["ticker"] for h in out] == ["6501.T"]
+
+    def test_backtest_records_survive_missing_pass_flag(self):
+        from datetime import date, timedelta
+        import backtester as m
+        entry = (date.today() - timedelta(days=40)).strftime("%Y-%m-%d")
+        history = {entry: [
+            {"ticker": "6501.T", "current_price": 3000.0, "composite_score": 70},      # 旧形式
+            {"ticker": "7203.T", "current_price": 2500.0, "pass_filters": True},        # 新形式
+            {"ticker": "9999.T", "current_price": 100.0, "pass_filters": False},        # 不通過
+            {"ticker": "8306.T", "composite_score": 60},                                # 価格なし
+        ]}
+        got = {r["ticker"] for r in m.extract_backtest_records(history)}
+        assert got == {"6501.T", "7203.T"}
+
+    def test_screener_history_records_entry_price(self, tmp_path):
+        import json as _json
+        import types as _types
+        import performance_tracker as m
+        cfg = _types.SimpleNamespace(DATA_DIR=str(tmp_path))
+        m.append_screener_history(cfg, {"candidates": [
+            {"ticker": "6501.T", "pass_filters": True, "current_price": 3000.0},
+            {"ticker": "9999.T", "pass_filters": False, "current_price": 100.0},
+        ]})
+        saved = _json.loads((tmp_path / "screener_history.json").read_text(encoding="utf-8"))
+        rows = list(saved.values())[0]
+        assert [r["ticker"] for r in rows] == ["6501.T"]
+        assert rows[0]["current_price"] == 3000.0 and rows[0]["pass_filters"] is True
+
+    def test_diversity_filter_runs_after_screener(self):
+        import pathlib
+        src = (pathlib.Path(__file__).resolve().parent.parent / "stock_analyzer_main.py").read_text(encoding="utf-8")
+        assert src.index("個別銘柄スクリーニングを実行中") < src.index("run_portfolio_diversity_filter")

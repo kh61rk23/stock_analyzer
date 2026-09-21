@@ -3025,28 +3025,6 @@ def run_all_tasks(mode: str = "all") -> dict:
             logger.add("catalyst_calendar", "error", str(_cate)[:100])
             print(f"  ⚠️  Catalyst Calendarエラー（スキップ）: {str(_cate)[:60]}")
 
-    # ── [Wave 3 - FE-6] Portfolio Diversity Filter（WEEKLY）────────
-    # sector_rotation_detector の直前・ignition_detector の前に配置
-    if _in_mode("portfolio_diversity_filter"):
-        try:
-            _pdf = _load_local_module(
-                "portfolio_diversity_filter",
-                "/content/portfolio_diversity_filter.py",
-                cfg.DRIVE_BASE / "portfolio_diversity_filter.py",
-            )
-            if _pdf:
-                div_result = _pdf.run_portfolio_diversity_filter(cfg, results)
-                results["diversity"] = div_result
-                hhi_str = f"HHI={div_result.get('hhi', 0):.3f}"
-                alert   = "⚠️ アラート" if div_result.get("should_alert") else "正常"
-                logger.add(
-                    "portfolio_diversity_filter", "success",
-                    f"{hhi_str} [{div_result.get('hhi_status','?')}] {alert}",
-                )
-        except Exception as _pdfe:
-            logger.add("portfolio_diversity_filter", "error", str(_pdfe)[:100])
-            print(f"  ⚠️  Portfolio Diversityエラー（スキップ）: {str(_pdfe)[:60]}")
-
     # ── [Step B] ニュースRSSパイプライン ─────────────────────────
     # ★ 2026-06-10 バグ修正: DAILY_MODULES に "news" が登録され実行順16
     #   として設計されているにもかかわらず実行ブロックが欠落していた
@@ -3569,6 +3547,29 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         if not getattr(cfg, "ENABLE_SCREENER", False):
             print("  ⏩ 個別株スクリーニング: スキップ（ENABLE_SCREENER=False）")
+
+    # ── [Wave 3 - FE-6] Portfolio Diversity Filter（WEEKLY）────────
+    # 2026-09-21: screener の**前**に置かれており results["screener"] が常に空で、
+    # 毎週「screenerデータなし → スキップ」だった。スクリーニング直後へ移動する。
+    if _in_mode("portfolio_diversity_filter"):
+        try:
+            _pdf = _load_local_module(
+                "portfolio_diversity_filter",
+                "/content/portfolio_diversity_filter.py",
+                cfg.DRIVE_BASE / "portfolio_diversity_filter.py",
+            )
+            if _pdf:
+                div_result = _pdf.run_portfolio_diversity_filter(cfg, results)
+                results["diversity"] = div_result
+                hhi_str = f"HHI={div_result.get('hhi', 0):.3f}"
+                alert   = "⚠️ アラート" if div_result.get("should_alert") else "正常"
+                logger.add(
+                    "portfolio_diversity_filter", "success",
+                    f"{hhi_str} [{div_result.get('hhi_status','?')}] {alert}",
+                )
+        except Exception as _pdfe:
+            logger.add("portfolio_diversity_filter", "error", str(_pdfe)[:100])
+            print(f"  ⚠️  Portfolio Diversityエラー（スキップ）: {str(_pdfe)[:60]}")
 
 # ── [Wave0 Policy Ph1] 議員取引監視（週2回: 火・金）──────────
     if getattr(cfg, "ENABLE_POLITICIAN_MONITOR", True):

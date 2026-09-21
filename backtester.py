@@ -131,7 +131,10 @@ def extract_backtest_records(
         for c in candidates:
             if not isinstance(c, dict):
                 continue
-            if not c.get("pass_filters", False):
+            # 2026-09-21: screener_history には通過銘柄しか保存されない（pass_filters は
+            # 2026-09-21 以降のみ付く）。欄が無い行を落とすと過去分が全滅するため、
+            # 明示的に False のときだけ除外する。
+            if c.get("pass_filters") is False:
                 continue
             ticker = c.get("ticker", "")
             price  = c.get("current_price")
