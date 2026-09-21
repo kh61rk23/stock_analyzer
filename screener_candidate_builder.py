@@ -29,7 +29,6 @@ from __future__ import annotations
 import json
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Optional
 
 
 # ==============================================================
@@ -101,29 +100,52 @@ def _load_edinet_high_credit(cfg) -> list[str]:
     return high_credit
 
 
-def _load_tdnet_tickers(results: dict) -> list[str]:
-    """
-    tdnet_monitor の結果から重要開示銘柄を返す。
+# TDnet のうちスクリーニング対象に足すカテゴリ（株主還元・支配権の変化）
+TDNET_PRIORITY_CATEGORIES = ("BUYBACK", "CANCEL", "DIV_UP", "MBO", "LARGE_HOLDING")
+TDNET_LOOKBACK_DAYS = 3
 
-    results["tdnet"]["high_priority"] に格納されている想定。
-    """
-    tdnet_result = results.get("tdnet", {})
-    if not tdnet_result or not isinstance(tdnet_result, dict):
-        return []
 
-    tickers = []
-    # high_priority または alerts リストから ticker を抽出
-    for key in ("high_priority", "alerts", "disclosures"):
-        items = tdnet_result.get(key, [])
-        if isinstance(items, list):
-            for item in items:
-                if isinstance(item, dict):
-                    t = item.get("ticker") or item.get("code")
-                    if t:
-                        # JP ticker の形式調整（4桁 → 4桁.T）
-                        if len(str(t)) == 4 and not str(t).endswith(".T"):
-                            t = f"{t}.T"
-                        tickers.append(str(t))
+def _load_tdnet_tickers(results: dict, cfg=None) -> list[str]:
+    """
+    TDnet の重要開示銘柄を返す。
+
+    2026-09-19: results["tdnet"]["high_priority"] / ["alerts"] / ["disclosures"] を
+    読んでいたが、tdnet_monitor が返すキーは "events" / "all_events" で毎回0件だった。
+    さらに TDnet モニターは候補ビルダーより後に動くため、当日の results には
+    まだ何も入っていない。前回実行が保存した通知済みキャッシュ
+    （tdnet_notified.json の "{ticker}_{日付}_{カテゴリ}"）から直近の開示を拾う。
+    """
+    tickers: list[str] = []
+
+    tdnet_result = results.get("tdnet") if isinstance(results, dict) else None
+    if isinstance(tdnet_result, dict):
+        for key in ("events", "all_events"):
+            for item in tdnet_result.get(key, []) or []:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("category") not in TDNET_PRIORITY_CATEGORIES:
+                    continue
+                t = item.get("ticker") or item.get("code")
+                if t:
+                    t = str(t)
+                    tickers.append(t if t.endswith(".T") else f"{t}.T")
+
+    if not tickers:
+        path = _data_dir(cfg) / "tdnet_notified.json"
+        cutoff = (date.today() - timedelta(days=TDNET_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            for nid in raw.get("notified", []):
+                # カテゴリ名にも "_" が入る（DIV_UP / LARGE_HOLDING）ので後ろは結合する
+                parts = str(nid).split("_")
+                if len(parts) < 3:
+                    continue
+                ticker, day, category = parts[0], parts[1], "_".join(parts[2:])
+                if day < cutoff or category not in TDNET_PRIORITY_CATEGORIES:
+                    continue
+                tickers.append(ticker if ticker.endswith(".T") else f"{ticker}.T")
+        except (OSError, ValueError):
+            return []
 
     return list(dict.fromkeys(tickers))   # 重複除去
 
@@ -243,7 +265,7 @@ def build_dynamic_screener_tickers(
 
     # ── ③ TDnet 重要開示銘柄 ─────────────────────────────────
     tdnet_tickers = [
-        t for t in _load_tdnet_tickers(results)
+        t for t in _load_tdnet_tickers(results, cfg)
         if t not in base_set
     ]
 

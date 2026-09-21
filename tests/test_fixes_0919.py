@@ -124,3 +124,43 @@ class TestScoreLevelAnomalies:
         out = {a["sector_code"]: a for a in m.detect_score_anomalies({"sectors": sectors})}
         assert out["1004"]["severity"] == "low"
         assert out["1005"]["severity"] == "high"
+
+
+# ── 候補ビルダー: TDnet の読み取りキーが違い毎日0社だった ─────────────────
+class TestCandidateBuilderTdnet:
+    def test_reads_events_from_results(self):
+        import screener_candidate_builder as m
+        out = m._load_tdnet_tickers({"tdnet": {"events": [
+            {"ticker": "5122.T", "category": "BUYBACK"},
+            {"code": "7287", "category": "DIV_UP"},
+            {"ticker": "1234.T", "category": "MGMT_CHANGE"},   # 対象外カテゴリ
+        ]}}, None)
+        assert out == ["5122.T", "7287.T"]
+
+    def test_falls_back_to_notified_cache(self, tmp_path):
+        import json as _json
+        import types
+        from datetime import date, timedelta
+        import screener_candidate_builder as m
+        recent = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
+        old = (date.today() - timedelta(days=10)).strftime("%Y-%m-%d")
+        (tmp_path / "tdnet_notified.json").write_text(_json.dumps({"notified": [
+            f"5122.T_{recent}_BUYBACK", f"9107.T_{recent}_DIV_UP",
+            f"1111.T_{old}_BUYBACK", f"2222.T_{recent}_SPLIT",
+        ]}), encoding="utf-8")
+        cfg = types.SimpleNamespace(DATA_DIR=str(tmp_path))
+        assert m._load_tdnet_tickers({}, cfg) == ["5122.T", "9107.T"]
+
+    def test_builder_adds_them(self, tmp_path):
+        import json as _json
+        import types
+        from datetime import date, timedelta
+        import screener_candidate_builder as m
+        recent = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
+        (tmp_path / "tdnet_notified.json").write_text(
+            _json.dumps({"notified": [f"5122.T_{recent}_BUYBACK"]}), encoding="utf-8")
+        cfg = types.SimpleNamespace(DATA_DIR=str(tmp_path), JAPAN_SECTORS={},
+                                    DYNAMIC_SCREENER_MAX_ADD=20)
+        out = m.build_dynamic_screener_tickers(cfg, {})
+        assert out["all_tickers"] == ["5122.T"]
+        assert out["dynamic_meta"]["5122.T"]["source"] == "tdnet"
