@@ -4740,6 +4740,8 @@ ENABLE_TAXONOMY_SIGNAL: bool = True
 TAXONOMY_HOTNESS_BASELINE_DAYS: int = 20   # 加熱判定のベースライン日数
 TAXONOMY_LEADING_ONLY_TH: float = 65.0     # 「先行だけ点灯」の先行閾値
 TAXONOMY_MARKET_DEFAULT: str = "JP"        # T-3 get_company_taxonomy_scores の既定market
+# 2026-09-21: 業種スコアの関与度加重に使う、1業種あたりの参照銘柄数
+TAXONOMY_SECTOR_TICKER_LIMIT: int = 10
 
 # ── taxonomy 台帳の定期投入（2026-07-25 追加）────────────────
 # taxonomy_loader.py（T-1後半 / R2-1）と taxonomy_company_mapper.py

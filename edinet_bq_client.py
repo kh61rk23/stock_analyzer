@@ -993,6 +993,44 @@ class EDINETBQClient:
         # E4 完了後に text_signal.py の計算結果を参照する実装に差し替える
         return 0.0
 
+    def get_taxonomy_scores_bulk(self, company_codes: list) -> dict:
+        """複数銘柄の taxonomy 関与度を1クエリで返す（{company_code: {node_id: score}}）。
+
+        2026-09-21: taxonomy_hotness が業種コードで company_taxonomy_map を引いており
+        （表は4桁の企業コード・業種擬似IDの行は無い）、毎日フォールバックの均等加重に
+        落ちていた。そのうえ業種ごとに1本ずつ引いており9本のN+1だった。
+        """
+        codes = [str(c).split(".")[0] for c in (company_codes or []) if c]
+        codes = sorted({c for c in codes if c})
+        if not codes:
+            return {}
+        sql = f"""
+        SELECT company_id, node_id, relevance_score AS score
+        FROM `{self.project}.taxonomy.company_taxonomy_map`
+        WHERE company_id IN UNNEST(@codes)
+          AND relevance_score IS NOT NULL
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY company_id, node_id
+            ORDER BY
+              CASE WHEN verified_flag THEN 0
+                   WHEN confidence_type = 'edinet' THEN 1
+                   ELSE 2 END,
+              updated_at DESC
+        ) = 1
+        """
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ArrayQueryParameter("codes", "STRING", codes)
+        ])
+        out: dict = {}
+        try:
+            for row in self.client.query(sql, job_config=job_config).result():
+                out.setdefault(str(row["company_id"]), {})[str(row["node_id"])] = \
+                    float(row["score"] or 0.0)
+        except Exception as e:
+            print(f"[BQClient] get_taxonomy_scores_bulk 失敗: {str(e)[:80]}")
+            return {}
+        return out
+
     def get_tickers_by_sector_bulk(self, limit: int = 10) -> dict:
         """
         全業種の ticker を1クエリでまとめて返す（{sector_code: [ticker, ...]}）。

@@ -164,3 +164,51 @@ class TestCandidateBuilderTdnet:
         out = m.build_dynamic_screener_tickers(cfg, {})
         assert out["all_tickers"] == ["5122.T"]
         assert out["dynamic_meta"]["5122.T"]["source"] == "tdnet"
+
+
+# ── taxonomy 業種スコア: 企業コードの表を業種コードで引いて毎日フォールバック ─────
+class TestTaxonomySectorWeights:
+    def test_aggregates_by_sector_in_two_queries(self, monkeypatch):
+        import sys
+        import types as _types
+        import taxonomy_hotness as m
+        calls = []
+
+        class FakeBQ:
+            def get_tickers_by_sector_bulk(self, limit=10):
+                calls.append(("tickers", limit))
+                return {"1016": ["6501.T", "6758.T"], "1025": ["9432.T"]}
+
+            def get_taxonomy_scores_bulk(self, codes):
+                calls.append(("scores", tuple(codes)))
+                return {"6501": {"ai_software": 0.6}, "6758": {"ai_software": 0.4},
+                        "9432": {"telecom": 0.5}}
+
+        monkeypatch.setitem(sys.modules, "edinet_bq_client",
+                            _types.SimpleNamespace(EDINETBQClient=FakeBQ))
+        out = m.fetch_sector_node_weights(
+            _types.SimpleNamespace(TAXONOMY_SECTOR_TICKER_LIMIT=10), ["1016", "1025"])
+        assert out == {"1016": {"ai_software": 0.5}, "1025": {"telecom": 0.5}}
+        assert calls == [("tickers", 10), ("scores", ("6501", "6758", "9432"))]
+
+    def test_empty_map_falls_back(self, monkeypatch):
+        import sys
+        import types as _types
+        import taxonomy_hotness as m
+
+        class FakeBQ:
+            def get_tickers_by_sector_bulk(self, limit=10):
+                return {"1016": ["6501.T"]}
+
+            def get_taxonomy_scores_bulk(self, codes):
+                return {}
+
+        monkeypatch.setitem(sys.modules, "edinet_bq_client",
+                            _types.SimpleNamespace(EDINETBQClient=FakeBQ))
+        assert m.fetch_sector_node_weights(_types.SimpleNamespace(), ["1016"]) == {}
+
+    def test_bulk_query_is_parameterized(self):
+        import pathlib
+        src = (pathlib.Path(__file__).resolve().parent.parent / "edinet_bq_client.py").read_text(encoding="utf-8")
+        assert "def get_taxonomy_scores_bulk" in src
+        assert "company_id IN UNNEST(@codes)" in src

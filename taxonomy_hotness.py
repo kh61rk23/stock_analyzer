@@ -191,29 +191,56 @@ def sector_scores_from_hotness(hotness: dict, sector_to_nodes: dict) -> dict:
 
 def fetch_sector_node_weights(cfg, sector_codes: list) -> dict:
     """
-    [T-3消費配線 / Wave R2] company_taxonomy_map の関与度を業種ごとに取得する。
-    edinet_bq_client.get_company_taxonomy_scores を **sector擬似ID**
-    （"sector:{market}:{code}"・T-2C の cluster_derived 規約）で呼び、
-    {sector_code: {node_id: relevance_score}} を返す。
-    これが get_company_taxonomy_scores の唯一の日次呼出元（従来は呼出元ゼロ）。
-    BQ未接続・空なら {} を返し、呼び出し側は _SECTOR_TO_TAXONOMY にフォールバック。
+    [T-3消費配線 / Wave R2] company_taxonomy_map の関与度を業種ごとに集約して返す。
+    {sector_code: {node_id: relevance_score}}。BQ未接続・空なら {} を返し、
+    呼び出し側は _SECTOR_TO_TAXONOMY にフォールバックする。
+
+    2026-09-21: 業種コードで company_taxonomy_map を引いていたが、表のキーは
+    4桁の企業コードで業種擬似ID（"sector:JP:1016"）の行は1件も無く、毎日
+    フォールバック（均等加重）に落ちていた。さらに業種ごとに1本ずつBQを
+    引く N+1 でもあった。業種→銘柄（1本）→銘柄の関与度（1本）の計2本で集約する。
     """
     try:
         from edinet_bq_client import EDINETBQClient
         bq = EDINETBQClient()
     except Exception:
         return {}
-    market = getattr(cfg, "TAXONOMY_MARKET_DEFAULT", "JP")
-    out = {}
-    for code in sector_codes:
-        try:
-            rows = bq.get_company_taxonomy_scores(str(code), market=market)
-        except Exception:
-            rows = []
-        weights = {r["node_id"]: float(r.get("score", 0) or 0)
-                   for r in (rows or []) if r.get("node_id")}
-        if weights:
-            out[str(code)] = weights
+
+    wanted = {str(c) for c in (sector_codes or [])}
+    try:
+        tickers_by_sector = bq.get_tickers_by_sector_bulk(
+            limit=int(getattr(cfg, "TAXONOMY_SECTOR_TICKER_LIMIT", 10))
+        ) or {}
+    except Exception:
+        return {}
+
+    codes_by_sector = {
+        sec: [str(t).split(".")[0] for t in tickers if t]
+        for sec, tickers in tickers_by_sector.items()
+        if not wanted or str(sec) in wanted
+    }
+    all_codes = {c for codes in codes_by_sector.values() for c in codes}
+    if not all_codes:
+        return {}
+
+    try:
+        scores_by_code = bq.get_taxonomy_scores_bulk(sorted(all_codes))
+    except Exception:
+        return {}
+    if not scores_by_code:
+        return {}
+
+    out: dict = {}
+    for sec, codes in codes_by_sector.items():
+        totals: dict = {}
+        for code in codes:
+            for node_id, score in (scores_by_code.get(code) or {}).items():
+                totals.setdefault(node_id, []).append(float(score))
+        if totals:
+            out[str(sec)] = {
+                node_id: round(sum(vals) / len(vals), 4)
+                for node_id, vals in totals.items()
+            }
     return out
 
 
