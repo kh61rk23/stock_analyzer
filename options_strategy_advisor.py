@@ -3,7 +3,7 @@
 # オプション戦略アドバイザー — IV環境×シグナル×イベントの統合提案
 # ==============================================================
 # 【役割】
-#   現物シグナル（composite score）・ボラティリティ環境（IV/HV）・
+#   現物シグナル（composite score）・ボラティリティ環境（HV水準）・
 #   イベント接近（event_horizon）を統合し、ルールベースで
 #   オプション戦略の「提案」を生成する（執行は常に人間）。
 #
@@ -14,14 +14,20 @@
 #   - 「提案」止まり。発注・建玉操作は一切しない
 #
 # 【戦略ルール】
-#   IV/HV >= OPTIONS_IV_RICH_RATIO（割高 = 売り手有利環境）:
+#   HV が自身の過去1年分布の上位（>= OPTIONS_HV_RICH_PCTL 分位）= 売り手有利環境:
 #     - 保有銘柄        → covered call（保有株が担保）
 #     - 高スコア候補    → cash-secured put（現金が担保・指値買いの代替）
-#   IV/HV <= OPTIONS_IV_CHEAP_RATIO（割安 = 買い手有利環境）:
+#   HV が下位（<= OPTIONS_HV_CHEAP_PCTL 分位）= 買い手有利環境:
 #     - 高スコア候補    → コール買い（defined-risk）
 #     - ドリフト/弱気環境の保有銘柄 → プロテクティブプット（保険）
 #   イベント（決算/FOMC等）が満期前にある場合:
 #     - 「跨ぎ警告」を必ず付与（IVクラッシュ/ギャップリスク）
+#
+# 【2026-09-21: IV を使わない判定へ変更】
+#   実行時刻は常に米国市場の時間外で、yfinance の ATM impliedVolatility が
+#   0.0001 等で返るため「IV欠損」で毎日 提案0件だった（9/18 実測 IV欠損5件）。
+#   健太の判断により、実行時刻は変えずヒストリカル・ボラティリティ（HV）の
+#   過去1年分布における位置だけで環境を判定する。
 #
 # 【対象ユニバース（yfinance API節約のため上限あり）】
 #   保有銘柄のUS銘柄 + OPTIONS_INDEX_ETFS + screener通過のUS上位
@@ -64,15 +70,41 @@ def calc_hv(closes: list[float], window: int = 20) -> Optional[float]:
         return None
 
 
-def classify_iv_regime(iv: float, hv: float,
-                       rich: float = 1.3, cheap: float = 0.8) -> str:
-    """IV/HV比からボラ環境を分類: rich（割高）/ cheap（割安）/ neutral。"""
-    if not iv or not hv or hv <= 0:
+def calc_hv_series(closes: list[float], window: int = 20,
+                   max_points: int = 250) -> list[float]:
+    """過去の各時点の年率HVを新しい順ではなく時系列順に並べて返す。"""
+    out: list[float] = []
+    if len(closes) < window + 2:
+        return out
+    start = max(window + 1, len(closes) - max_points)
+    for end in range(start, len(closes) + 1):
+        hv = calc_hv(closes[:end], window)
+        if hv is not None:
+            out.append(hv)
+    return out
+
+
+def hv_percentile(hv: Optional[float], hv_series: list[float]) -> Optional[float]:
+    """HV が過去分布の何分位にあるか（0〜100）。データ不足は None。"""
+    if hv is None or len(hv_series) < 30:
+        return None
+    below = sum(1 for x in hv_series if x <= hv)
+    return round(below / len(hv_series) * 100, 1)
+
+
+def classify_hv_regime(pctl: Optional[float],
+                       rich_pctl: float = 70.0,
+                       cheap_pctl: float = 30.0) -> str:
+    """HVの分位からボラ環境を分類: rich（高ボラ＝売り手有利）/ cheap / neutral。
+
+    2026-09-21: 従来は IV/HV 比で判定していたが、実行時刻（米国時間外）では
+    ATM の IV が取れず毎回 unknown になっていた。HV 自身の過去分布で代替する。
+    """
+    if pctl is None:
         return "unknown"
-    ratio = iv / hv
-    if ratio >= rich:
+    if pctl >= rich_pctl:
         return "rich"
-    if ratio <= cheap:
+    if pctl <= cheap_pctl:
         return "cheap"
     return "neutral"
 
@@ -99,7 +131,7 @@ def suggest_strategies(m: dict, cfg=None) -> list[dict]:
         [{ticker, strategy, direction, rationale, warnings, guardrail_ok}]
     """
     out = []
-    rich = float(getattr(cfg, "OPTIONS_IV_RICH_RATIO", 1.3)) if cfg else 1.3
+    rich_pctl = float(getattr(cfg, "OPTIONS_HV_RICH_PCTL", 70.0)) if cfg else 70.0
     csp_min = float(getattr(cfg, "OPTIONS_MIN_SCORE_FOR_CSP", 70.0)) if cfg else 70.0
     regime = m.get("regime", "unknown")
     score = float(m.get("composite_score") or 0)
@@ -118,26 +150,27 @@ def suggest_strategies(m: dict, cfg=None) -> list[dict]:
             "expiry": m.get("expiry", ""),
             "expected_move_pct": m.get("expected_move_pct"),
             "iv": m.get("iv"), "hv": m.get("hv"),
+            "hv_percentile": m.get("hv_percentile"),
             "guardrail_ok": True,   # 本関数は defined-risk/covered しか出さない
         })
 
     if regime == "rich":
         if m.get("is_portfolio"):
             add("covered_call", "neutral_bullish",
-                f"IV/HV={m.get('iv',0):.0%}/{m.get('hv',0):.0%}（割高域≥{rich}倍）。"
-                "保有株を担保にプレミアム収入")
+                f"HV={m.get('hv',0):.0%}（過去1年の{m.get('hv_percentile',0):.0f}分位"
+                f"・{rich_pctl:.0f}分位以上＝高ボラ）。保有株を担保にプレミアム収入")
         if score >= csp_min and not m.get("bearish_context"):
             add("cash_secured_put", "bullish",
-                f"composite {score:.0f}点の買い候補×IV割高。"
+                f"composite {score:.0f}点の買い候補×高ボラ（HV上位）。"
                 "現金担保プットで指値買いの代替（権利行使なら望んだ価格で取得）")
     elif regime == "cheap":
         if score >= csp_min and not m.get("bearish_context"):
             add("long_call", "bullish",
-                f"composite {score:.0f}点×IV割安。"
+                f"composite {score:.0f}点×低ボラ（HV下位）。"
                 "最大損失プレミアム限定のコール買い")
         if m.get("is_portfolio") and m.get("bearish_context"):
             add("protective_put", "hedge",
-                "保有銘柄に弱気シグナル×IV割安。保険コストが安い局面")
+                "保有銘柄に弱気シグナル×低ボラ（HV下位）。保険コストが安い局面")
     # neutral/unknown は提案なし（無理にポジションを取らない）
     return out
 
@@ -196,12 +229,19 @@ def _fetch_metrics(cfg, entry: dict, horizon: dict,
         import yf_cache as yf
         tk = entry["ticker"]
         t = yf.Ticker(tk)
-        hist = t.history(period="3mo")
+        # HVの分位を出すため1年分を取る（yf_cache 経由でキャッシュされる）
+        hist = t.history(period="1y")
         closes = list(hist["Close"].dropna()) if len(hist) else []
         spot = float(closes[-1]) if closes else 0
         if spot <= 0:
             return _fail("価格なし")
-        hv = calc_hv(closes, int(getattr(cfg, "OPTIONS_HV_WINDOW_DAYS", 20)))
+        window = int(getattr(cfg, "OPTIONS_HV_WINDOW_DAYS", 20))
+        hv = calc_hv(closes, window)
+        if hv is None:
+            return _fail("HV算出不可")
+        pctl = hv_percentile(hv, calc_hv_series(closes, window))
+        if pctl is None:
+            return _fail("HV履歴不足")
         expiries = list(t.options or [])
         if not expiries:
             return _fail("満期一覧なし")
@@ -214,11 +254,10 @@ def _fetch_metrics(cfg, entry: dict, horizon: dict,
         calls, puts = chain.calls, chain.puts
         atm_c = calls.iloc[(calls["strike"] - spot).abs().argsort()[:1]]
         atm_p = puts.iloc[(puts["strike"] - spot).abs().argsort()[:1]]
+        # 2026-09-21: IV は参考表示のみ（時間外は 0.0001 等で返るため判定には使わない）
         iv = float((atm_c["impliedVolatility"].iloc[0]
                     + atm_p["impliedVolatility"].iloc[0]) / 2)
-        if not iv >= 0.01:
-            # 米国の取引時間外は ATM の IV が 0.0001 等で返り「割安」と誤判定するため除外
-            return _fail("IV欠損")
+        iv = iv if iv >= 0.01 else None
         straddle = float(atm_c["lastPrice"].iloc[0] + atm_p["lastPrice"].iloc[0])
         # 満期前イベント（同一ticker決算 or 高重要度マクロ）
         event = None
@@ -230,12 +269,14 @@ def _fetch_metrics(cfg, entry: dict, horizon: dict,
                 event = {"label": e.get("label", ""), "date": e.get("date", "")}
                 break
         return {
-            "ticker": tk, "spot": round(spot, 2), "iv": round(iv, 4),
+            "ticker": tk, "spot": round(spot, 2),
+            "iv": round(iv, 4) if iv is not None else None,
             "hv": hv,
-            "regime": classify_iv_regime(
-                iv, hv or 0,
-                float(getattr(cfg, "OPTIONS_IV_RICH_RATIO", 1.3)),
-                float(getattr(cfg, "OPTIONS_IV_CHEAP_RATIO", 0.8))),
+            "hv_percentile": pctl,
+            "regime": classify_hv_regime(
+                pctl,
+                float(getattr(cfg, "OPTIONS_HV_RICH_PCTL", 70.0)),
+                float(getattr(cfg, "OPTIONS_HV_CHEAP_PCTL", 30.0))),
             "is_portfolio": entry.get("is_portfolio", False),
             "composite_score": entry.get("composite_score", 0),
             "event_before_expiry": event,

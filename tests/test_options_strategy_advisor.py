@@ -13,11 +13,13 @@ class TestHV:
 
 
 class TestRegime:
+    # 2026-09-21: 実行時刻（米国時間外）ではATMのIVが取れないため、
+    # IV/HV比ではなく HV の過去1年分位で判定するよう変更した。
     def test_rich_cheap_neutral(self):
-        assert opt.classify_iv_regime(0.40, 0.25) == "rich"    # 1.6倍
-        assert opt.classify_iv_regime(0.15, 0.25) == "cheap"   # 0.6倍
-        assert opt.classify_iv_regime(0.25, 0.25) == "neutral"
-        assert opt.classify_iv_regime(0.25, 0) == "unknown"
+        assert opt.classify_hv_regime(85.0) == "rich"
+        assert opt.classify_hv_regime(12.0) == "cheap"
+        assert opt.classify_hv_regime(50.0) == "neutral"
+        assert opt.classify_hv_regime(None) == "unknown"
 
 
 class TestExpectedMove:
@@ -26,7 +28,8 @@ class TestExpectedMove:
 
 
 class TestSuggestStrategies:
-    BASE = {"ticker": "AAPL", "spot": 200.0, "iv": 0.40, "hv": 0.25,
+    BASE = {"ticker": "AAPL", "spot": 200.0, "iv": None, "hv": 0.25,
+            "hv_percentile": 85.0,
             "expiry": "2026-07-17", "expected_move_pct": 5.0,
             "event_before_expiry": None, "bearish_context": False}
 

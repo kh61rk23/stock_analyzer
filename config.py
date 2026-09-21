@@ -1487,6 +1487,11 @@ ENABLE_MARKET_BREADTH: bool = True   # 市場幅指標 [3-7]
 ENABLE_CREDIT_DATA:      bool  = True    # 信用残高データ取得 [3-5]
 CREDIT_SQUEEZE_THRESH:   float = 1.0     # 踏み上げ候補の倍率閾値
 CREDIT_OVERHEAT_THRESH:  float = 10.0   # 過熱（崩落リスク）の倍率閾値
+# 2026-09-21: 市場全体データでは絶対値の閾値だと7割が「過熱」になるため、
+# その週の分位で判定する（健太の判断）。絶対値は銘柄数が少ないときの予備。
+CREDIT_SQUEEZE_PCTL:  float = 10.0   # 倍率が下位この%以下 → 踏み上げ候補
+CREDIT_OVERHEAT_PCTL: float = 90.0   # 倍率が上位この%以上 → 過熱
+CREDIT_CAUTION_PCTL:  float = 75.0   # 倍率が上位この%以上 → 注意（加減点なし）
 ENABLE_CORRELATION_HEATMAP: bool = True   # 相関ヒートマップ [3-2]
 ENABLE_SCENARIO_ANALYSIS: bool = True   # シナリオ分析（フェーズ3）
 ENABLE_PERFORMANCE_TRACKER: bool = True      # パフォーマンストラッカー有効化（2-3追加）
@@ -4628,8 +4633,10 @@ EVENT_HORIZON_EARNINGS_TTL_DAYS: int = 3   # 決算日キャッシュTTL（yfina
 ENABLE_OPTIONS_ADVISOR: bool = True
 OPTIONS_INDEX_ETFS: list = ["SPY", "QQQ"]   # 常時監視する指数ETF
 OPTIONS_MAX_UNIVERSE: int = 10              # yfinanceチェーン取得の上限銘柄数
-OPTIONS_IV_RICH_RATIO: float = 1.3          # IV/HV がこれ以上 → プレミアム売り環境
-OPTIONS_IV_CHEAP_RATIO: float = 0.8         # IV/HV がこれ以下 → プレミアム買い環境
+# 2026-09-21: 実行時刻（米国時間外）では ATM の IV が取れず提案0件が続いたため、
+# HV の過去1年分布での位置で環境を判定する（健太の判断）。
+OPTIONS_HV_RICH_PCTL: float = 70.0          # HVがこの分位以上 → 高ボラ＝プレミアム売り環境
+OPTIONS_HV_CHEAP_PCTL: float = 30.0         # HVがこの分位以下 → 低ボラ＝プレミアム買い環境
 OPTIONS_HV_WINDOW_DAYS: int = 20            # ヒストリカル・ボラティリティ算出窓
 OPTIONS_MIN_SCORE_FOR_CSP: float = 70.0     # cash-secured put 提案の最低composite
 

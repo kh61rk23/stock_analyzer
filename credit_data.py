@@ -16,7 +16,7 @@
 #
 # 【データソース】
 #   JPX 信用取引残高 週次CSV（毎週金曜公開）
-#   URL: https://www.jpx.co.jp/markets/statistics-equities/margin/index.html
+#   URL: https://www.jpx.co.jp/markets/statistics-equities/margin/05.html
 #
 # 【出力スキーマ】
 #   {
@@ -50,8 +50,7 @@
 
 from __future__ import annotations
 
-import csv
-import io
+import re
 import json
 import time
 from datetime import datetime, timedelta, date
@@ -72,21 +71,18 @@ PENALTY_OVERHEAT    = -5.0   # 過熱: composite_score -5pt
 CACHE_HOURS         = 24 * 7  # 週次データなので7日キャッシュ
 CACHE_FILENAME      = "credit_data_cache.json"
 
-# JPX 信用残高 CSV の URL パターン（週次更新）
-# 例: https://www.jpx.co.jp/markets/statistics-equities/margin/tvdivq0000001mf0-att/data_j.csv
-JPX_MARGIN_CSV_URL = (
-    "https://www.jpx.co.jp/markets/statistics-equities/margin/"
-    "tvdivq0000001mf0-att/data_j.csv"
-)
-# フォールバック: 過去数週分のURLを試す
-JPX_FALLBACK_URLS = [
-    "https://www.jpx.co.jp/markets/statistics-equities/margin/"
-    "tvdivq0000001mf0-att/data_j.csv",
-]
+# JPX「銘柄別信用取引週末残高」（毎週火曜 16:30 目安）
+# 2026-09-21: 従来の CSV（.../margin/tvdivq0000001mf0-att/data_j.csv）は配信終了で
+# 全URLが404になっていた（毎週 yfinance の代理値へフォールバック）。現在は
+# 一覧ページに PDF（syumatsuYYYYMMDD00.pdf）として掲載されるため、
+# 一覧から最新のURLを見つけて読む。
+JPX_WEEKLY_PAGE_URL = "https://www.jpx.co.jp/markets/statistics-equities/margin/05.html"
+JPX_BASE_URL        = "https://www.jpx.co.jp"
+JPX_MAX_WEEKS_BACK  = 3      # 最新が未掲載のときに遡る週数
 
 
 # ==============================================================
-# BLOCK 1: JPX CSV 取得
+# BLOCK 1: JPX 週末残高PDF 取得
 # ==============================================================
 
 _CFG_CONST_MAP = {
@@ -107,112 +103,192 @@ def sync_thresholds_from_config(cfg) -> dict:
     return sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
 
 
-def _fetch_jpx_csv(url: str, timeout: int = 15) -> Optional[str]:
-    """JPX の信用残高 CSV をテキストとして取得する。"""
+_JPX_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept":  "text/html,application/pdf,*/*",
+    "Referer": "https://www.jpx.co.jp/",
+}
+
+
+def discover_jpx_weekly_pdfs(max_files: int = JPX_MAX_WEEKS_BACK,
+                             fetch=None) -> list:
+    """一覧ページから「銘柄別信用取引週末残高」PDFのURLを新しい順に返す。"""
+    fetch = fetch or _fetch_text
+    html = fetch(JPX_WEEKLY_PAGE_URL)
+    if not html:
+        return []
+    hits = re.findall(r'href="(/markets/statistics-equities/margin/[^"]*?syumatsu(\d{8})\d{2}\.pdf)"',
+                      html)
+    seen: dict = {}
+    for href, day in hits:
+        seen.setdefault(day, JPX_BASE_URL + href)
+    return [seen[d] for d in sorted(seen, reverse=True)][:max(1, int(max_files))]
+
+
+def _fetch_text(url: str, timeout: int = 20) -> Optional[str]:
+    """HTML をテキストで取得する。"""
     try:
         import requests
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
-            "Accept":          "text/csv,application/csv,*/*",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Referer":         "https://www.jpx.co.jp/",
-        }
-        r = requests.get(url, headers=headers, timeout=timeout)
+        r = requests.get(url, headers=_JPX_HEADERS, timeout=timeout)
         if r.status_code == 200:
-            # JPX CSV は Shift-JIS エンコード
-            r.encoding = "shift_jis"
+            r.encoding = "utf-8"
             return r.text
-        return None
+        print(f"    ⚠️  JPX ページ取得失敗 HTTP {r.status_code}: {url[:70]}")
     except Exception as e:
-        print(f"    ⚠️  JPX CSV 取得失敗 ({url[:60]}): {str(e)[:60]}")
+        print(f"    ⚠️  JPX ページ取得失敗 ({url[:60]}): {str(e)[:60]}")
+    return None
+
+
+def _fetch_jpx_pdf(url: str, timeout: int = 30) -> Optional[bytes]:
+    """週末残高PDFをバイト列で取得する。"""
+    try:
+        import requests
+        r = requests.get(url, headers=_JPX_HEADERS, timeout=timeout)
+        if r.status_code == 200 and r.content[:4] == b"%PDF":
+            return r.content
+        print(f"    ⚠️  JPX PDF 取得失敗 HTTP {r.status_code}: {url[:70]}")
+    except Exception as e:
+        print(f"    ⚠️  JPX PDF 取得失敗 ({url[:60]}): {str(e)[:60]}")
+    return None
+
+
+def _jpx_number(text: str) -> Optional[int]:
+    """"8,900" / "▲ 400" / "0" を int にする（▲ は負値）。"""
+    t = str(text).replace(",", "").replace("△", "▲").strip()
+    neg = t.startswith("▲")
+    t = t.lstrip("▲").replace(" ", "").replace("\u3000", "")
+    if not t.isdigit():
         return None
+    value = int(t)
+    return -value if neg else value
 
 
-def _parse_jpx_csv(text: str) -> list:
+def _flag_for_ratio(margin_ratio: float) -> str:
+    if margin_ratio < SQUEEZE_THRESHOLD:
+        return "squeeze"
+    if margin_ratio > OVERHEAT_THRESHOLD:
+        return "overheated"
+    if margin_ratio >= CAUTION_THRESHOLD:
+        return "caution"
+    return "normal"
+
+
+def assign_relative_flags(records: list, cfg=None) -> list:
+    """信用倍率の**その週の分布**で squeeze / caution / overheated を付け直す。
+
+    2026-09-21: 絶対値の閾値（<1倍=踏み上げ / >10倍=過熱）は、売残がほぼ無い
+    小型株が多い市場全体データでは 4,194銘柄中 2,905銘柄が「過熱」になり、
+    大半の銘柄に -5pt が付いてしまう（中央値56.7倍）。健太の判断により、
+    その週の分位（既定: 下位10% / 上位10%・注意は上位25%）で判定する。
+    銘柄数が少ないとき（フォールバック経由など）は従来の絶対値で判定する。
     """
-    JPX 信用残高 CSV を解析して CreditRecord リストを返す。
+    # 売残ゼロ（倍率は番人値 99.99）は「倍率が高い」のではなく売り手が居ないだけなので、
+    # 分位の母集団からも判定対象からも外す（上位10%が番人値の同値で埋まるのを防ぐ）
+    ratios = sorted(
+        r["margin_ratio"] for r in records
+        if r.get("margin_ratio") is not None
+        and r.get("short_shares", 0) > 0 and r["margin_ratio"] < 99.99
+    )
+    if len(ratios) < 100:
+        for r in records:
+            r["flag"] = _flag_for_ratio(r["margin_ratio"])
+        return records
 
-    JPX CSV フォーマット（Shift-JIS / 週次）:
-      列: 計上基準日, 市場区分, コード, 銘柄名, 信用買残(株), 前週比, 信用売残(株), 前週比, 信用倍率
+    def _pctl(p: float) -> float:
+        idx = min(len(ratios) - 1, max(0, int(round(len(ratios) * p / 100)) - 1))
+        return ratios[idx]
+
+    squeeze_p  = float(getattr(cfg, "CREDIT_SQUEEZE_PCTL", 10.0)) if cfg else 10.0
+    overheat_p = float(getattr(cfg, "CREDIT_OVERHEAT_PCTL", 90.0)) if cfg else 90.0
+    caution_p  = float(getattr(cfg, "CREDIT_CAUTION_PCTL", 75.0)) if cfg else 75.0
+    lo, hi, mid = _pctl(squeeze_p), _pctl(overheat_p), _pctl(caution_p)
+
+    for r in records:
+        ratio = r["margin_ratio"]
+        if not r.get("short_shares", 0) or ratio >= 99.99:
+            r["flag"] = "normal"      # 売残ゼロ＝判定材料なし
+        elif ratio <= lo:
+            r["flag"] = "squeeze"
+        elif ratio >= hi:
+            r["flag"] = "overheated"
+        elif ratio >= mid:
+            r["flag"] = "caution"
+        else:
+            r["flag"] = "normal"
+    return records
+
+
+def parse_jpx_weekly_pdf(data: bytes) -> tuple:
     """
-    records = []
+    「銘柄別信用取引週末残高」PDFを解析して (records, as_of_date) を返す。
+
+    PDF の1銘柄は次の並びで出る（PyMuPDF のテキスト抽出順）:
+      銘柄名 / 5桁コード（例 13010）/ ISIN / 売残高 / 前週比 / 買残高 / 前週比 / …
+    """
+    records: list = []
     as_of_date = ""
+    try:
+        import fitz
+    except ImportError:
+        print("    ⚠️  PyMuPDF が未インストールです（pip install pymupdf）")
+        return records, as_of_date
 
     try:
-        reader = csv.reader(io.StringIO(text))
-        header_skipped = False
-
-        for row in reader:
-            # 空行・ヘッダー行スキップ
-            if not row or len(row) < 5:
-                continue
-            if not header_skipped:
-                # 最初の数値行まで読み飛ばす
-                try:
-                    int(row[2])  # コード欄が数字ならデータ行
-                    header_skipped = True
-                except (ValueError, IndexError):
-                    continue
-
-            try:
-                # 列インデックスは JPX のフォーマットに準拠
-                # 0: 計上基準日, 1: 市場区分, 2: コード, 3: 銘柄名
-                # 4: 信用買残(株), 5: 前週比(買), 6: 信用売残(株), 7: 前週比(売), 8: 信用倍率
-                as_of_raw  = row[0].strip()
-                code       = row[2].strip().zfill(4)
-                name       = row[3].strip()
-                long_raw   = row[4].replace(",", "").strip()
-                long_chg   = row[5].replace(",", "").strip()
-                short_raw  = row[6].replace(",", "").strip()
-                short_chg  = row[7].replace(",", "").strip()
-
-                long_shares  = int(long_raw)   if long_raw.lstrip("-").isdigit()  else 0
-                short_shares = int(short_raw)  if short_raw.lstrip("-").isdigit() else 0
-                long_change  = int(long_chg)   if long_chg.lstrip("-").isdigit()  else 0
-                short_change = int(short_chg)  if short_chg.lstrip("-").isdigit() else 0
-
-                # 信用倍率計算
-                if short_shares > 0:
-                    margin_ratio = round(long_shares / short_shares, 2)
-                elif long_shares > 0:
-                    margin_ratio = 99.99   # 売り残ゼロ（買いのみ）
-                else:
-                    continue   # 両方ゼロはスキップ
-
-                # フラグ付与
-                if margin_ratio < SQUEEZE_THRESHOLD:
-                    flag = "squeeze"
-                elif margin_ratio > OVERHEAT_THRESHOLD:
-                    flag = "overheated"
-                elif margin_ratio >= CAUTION_THRESHOLD:  # 6.0以上を caution
-                    flag = "caution"
-                else:
-                    flag = "normal"
-
-                ticker = f"{code}.T"
-                as_of_date = as_of_raw
-
-                records.append({
-                    "ticker":       ticker,
-                    "code":         code,
-                    "name":         name,
-                    "long_shares":  long_shares,
-                    "short_shares": short_shares,
-                    "long_change":  long_change,
-                    "short_change": short_change,
-                    "margin_ratio": margin_ratio,
-                    "flag":         flag,
-                    "as_of_date":   as_of_raw,
-                })
-            except (IndexError, ValueError):
-                continue
-
+        with fitz.open(stream=data, filetype="pdf") as doc:
+            lines = []
+            for page in doc:
+                lines.extend(
+                    ln.strip() for ln in page.get_text().splitlines() if ln.strip()
+                )
     except Exception as e:
-        print(f"    ⚠️  CSV 解析エラー: {str(e)[:80]}")
+        print(f"    ⚠️  JPX PDF 解析エラー: {str(e)[:80]}")
+        return records, as_of_date
+
+    for ln in lines[:40]:
+        m = re.match(r"^(\d{4})/(\d{1,2})/(\d{1,2})\s*申込み現在", ln)
+        if m:
+            as_of_date = f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+            break
+
+    seen_codes = set()
+    for i, ln in enumerate(lines):
+        # 5桁の銘柄コード（4桁コード + 末尾0）。ISIN が続く行だけを採る
+        if not re.fullmatch(r"[0-9][0-9A-Z]{3}0", ln):
+            continue
+        if i + 6 >= len(lines) or not re.fullmatch(r"JP[0-9A-Z]{10}", lines[i + 1]):
+            continue
+        code = ln[:4]
+        if code in seen_codes:
+            continue
+        short_shares = _jpx_number(lines[i + 2])
+        short_change = _jpx_number(lines[i + 3])
+        long_shares  = _jpx_number(lines[i + 4])
+        long_change  = _jpx_number(lines[i + 5])
+        if short_shares is None or long_shares is None:
+            continue
+        if short_shares > 0:
+            margin_ratio = round(long_shares / short_shares, 2)
+        elif long_shares > 0:
+            margin_ratio = 99.99
+        else:
+            continue
+        seen_codes.add(code)
+        records.append({
+            "ticker":       f"{code}.T",
+            "code":         code,
+            "name":         lines[i - 1] if i else "",
+            "long_shares":  long_shares,
+            "short_shares": short_shares,
+            "long_change":  long_change or 0,
+            "short_change": short_change or 0,
+            "margin_ratio": margin_ratio,
+            "flag":         _flag_for_ratio(margin_ratio),
+            "as_of_date":   as_of_date,
+        })
 
     return records, as_of_date
 
@@ -366,24 +442,24 @@ def run_credit_data(cfg) -> dict:
               f"踏み上げ{len(cached.get('flag_short_squeeze',[]))}件）")
         return cached
 
-    # JPX CSV 取得
-    text = None
-    for url in JPX_FALLBACK_URLS:
-        text = _fetch_jpx_csv(url)
-        if text:
-            print(f"    ✅ JPX CSV 取得成功（{len(text):,}文字）")
+    # JPX 週末残高PDF 取得（一覧から最新→過去の順に試す）
+    records_list: list = []
+    as_of_date = ""
+    for url in discover_jpx_weekly_pdfs():
+        data = _fetch_jpx_pdf(url)
+        if not data:
+            time.sleep(1)
+            continue
+        records_list, as_of_date = parse_jpx_weekly_pdf(data)
+        records_list = assign_relative_flags(records_list, cfg)
+        if records_list:
+            print(f"    ✅ JPX 週末残高PDF 取得成功（{url.split('/')[-1]} / "
+                  f"{len(records_list):,}銘柄）")
             break
         time.sleep(1)
 
-    if not text:
-        print("    ⚠️  JPX CSV 全URL取得失敗。yfinance フォールバックに切り替えます...")
-        return _fallback_via_yfinance(cfg)
-
-    # CSV 解析
-    records_list, as_of_date = _parse_jpx_csv(text)
-
     if not records_list:
-        print("    ⚠️  CSV 解析結果が空。yfinance フォールバックに切り替えます...")
+        print("    ⚠️  JPX 週末残高PDF 取得/解析に失敗。yfinance フォールバックに切り替えます...")
         return _fallback_via_yfinance(cfg)
 
     # ticker → record の辞書形式に変換
