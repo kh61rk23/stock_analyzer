@@ -203,6 +203,13 @@ def _get_all_candidate_ids(app_id, stats_code, search_word) -> list:
 
 
 def _parse_time_code(time_code: str) -> str:
+    # 2026-09-26: e-Statの標準時間コードは10桁 "YYYY00MMMM"（月次）/
+    # "YYYY000000"（年次）/ "YYYY100000"（年度）。旧実装は[4:6]="00"を月と
+    # 読んで月次データを全て年だけ（"2026"）にしていたため、前年比が
+    # 「2026年7月 vs 2025年12月」の比較になり建設着工-87%等の異常値を出していた。
+    if len(time_code) == 10 and time_code[:4].isdigit() and time_code[4:6] in ("00", "10"):
+        year, month = time_code[:4], time_code[8:10]
+        return f"{year}-{month}" if month not in ("00",) else year
     if len(time_code) >= 6:
         year, month = time_code[:4], time_code[4:6]
         return f"{year}-{month}" if month != "00" else year
@@ -313,6 +320,9 @@ def fetch_estat_data_by_id(stats_data_id, app_id, limit=24):
         return None, False
 
 
+_FAILOVER_MAX_CANDIDATES = 15
+
+
 def fetch_estat_with_failover(stats_data_id, app_id, stats_code,
                                search_word, hardcoded_id,
                                data_dir, limit=24):
@@ -328,18 +338,27 @@ def fetch_estat_with_failover(stats_data_id, app_id, stats_code,
     cache_file = data_dir / f"id_cache_{stats_code}_{month}.txt" if data_dir else None
     data_cache = data_dir / f"data_{stats_data_id}_{month}.json" if data_dir else None
 
-    # データキャッシュ確認
+    good_file  = data_dir / f"failover_id_{stats_code}.txt" if data_dir else None
+
+    # データキャッシュ確認（陳腐化した内容は使わずフェイルオーバーへ回す）
     if data_cache and data_cache.exists():
         try:
-            return json.loads(data_cache.read_text(encoding="utf-8")), stats_data_id
+            cached = json.loads(data_cache.read_text(encoding="utf-8"))
+            for r in cached:   # 旧形式で保存された time を time_code から引き直す
+                if r.get("time_code"):
+                    r["time"] = _parse_time_code(r["time_code"])
+            if not _is_stale(cached):
+                return cached, stats_data_id
         except Exception:
             pass
 
     # 最初の試行
-    open_date_info = ""
     records, is_invalid = fetch_estat_data_by_id(stats_data_id, app_id, limit)
 
-    if records:
+    # 2026-09-26: 以前はここで records があれば即 return していたため、下の
+    # 陳腐化判定（_is_stale）は records=None でしか評価されず常にFalse＝
+    # 「古いデータのときのフェイルオーバー」が一度も発動しないデッドコードだった。
+    if records and not _is_stale(records):
         if data_cache:
             try:
                 data_cache.parent.mkdir(parents=True, exist_ok=True)
@@ -354,6 +373,12 @@ def fetch_estat_with_failover(stats_data_id, app_id, stats_code,
     is_stale = _is_stale(records)
     if is_stale and records:
         print(f"    ⚡ フェイルオーバー発動: {stats_data_id} は古いデータ（最新: {records[0].get('time','?')}）")
+
+    exhausted = (data_dir / f"failover_exhausted_{stats_code}_{month}.txt"
+                 if data_dir else None)
+    if is_stale and not is_invalid and exhausted and exhausted.exists():
+        # 今月すでに全候補を試して新しい表が無かった → 毎日の再探索を省く
+        return records, stats_data_id
 
     if is_invalid or is_stale:
         # ★ フェイルオーバー発動: キャッシュを削除して再検索
@@ -373,15 +398,33 @@ def fetch_estat_with_failover(stats_data_id, app_id, stats_code,
         elif hardcoded_id and hardcoded_id in candidates:
             candidates.remove(hardcoded_id)
             candidates.insert(0, hardcoded_id)
-        # 無効だったIDは除外
-        candidates = [c for c in candidates if c != stats_data_id]
+        # 前回フェイルオーバーで当たったIDを最優先で試す
+        prev_good = None
+        if good_file and good_file.exists():
+            try:
+                prev_good = good_file.read_text().strip() or None
+            except OSError:
+                prev_good = None
+        if prev_good:
+            if prev_good in candidates:
+                candidates.remove(prev_good)
+            candidates.insert(0, prev_good)
+        # 無効だったIDは除外し、試行数に上限を設ける（1候補≒1秒）
+        candidates = [c for c in candidates if c != stats_data_id][:_FAILOVER_MAX_CANDIDATES]
 
         print(f"    🔄 代替候補 {len(candidates)}件を順に試行中...")
         for cid in candidates:
             time.sleep(0.3)
             recs, inv = fetch_estat_data_by_id(cid, app_id, limit)
+            if recs and _is_stale(recs):
+                continue  # 候補も古い表なら採用しない
             if recs:
                 print(f"    ✅ フェイルオーバー成功: {cid}")
+                if good_file:
+                    try:
+                        good_file.write_text(cid)
+                    except OSError:
+                        pass
                 # 新しいIDをキャッシュに保存
                 if cache_file:
                     try:
@@ -401,8 +444,15 @@ def fetch_estat_with_failover(stats_data_id, app_id, stats_code,
                 return recs, cid
             if inv:
                 continue  # 無効IDはスキップ
+        print(f"    ❌ 代替候補に新しいデータなし（{stats_code} / 要 hardcoded_id 更新）")
+        if exhausted:
+            try:
+                exhausted.write_text(datetime.now().strftime("%Y-%m-%d"))
+            except OSError:
+                pass
 
-    return None, stats_data_id
+    # 代替が無ければ古いデータのまま返す（judge_sector_impact の鮮度ガードで無効化される）
+    return records, stats_data_id
 
 def search_statsdata_id(app_id, stats_code, search_word, data_dir=None, hardcoded_id=None):
     """
@@ -453,6 +503,11 @@ def calculate_changes(records):
                 (r for r in records[1:] if r["time"].startswith(target_year)),
                 None
             )
+        # 月次なら同月（"2025-07"）と比べる。年だけの一致だと先頭＝12月を拾う
+        if len(latest_time) >= 7 and target_year:
+            same_month = f"{target_year}{latest_time[4:7]}"
+            yr_record = next(
+                (r for r in records[1:] if r["time"] == same_month), None)
         if yr_record:
             yr = yr_record["value"]
             if yr and yr != 0:

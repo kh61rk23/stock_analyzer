@@ -59,3 +59,46 @@ class TestCalculateChanges:
         ch = calculate_changes(records)
         assert ch["yoy_change"] == 5.0
         assert ch["latest_time"] == "2026-05"
+
+
+# ── 2026-09-26: e-Stat 10桁時間コード / 同月比較 / 陳腐化フェイルオーバー ──
+class TestEstatTimeCode:
+    def test_monthly_10digit_code(self):
+        from gov_data_pipeline import _parse_time_code
+        assert _parse_time_code("2026000707") == "2026-07"
+        assert _parse_time_code("2026000000") == "2026"
+        assert _parse_time_code("2026100000") == "2026"
+
+    def test_yoy_compares_same_month_not_december(self):
+        # 建設着工の実データ: 2026-07=17043 / 2025-12=133452 / 2025-07=15377
+        records = [
+            {"time": "2026-07", "value": 17043.0},
+            {"time": "2025-12", "value": 133452.0},
+            {"time": "2025-07", "value": 15377.0},
+        ]
+        assert calculate_changes(records)["yoy_change"] == 10.83
+
+
+class TestStaleFailover:
+    def _patch(self, monkeypatch, table):
+        import gov_data_pipeline as g
+        monkeypatch.setattr(g, "fetch_estat_data_by_id",
+                            lambda sid, app, limit=24: (table.get(sid), False))
+        monkeypatch.setattr(g, "_get_all_candidate_ids", lambda *a: ["OLD2", "NEW"])
+        monkeypatch.setattr(g.time, "sleep", lambda s: None)
+        return g
+
+    def test_stale_primary_triggers_failover(self, monkeypatch, tmp_path):
+        old = [{"time": "2005-12", "time_code": "2005001212", "value": 1.0}]
+        new = [{"time": "2026-07", "time_code": "2026000707", "value": 2.0}]
+        g = self._patch(monkeypatch, {"OLD": old, "OLD2": old, "NEW": new})
+        recs, used = g.fetch_estat_with_failover("OLD", "k", "C", "w", None, tmp_path)
+        assert used == "NEW" and recs == new
+        assert (tmp_path / "failover_id_C.txt").read_text() == "NEW"
+
+    def test_no_fresh_candidate_returns_stale_and_marks_month(self, monkeypatch, tmp_path):
+        old = [{"time": "2005-12", "time_code": "2005001212", "value": 1.0}]
+        g = self._patch(monkeypatch, {"OLD": old, "OLD2": old})
+        recs, used = g.fetch_estat_with_failover("OLD", "k", "C", "w", None, tmp_path)
+        assert used == "OLD" and recs == old
+        assert list(tmp_path.glob("failover_exhausted_C_*.txt"))

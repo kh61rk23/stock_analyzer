@@ -270,6 +270,12 @@ HIGH_IMPORTANCE_KEYWORDS = [
 # BLOCK 2: RSS取得
 # ==============================================================
 
+# 0件だったフィードの理由 {feed_id: "HTTP 403" など}。
+# 2026-09-26: HTTPエラー・例外・「2日以内の記事なし」がすべて「0件」と
+# 同じ表示になり、Arabian Business の連日0件の原因が切り分けられなかった。
+_FETCH_DIAG: dict = {}
+
+
 def _fetch_feed(feed_def: dict, timeout: int = 15,
                 user_agent: Optional[str] = None) -> list:
     """
@@ -298,10 +304,14 @@ def _fetch_feed(feed_def: dict, timeout: int = 15,
         resp = requests.get(feed_def["url"], headers=headers,
                             timeout=timeout, allow_redirects=True)
         if resp.status_code != 200:
+            _FETCH_DIAG[feed_def.get("id")] = f"HTTP {resp.status_code}"
             return []
         parsed = feedparser.parse(resp.content)
-    except Exception:
+    except Exception as exc:
+        _FETCH_DIAG[feed_def.get("id")] = type(exc).__name__
         return []
+    if not parsed.entries:
+        _FETCH_DIAG[feed_def.get("id")] = "エントリ0（RSSでない応答の可能性）"
 
     articles = []
     cutoff   = datetime.now() - timedelta(days=2)  # 2日以内の記事のみ
@@ -340,6 +350,8 @@ def _fetch_feed(feed_def: dict, timeout: int = 15,
         except Exception:
             continue
 
+    if parsed.entries and not articles:
+        _FETCH_DIAG[feed_def.get("id")] = f"2日以内の記事なし（全{len(parsed.entries)}件が古い）"
     return articles
 
 
@@ -355,9 +367,12 @@ def fetch_all_feeds(feeds: list, cfg) -> list:
         if enabled_ids is not None and feed["id"] not in enabled_ids:
             continue
         ua_key = feed.get("user_agent_cfg")
+        _FETCH_DIAG.pop(feed["id"], None)
         arts = _fetch_feed(feed, user_agent=getattr(cfg, ua_key, None) if ua_key else None)
         all_articles.extend(arts)
-        print(f"    [{feed['priority']}] {feed['name']}: {len(arts)}件")
+        why = _FETCH_DIAG.get(feed["id"]) if not arts else None
+        print(f"    [{feed['priority']}] {feed['name']}: {len(arts)}件"
+              + (f"（{why}）" if why else ""))
         time.sleep(0.5)  # レート制限対策
 
     return all_articles

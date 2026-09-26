@@ -941,6 +941,14 @@ def _days_since(date_str: Optional[str]) -> int:
         return 999
 
 
+def _in_failure_backoff(entry: dict) -> bool:
+    """連続失敗中で、再試行日(next_due)がまだ来ていないか"""
+    if not entry.get("fail_streak"):
+        return False
+    due = entry.get("next_due")
+    return bool(due) and due > date.today().strftime("%Y-%m-%d")
+
+
 def _build_fetch_queue(cfg, meta: dict, cik_map: dict) -> list[dict]:
     """
     優先順位に従って本日取得すべき銘柄リストを返す。
@@ -998,6 +1006,8 @@ def _build_fetch_queue(cfg, meta: dict, cik_map: dict) -> list[dict]:
         if tu in seen or tu not in cik_map:
             continue
         entry    = meta.get(tu, {})
+        if _in_failure_backoff(entry):
+            continue
         days_old = _days_since(entry.get("last_fetched"))
         if days_old >= cache_days:
             rotation_targets.append((days_old, tu))
@@ -1058,13 +1068,21 @@ def _update_meta(meta: dict, result: dict) -> None:
         data = result.get("data", {})
         entry["last_fetched"]   = today
         entry["last_status"]    = "ok"
+        entry.pop("fail_streak", None)
         entry["recent_8k_dates"] = data.get("recent_8k_dates", [])
         entry["eps_latest"]     = data.get("latest_eps")
         next_due = (date.today() + timedelta(days=CACHE_DAYS)).strftime("%Y-%m-%d")
         entry["next_due"]       = next_due
     else:
+        # 2026-09-26: 財務XBRLを持たない銘柄（例: MANA=Grayscale信託）は
+        # 何度やっても失敗するのに、last_fetched が無いため毎日キュー先頭
+        # (999日経過扱い)に入り、31回連続で1枠を潰していた。
+        # 連続失敗ごとに再試行間隔を倍にする（1,2,4,…日、上限CACHE_DAYS）。
+        streak = entry.get("fail_streak", 0) + 1
+        entry["fail_streak"]    = streak
         entry["last_status"]    = f"error: {result.get('error','')}"
-        entry["next_due"]       = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+        backoff = min(2 ** (streak - 1), CACHE_DAYS)
+        entry["next_due"]       = (date.today() + timedelta(days=backoff)).strftime("%Y-%m-%d")
 
     meta[ticker] = entry
 

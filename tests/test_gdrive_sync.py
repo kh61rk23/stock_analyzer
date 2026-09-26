@@ -204,3 +204,19 @@ class TestParallelUpload:
             "失敗したファイルが同期済みとして記録されている（次回再送されない）")
         assert any(k.endswith("f0.md") for k in recorded), (
             "1件の失敗で他のファイルまで巻き添えになっている")
+
+
+class TestContentSignature:
+    def test_mtime_change_alone_does_not_resend(self, gdrive, tmp_path):
+        """Actionsの checkout は全ファイルの mtime を変える。内容が同じなら送らない"""
+        import os
+        ins, logs = _tree(tmp_path, 5)
+        state = tmp_path / "state.json"
+        _sync(gdrive, ins, logs, state)
+        before = dict(gdrive._counter)
+        for f in list(ins.rglob("*.md")) + [logs / "run.log"]:
+            os.utime(f, (1790398431, 1790398431))
+        _sync(gdrive, ins, logs, state)
+        for k in ("list", "create", "update"):
+            assert gdrive._counter[k] == before[k], (
+                f"mtimeが変わっただけで {k} が呼ばれている")

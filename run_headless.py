@@ -18,6 +18,7 @@
 # ==============================================================
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -135,7 +136,10 @@ def _upload_to_gdrive_oauth(client_id, client_secret, refresh_token,
     creds.refresh(Request())
     service = build("drive", "v3", credentials=creds)
 
-    # 前回同期時の {相対パス: "mtime:size"}。差分だけ送るために使う。
+    # 前回同期時の {相対パス: "md5:size"}。差分だけ送るために使う。
+    # 2026-09-26: 以前は "mtime:size" だったが、Actionsは毎回 checkout で
+    # 全ファイルの mtime が揃って変わるため、差分同期が一度も効かず毎日
+    # 全3,381件（約7分・タイムアウト失敗あり）を送っていた。内容ハッシュにする。
     # 壊れていても全件送り直すだけなので、読めなければ黙って空で始める。
     prev_state: dict = {}
     if state_path:
@@ -236,10 +240,9 @@ def _upload_to_gdrive_oauth(client_id, client_secret, refresh_token,
             rel = f.relative_to(local_base)
             key = f"{remote_name}/{rel.as_posix()}"
             try:
-                stat = f.stat()
+                sig = f"{hashlib.md5(f.read_bytes()).hexdigest()}:{f.stat().st_size}"
             except OSError:
                 continue
-            sig = f"{int(stat.st_mtime)}:{stat.st_size}"
             new_state[key] = sig
             if prev_state.get(key) == sig:
                 skipped += 1
