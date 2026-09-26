@@ -4,7 +4,7 @@
 設計の正本は `../統合ファイルなど/02_ファイル構成/`
 （SPEC_core.md / SPEC_db_schema.md / SPEC_investment_dept.md / MODULE_INDEX.md）。
 進捗管理・引き継ぎ資料は `../統合ファイルなど/01_最新版ロードマップ・必要書類/`
-（CHANGELOG.md / TODO_LIST.md / SESSION_PACKET.md 等）。
+（TODO_LIST.md / SESSION_PACKET.md 等。CHANGELOG.md は2026-09-26に凍結し、変更履歴は board の開発ログ台帳へ移設）。
 
 ## 絶対禁止
 
@@ -33,8 +33,9 @@ python3 maintenance_packet.py   # 全監査+台帳+直近変更を MAINTENANCE_P
 
 完了時:
 1. `python3 -m pytest tests/ -q` 全通過を確認
-2. `../統合ファイルなど/01_最新版ロードマップ・必要書類/CHANGELOG.md` に
-   `[YYYY-MM-DD] 種別: 内容（ファイル名必須）` 形式で追記
+2. 開発ログ台帳に記録（2026-09-26〜。CHANGELOG.md は凍結）:
+   `python3 ~/Documents/Obsidian_Local/Vault2_ClaudeCode_Local/board/devlog.py add --project stock_analyzer --kind 修正 --title "…" --detail "…" --files a.py --commit abc1234`
+   （board「システム › 開発」/dev で全プロジェクト横断に見られる）
 3. MODULE_INDEX.md / SPEC_core.md に構造変更を反映
 
 ## このシステムの構造（30秒）
