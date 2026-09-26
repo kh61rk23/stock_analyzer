@@ -471,7 +471,9 @@ def _get_edinet_text_sections(
         # edinet.text_analysis から取得
         query = f"""
         SELECT section_type,
-               CAST(NULL AS STRING) AS text_body
+               -- 2026-09-26: 本文列は raw_text。旧コードは NULL 固定で、行があると
+               -- 空文字の辞書を返して代替経路にも進まず、抽出が常に0件だった
+               raw_text AS text_body
         FROM `{_pid}.edinet.text_analysis`
         WHERE company_code = '{code}'
         ORDER BY fiscal_year_end DESC
@@ -479,13 +481,14 @@ def _get_edinet_text_sections(
         """
         rows = list(raw_bq.query(query).result())
 
-        if rows:
-            # text_analysis にテキスト本文がある場合
-            return {
-                row.section_type: (row.text_body or "")
-                for row in rows
-                if row.section_type
-            }
+        # text_analysis にテキスト本文がある場合（本文が空の行だけなら代替経路へ）
+        from_bq = {
+            row.section_type: row.text_body
+            for row in rows
+            if row.section_type and (row.text_body or "").strip()
+        }
+        if from_bq:
+            return from_bq
 
         # text_analysis が空の場合 → text_extractor 経由でセクション取得を試みる
         # ★ 2026-06-11 バグ修正: 旧実装は存在しない edinet_client.EDINETClient
@@ -495,7 +498,10 @@ def _get_edinet_text_sections(
         #   委譲に修正。
         try:
             _te_mod = importlib.import_module("text_extractor")
-            _sections = _te_mod.extract_sections(cfg, str(code)) or {}
+            # 2026-09-26: extract_sections() の戻り値は {"securities_code", "company_name",
+            # ..., "sections": {business, risk, ...}} で、旧コードは外側の辞書を読んで
+            # 証券コード・会社名などのメタ情報を「本文」として返していた。
+            _sections = (_te_mod.extract_sections(cfg, str(code)) or {}).get("sections") or {}
             result = {
                 k: v for k, v in _sections.items()
                 if isinstance(v, str) and v.strip()

@@ -3659,6 +3659,13 @@ TEXT_SIGNAL_CACHE_FILE       = "text_signal_cache.json"
 TEXT_SIGNAL_TTL_DAYS         = 30
 TEXT_SIGNAL_FIRST_RUN_LIMIT  = 50
 ENABLE_TEXT_SIGNAL           = True
+# 2026-09-26（健太の判断で当面無効）: 有報テキストのリスク減点（base_agent の
+# edinet_text_risk_bonus）だけを止める。ENABLE_TEXT_SIGNAL は text_extractor
+# （edinet_exposure_extractor の代替経路も使う）を兼ねているため別フラグにした。
+# 無効化の理由: ①前期比成分が仮実装で常に0 ②英語FinBERTに日本語を入力
+# ③「事業等のリスク」欄のキーワード数で減点＝リスクを丁寧に書く会社ほど減点され、
+#   全33業種が −1.5〜−9点になっていた（9/26実測）。作り直すなら設計から。
+ENABLE_TEXT_RISK_BONUS       = False
 
 # ── Wave 5 - E4: リスクカテゴリ定義 ─────────────────────────────
 # text_signal.py でリスクをカテゴリ別に分類するためのキーワードマップ。

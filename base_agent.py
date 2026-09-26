@@ -814,7 +814,8 @@ def build_result(
     # ★ try/except 厳重保護: 全モジュール未配置時も 0.0 で継続しシステム全停止を防ぐ
     # ==============================================================
     _edinet_text_risk_bonus = 0.0
-    if getattr(cfg, "ENABLE_TEXT_SIGNAL", False):
+    if (getattr(cfg, "ENABLE_TEXT_SIGNAL", False)
+            and getattr(cfg, "ENABLE_TEXT_RISK_BONUS", False)):
         try:
             import sys as _sys_ts, importlib as _imp_ts, pathlib as _pl_ts
             _sys_ts.path.insert(0, str(_pl_ts.Path(__file__).parent))

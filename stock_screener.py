@@ -438,6 +438,16 @@ def _load_edinet_accruals(cfg) -> dict:
                     except (TypeError, ValueError):
                         pass
 
+    # 2026-09-26: 上のローカルDB（edinet_rotation）は ENABLE_EDINET_ROTATION=False で
+    # 更新が止まっており、毎日「データなし」＝補正0点だった。正本の BQ financials から読む。
+    if not accruals:
+        try:
+            from edinet_bq_client import EDINETBQClient
+            for code, acr in EDINETBQClient().get_latest_accrual_ratios().items():
+                accruals[f"{code}.T"] = acr
+        except Exception as e:
+            print(f"  ⚠️  EDINET accrual（BQ）読み込みエラー（スキップ）: {str(e)[:80]}")
+
     n = len(accruals)
     if n > 0:
         print(f"  📊 EDINET accrual: {n}銘柄分のデータを読み込み")

@@ -205,8 +205,11 @@ jobs:
           EOF
       # ── 3-B2. Wave 5 - E4: テキストシグナル抽出（週次のみ・50社上限）──
       # 追加不要（3-B3との共存は if 条件が同一のため問題なし。並列ではなく直列実行のため順序に依存性なし）
+      # 2026-09-26: 停止。config.SECTORS に銘柄リストが無く（銘柄はBQから取る方式へ移行済み）
+      # 毎週「対象銘柄リストが空のためスキップ」で空振りしていた。リスク減点自体も
+      # ENABLE_TEXT_RISK_BONUS=False で当面無効（健太の判断）。
       - name: 📝 Run text extractor (weekly, first-run limit 50)
-        if: steps.set-mode.outputs.mode == 'weekly'
+        if: false && steps.set-mode.outputs.mode == 'weekly'
         env:
           BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
           BQ_PROJECT_ID:  ${{ secrets.BQ_PROJECT_ID }}

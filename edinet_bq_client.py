@@ -922,6 +922,40 @@ class EDINETBQClient:
             _FIN_LATEST_CACHE.setdefault(code, row)
         return row
 
+    def get_latest_accrual_ratios(self) -> dict:
+        """全社の最新期アクルーアル比率 (純利益−営業CF)/総資産 を1クエリで返す。
+
+        2026-09-26: stock_screener の Sloan アクルーアル補正は、廃止済みの
+        edinet_rotation のローカルDBだけを読んでおり、毎日「データなし」で
+        補正0点だった。financials から直接計算する（accrual_ratio 列は
+        取り込み側が埋めるようになるまで空のため、列が空なら計算値を使う）。
+
+        Returns: {4桁コード: float}
+        """
+        sql = f"""
+        SELECT company_code,
+               COALESCE(accrual_ratio,
+                        SAFE_DIVIDE(net_income - operating_cf, total_assets)) AS acr
+        FROM (
+            SELECT *,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY company_code
+                       ORDER BY COALESCE(fiscal_year, EXTRACT(YEAR FROM fiscal_year_end)) DESC, updated_at DESC
+                   ) AS rn
+            FROM `{self.dataset}.financials`
+            WHERE company_code IS NOT NULL
+              AND (accrual_ratio IS NOT NULL
+                   OR (net_income IS NOT NULL AND operating_cf IS NOT NULL AND total_assets > 0))
+        )
+        WHERE rn = 1
+        """
+        out: dict = {}
+        for row in self.client.query(sql).result():
+            code = _fin_code(row["company_code"])
+            if code and row["acr"] is not None:
+                out[code] = float(row["acr"])
+        return out
+
     def prefetch_latest_financials(self, securities_codes) -> int:
         """複数銘柄の最新期 financials を1クエリで先読みしてキャッシュへ載せる。
 

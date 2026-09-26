@@ -121,7 +121,9 @@ def map_edinetdb_financials(
         "roe": roe,
         "roa": _ratio(net_income, total_assets),
         "operating_margin": _ratio(operating_income, net_sales),
-        "accrual_ratio": None,
+        # 2026-09-26: 常に None で書いており、BQ の accrual_ratio 列は全2,002行が空だった
+        "accrual_ratio": _ratio(net_income - op_cf, total_assets)
+        if net_income is not None and op_cf is not None else None,
         "fcf_yield": None,
         "labor_productivity": _ratio(net_sales, employee_count),
         "currency": "JPY",
