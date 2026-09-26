@@ -102,3 +102,9 @@ class TestStaleFailover:
         recs, used = g.fetch_estat_with_failover("OLD", "k", "C", "w", None, tmp_path)
         assert used == "OLD" and recs == old
         assert list(tmp_path.glob("failover_exhausted_C_*.txt"))
+
+    def test_empty_primary_triggers_failover(self, monkeypatch, tmp_path):
+        new = [{"time": "2026-07", "time_code": "2026000707", "value": 2.0}]
+        g = self._patch(monkeypatch, {"EMPTY": None, "NEW": new})
+        recs, used = g.fetch_estat_with_failover("EMPTY", "k", "C", "w", None, tmp_path)
+        assert used == "NEW" and recs == new

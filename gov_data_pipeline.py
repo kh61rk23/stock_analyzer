@@ -376,14 +376,19 @@ def fetch_estat_with_failover(stats_data_id, app_id, stats_code,
 
     exhausted = (data_dir / f"failover_exhausted_{stats_code}_{month}.txt"
                  if data_dir else None)
-    if is_stale and not is_invalid and exhausted and exhausted.exists():
+    # 2026-09-26: 応答はあるが値が空（家計調査 0002070001 が毎日「データなし」）の
+    # ときも代替を探す。以前は無効ID・陳腐化のときしか探さず、空のまま放置されていた。
+    is_empty = records is None and not is_invalid
+    if (is_stale or is_empty) and not is_invalid and exhausted and exhausted.exists():
         # 今月すでに全候補を試して新しい表が無かった → 毎日の再探索を省く
         return records, stats_data_id
 
-    if is_invalid or is_stale:
+    if is_invalid or is_stale or is_empty:
         # ★ フェイルオーバー発動: キャッシュを削除して再検索
         if is_invalid:
             print(f"    ⚡ フェイルオーバー発動: {stats_data_id} は無効")
+        elif is_empty:
+            print(f"    ⚡ フェイルオーバー発動: {stats_data_id} はデータが空")
         if cache_file and cache_file.exists():
             cache_file.unlink()
         if data_cache and data_cache.exists():
