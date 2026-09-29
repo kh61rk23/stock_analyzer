@@ -180,12 +180,18 @@ def test_insider_scraper_get_cik_uses_sec_client(monkeypatch):
 def test_insider_scraper_fetch_recent_filings_uses_sec_client_submissions(monkeypatch):
     calls = []
 
+    # 2026-09-30: 固定日付（2026-07-01）だと実行日が進むと days=90 の窓から外れて
+    # 落ちていた。実行日からの相対日付にする。
+    from datetime import date, timedelta
+    recent = (date.today() - timedelta(days=10)).isoformat()
+    older = (date.today() - timedelta(days=40)).isoformat()
+
     def fake_submissions(cik, cfg=None):
         calls.append(cik)
         return {
             "filings": {"recent": {
                 "form": ["4", "10-Q"],
-                "filingDate": ["2026-07-01", "2026-06-01"],
+                "filingDate": [recent, older],
                 "accessionNumber": ["0001234567-26-000001", "0001234567-26-000002"],
                 "primaryDocument": ["form4.xml", "10q.htm"],
             }}

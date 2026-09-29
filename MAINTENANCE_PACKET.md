@@ -1,6 +1,6 @@
 # 保守セッションパケット（自動生成）
 
-> 生成: 2026-09-30 00:00:16 / maintenance_packet.py（手動編集禁止）
+> 生成: 2026-09-30 00:02:28 / maintenance_packet.py（手動編集禁止）
 > AIエージェントは改修着手前に本パケットを読了すること。
 > 標準手順: リポジトリ直下 CLAUDE.md / 設計正本: SPEC_core.md
 
@@ -18,12 +18,12 @@
     resultsスキーマ監査: 契約147キー / 実コード148キー
       ✅ 契約とコードは完全一致
 
-### ❌ 回帰テスト（pytest tests/）（exit 1）
-    =========================== short test summary info ============================
-    FAILED tests/test_sec_migration_u1c.py::test_insider_scraper_fetch_recent_filings_uses_sec_client_submissions
-    1 failed, 2181 passed, 1 skipped in 7.64s
+### ✅ 回帰テスト（pytest tests/）（exit 0）
+    ........................................................................ [ 98%]
+    .......................                                                  [100%]
+    2182 passed, 1 skipped in 7.31s
 
-**総合判定: ❌ 監査NGあり — まず監査の修復から着手すること**
+**総合判定: ✅ 全監査グリーン — 改修着手可**
 
 ## ② 実行台帳（直近の本番実行状態）
 
