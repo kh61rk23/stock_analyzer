@@ -641,130 +641,8 @@ def build_report(stat_results, sector_signals):
 # A-1: 貿易品目別シグナル取得（Wave 1）
 # ==============================================================
 
-def fetch_trade_item_signals(
-    app_id:   str,
-    data_dir: "Path",
-    cfg,
-) -> list:
-    """
-    GOV_TRADE_JOB_RULES["trade_items"]（旧名 LEADING_INDICATOR_RULES） に基づき、
-    品目別貿易統計を取得してセクターシグナルに変換する（A-1）。
-
-    処理フロー:
-      1. cfg.GOV_TRADE_JOB_RULES["trade_items"]（旧名 LEADING_INDICATOR_RULES） の各エントリを走査
-      2. statsCode + searchWord で e-Stat から statsDataId を検索
-      3. getStatsData でデータ取得 → calculate_changes → judge_sector_impact
-      4. stat_results 互換形式のリストを返す（run_gov_pipeline のループに統合）
-
-    Returns:
-        [{stat: stat_def, records: [...], changes: {...}, impact: {...}}, ...]
-        エラー時は空リスト（例外を外に投げない）
-    """
-    results: list = []
-    try:
-        rules = getattr(cfg, "GOV_TRADE_JOB_RULES", {})
-        trade_items = rules.get("trade_items", {})
-        if not trade_items:
-            return results
-
-        print(f"\n  📦 [A-1] 貿易品目別シグナル取得中（{len(trade_items)}品目）...")
-
-        for item_key, item_def in trade_items.items():
-            try:
-                # プレースホルダーエントリはスキップ
-                if item_def.get("placeholder", False):
-                    continue
-                stats_code  = item_def.get("statsCode", "")
-                search_word = item_def.get("searchWord", "")
-                stat_id     = item_def.get("stat_id", item_key)
-
-                if not stats_code:
-                    continue
-
-                # STAT_DEFINITIONS 互換の stat_def を動的に生成
-                stat_def = {
-                    "id":          stat_id,
-                    "name":        item_def["name_ja"],
-                    "statsCode":   stats_code,
-                    "searchWord":  search_word,
-                    "unit":        "（百万円）",
-                    "direction":   item_def.get("direction", "higher_is_good"),
-                    "sectors":     item_def.get("sectors", []),
-                    "description": item_def.get("description", ""),
-                    "weight":      item_def.get("weight", 1.0),
-                    "a1_trade_item": True,    # A-1マーカー
-                }
-
-                # statsDataId の検索
-                stats_data_id = search_statsdata_id(
-                    app_id       = app_id,
-                    stats_code   = stats_code,
-                    search_word  = search_word,
-                    data_dir     = data_dir,
-                    hardcoded_id = None,
-                )
-                if not stats_data_id:
-                    print(
-                        f"    ⚠️  [A-1] {item_def['name_ja']}: "
-                        f"statsDataId 未取得（スキップ）"
-                    )
-                    results.append({
-                        "stat": stat_def, "records": [], "changes": {},
-                        "impact": {
-                            "signal": "neutral", "score": 0,
-                            "reason": f"[A-1] statsDataId取得失敗: {search_word}",
-                        },
-                    })
-                    time.sleep(0.3)
-                    continue
-
-                # フェイルオーバー付きデータ取得
-                records, _ = fetch_estat_with_failover(
-                    stats_data_id = stats_data_id,
-                    app_id        = app_id,
-                    stats_code    = stats_code,
-                    search_word   = search_word,
-                    hardcoded_id  = None,
-                    data_dir      = data_dir,
-                )
-
-                if records:
-                    changes = calculate_changes(records)
-                    impact  = judge_sector_impact(stat_def, changes)
-                    # weight による影響スケーリング
-                    w = float(item_def.get("weight", 1.0))
-                    impact["score"] = round(impact.get("score", 0) * w, 1)
-                    icon  = {"tailwind": "📦", "headwind": "📉",
-                             "neutral": "➡️"}.get(impact["signal"], "➡️")
-                    print(
-                        f"  {icon} [A-1] {item_def['name_ja']}: "
-                        f"{impact['reason']}"
-                    )
-                    results.append({
-                        "stat": stat_def, "records": records,
-                        "changes": changes, "impact": impact,
-                    })
-                else:
-                    print(f"    ⚠️  [A-1] {item_def['name_ja']}: データなし")
-                    results.append({
-                        "stat": stat_def, "records": [], "changes": {},
-                        "impact": {"signal": "neutral", "score": 0,
-                                   "reason": "[A-1] データ取得失敗"},
-                    })
-
-                time.sleep(0.5)
-
-            except Exception as _ie:
-                print(
-                    f"    ⚠️  [A-1] {item_def.get('name_ja','?')} "
-                    f"エラー（スキップ）: {str(_ie)[:60]}"
-                )
-                continue
-
-    except Exception as e:
-        print(f"    ⚠️  [A-1] 貿易品目取得全体エラー（スキップ）: {str(e)[:80]}")
-
-    return results
+# 2026-09-29: 貿易品目別シグナル（[A-1]・e-Stat 7品目）は毎日「変化率計算不可」で
+# 機能していなかったため健太の判断で廃止した。
 
 
 # ==============================================================
@@ -1042,18 +920,6 @@ def run_gov_pipeline(cfg) -> dict:
                                               "reason": "データ取得失敗"}})
         time.sleep(0.5)
 
-    # ── [A-1] 貿易品目別シグナルを stat_results に追加 ─────────────
-    try:
-        trade_results = fetch_trade_item_signals(app_id, data_dir, cfg)
-        if trade_results:
-            stat_results.extend(trade_results)
-            print(
-                f"  📦 [A-1] 貿易品目シグナル: "
-                f"{len(trade_results)}品目取得"
-            )
-    except Exception as _a1e:
-        print(f"  ⚠️  [A-1] 貿易品目シグナル統合エラー（スキップ）: {str(_a1e)[:80]}")
-
     # ── [A-2] 職種別求人倍率シグナルを stat_results に追加 ──────────
     try:
         job_results = fetch_job_opening_ratios(app_id, data_dir, cfg)
@@ -1086,8 +952,6 @@ def run_gov_pipeline(cfg) -> dict:
         "stat_results": stat_results, "sector_signals": sector_signals,
         "report_path": str(report_path) if report_path else "",
         "stats_fetched": fetched, "stats_total": total, "skipped": False,
-        "trade_items_fetched":   sum(1 for r in stat_results
-                                     if r.get("stat", {}).get("a1_trade_item")),
         "job_openings_fetched":  sum(1 for r in stat_results
                                      if r.get("stat", {}).get("a2_job_opening")),
     }

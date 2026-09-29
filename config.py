@@ -3008,85 +3008,11 @@ US_RATE_SENSITIVITY_RULES: dict = {
 # BLOCK 28: 先行指標ルール設定（Wave 1 - A-1 / A-2）
 # ==============================================================
 
-# ── A-1: 貿易品目 → 業種コードマッピング ─────────────────────────
-# gov_data_pipeline.fetch_trade_item_signals() が参照する。
-# statsCode / searchWord はe-Stat財務省貿易統計から対応する品目表を使用する。
-# weight: スコア増幅係数（1.0 = 基準。1.5 = 1.5倍の影響を与える）
+# ── A-1: 貿易品目 → 業種コードマッピングは 2026-09-29 に廃止 ─────────
 # ★ 2026-06-10 SSOT修正: 旧名 LEADING_INDICATOR_RULES は BLOCK R-2 と
 #   同名衝突し後勝ち上書きが発生していたため GOV_TRADE_JOB_RULES に改名。
 GOV_TRADE_JOB_RULES: dict = {
-    "trade_items": {
-        "semiconductor_exports": {
-            "name_ja":    "半導体・電子部品輸出",
-            "statsCode":  "00350300",
-            "searchWord": "半導体等電子部品",
-            "sectors":    ["1016", "1018"],       # 電気機器, 精密機器
-            "direction":  "higher_is_good",
-            "weight":     1.5,
-            "stat_id":    "trade_semiconductor",
-            "description": "半導体輸出増は電気機器・精密機器メーカーの受注先行指標",
-        },
-        "auto_exports": {
-            "name_ja":    "自動車輸出",
-            "statsCode":  "00350300",
-            "searchWord": "自動車",
-            "sectors":    ["1017"],                # 輸送用機器
-            "direction":  "higher_is_good",
-            "weight":     1.3,
-            "stat_id":    "trade_auto",
-            "description": "自動車輸出増は輸送用機器メーカーの生産・収益先行指標",
-        },
-        "machinery_exports": {
-            "name_ja":    "一般機械輸出",
-            "statsCode":  "00350300",
-            "searchWord": "一般機械",
-            "sectors":    ["1015"],                # 機械
-            "direction":  "higher_is_good",
-            "weight":     1.2,
-            "stat_id":    "trade_machinery",
-            "description": "一般機械輸出増は機械業種の設備投資受注先行指標",
-        },
-        "chemical_exports": {
-            "name_ja":    "化学製品輸出（有機化合物）",
-            "statsCode":  "00350300",
-            "searchWord": "有機化合物",
-            "sectors":    ["1007"],                # 化学
-            "direction":  "higher_is_good",
-            "weight":     1.1,
-            "stat_id":    "trade_chemical",
-            "description": "有機化合物輸出増は化学業種の生産・販売先行指標",
-        },
-        "steel_exports": {
-            "name_ja":    "鉄鋼輸出",
-            "statsCode":  "00350300",
-            "searchWord": "鉄鋼",
-            "sectors":    ["1012"],                # 鉄鋼
-            "direction":  "higher_is_good",
-            "weight":     1.1,
-            "stat_id":    "trade_steel",
-            "description": "鉄鋼輸出増は鉄鋼業の生産・価格の先行指標",
-        },
-        "pharma_imports": {
-            "name_ja":    "医薬品輸入",
-            "statsCode":  "00350300",
-            "searchWord": "医薬品",
-            "sectors":    ["1008"],                # 医薬品
-            "direction":  "higher_is_good",
-            "weight":     1.0,
-            "stat_id":    "trade_pharma",
-            "description": "医薬品輸入増は国内医薬品需要の高まりを示す先行指標",
-        },
-        "crude_oil_imports": {
-            "name_ja":    "原油輸入",
-            "statsCode":  "00350300",
-            "searchWord": "原油",
-            "sectors":    ["1009", "1020"],        # 石油石炭, 電力ガス
-            "direction":  "lower_is_good",         # 輸入増=コスト増=逆風
-            "weight":     1.2,
-            "stat_id":    "trade_crude_oil",
-            "description": "原油輸入増はエネルギーコスト上昇→石油精製・電力ガスに逆風",
-        },
-    },
+    # "trade_items"（[A-1] 貿易品目別シグナル）は 2026-09-29 に廃止（e-Statで毎日取得不能だった）
 
     # ── A-2: 職種別求人倍率 → 業種コードマッピング ──────────────────
     # ★ Ph1 プレースホルダー: 統計ID確定後に実装

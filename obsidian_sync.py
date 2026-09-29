@@ -89,7 +89,29 @@ def _load_json(p: Path):
 # pull: GitHub → ローカル stock_data + vault 05_最新データ/
 # ==============================================================
 
-def cmd_pull(cfg, repo_url: str) -> None:
+def _git_with_retry(args: list, timeout: int, tries: int = 6, wait: int = 30):
+    """ネットワーク未接続（スリープ復帰直後）を待って git を再試行する。
+
+    2026-09-29: launchd はスリープ中に過ぎた 10:30 のジョブを復帰直後に走らせるが、
+    その時点では Wi-Fi が未接続で「Could not resolve host: github.com」になり、
+    30回中28回 pull に失敗していた（同期用cloneは 8/27 のまま）。
+    """
+    import time as _t
+    r = None
+    for i in range(tries):
+        r = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        if r.returncode == 0:
+            return r
+        transient = any(k in (r.stderr or "") for k in (
+            "Could not resolve host", "unable to access", "Connection", "timed out"))
+        if not transient or i == tries - 1:
+            break
+        print(f"  ⏳ ネットワーク待ち（{i + 1}/{tries}）: {(r.stderr or '').strip()[:80]}")
+        _t.sleep(wait)
+    return r
+
+
+def cmd_pull(cfg, repo_url: str) -> bool:
     repo_url = repo_url or os.environ.get("STOCK_ANALYZER_REPO_URL", "")
     if not repo_url:
         print("⏩ pull スキップ: リポジトリ未指定"
@@ -99,15 +121,13 @@ def cmd_pull(cfg, repo_url: str) -> None:
         return
     SYNC_CACHE.parent.mkdir(parents=True, exist_ok=True)
     if (SYNC_CACHE / ".git").exists():
-        r = subprocess.run(["git", "-C", str(SYNC_CACHE), "pull", "--ff-only"],
-                           capture_output=True, text=True, timeout=300)
+        r = _git_with_retry(["git", "-C", str(SYNC_CACHE), "pull", "--ff-only"], 300)
     else:
-        r = subprocess.run(["git", "clone", "--depth", "1", repo_url,
-                            str(SYNC_CACHE)],
-                           capture_output=True, text=True, timeout=600)
+        r = _git_with_retry(["git", "clone", "--depth", "1", repo_url,
+                             str(SYNC_CACHE)], 600)
     if r.returncode != 0:
         print(f"❌ git 失敗: {r.stderr[:200]}")
-        return
+        return False
     print(f"✅ リポジトリ同期: {SYNC_CACHE}")
 
     # ① ローカル作業コピーの stock_data へミラー（パケットが濃くなる）
@@ -145,6 +165,68 @@ def cmd_pull(cfg, repo_url: str) -> None:
         f"- 転記: {', '.join(copied) if copied else 'なし'}\n",
         encoding="utf-8")
     print(f"✅ vault 転記: {dest}（{len(copied)}ファイル）")
+    return True
+
+
+# ==============================================================
+# mirror: 審議済みティッカーを GitHub へ（2026-09-29・健太の要望で自動化）
+# ==============================================================
+MIRROR_REL = Path("stock_data") / "data" / "deliberated_tickers.json"
+
+
+def cmd_mirror(cfg) -> bool:
+    """vault の 40_判断台帳.md から審議済みティッカーを書き出し、変わっていれば
+    同期用clone（SYNC_CACHE）でその1ファイルだけコミットして push する。
+
+    Actions のメール（審議キュー）は vault を読めないため、このミラーで審議済みを
+    除外している。以前は Mac で書き出したあと手作業でコミットする必要があった。
+    作業中のリポジトリ（01_System）には触れない。
+    """
+    from deliberation_scheduler import _load_ledger_tickers
+    tickers = sorted(_load_ledger_tickers(cfg))
+    if not tickers:
+        print("⏩ mirror: 判断台帳を読めない／審議済み0件（push しない）")
+        return True
+    if not (SYNC_CACHE / ".git").exists():
+        print("⏩ mirror: 同期用cloneが無い（先に pull が必要）")
+        return False
+    target = SYNC_CACHE / MIRROR_REL
+    try:
+        current = sorted(json.loads(target.read_text(encoding="utf-8")).get("tickers") or [])
+    except (OSError, ValueError):
+        current = None
+    # 作業コピー側にも書く（Mac上の queue / board が同じ集合を使う）
+    try:
+        from deliberation_scheduler import export_deliberated_mirror
+        export_deliberated_mirror(cfg)
+    except Exception:
+        pass
+    if current == tickers:
+        print(f"✅ mirror: 変更なし（審議済み{len(tickers)}銘柄）")
+        return True
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({
+        "tickers": tickers,
+        "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "source": "40_判断台帳.md",
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    g = ["git", "-C", str(SYNC_CACHE)]
+    added = sorted(set(tickers) - set(current or []))
+    msg = f"auto: 審議済みミラー更新（{len(tickers)}銘柄" + (f"・追加 {', '.join(added)}" if added else "") + "）"
+    for step in (g + ["add", str(MIRROR_REL)], g + ["commit", "-q", "-m", msg]):
+        r = subprocess.run(step, capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            print(f"❌ mirror: {' '.join(step[3:5])} 失敗: {(r.stderr or r.stdout)[:200]}")
+            return False
+    for attempt in range(2):
+        r = _git_with_retry(g + ["push", "-q", "origin", "HEAD:main"], 120)
+        if r.returncode == 0:
+            print(f"✅ mirror: push 完了 — {msg}")
+            return True
+        # Actions の auto コミットと競合したら取り込み直して再送
+        _git_with_retry(g + ["pull", "--rebase", "-q", "origin", "main"], 300)
+    print(f"❌ mirror: push 失敗: {(r.stderr or '')[:200]}")
+    return False
 
 
 # ==============================================================
@@ -334,16 +416,22 @@ def cmd_feedback(cfg) -> None:
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Obsidian 同期ブリッジ（DEPT-2）")
-    ap.add_argument("command", choices=["pull", "queue", "journal",
+    ap.add_argument("command", choices=["pull", "mirror", "queue", "journal",
                                         "feedback", "all"])
     ap.add_argument("--repo", default="", help="GitHub リポジトリURL")
     args = ap.parse_args()
     cfg = _load_config()
+    ok = True
     if args.command in ("pull", "all"):
-        cmd_pull(cfg, args.repo)
+        ok = (cmd_pull(cfg, args.repo) is not False) and ok
+    if args.command in ("mirror", "all"):
+        ok = cmd_mirror(cfg) and ok
     if args.command in ("queue", "all"):
         cmd_queue(cfg)
     if args.command in ("journal", "all"):
         cmd_journal(cfg)
     if args.command in ("feedback", "all"):
         cmd_feedback(cfg)
+    # 2026-09-29: 失敗しても rc=0 で終わっていたため、run_apps.log 上は毎日「成功」に
+    # 見えていた。pull / mirror の失敗は非0で返す。
+    sys.exit(0 if ok else 1)
