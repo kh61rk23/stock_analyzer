@@ -163,13 +163,6 @@ RSS_FEEDS = [
         "lang":     "en",
     },
     {
-        "id":       "arabian_business",
-        "name":     "Arabian Business",
-        "url":      "https://www.arabianbusiness.com/feed",
-        "priority": "A",
-        "lang":     "en",
-    },
-    {
         "id":       "globes_en",
         "name":     "Globes（イスラエル英語版）",
         "url":      "https://www.globes.co.il/webservice/rss/rssfeeder.asmx/FeederNode?iID=942",

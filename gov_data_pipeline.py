@@ -36,7 +36,10 @@ STAT_DEFINITIONS = [
         "name":         "鉱工業生産指数",
         "statsCode":    "00550300",
         "searchWord":   "鉱工業",
-        "unit":         "（2015年=100）",
+        "unit":         "（前年比%）",
+        # 2026-09-30: e-Stat の統計表IDは改定のたびに変わり追いきれない（健太の判断）。
+        # 系列IDが固定の FRED（OECD経由の公式統計）から取る。
+        "fred":         {"series": "JPNPRINTO01GYSAM", "kind": "yoy"},
         "direction":    "higher_is_good",
         "sectors":      ["1015", "1016", "1007", "1012"],
         "description":  "生産指数の上昇は製造業全般の追い風",
@@ -46,7 +49,8 @@ STAT_DEFINITIONS = [
         "name":         "毎月勤労統計（現金給与総額）",
         "statsCode":    "00450071",
         "searchWord":   "現金給与総額",
-        "unit":         "（円）",
+        "unit":         "（前年比%）",
+        "fred":         {"series": "LCEAMN01JPM659S", "kind": "yoy"},
         "direction":    "higher_is_good",
         "sectors":      ["1027", "1033", "1004", "1019"],
         "description":  "賃金上昇は消費拡大につながり、小売・外食・サービス業に追い風",
@@ -55,10 +59,12 @@ STAT_DEFINITIONS = [
     },
     {
         "id":           "household_spending",
-        "name":         "家計調査（消費支出）",
+        "name":         "小売販売数量（家計消費の代理）",
         "statsCode":    "00200561",
         "searchWord":   "消費支出",
-        "unit":         "（円）",
+        "unit":         "（前年比%）",
+        # 家計調査の消費支出は FRED に現役の系列が無いため、小売販売数量で代替する
+        "fred":         {"series": "JPNSLRTTO01GYSAM", "kind": "yoy"},
         "direction":    "higher_is_good",
         "sectors":      ["1027", "1033", "1004", "1026"],
         "description":  "消費支出の増加は内需型業種全般の追い風",
@@ -69,6 +75,7 @@ STAT_DEFINITIONS = [
         "statsCode":    "00200531",
         "searchWord":   "完全失業率 月次",
         "unit":         "（%）",
+        "fred":         {"series": "LRUN64TTJPM156S", "kind": "level"},
         "direction":    "higher_is_bad",
         "sectors":      ["1027", "1033", "1028", "1032"],
         "description":  "失業率上昇は景気悪化を示し、内需・金融・不動産に逆風",
@@ -99,7 +106,8 @@ STAT_DEFINITIONS = [
         "name":         "貿易統計（輸出総額）",
         "statsCode":    "00350300",
         "searchWord":   "輸出",
-        "unit":         "（百万円）",
+        "unit":         "（前年比%）",
+        "fred":         {"series": "XTEXVA01JPM659S", "kind": "yoy"},
         "direction":    "higher_is_good",
         "sectors":      ["1017", "1015", "1007", "1016"],
         "description":  "輸出増加は外需型製造業（自動車・機械・化学）の追い風",
@@ -861,6 +869,80 @@ def fetch_job_opening_ratios(
 
     return results
 
+# ==============================================================
+# FRED 取得（2026-09-30）
+# ==============================================================
+FRED_API_URL = "https://api.stlouisfed.org/fred/series/observations"
+FRED_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
+FRED_STALE_MONTHS = 9   # 最新がこれより古ければ「系列の更新停止」とみなす
+
+
+def fetch_fred_series(series_id: str, api_key: str = "", limit: int = 36):
+    """FRED の月次系列を新しい順の records で返す（失敗時は None と理由）。
+
+    APIキーがあれば公式API、無ければ公開CSV（キー不要）を使う。
+    Returns: (records | None, error_str)
+    """
+    try:
+        import requests
+    except ImportError:
+        return None, "requests なし"
+    rows = []
+    try:
+        if api_key:
+            r = requests.get(FRED_API_URL, params={
+                "series_id": series_id, "api_key": api_key, "file_type": "json",
+                "sort_order": "desc", "limit": str(limit)}, timeout=30)
+            if r.status_code != 200:
+                return None, f"HTTP {r.status_code}"
+            for o in r.json().get("observations", []):
+                rows.append((o.get("date", ""), o.get("value", "")))
+        else:
+            r = requests.get(FRED_CSV_URL, params={"id": series_id}, timeout=30)
+            if r.status_code != 200 or "," not in r.text[:200]:
+                return None, f"HTTP {r.status_code}"
+            for line in r.text.strip().splitlines()[1:]:
+                d, _, v = line.partition(",")
+                rows.append((d, v))
+    except Exception as e:
+        return None, f"{type(e).__name__}: {str(e)[:60]}"
+    records = []
+    for d, v in rows:
+        try:
+            val = float(v)
+        except (TypeError, ValueError):
+            continue   # FRED は欠測を "." で返す
+        records.append({"time": d[:7], "value": val, "time_code": d[:7].replace("-", "")})
+    records.sort(key=lambda x: x["time_code"], reverse=True)
+    return (records[:limit] or None), ("" if records else "データなし")
+
+
+def fred_changes(records: list, kind: str) -> dict:
+    """FRED 系列から calculate_changes と同じ形の dict を作る（純関数）。
+
+    kind="yoy"   系列そのものが前年比(%)。値をそのまま yoy_change に使う
+    kind="level" 水準（失業率など）。calculate_changes で前年同月比を出す
+    """
+    if not records:
+        return {}
+    if kind == "yoy":
+        latest = records[0]
+        prev = records[1]["value"] if len(records) > 1 else None
+        return {"latest_value": latest["value"], "latest_time": latest["time"],
+                "yoy_change": round(latest["value"], 2),
+                "mom_change": round(latest["value"] - prev, 2) if prev is not None else None}
+    return calculate_changes(records)
+
+
+def _months_old(ym: str) -> int:
+    try:
+        y, m = int(ym[:4]), int(ym[5:7])
+    except (ValueError, IndexError):
+        return 999
+    now = datetime.now()
+    return (now.year - y) * 12 + (now.month - m)
+
+
 def run_gov_pipeline(cfg) -> dict:
     print(f"\n{'='*60}")
     print("  📊 政府統計パイプライン v9.0 実行開始")
@@ -876,8 +958,38 @@ def run_gov_pipeline(cfg) -> dict:
     data_dir    = dirs["data_dir"]
     stat_results = []
 
+    fred_key = getattr(cfg, "POLICY_FRED_API_KEY", "") or ""
     for stat_def in STAT_DEFINITIONS:
         print(f"\n  📥 {stat_def['name']} 取得中...")
+
+        # 2026-09-30: fred を持つ統計は e-Stat を使わず FRED から取る
+        if stat_def.get("fred"):
+            sid, kind = stat_def["fred"]["series"], stat_def["fred"].get("kind", "level")
+            records, err = fetch_fred_series(sid, fred_key)
+            print(f"    🔍 FRED: {sid}（{'API' if fred_key else 'CSV'}）")
+            if not records:
+                print(f"  ⚠️  FRED取得失敗: {err}")
+                stat_results.append({"stat": stat_def, "records": [], "changes": {},
+                                     "impact": {"signal": "neutral", "score": 0,
+                                                "reason": f"FRED取得失敗（{err}）"}})
+                continue
+            age = _months_old(records[0]["time"])
+            if age > FRED_STALE_MONTHS:
+                # 系列が止まった（FRED側の打ち切り）ことを隠さない。シグナル化しない
+                print(f"  ⚠️  FRED系列 {sid} の更新が止まっている可能性"
+                      f"（最新 {records[0]['time']}・{age}か月前）→ 系列の差し替えが必要")
+                stat_results.append({"stat": stat_def, "records": records, "changes": {},
+                                     "impact": {"signal": "neutral", "score": 0,
+                                                "reason": f"FRED系列の更新停止（最新{records[0]['time']}）"}})
+                continue
+            changes = fred_changes(records, kind)
+            impact = judge_sector_impact(stat_def, changes)
+            icon = {"tailwind": "📈", "headwind": "📉", "neutral": "➡️"}.get(impact["signal"], "➡️")
+            print(f"  {icon} {impact['reason']} （最新: {changes.get('latest_time', '?')}）")
+            stat_results.append({"stat": stat_def, "records": records,
+                                 "changes": changes, "impact": impact})
+            time.sleep(0.3)
+            continue
 
         # statsCode を複数候補で試す（fallback_stats_codes対応）
         all_codes = [stat_def["statsCode"]] + stat_def.get("fallback_stats_codes", [])

@@ -108,3 +108,31 @@ class TestStaleFailover:
         g = self._patch(monkeypatch, {"EMPTY": None, "NEW": new})
         recs, used = g.fetch_estat_with_failover("EMPTY", "k", "C", "w", None, tmp_path)
         assert used == "NEW" and recs == new
+
+
+# ── 2026-09-30: e-Stat の統計表ID追跡をやめ、FRED（固定の系列ID）から取る ──
+class TestFredSource:
+    def test_csv_parsing_skips_missing_and_sorts_desc(self, monkeypatch):
+        import types
+        import requests
+        import gov_data_pipeline as g
+        csv = "observation_date,X\n2026-04-01,1.0\n2026-05-01,.\n2026-06-01,2.5\n"
+        monkeypatch.setattr(requests, "get", lambda *a, **k: types.SimpleNamespace(
+            status_code=200, text=csv))
+        recs, err = g.fetch_fred_series("X")
+        assert err == "" and [r["time"] for r in recs] == ["2026-06", "2026-04"]
+
+    def test_yoy_series_is_used_as_is(self):
+        import gov_data_pipeline as g
+        ch = g.fred_changes([{"time": "2026-06", "value": 2.46}, {"time": "2026-05", "value": 0.7}], "yoy")
+        assert ch["yoy_change"] == 2.46 and ch["latest_time"] == "2026-06"
+
+    def test_estat_ids_no_longer_used_for_fred_stats(self):
+        import gov_data_pipeline as g
+        fred_ids = {d["id"] for d in g.STAT_DEFINITIONS if d.get("fred")}
+        assert {"industrial_production", "wages", "household_spending",
+                "unemployment", "trade_exports"} <= fred_ids
+
+    def test_stale_series_detected(self):
+        import gov_data_pipeline as g
+        assert g._months_old("2024-03") > g.FRED_STALE_MONTHS
