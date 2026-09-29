@@ -110,7 +110,7 @@ class TestStaleFailover:
         assert used == "NEW" and recs == new
 
 
-# ── 2026-09-30: e-Stat の統計表ID追跡をやめ、FRED（固定の系列ID）から取る ──
+# ── 2026-09-29: e-Stat の統計表ID追跡をやめ、FRED（固定の系列ID）から取る ──
 class TestFredSource:
     def test_csv_parsing_skips_missing_and_sorts_desc(self, monkeypatch):
         import types

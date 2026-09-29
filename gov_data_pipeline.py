@@ -37,7 +37,7 @@ STAT_DEFINITIONS = [
         "statsCode":    "00550300",
         "searchWord":   "鉱工業",
         "unit":         "（前年比%）",
-        # 2026-09-30: e-Stat の統計表IDは改定のたびに変わり追いきれない（健太の判断）。
+        # 2026-09-29: e-Stat の統計表IDは改定のたびに変わり追いきれない（健太の判断）。
         # 系列IDが固定の FRED（OECD経由の公式統計）から取る。
         "fred":         {"series": "JPNPRINTO01GYSAM", "kind": "yoy"},
         "direction":    "higher_is_good",
@@ -870,7 +870,7 @@ def fetch_job_opening_ratios(
     return results
 
 # ==============================================================
-# FRED 取得（2026-09-30）
+# FRED 取得（2026-09-29）
 # ==============================================================
 FRED_API_URL = "https://api.stlouisfed.org/fred/series/observations"
 FRED_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
@@ -962,7 +962,7 @@ def run_gov_pipeline(cfg) -> dict:
     for stat_def in STAT_DEFINITIONS:
         print(f"\n  📥 {stat_def['name']} 取得中...")
 
-        # 2026-09-30: fred を持つ統計は e-Stat を使わず FRED から取る
+        # 2026-09-29: fred を持つ統計は e-Stat を使わず FRED から取る
         if stat_def.get("fred"):
             sid, kind = stat_def["fred"]["series"], stat_def["fred"].get("kind", "level")
             records, err = fetch_fred_series(sid, fred_key)

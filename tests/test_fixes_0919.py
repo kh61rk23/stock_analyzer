@@ -63,7 +63,7 @@ class TestNewsFeeds:
             assert dead not in ids
         urls = {f["id"]: f["url"] for f in m.RSS_FEEDS}
         assert urls["mof_press"] == "https://www.mof.go.jp/news.rss"
-        # 2026-09-30: Arabian Business は Actions 環境から HTTP 405 で拒否されるため削除（健太の指示）
+        # 2026-09-29: Arabian Business は Actions 環境から HTTP 405 で拒否されるため削除（健太の指示）
         assert "arabian_business" not in urls
         assert "globes.co.il/webservice/rss" in urls["globes_en"]
 
