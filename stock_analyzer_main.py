@@ -1437,12 +1437,24 @@ def run_all_tasks(mode: str = "all") -> dict:
                 # （404）が混ざっており、こちらの障害が0でも alert が鳴って
                 # いた。missing を分離したので、実問題だけで判定する。
                 # データ無しのみの場合は success（件数は note に残る）。
+                # 2026-09-29: 対象があるのに取り込み0社（9/22・9/24は11社すべて
+                # データ無し）でも success と記録していた。0社は warn にする。
+                if value.get("skipped"):
+                    _st = "skipped"
+                elif value.get("failure"):
+                    _st = "alert"
+                elif value.get("targets") and not value.get("success"):
+                    _st = "warn"
+                else:
+                    _st = "success"
+                _names = "、".join(
+                    f"{c.get('sec_code') or c.get('edinet_code')} {c.get('name', '')}".strip()
+                    for c in value.get("ingested", []) or []) or "なし"
                 logger.add(
-                    "edinetdb_ingest",
-                    "skipped" if value.get("skipped") else (
-                        "success" if not value.get("failure") else "alert"
-                    ),
-                    str(value),
+                    "edinetdb_ingest", _st,
+                    f"取込{value.get('success', 0)}社 / データ無し{value.get('missing', 0)}社 / "
+                    f"失敗{value.get('failure', 0)}社 / 書類{value.get('doc_index_rows', 0)}件 / "
+                    f"API{value.get('api_calls', 0)}回 | 取込: {_names}",
                 )
         except Exception as exc:
             logger.add("edinetdb_ingest", "error", str(exc)[:100])

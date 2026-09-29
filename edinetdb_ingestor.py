@@ -676,6 +676,9 @@ def run_edinetdb_ingest(
     if target_limit is not None:
         targets = targets[:max(0, int(target_limit))]
     success = failure = missing = 0
+    # 2026-09-29: 取り込んだ会社を通知メールに載せるため、社名つきで返す
+    ingested: list[dict] = []
+    missing_list: list[dict] = []
     doc_index_rows = 0
     # 2026-09-10: failure は4つの別原因（financials欠落 / segments欠落 /
     # text-blocks欠落 / BQ MERGE例外）を1つの数字に潰しており、
@@ -715,6 +718,9 @@ def run_edinetdb_ingest(
         if is_missing:
             reasons["missing"] += 1
             missing += 1
+            _c = by_edinet.get(code, {})
+            missing_list.append({"edinet_code": code, "sec_code": company_code,
+                                 "name": _c.get("name") or _c.get("name_ja") or ""})
         else:
             reasons[kind] += 1
             failure += 1
@@ -796,6 +802,12 @@ def run_edinetdb_ingest(
                 "fetch_count": fetch_count + 1, "company_code": company_code,
             }
             success += 1
+            ingested.append({
+                "edinet_code": code, "sec_code": company_code,
+                "name": company.get("name") or company.get("name_ja") or "",
+                "fiscal_year": latest_year, "financial_rows": len(fin_rows),
+                "text_rows": len(text_rows),
+            })
             # 書類一覧の MERGE 失敗は財務取込の成否に影響させない
             if doc_rows:
                 try:
@@ -830,6 +842,8 @@ def run_edinetdb_ingest(
         # EdinetDBにデータが無いだけのものは障害ではないので別建てにする
         "missing": missing,
         "doc_index_rows": doc_index_rows,
+        "ingested": ingested,
+        "missing_companies": missing_list,
         "reasons": reasons,
         "targets": targets, "budget": daily_budget, "api_calls": client.calls,
     }

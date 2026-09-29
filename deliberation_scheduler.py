@@ -79,10 +79,28 @@ def parse_deliberated_tickers(ledger_text: str) -> set:
     """40_判断台帳.md から既審議 ticker を抽出（wikilink/コード表記の両対応）。"""
     if not ledger_text:
         return set()
-    # 例: | 2026-07-01 | [[7203.T]] | Buy | ... / または 7203 単体
-    tickers = set(re.findall(r"\b(\d{4}\.T|\d{4}|[A-Z]{1,5})\b", ledger_text))
-    # 明らかな非ティッカー語（見出し等）は4桁数字/.T/2-5大文字に限定済み
-    return tickers
+    # 2026-09-29: 以前は本文全体から「4桁数字・大文字1〜5字」を拾っており、
+    # 状態欄の "2026"・"DV-8"・"D-03" の "DEPT" などを審議済みと誤認する一方、
+    # 英字入りの新しい証券コード（543A.T・646A.T）を取りこぼしていた。
+    # 表の ticker 列（見出し行で位置を特定）だけを読む。
+    out: set = set()
+    # 見出し行が無い表（旧形式・テスト）は「2列目＝ticker」とみなす
+    col = None if re.search(r"\|\s*ticker\s*\|", ledger_text, re.I) else 1
+    code_re = re.compile(r"^(?:\d{3}[0-9A-Z]\.T|\d{3}[0-9A-Z]|[A-Z]{1,5})$")
+    for line in ledger_text.splitlines():
+        s = line.strip()
+        if not s.startswith("|"):
+            continue
+        cells = [c.strip() for c in s.strip("|").split("|")]
+        if "ticker" in [c.lower() for c in cells]:
+            col = [c.lower() for c in cells].index("ticker")
+            continue
+        if col is None or col >= len(cells):
+            continue
+        raw = cells[col].replace("[[", "").replace("]]", "").strip()
+        if code_re.match(raw):
+            out.add(raw if not re.match(r"^\d{3}[0-9A-Z]$", raw) else raw + ".T")
+    return out
 
 
 # ── プロンプトテンプレ（D-12モデル既定） ─────────────────────

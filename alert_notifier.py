@@ -1862,7 +1862,46 @@ def extract_alerts(cfg, results: dict) -> list:
     except Exception:
         pass
 
+    # ── EdinetDB 取り込み結果（2026-09-29・健太の要望）─────────────
+    # 毎日「どの会社の有報データがBQに入ったか」をメールで確認できるようにする。
+    # 0社の日も「0社だった」ことを知らせる（静かに止まっていないかの確認用）。
+    if getattr(cfg, "ALERT_ON_EDINETDB_INGEST", True):
+        ing = results.get("edinetdb_ingest") or {}
+        if isinstance(ing, dict) and not ing.get("skipped") and "success" in ing:
+            alerts.append(build_edinetdb_ingest_alert(ing))
+
     return alerts
+
+
+def build_edinetdb_ingest_alert(ing: dict) -> dict:
+    """EdinetDB 取り込み結果をメール用アラート1件にまとめる（純関数）。"""
+    def _name(c: dict) -> str:
+        code = c.get("sec_code") or c.get("edinet_code") or "?"
+        return f"{code} {c.get('name') or ''}".strip()
+
+    done = ing.get("ingested") or []
+    miss = ing.get("missing_companies") or []
+    lines = []
+    for c in done:
+        fy = c.get("fiscal_year")
+        lines.append(f"  ✅ {_name(c)}" + (f"（{fy}年度まで・財務{c.get('financial_rows', 0)}期）" if fy else ""))
+    if not done:
+        lines.append("  （本日取り込めた会社はありません）")
+    if miss:
+        lines.append(f"  ― EdinetDBにまだデータが無い会社 {len(miss)}社: "
+                     + "、".join(_name(c) for c in miss[:10])
+                     + ("…" if len(miss) > 10 else ""))
+    if ing.get("failure"):
+        lines.append(f"  ⚠️ 失敗 {ing['failure']}社（内訳: {ing.get('reasons', {})}）")
+    lines.append(f"  書類一覧 {ing.get('doc_index_rows', 0)}件 / API {ing.get('api_calls', 0)}回")
+    n = len(done)
+    return {
+        "trigger":  "edinetdb_ingest",
+        "title":    f"🗂 EDINET DB 取り込み {n}社" + ("（0社・要確認）" if n == 0 and ing.get("targets") else ""),
+        "body":     "\n".join(lines),
+        "severity": "medium" if (n == 0 and ing.get("targets")) or ing.get("failure") else "info",
+        "channel":  "gmail",
+    }
 
 
 # ==============================================================

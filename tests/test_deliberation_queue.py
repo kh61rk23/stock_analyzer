@@ -175,7 +175,11 @@ def test_export_mirror_roundtrip(tmp_path):
     """vault が読めるとき、ミラーが書かれて再読み込みできること。"""
     vault = tmp_path / "vault"
     vault.mkdir()
-    (vault / "40_判断台帳.md").write_text("[[7203.T]] [[6501.T]]", encoding="utf-8")
+    # 実物の判断台帳と同じ表形式（2026-09-29: ticker 列だけを読むようにした）
+    (vault / "40_判断台帳.md").write_text(
+        "| case_id | ticker | 判断 |\n|---|---|---|\n"
+        "| 2026-07-01_7203T | [[7203.T]] | Buy |\n| 2026-07-02_6501T | 6501.T | Watch |\n",
+        encoding="utf-8")
     data = tmp_path / "data"
     cfg = _Cfg(data, vault)
 

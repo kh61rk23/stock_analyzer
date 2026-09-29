@@ -1779,6 +1779,7 @@ ALERT_ON_MACRO_DELTA:    bool = True   # マクロ急変アラート [GAP-7]
 ALERT_ON_BUYBACK:        bool = True   # 自己株式取得アラート [M-4]
 ALERT_ON_DIV_UP:         bool = True   # 増配・特別配当アラート [M-4]
 ALERT_ON_FOREIGN_SPIKE:  bool = True   # 外国人持株急増アラート [P-4]
+ALERT_ON_EDINETDB_INGEST: bool = True  # その日EdinetDBから取り込んだ銘柄をメールに載せる（2026-09-29）
 
 # ── LINE Messaging API ─────────────────────────────────────────
 # LINE Notify は 2025年3月終了。Messaging API を使用する。

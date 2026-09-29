@@ -50,7 +50,19 @@ class TestLedgerParse:
     def test_extract_tickers(self):
         text = "| 2026-07-01 | [[7203.T]] | Buy |\n| 2026-06-15 | [[6758]] | Watch |"
         s = parse_deliberated_tickers(text)
-        assert "7203.T" in s and "6758" in s
+        # 4桁だけの表記はスクリーナー候補と突き合わせられるよう .T を付ける
+        assert "7203.T" in s and "6758.T" in s
+
+    def test_real_ledger_reads_only_ticker_column(self):
+        """2026-09-29: 状態欄の 2026 / DV-8 / D-03 を拾い、543A.T を落としていた"""
+        text = (
+            "| case_id | ticker | 判断 | conviction | 層 | 未解消指摘 | 状態 |\n"
+            "|---|---|---|---|---|---|---|\n"
+            "| 2026-07-07_1605T | 1605.T | Watch | 2 | カジノ | 0 | **承認（2026-07-08）**DV-8 D-03 DEPT |\n"
+            "| 2026-07-07_D-03 | —（制度決議） | 見送り | 4 | — | 0 | 承認 |\n"
+            "| 2026-07-29_543AT | 543A.T | Watch | 2 | カジノ | 10 | 承認待ち |\n"
+            "| 2026-08-04_SOXL | SOXL | Avoid | 3 | カジノ | 8 | 承認待ち |\n")
+        assert parse_deliberated_tickers(text) == {"1605.T", "543A.T", "SOXL"}
 
     def test_empty(self):
         assert parse_deliberated_tickers("") == set()
