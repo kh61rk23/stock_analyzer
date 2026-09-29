@@ -169,6 +169,14 @@ def latest_candidates(history: dict) -> tuple:
     return "", []
 
 
+def _slim_trail(c: dict) -> list:
+    try:
+        from score_trail import slim
+        return slim(c)
+    except Exception:
+        return []
+
+
 def append_screener_history(cfg, screener_result: dict) -> None:
     """
     今日のスクリーニング通過銘柄を screener_history.json に追記する。
@@ -209,6 +217,10 @@ def append_screener_history(cfg, screener_result: dict) -> None:
                 # どちらも保存しておらず、バックテスト・自己評価が常に0件だった
                 "current_price":   c.get("current_price"),
                 "pass_filters":    True,
+                # 2026-09-29: 点数の経路（どのモジュールで何点動いたか）と加点前の点
+                "base_score":      c.get("base_score"),
+                "score_trail":     _slim_trail(c),
+                "kpi":             c.get("kpi"),
             }
             for c in candidates
             if c.get("pass_filters")

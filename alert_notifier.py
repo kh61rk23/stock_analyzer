@@ -416,6 +416,21 @@ def extract_alerts(cfg, results: dict) -> list:
                 cfg, results,
                 top_n=int(getattr(cfg, "DELIBERATION_QUEUE_TOP_N", 5)))
             _q = _dq.get("queue", [])
+            # 2026-09-29: 前回からの入れ替わり（連続日数・外れた銘柄と理由）
+            _chg = {}
+            try:
+                from deliberation_scheduler import (queue_changes, resolve_deliberated,
+                                                    _load_screener_candidates)
+                from performance_tracker import load_screener_history
+                _already, _ = resolve_deliberated(cfg)
+                _today_c = ((results.get("screener") or {}).get("candidates")
+                            or _load_screener_candidates(cfg))
+                _chg = queue_changes(
+                    load_screener_history(cfg), _q, _already,
+                    top_n=int(getattr(cfg, "DELIBERATION_QUEUE_TOP_N", 5)),
+                    today=datetime.now().strftime("%Y-%m-%d"), today_cands=_today_c)
+            except Exception as _qc_err:
+                print(f"  ⚠️  [alert] 審議キューの入れ替わり計算失敗: {str(_qc_err)[:80]}")
             if _q:
                 _ql = []
                 for _i, _c in enumerate(_q, 1):
@@ -431,9 +446,24 @@ def extract_alerts(cfg, results: dict) -> list:
                     if _c.get("strategy_label"):
                         _extra.append(str(_c["strategy_label"]))
                     _ex_s = f" | {' / '.join(_extra)}" if _extra else ""
+                    _stk = (_chg.get("streak") or {}).get(_c.get("ticker"))
+                    _stk_s = ("" if not _stk else "（新規）" if _stk == 1
+                              else "（2週間以上連続）" if _stk > 14 else f"（{_stk}日連続）")
                     _ql.append(
                         f"  {_mark} {_i}. {_nm}（{_c.get('ticker','')}）: "
-                        f"{_sc_s}{_ex_s}")
+                        f"{_sc_s}{_stk_s}{_ex_s}")
+                    try:
+                        from score_trail import summary as _trail_sum
+                        _tr = _trail_sum(_c)
+                        if _tr:
+                            _ql.append(f"       点数の経路: {_tr}")
+                    except Exception:
+                        pass
+                for _d in (_chg.get("dropped") or []):
+                    _ql.append(f"  ↓ 外れた: {str(_d.get('name') or '')[:16]}（{_d['ticker']}）"
+                               f" — {_d['reason']}")
+                if _chg.get("prev_date") and not _chg.get("new") and not _chg.get("dropped"):
+                    _ql.append(f"  ＝ 前回（{_chg['prev_date']}）から入れ替わりなし")
                 _ql.append("")
                 _ql.append(f"  ▶ = 次回の審議で選定される銘柄"
                            f"（隔週 / {_dq.get('interval_days', 14)}日間隔）")

@@ -57,7 +57,9 @@ def build_deliberation_queue(candidates: list, already: set,
         (c for c in candidates
          if c.get("ticker") and c.get("composite_score") is not None
          and c["ticker"] not in already),
-        key=lambda c: -float(c["composite_score"]))
+        # 2026-09-29: 同点（100点張り付き等）は加点前の点（base_score）で並べる
+        key=lambda c: (-float(c["composite_score"]),
+                       -float(c.get("base_score") or c["composite_score"])))
     return ranked[:max(0, int(top_n))]
 
 
@@ -307,6 +309,60 @@ def get_queue_for_report(cfg, results: dict = None, top_n: int = 5) -> dict:
         "partial":       source != "台帳(正本)",
         "interval_days": int(getattr(cfg, "DELIBERATION_INTERVAL_DAYS", 14)),
     }
+
+
+def queue_changes(history: dict, today_queue: list, already: set,
+                  top_n: int = 5, today: str | None = None, lookback: int = 14,
+                  today_cands: list | None = None) -> dict:
+    """審議キューの前回からの入れ替わりを返す（純関数・2026-09-29）。
+
+    毎日同じ銘柄が並ぶと「ロジックが動いているのか」が分からないため
+    （健太の指摘）、各銘柄が何日連続で並んでいるかと、前回から外れた銘柄と
+    その理由をメールに出す。過去日のキューは同じ除外集合・同じ並べ方で
+    screener_history から再計算する。
+
+    Returns:
+        {"streak": {ticker: 連続日数}, "new": [ticker],
+         "dropped": [{"ticker","name","reason"}], "prev_date": str|None}
+    """
+    from performance_tracker import latest_candidates
+    days = sorted(d for d in (history or {}) if not today or d < today)[-lookback:]
+    past = []   # 新しい順の [(date, [ticker...], {ticker: cand})]
+    for d in reversed(days):
+        _, cands = latest_candidates({d: history[d]})
+        q = build_deliberation_queue(cands, already, top_n=top_n)
+        past.append((d, [c["ticker"] for c in q], {c.get("ticker"): c for c in cands}))
+    today_t = [c.get("ticker") for c in today_queue]
+    streak = {}
+    for t in today_t:
+        n = 1
+        for _, qt, _ in past:
+            if t in qt:
+                n += 1
+            else:
+                break
+        streak[t] = n
+    dropped = []
+    prev_date = past[0][0] if past else None
+    if past:
+        _, prev_q, prev_cands = past[0]
+        in_queue = {c.get("ticker") for c in today_queue}
+        ranked = build_deliberation_queue(today_cands or [], already, top_n=10 ** 6)
+        rank = {c.get("ticker"): (i, c) for i, c in enumerate(ranked, 1)}
+        for t in prev_q:
+            if t in in_queue:
+                continue
+            if t in already:
+                reason = "審議済みになった"
+            elif t in rank:
+                i, c = rank[t]
+                reason = f"順位が下がった（今日{i}位・{float(c.get('composite_score') or 0):.1f}点）"
+            else:
+                reason = "今日の候補から外れた（スクリーナー不通過）"
+            dropped.append({"ticker": t, "name": (prev_cands.get(t) or {}).get("name", ""),
+                            "reason": reason})
+    return {"streak": streak, "new": [t for t, n in streak.items() if n == 1],
+            "dropped": dropped, "prev_date": prev_date}
 
 
 def run_prep(cfg, ticker: str = "", dry_run: bool = False) -> dict:

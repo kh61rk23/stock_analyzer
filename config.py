@@ -3227,6 +3227,12 @@ IGNITION_HISTORY_TTL_DAYS         = 180   # ignition_history.json
 POLITICIAN_CACHE_LAYERS    = 4
 EMERGENCY_VIX_THRESHOLD    = 45.0   # VIX > 45 → 緊急介入フラグ
 SCORE_MAX_POLICY_L4_ADJ    = 25.0   # $composite\_score + min(bonus, 25.0)$
+# 2026-09-29（健太の判断）: 個別銘柄の総合点へ乗せる政策系加点（政策・L4・議会L4）の
+# 合計上限。業種単位の上限 25 のまま銘柄に乗せると、電気機器は元75点以上が全部
+# 100点に張り付き（9/29 上位5銘柄がすべて100.0）、順位が付かなくなっていた。
+SCORE_MAX_POLICY_STOCK_ADJ = 10.0
+# 2026-09-29: スクリーナー候補に審議KPI 9項目（PBR〜投資資本IRR）を付ける（表示専用）
+ENABLE_CANDIDATE_KPI: bool = True
 
 # ==============================================================
 # BLOCK 32: Wave 3 - FE-5 PEAD監視定数

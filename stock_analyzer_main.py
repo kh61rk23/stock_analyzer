@@ -136,6 +136,13 @@ class RunLogger:
         }
         self._logs.append(entry)
         self._logs = self._logs[-cfg.LOG_MAX_ENTRIES:]
+        # 2026-09-29: 各モジュールの記録ごとに、スクリーナー候補の総合点が
+        # 動いたかを検出して「点数の経路」に積む（score_trail.py）
+        try:
+            import score_trail as _st
+            _st.checkpoint(module)
+        except Exception:
+            pass
         try:
             self.log_path.parent.mkdir(parents=True, exist_ok=True)
             self.log_path.write_text(
@@ -1393,6 +1400,11 @@ def run_all_tasks(mode: str = "all") -> dict:
         "geo_risk":     {},   # Wave 6 - G-N: 国別リスク日次更新結果
               }
     source_ingest_done = {"edinet": False, "fudosan": False, "us": False}
+    try:
+        import score_trail as _st_watch
+        _st_watch.watch(results)
+    except Exception:
+        pass
     # ── [Wave 3 - Policy Ph2] EMERGENCY_OVERRIDE_FLAG チェック ──
     # VIX > EMERGENCY_VIX_THRESHOLD(45.0) の場合、政策シグナルを全停止
     try:
@@ -3250,6 +3262,17 @@ def run_all_tasks(mode: str = "all") -> dict:
                     sector_tier_map = results.get("sector_tier", {}),
                 )
                 results["screener"] = screen_result
+                try:   # 基本点を先に記録する（以降の加減点と区別するため）
+                    import score_trail as _st_base
+                    _st_base.checkpoint("stock_screener")
+                except Exception:
+                    pass
+                # 2026-09-29: 候補に審議KPI 9項目を付ける（表示専用・点数には使わない）
+                try:
+                    import candidate_kpi as _ckpi
+                    results["candidate_kpi"] = _ckpi.attach_kpis(cfg, results)
+                except Exception as _ck_e:
+                    print(f"  ⚠️  candidate_kpi エラー（スキップ）: {str(_ck_e)[:80]}")
 
                 # ── [④] セクター振り分け補完 ───────────────────────
                 try:
@@ -4954,6 +4977,12 @@ def run_all_tasks(mode: str = "all") -> dict:
                 )
                 if _pt_hist:
                     _pt_hist.append_screener_history(cfg, results["screener"])
+            # 2026-09-29: 選別の経路（点数の内訳・9指標・落ちた理由）を残す
+            try:
+                import screener_trace as _strace
+                results["screener_trace"] = _strace.run(cfg, results)
+            except Exception as _tr_e:
+                print(f"  ⚠️  screener_trace エラー（スキップ）: {str(_tr_e)[:80]}")
             else:
                 print("  ⏩ screener履歴の蓄積: スキップ"
                       "（ENABLE_PERFORMANCE_TRACKER=False）")

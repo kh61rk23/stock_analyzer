@@ -205,6 +205,12 @@ def calc_effective_adj(signal: dict) -> float:
         return 0.0
 
 
+def _clamp_stock_adj(adj: float, cfg=None) -> float:
+    """個別銘柄へ乗せる政策系加点の合計を ±SCORE_MAX_POLICY_STOCK_ADJ に収める。"""
+    cap = float(getattr(cfg, "SCORE_MAX_POLICY_STOCK_ADJ", 10.0))
+    return round(max(-cap, min(cap, float(adj))), 2)
+
+
 def get_sector_effective_boosts(
     cache: dict,
     cfg=None,
@@ -453,6 +459,10 @@ def apply_policy_signals_to_screener(
 
             if total_adj == 0.0:
                 continue
+            # 2026-09-29: 銘柄単位では政策系加点の合計を ±SCORE_MAX_POLICY_STOCK_ADJ に抑える
+            total_adj = _clamp_stock_adj(total_adj, cfg)
+            if "policy_signal_adj" in c:
+                c["policy_signal_adj"] = round(total_adj - float(c.get("policy_l4_adj", 0.0)), 2)
 
             # composite_score に加算（上限 100pt・下限 0pt）
             original = float(c.get("composite_score", 0.0))
@@ -752,6 +762,13 @@ def run_policy_signal_applier(
                 _cadj_clamped = round(
                     max(-_l4_max, min(_l4_max, _cadj)), 2
                 )
+                # 2026-09-29: 政策加点と合わせて銘柄単位の上限内に収める
+                _prev_total = float(_cand.get("policy_total_adj", 0.0) or 0.0)
+                _cadj_clamped = round(
+                    _clamp_stock_adj(_prev_total + _cadj_clamped, cfg) - _prev_total, 2)
+                if _cadj_clamped == 0.0:
+                    continue
+                _cand["policy_total_adj"] = round(_prev_total + _cadj_clamped, 2)
                 _orig = float(_cand.get("composite_score", 0.0))
                 _cand["composite_score"] = round(
                     max(0.0, min(100.0, _orig + _cadj_clamped)), 1
