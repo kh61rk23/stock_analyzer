@@ -30,8 +30,13 @@ def _paper_dir(cfg) -> Path:
     d = Path(p)
     if not d.is_absolute():
         base = Path(getattr(cfg, "DRIVE_BASE", "."))
-        # DRIVE_BASE 配下に stock_data がある場合はそちらへ
-        cand = base / p
+        # 2026-09-29: Actions では DRIVE_BASE 自体が <workspace>/stock_data のため、
+        # base / "stock_data/paper" が stock_data/stock_data/paper になり、
+        # コミット対象（git add stock_data/paper/）の外に書いていた。口座と注文が
+        # 毎回消え、毎日「新規注文8件・約定0件」を繰り返していた。
+        rel = d.parts[1:] if (d.parts and d.parts[0] == "stock_data"
+                              and base.name == "stock_data") else d.parts
+        cand = base.joinpath(*rel)
         d = cand if base.exists() else Path(p)
     d.mkdir(parents=True, exist_ok=True)
     return d
