@@ -52,7 +52,7 @@ _LATEST_FILENAME = "module_ledger_latest.json"
 _DEFAULT_MODE_KEY_ALIASES: dict = {
     "key_health":       ["api_key_health"],
     "screener":         ["stock_screener"],
-    "excel_export":     ["excel_export", "correlation_heatmap"],
+    "excel_export":     ["correlation_heatmap"],   # Excel出力は 2026-09-29 に削除
     "ml_meta":          ["ml_meta_dataset", "ml_meta_correction"],
     "us_sector_bridge": ["us_sector_bridge"],
     # mode-key "size_tier" で走るのは size_decay_manager / cross_size_signal で、

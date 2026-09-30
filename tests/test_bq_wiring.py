@@ -41,9 +41,12 @@ class TestWeeklyGateKeys:
     def test_bq_writing_monitors_run_in_weekly(self):
         # BQ us.job_signal_cache / executive_transitions / facility_signals の
         # 唯一の書き込み経路。weekly で通らなければ永久に0行になる。
-        for key in ("job_posting", "executive_transition", "facility_expansion"):
+        # 2026-09-29: job_posting / facility_expansion は健太の判断で廃止（一覧から除外）
+        for key in ("executive_transition",):
             assert _in_mode(key, "weekly") is True, f"{key} が週次で実行されない"
             assert _in_mode(key, "daily") is False, f"{key} は日次では走らない想定"
+        for key in ("job_posting", "facility_expansion"):
+            assert _in_mode(key, "weekly") is False, f"{key} は廃止済みなのに動いている"
 
 
 class TestNedoWiring:

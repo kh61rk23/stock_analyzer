@@ -1,27 +1,27 @@
 # 保守セッションパケット（自動生成）
 
-> 生成: 2026-09-30 15:37:53 / maintenance_packet.py（手動編集禁止）
+> 生成: 2026-09-30 18:24:48 / maintenance_packet.py（手動編集禁止）
 > AIエージェントは改修着手前に本パケットを読了すること。
 > 標準手順: リポジトリ直下 CLAUDE.md / 設計正本: SPEC_core.md
 
 ## ① 監査結果
 
 ### ✅ SSOT監査（config_audit）（exit 0）
-          L4693: TAXONOMY_MARKET_DEFAULT
+          L4623: TAXONOMY_MARKET_DEFAULT
     ============================================================
     ✅ CRITICAL なし
 
 ### ✅ パイプライン整合（pipeline_registry_gen --audit）（exit 0）
-    パイプライン監査: ステージ108 / 問題0件
+    パイプライン監査: ステージ105 / 問題0件
 
 ### ✅ results契約（results_schema --audit）（exit 0）
-    resultsスキーマ監査: 契約147キー / 実コード148キー
+    resultsスキーマ監査: 契約144キー / 実コード145キー
       ✅ 契約とコードは完全一致
 
 ### ✅ 回帰テスト（pytest tests/）（exit 0）
     ........................................................................ [ 98%]
     ......................................                                   [100%]
-    2197 passed, 1 skipped in 10.30s
+    2197 passed, 1 skipped in 8.01s
 
 **総合判定: ✅ 全監査グリーン — 改修着手可**
 

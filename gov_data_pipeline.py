@@ -637,115 +637,9 @@ def build_report(stat_results, sector_signals):
     lines += ["---", f"*出典: e-Stat / 取得日: {now}*", ""]
     return "\n".join(lines)
 
-# ==============================================================
-# A-1: 貿易品目別シグナル取得（Wave 1）
-# ==============================================================
+# A-1 貿易品目別シグナル・A-2 職種別求人倍率シグナルは 2026-09-29 に廃止
+# （A-1 は e-Stat で毎日「変化率計算不可」、A-2 は統計ID未設定の仮実装だった）
 
-# 2026-09-29: 貿易品目別シグナル（[A-1]・e-Stat 7品目）は毎日「変化率計算不可」で
-# 機能していなかったため健太の判断で廃止した。
-
-
-# ==============================================================
-# A-2: 職種別求人倍率シグナル取得（Wave 1）Ph1プレースホルダー
-# ==============================================================
-
-def fetch_job_opening_ratios(
-    app_id:   str,
-    data_dir: "Path",
-    cfg,
-) -> list:
-    """
-    【Ph1 プレースホルダー】職種別求人倍率を e-Stat から取得し、
-    GOV_TRADE_JOB_RULES["job_openings"] に基づいてセクターシグナルに変換する。
-
-    ★ 実装状況:
-      statsCode が `""` のエントリはすべてスキップされる（統計ID未確定のため）。
-      statsCode 確定後に各エントリの "statsCode" を設定することで自動的に有効化される。
-
-    参考: 厚生労働省「一般職業紹介状況（職業別）」
-      候補 statsCode: "00450022"（e-Stat で実在を確認してから設定すること）
-
-    Returns:
-        list: 現時点では常に空リストを返す
-              （statsCode 確定後に fetch_trade_item_signals と同じ構造で実装する）
-    """
-    results: list = []
-    try:
-        rules = getattr(cfg, "GOV_TRADE_JOB_RULES", {})
-        job_items = rules.get("job_openings", {})
-        if not job_items:
-            return results
-
-        # statsCode が設定済みのエントリのみ処理
-        active = {k: v for k, v in job_items.items()
-                  if v.get("statsCode", "") and not v.get("placeholder", False)}
-
-        if not active:
-            print(
-                "  ⏩ [A-2] 求人倍率シグナル: statsCode 未設定のためスキップ"
-                "（統計ID確定後に GOV_TRADE_JOB_RULES を更新してください）"
-            )
-            return results
-
-        # statsCode が設定されている場合の実装（fetch_trade_item_signals と同構造）
-        print(f"\n  👷 [A-2] 職種別求人倍率取得中（{len(active)}職種）...")
-        for item_key, item_def in active.items():
-            try:
-                stats_code  = item_def["statsCode"]
-                search_word = item_def.get("searchWord", "")
-                stat_id     = item_def.get("stat_id", item_key)
-
-                stat_def = {
-                    "id":          stat_id,
-                    "name":        item_def["name_ja"],
-                    "statsCode":   stats_code,
-                    "searchWord":  search_word,
-                    "unit":        "（倍）",
-                    "direction":   item_def.get("direction", "higher_is_good"),
-                    "sectors":     item_def.get("sectors", []),
-                    "description": item_def.get("description", ""),
-                    "weight":      item_def.get("weight", 1.0),
-                    "a2_job_opening": True,    # A-2マーカー
-                }
-
-                stats_data_id = search_statsdata_id(
-                    app_id       = app_id,
-                    stats_code   = stats_code,
-                    search_word  = search_word,
-                    data_dir     = data_dir,
-                    hardcoded_id = None,
-                )
-                if not stats_data_id:
-                    continue
-
-                records, _ = fetch_estat_with_failover(
-                    stats_data_id = stats_data_id,
-                    app_id        = app_id,
-                    stats_code    = stats_code,
-                    search_word   = search_word,
-                    hardcoded_id  = None,
-                    data_dir      = data_dir,
-                )
-
-                if records:
-                    changes = calculate_changes(records)
-                    impact  = judge_sector_impact(stat_def, changes)
-                    w = float(item_def.get("weight", 1.0))
-                    impact["score"] = round(impact.get("score", 0) * w, 1)
-                    results.append({
-                        "stat": stat_def, "records": records,
-                        "changes": changes, "impact": impact,
-                    })
-
-                time.sleep(0.5)
-
-            except Exception:
-                continue
-
-    except Exception as e:
-        print(f"    ⚠️  [A-2] 求人倍率取得エラー（スキップ）: {str(e)[:80]}")
-
-    return results
 
 # ==============================================================
 # FRED 取得（2026-09-29）
@@ -920,17 +814,6 @@ def run_gov_pipeline(cfg) -> dict:
                                               "reason": "データ取得失敗"}})
         time.sleep(0.5)
 
-    # ── [A-2] 職種別求人倍率シグナルを stat_results に追加 ──────────
-    try:
-        job_results = fetch_job_opening_ratios(app_id, data_dir, cfg)
-        if job_results:
-            stat_results.extend(job_results)
-            print(
-                f"  👷 [A-2] 求人倍率シグナル: "
-                f"{len(job_results)}職種取得"
-            )
-    except Exception as _a2e:
-        print(f"  ⚠️  [A-2] 求人倍率シグナル統合エラー（スキップ）: {str(_a2e)[:80]}")
 
     sector_signals = aggregate_sector_signals(stat_results)
     report_md      = build_report(stat_results, sector_signals)
@@ -952,8 +835,6 @@ def run_gov_pipeline(cfg) -> dict:
         "stat_results": stat_results, "sector_signals": sector_signals,
         "report_path": str(report_path) if report_path else "",
         "stats_fetched": fetched, "stats_total": total, "skipped": False,
-        "job_openings_fetched":  sum(1 for r in stat_results
-                                     if r.get("stat", {}).get("a2_job_opening")),
     }
 
 

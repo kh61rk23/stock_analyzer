@@ -278,4 +278,5 @@ class TestShareholderAnalyzerDisabled:
         import config
         assert config.ENABLE_SHAREHOLDER_ANALYZER is False
         src = (pathlib.Path(__file__).resolve().parent.parent / "stock_analyzer_main.py").read_text(encoding="utf-8")
-        assert 'logger.add("shareholder_analyzer", "skipped"' in src
+        # 2026-09-29: 停止していたブロック自体を削除した（呼び出しが残っていないこと）
+        assert "run_shareholder_analyzer(" not in src

@@ -1589,7 +1589,7 @@ DAILY_MODULES = [
     "options_advisor", # ★ 2026-06-13 OPT-1: オプション戦略提案（日次）
     "signal_aggregator",  # 統合シグナル [4-9]
     "inference",          # 推論エンジン [4-10]
-    "edinet_rotation", # edinetのローテーション
+    # "edinet_rotation",  ← 2026-09-29 廃止（健太の判断・機能していなかった）
     "us_fundamentals", # ★ US財務DBローテーター（Phase US-1）← screenerより先に実行
     "us_screener",   # 米国株スクリーニング（US財務DB補完後に実行）
     "us_8k",           # ★ US 8-K リアルタイム監視（Phase US-3）
@@ -1623,7 +1623,7 @@ WEEKLY_MODULES = [
     "correlation",   # 米国債×業種 相関監査
     "size_tier_classifier",      # Wave0 Size Ph1（sector実行直後・週次）
     "business_model_classifier", # Wave0 BM Ph1（size_tier_classifierの直後・週次）
-    "jp_us_sector_correlation",   # Wave0 Idea2-A（correlation_auditの直後）
+    # "jp_us_sector_correlation",  ← 2026-09-29 廃止（健太の判断・機能していなかった）
     "sector_rotation_detector",    # Wave0 Idea2-B（signal_aggregatorの直前・必須）
     "portfolio_diversity_filter",  # Wave 3 - FE-6（screener直後・Ignitionの前）
     "ignition_detector",           # Wave 2 - FE-4（sector_rotation_detectorの直後）
@@ -1660,9 +1660,9 @@ WEEKLY_MODULES = [
     # 判定が常に False となり、週次実行でも一度も動いていなかった
     # （BQ us.job_signal_cache / us.executive_transitions /
     #   us.facility_signals が作成以来ずっと0行だった原因）。
-    "job_posting",           # Wave 6 - I-1: 求人票モニター
+    # "job_posting",  ← 2026-09-29 廃止（健太の判断・機能していなかった）
     "executive_transition",  # Wave 6 - I-3: 役員転職トラッカー
-    "facility_expansion",    # Wave 6 - I-4: 施設着工モニター
+    # "facility_expansion",  ← 2026-09-29 廃止（健太の判断・機能していなかった）
     # 2026-09-09: 読む側（base_agent.get_policy_support_bonus）は配線済みなのに
     # 書く側が未配線で、BQ edinet.policy_support が0行のままだった。
     "nedo",                  # Wave 1 - I-2: NEDO採択情報 → policy_support
@@ -2332,7 +2332,7 @@ GOV_RSS_FEEDS:      list = []   # 空の場合は policy_radar.py のデフォ�
 # BLOCK US-1: 米国株財務DBローテーター設定
 # ==============================================================
 ENABLE_US_FUNDAMENTALS:    bool  = True
-US_DAILY_FETCH_LIMIT:      int   = 20    # 1日あたり最大取得社数
+US_DAILY_FETCH_LIMIT:      int   = 100   # 1日あたり最大取得社数（2026-09-29: 20→100。885社を約9日で一巡）
 US_FUNDAMENTALS_CACHE_DAYS: int  = 30   # 財務データの再取得間隔（日）
 US_WATCHLIST_TICKERS:      list  = [    # 優先取得銘柄（watchlist）
     "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL",
@@ -3009,77 +3009,7 @@ US_RATE_SENSITIVITY_RULES: dict = {
 }
 
 # ==============================================================
-# BLOCK 28: 先行指標ルール設定（Wave 1 - A-1 / A-2）
-# ==============================================================
-
-# ── A-1: 貿易品目 → 業種コードマッピングは 2026-09-29 に廃止 ─────────
-# ★ 2026-06-10 SSOT修正: 旧名 LEADING_INDICATOR_RULES は BLOCK R-2 と
-#   同名衝突し後勝ち上書きが発生していたため GOV_TRADE_JOB_RULES に改名。
-GOV_TRADE_JOB_RULES: dict = {
-    # "trade_items"（[A-1] 貿易品目別シグナル）は 2026-09-29 に廃止（e-Statで毎日取得不能だった）
-
-    # ── A-2: 職種別求人倍率 → 業種コードマッピング ──────────────────
-    # ★ Ph1 プレースホルダー: 統計ID確定後に実装
-    # 厚生労働省「一般職業紹介状況（職業別）」
-    #   statsCode 候補: "00450022"（要e-Stat API確認）
-    "job_openings": {
-        "it_specialist": {
-            "name_ja":    "IT・情報系専門職求人倍率",
-            "statsCode":  "",                      # TODO: 統計ID調査後に設定
-            "searchWord": "情報処理・通信技術者",
-            "sectors":    ["1025", "1016"],        # 情報通信, 電気機器
-            "direction":  "higher_is_good",
-            "weight":     1.3,
-            "stat_id":    "job_it",
-            "placeholder": True,
-            "description": "IT専門職求人増は情報通信・電気機器の事業拡大先行指標",
-        },
-        "construction": {
-            "name_ja":    "建設・土木系技術者求人倍率",
-            "statsCode":  "",                      # TODO: 統計ID調査後に設定
-            "searchWord": "建設・土木・測量技術者",
-            "sectors":    ["1003", "1015"],        # 建設, 機械
-            "direction":  "higher_is_good",
-            "weight":     1.2,
-            "stat_id":    "job_construction",
-            "placeholder": True,
-            "description": "建設求人増は建設・機械発注増の先行指標",
-        },
-        "healthcare": {
-            "name_ja":    "医療・介護系求人倍率",
-            "statsCode":  "",                      # TODO: 統計ID調査後に設定
-            "searchWord": "医療・福祉",
-            "sectors":    ["1008", "1033"],        # 医薬品, サービス
-            "direction":  "higher_is_good",
-            "weight":     1.1,
-            "stat_id":    "job_healthcare",
-            "placeholder": True,
-            "description": "医療介護求人増は医薬品・サービス業の需要拡大先行指標",
-        },
-        "manufacturing": {
-            "name_ja":    "製造技能系求人倍率",
-            "statsCode":  "",                      # TODO: 統計ID調査後に設定
-            "searchWord": "生産工程・労務",
-            "sectors":    ["1015", "1016", "1017"], # 機械, 電気機器, 輸送用機器
-            "direction":  "higher_is_good",
-            "weight":     1.2,
-            "stat_id":    "job_manufacturing",
-            "placeholder": True,
-            "description": "製造求人増は機械・電気・自動車の生産拡大先行指標",
-        },
-        "logistics": {
-            "name_ja":    "運輸・物流系求人倍率",
-            "statsCode":  "",                      # TODO: 統計ID調査後に設定
-            "searchWord": "輸送・機械運転",
-            "sectors":    ["1021", "1022", "1023"], # 陸運, 海運, 空運
-            "direction":  "higher_is_good",
-            "weight":     1.1,
-            "stat_id":    "job_logistics",
-            "placeholder": True,
-            "description": "物流求人増は陸海空運の事業拡大シグナル",
-        },
-    },
-}
+# BLOCK 28: 先行指標ルール（A-1 貿易品目・A-2 職種別求人倍率）は 2026-09-29 に廃止
 
 # ==============================================================
 # BLOCK 29: Wave 2 Feature Engineering 定数（FE-1 / FE-2 / FE-3）
@@ -3999,7 +3929,7 @@ for _d in _WAVE6_DIRS:
 #   $facility\_score = project\_count \times FACILITY\_EXPANSION\_BONUS$
 
 # ── I-1: 求人票モニター設定 ─────────────────────────────────
-ENABLE_JOB_POSTING_MONITOR: bool = True
+ENABLE_JOB_POSTING_MONITOR: bool = False  # 2026-09-29 廃止（Wantedly検索件数で業種加点・質が低い）
 JOB_POSTING_CACHE_TTL_DAYS: int  = 30     # hiring_signal_cache.json の TTL
 JOB_POSTING_CACHE_PATH: str      = "hiring_signal_cache.json"  # CACHE_DIR 配下
 
@@ -4077,7 +4007,7 @@ EXECUTIVE_NEW_HIRE_BONUS: float     = 4.0
 EXECUTIVE_TRANSITION_THRESHOLD: int = 2
 
 # ── I-4: 施設着工モニター設定 ───────────────────────────────
-ENABLE_FACILITY_EXPANSION: bool   = True
+ENABLE_FACILITY_EXPANSION: bool   = False  # 2026-09-29 廃止（取得元3つが301/404/403で取得0件）
 FACILITY_CACHE_TTL_DAYS: int      = 180    # facility_project_cache.json の TTL
 FACILITY_CACHE_PATH: str          = "facility_project_cache.json"  # CACHE_DIR 配下
 
@@ -5294,7 +5224,7 @@ B5_CORRELATION_HEATMAP_FETCH_DELAY = 0.25  # FETCH_DELAY
 B5_GOOGLE_TRENDS_PIPELINE_FETCH_SLEEP_SEC = 5.0  # FETCH_SLEEP_SEC
 B5_PORTFOLIO_OPTIMIZER_FETCH_DELAY = 0.3  # FETCH_DELAY
 B5_ANOMALY_SEASON_FETCH_DELAY = 0.3  # FETCH_DELAY
-B5_US_FUNDAMENTAL_ROTATOR_DAILY_FETCH_LIMIT = 20  # DAILY_FETCH_LIMIT
+B5_US_FUNDAMENTAL_ROTATOR_DAILY_FETCH_LIMIT = 100  # DAILY_FETCH_LIMIT
 B5_US_FUNDAMENTAL_ROTATOR_REQUEST_DELAY = 0.12  # REQUEST_DELAY
 B5_US_FUNDAMENTAL_ROTATOR_REQUEST_TIMEOUT = 15  # REQUEST_TIMEOUT
 B5_PAID_MEDIA_SEARCHER_CSE_DEAD_LIMIT = 3  # _CSE_DEAD_LIMIT

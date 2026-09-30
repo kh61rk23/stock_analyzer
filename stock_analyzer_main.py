@@ -3896,65 +3896,7 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ TDnetモニター: スキップ（ENABLE_TDNET_MONITOR=False）")
     
-    # ── [P-4] 株主構成分析 ──────────────────────────────────────
-    if getattr(cfg, "ENABLE_SHAREHOLDER_ANALYZER", True) and _in_mode("screener"):
-        try:
-            _sa = _load_local_module(
-                "shareholder_analyzer",
-                "/content/shareholder_analyzer.py",
-                cfg.DRIVE_BASE / "shareholder_analyzer.py",
-            )
-            _erm = _load_local_module(
-                "edinet_rotation_manager",
-                "/content/edinet_rotation_manager.py",
-                cfg.DRIVE_BASE / "edinet_rotation_manager.py",
-            )
-            if _sa and _erm:
-                _edb = _erm.load_db(cfg)
-                # screener通過銘柄を対象に絞る
-                _sc_res = results.get("screener", {})
-                _sa_tickers = [
-                    c["ticker"] for c in _sc_res.get("candidates", [])
-                    if c.get("pass_filters") and c.get("ticker")
-                ]
-                sa_result = _sa.run_shareholder_analyzer(
-                    cfg, _edb, tickers=_sa_tickers or None
-                )
-                results["shareholder"] = sa_result
-                logger.add(
-                    "shareholder_analyzer", "success",
-                    f"分析{sa_result['total']}銘柄 "
-                    f"| 外国人急増{len(sa_result['foreign_spike'])} "
-                    f"| 情報優位{len(sa_result['info_advantage'])}",
-                )
-
-                # screener candidates に shareholder_score を追記
-                if _sc_res:
-                    sh_results = sa_result.get("results", {})
-                    for c in _sc_res.get("candidates", []):
-                        tk = c.get("ticker", "")
-                        if tk in sh_results:
-                            sr = sh_results[tk]
-                            c["shareholder_score"]   = sr.get("shareholder_score")
-                            c["foreign_pct"]         = sr.get("foreign_pct")
-                            c["institutional_pct"]   = sr.get("institutional_pct")
-                            c["owner_pct"]           = sr.get("owner_pct")
-                            c["policy_share_trend"]  = sr.get("policy_share_trend")
-                            # discovery_score への補正を適用
-                            disc_adj = sr.get("discovery_adj", 0.0)
-                            if disc_adj:
-                                c["discovery_score"] = round(
-                                    min(100.0, (c.get("discovery_score") or 0) + disc_adj),
-                                    1,
-                                )
-        except Exception as e:
-            logger.add("shareholder_analyzer", "error", str(e)[:100])
-            print(f"  ⚠️  株主構成分析エラー: {str(e)[:80]}")
-    else:
-        # 2026-09-17: 読み先の旧EDINET API蓄積DBが廃止され毎日「0銘柄」だったため停止。
-        # skipped を残さないと台帳の「記録なし」に出続ける。
-        print("  ⏩ 株主構成分析: スキップ（ENABLE_SHAREHOLDER_ANALYZER=False / 株主データ源なし）")
-        logger.add("shareholder_analyzer", "skipped", "株主データ源なし（旧EDINET API廃止）")
+    # [P-4] 株主構成分析は 2026-09-29 に削除（旧EDINET API廃止で株主データ源なし・2026-09-17から停止していた）
     # ── [I-3] 経営者スコア算出 ──────────────────────────────────
     if getattr(cfg, "ENABLE_CEO_EVALUATOR", True) and _in_mode("screener"):
         try:
@@ -4417,32 +4359,7 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ 規模分類マスター: スキップ（週次以外）")
 
-    # ── legacy EdinetDBローテーション（政府EDINET直取得は無効）──
-    if getattr(cfg, "ENABLE_EDINET_ROTATION", False) and _in_mode("edinet_rotation"):
-        print("\n  🔄 EdinetDB ローテーション...")
-        try:
-            _erm = _load_local_module(
-                "edinet_rotation_manager",
-                "/content/edinet_rotation_manager.py",
-                cfg.DRIVE_BASE / "edinet_rotation_manager.py",
-            )
-            if _erm:
-                # ── [問題C] sector_tier を results に含めて渡す ─────
-                # sector_tier が未確定の場合は sector composite_score から簡易計算
-                if "sector_tier" not in results and results.get("sectors"):
-                    results["sector_tier"] = _calc_sector_tier(results["sectors"], results)
-                erm_result = _erm.run_edinet_rotation(cfg, results)
-                results["edinet_rotation"] = erm_result
-                logger.add("edinet_rotation", "success",
-                           f"取得:{erm_result.get('ok_count',0)}社 "
-                           f"カバレッジ:{erm_result.get('db_coverage',0):.1f}%")
-        except Exception as e:
-            logger.add("edinet_rotation", "error", str(e)[:100])
-    else:
-        # 2026-07-25 B-2: D-① で legacy 直取得を退役させた意図的停止。
-        # skipped を残さないと台帳の「記録なし」に出続け、配線漏れと紛れる。
-        logger.add("edinet_rotation", "skipped",
-                   "ENABLE_EDINET_ROTATION=False（D-① legacy直取得を退役）")
+    # legacy EdinetDBローテーション（D-①で退役）は 2026-09-29 に削除
     # ── [Phase US-1] US財務DBローテーター ────────────────────────
     if getattr(cfg, "ENABLE_US_FUNDAMENTALS", True) and _in_mode("us_fundamentals") and not source_ingest_done["us"]:
         try:
@@ -4927,39 +4844,8 @@ def run_all_tasks(mode: str = "all") -> dict:
             print(f"  ⚠️  ポジションサイジングエラー: {str(e)[:80]}")
     else:
         print("  ⏩ ポジションサイジング: スキップ（週次/無効）")
-    # ── Excel ダッシュボード CSV エクスポート（Step D）────────
-    if getattr(cfg, "ENABLE_EXCEL_EXPORT", False) and _in_mode("excel_export"):
-        print("\n  📊 Excel ダッシュボード CSV エクスポート中...")
-        try:
-            _ex = _load_local_module(
-                "excel_dashboard_exporter",
-                "/content/excel_dashboard_exporter.py",
-                cfg.DRIVE_BASE / "excel_dashboard_exporter.py",
-            )
-            if _ex:
-                export_result = _ex.run_excel_exporter(cfg, results)
-                results["excel_export"] = export_result
-                logger.add("excel_export", "success",
-                           f"{export_result.get('row_count',0)}行出力 "
-                           f"JP:{export_result['breakdown'].get('JP',0)} "
-                           f"US:{export_result['breakdown'].get('US',0)} "
-                           f"ETF:{export_result['breakdown'].get('ETF',0)}")
-            else:
-                print("  ⚠️  excel_dashboard_exporter.py が見つかりません")
-                logger.add("excel_export", "warn",
-                           "excel_dashboard_exporter.py not found")
-        except Exception as e:
-            logger.add("excel_export", "error", str(e)[:100])
-            print(f"  ⚠️  Excelエクスポートエラー: {str(e)[:80]}")
-    else:
-        # 2026-07-25 B-2: 意図的停止（BUG-03で廃止）でも台帳に skipped を残す。
-        # 記録が無いと「配線漏れ」と区別できず監査ノイズになるため。
-        if not getattr(cfg, "ENABLE_EXCEL_EXPORT", False):
-            print("  ⏩ Excelエクスポート: スキップ（ENABLE_EXCEL_EXPORT=False）")
-            logger.add("excel_export", "skipped",
-                       "ENABLE_EXCEL_EXPORT=False（2026-07-12 BUG-03で廃止）")
-        else:
-            logger.add("excel_export", "skipped", "対象モード外")
+
+    # Excel ダッシュボード CSV エクスポート（2026-07-12 BUG-03で廃止）は 2026-09-29 に削除
 
     # ── スコア履歴・スクリーナー履歴の蓄積（Excel出力の有無に関わらず毎回実行）──
     try:

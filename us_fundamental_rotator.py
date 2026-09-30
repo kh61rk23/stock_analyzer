@@ -93,7 +93,7 @@ _CFG_CONST_MAP = {
 }
 
 CACHE_DAYS         = 30    # 財務データの再取得間隔（日）
-DAILY_FETCH_LIMIT  = 20    # 1日あたりの最大取得社数
+DAILY_FETCH_LIMIT  = 100   # 1日あたりの最大取得社数（2026-09-29: 20→100・健太の判断）
 REQUEST_DELAY      = 0.12  # SEC API のレート制限対策（10req/s上限）
 REQUEST_TIMEOUT    = 15
 
@@ -1207,6 +1207,7 @@ def run_us_fundamental_rotator(cfg, results: dict | None = None) -> dict:
     error_count = 0
     bq_rows_count = 0
     bq_error_count = 0
+    pending_bq: list = []   # [(ticker, rows)]
 
     for i, item in enumerate(queue, 1):
         ticker   = item["ticker"]
@@ -1222,21 +1223,9 @@ def run_us_fundamental_rotator(cfg, results: dict | None = None) -> dict:
             data = result["data"]
             if (getattr(cfg, "ENABLE_US_BQ_EXPORT", True)
                     and getattr(cfg, "ENABLE_US_FUNDAMENTALS_BQ", True)):
-                rows = _us_fundamentals_to_bq_rows(ticker, data)
-                if _upsert_us_fundamentals_to_bq(
-                    rows, getattr(cfg, "US_FUNDAMENTALS_BQ_TABLE", "fundamentals")
-                ):
-                    bq_rows_count += len(rows)
-                else:
-                    bq_error_count += 1
-                    # GitHub runnerの個別JSONは永続化しないため、BQ失敗時に
-                    # 30日間fresh扱いにするとデータが消える。翌日再試行へ戻す。
-                    entry = meta.setdefault(ticker, {"ticker": ticker, "fetch_count": 0})
-                    entry.pop("last_fetched", None)
-                    entry["last_status"] = "error: bq_upsert_failed"
-                    entry["next_due"] = (
-                        date.today() + timedelta(days=1)
-                    ).strftime("%Y-%m-%d")
+                # 2026-09-29: 1社ごとに MERGE（1回2〜3秒・10MB課金）していたのを、
+                # ループ後の1回にまとめる（取得社数を 20→100 に増やすため）
+                pending_bq.append((ticker, _us_fundamentals_to_bq_rows(ticker, data)))
             eps  = data.get("latest_eps")
             accel = data.get("eps_accel_score_xbrl")
             print(
@@ -1246,6 +1235,22 @@ def run_us_fundamental_rotator(cfg, results: dict | None = None) -> dict:
         else:
             error_count += 1
             print(f"      ❌ {result.get('error','')[:60]}")
+
+    # ── BQ へまとめて1回で書く ─────────────────────────────────
+    if pending_bq:
+        all_rows = [r for _, rows in pending_bq for r in rows]
+        if _upsert_us_fundamentals_to_bq(
+                all_rows, getattr(cfg, "US_FUNDAMENTALS_BQ_TABLE", "fundamentals")):
+            bq_rows_count = len(all_rows)
+        else:
+            bq_error_count = len(pending_bq)
+            # GitHub runnerの個別JSONは永続化しないため、BQ失敗時に
+            # 30日間fresh扱いにするとデータが消える。翌日再試行へ戻す。
+            for ticker, _ in pending_bq:
+                entry = meta.setdefault(ticker, {"ticker": ticker, "fetch_count": 0})
+                entry.pop("last_fetched", None)
+                entry["last_status"] = "error: bq_upsert_failed"
+                entry["next_due"] = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
 
     # ── meta 保存 ─────────────────────────────────────────────
     save_meta(cfg, meta)
