@@ -54,3 +54,12 @@ def test_uses_official_api_with_demo_key_and_drops_rss_cache(tmp_path, monkeypat
     assert r["fetched_count"] == 1 and r["bill_count"] == 1
     assert r["total_tracked"] == 1, "RSS 由来の偽法案がキャッシュに残っている"
     assert r["sector_boosts"]["1016"] == 10.0
+
+
+def test_job_surge_needs_baseline():
+    """求人票: 前回件数が無いのに『急増』扱いしていた（2026-09-29）"""
+    import job_posting_monitor as jp
+    cfg = types.SimpleNamespace(JOB_SURGE_THRESHOLD_RATIO=1.5, JOB_SURGE_SCORE_BONUS=5.0,
+                                JOB_SURGE_SECTOR_MAP={"ai_ml": ["1025"]})
+    assert jp._detect_surge({"ai_ml": 24}, {}, cfg) == ([], {})
+    assert jp._detect_surge({"ai_ml": 24}, {"ai_ml": 10}, cfg)[0] == ["ai_ml"]

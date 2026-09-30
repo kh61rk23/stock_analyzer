@@ -395,7 +395,11 @@ def _detect_surge(
 
     for cat, curr in curr_counts.items():
         prev  = prev_counts.get(cat, 0)
-        ratio = curr / max(prev, 1)
+        # 2026-09-29: 前回の件数が無い（初回・0件）ときに curr/1 を比率にしており、
+        # 3件以上あれば必ず「急増」扱いで業種に+10点が30日乗っていた。基準が無い回は判定しない
+        if prev <= 0:
+            continue
+        ratio = curr / prev
 
         if ratio >= threshold and curr >= 3:   # 最低3件以上ヒットが必要
             surge_cats.append(cat)
@@ -452,6 +456,9 @@ def run_job_posting_monitor(cfg, results: dict) -> dict:
 
     # ── キャッシュ確認 ────────────────────────────────────────
     cache = _load_cache(cfg)
+    if cache and not cache.get("prev_counts"):
+        # 2026-09-29: 基準（前回件数）の無い判定で作られたキャッシュは加点を捨てる
+        cache = {**cache, "sector_boosts": {}, "surge_detected": []}
     if cache:
         print(
             f"    📦 [job_posting] キャッシュ利用 "
