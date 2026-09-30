@@ -1331,6 +1331,10 @@ ENABLE_EDINETDB_INGEST: bool = os.getenv(
 EDINETDB_RECONCILE_WITH_BQ: bool = True
 ENABLE_EDINET_DIRECT_FETCH: bool = False
 EDINETDB_BASE_URL: str = os.getenv("EDINETDB_BASE_URL", "https://edinetdb.jp/v1")
+# 2026-09-29: 取り込み前に EdinetDB の公開Webページで財務の有無を確認し、無ければ次の候補へ
+EDINETDB_WEB_PRECHECK: bool = True
+EDINETDB_WEB_BASE: str = "https://edinetdb.jp/company/"
+EDINETDB_WEB_RECHECK_DAYS: int = 7     # 財務なしの会社を再確認するまでの日数
 EDINETDB_LOOKBACK_DAYS: int = 7
 # 2026-07-30: 90→46 に変更。日次で EdinetDB を叩く方針にしたため、
 # 日次予算が月次枠と整合していないと月半ばで枠切れし、残り2週間まるごと

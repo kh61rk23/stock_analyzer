@@ -60,10 +60,15 @@ _BUNDLE_LOCK = threading.Lock()
 
 
 def _fin_code(securities_code) -> str:
-    """証券コードを financials.company_code の表記（数字4桁）へ揃える。"""
-    return "".join(
-        ch for ch in str(securities_code or "").split(".")[0] if ch.isdigit()
-    )[:4]
+    """証券コードを financials.company_code の表記（4桁）へ揃える。
+
+    2026-09-29: 英字入りの新しい証券コード（624A 等）は数字だけ拾うと「624」になり
+    該当行に当たらなかった。先頭4文字が「数字3桁＋英数字」ならそのまま使う。
+    """
+    head = str(securities_code or "").split(".")[0].strip().upper()
+    if re.fullmatch(r"\d{3}[0-9A-Z]0?", head):
+        return head[:4]
+    return "".join(ch for ch in head if ch.isdigit())[:4]
 
 
 # 有報「事業等のリスク」の項目見出し: "（1）市場リスク…" "(2) 事業環境　…" "①　信用リスク…"

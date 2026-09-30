@@ -1921,6 +1921,10 @@ def build_edinetdb_ingest_alert(ing: dict) -> dict:
         lines.append(f"  ― EdinetDBにまだデータが無い会社 {len(miss)}社: "
                      + "、".join(_name(c) for c in miss[:10])
                      + ("…" if len(miss) > 10 else ""))
+    web = ing.get("web_skipped") or []
+    if web:
+        lines.append(f"  ― Webで財務なしのため取り込み対象外 {len(web)}社: "
+                     + "、".join(_name(c) for c in web[:10]) + ("…" if len(web) > 10 else ""))
     if ing.get("failure"):
         lines.append(f"  ⚠️ 失敗 {ing['failure']}社（内訳: {ing.get('reasons', {})}）")
     lines.append(f"  書類一覧 {ing.get('doc_index_rows', 0)}件 / API {ing.get('api_calls', 0)}回")

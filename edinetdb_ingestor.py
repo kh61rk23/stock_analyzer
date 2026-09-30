@@ -459,10 +459,12 @@ def _save_json(path: Path, value) -> None:
 
 
 def _sec4(value) -> str:
+    # 2026-09-29: 2024年以降の新規上場は英字入りの証券コード（例: 624A・154A）。
+    # 数字4桁しか受け付けず空文字になり、BQ に company_code=None で格納されていた
     value = str(value or "").upper().replace(".T", "").strip()
     if len(value) == 5 and value.endswith("0"):
         value = value[:4]
-    return value if len(value) == 4 and value.isdigit() else ""
+    return value if re.fullmatch(r"\d{3}[0-9A-Z]", value) else ""
 
 
 def _priority_tickers(cfg) -> tuple[list[str], list[str], list[str]]:
@@ -523,6 +525,95 @@ def _company_row(company: dict, now: str) -> dict:
         "last_fetched_at": now,
         "updated_at": now,
     }
+
+
+# ==============================================================
+# Web事前確認（2026-09-29・健太の要望）
+# EdinetDB に財務が無い会社（主に新規上場）を API で取りに行き、毎日の枠を
+# 空振りで潰していた（9/22・9/24 は11社すべて「データ無し」）。取り込み前に
+# EdinetDB の公開Webページ（APIではない・予算を消費しない）を見て、財務が
+# 無ければその会社は飛ばし、次の候補へ進む。
+# ==============================================================
+_WEB_HAS = "開示財務データ"
+_WEB_LACK = "分析に必要なデータが不足"
+
+
+def page_has_financials(html: str | None, status: int = 200):
+    """会社ページのHTMLから財務データの有無を判定する（純関数）。
+
+    True=財務あり / False=財務なし・ページなし / None=判定不能（通信失敗など）
+    2026-09-29 実測: 財務ありの会社は「開示財務データ」欄と「FY20xxに売上高…」の
+    要約文があり、APIで not_found だった会社は全て「分析に必要なデータが不足」。
+    """
+    if status == 404:
+        return False
+    if status != 200 or not html:
+        return None
+    if _WEB_HAS in html:
+        return True
+    if _WEB_LACK in html:
+        return False
+    return None
+
+
+def _web_check(code: str, cfg) -> bool | None:
+    base = getattr(cfg, "EDINETDB_WEB_BASE", "https://edinetdb.jp/company/")
+    try:
+        import requests
+        r = requests.get(base + code, timeout=15, headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"})
+        return page_has_financials(r.text, r.status_code)
+    except Exception:
+        return None
+
+
+def prefilter_targets(candidates: list[str], want: int, meta: dict, cfg,
+                      checker=None, today: date | None = None,
+                      sleep=None) -> tuple[list[str], list[str]]:
+    """Webで財務が確認できた会社を want 社まで選ぶ（財務なしは飛ばして次へ）。
+
+    確認結果は meta[code]["web_check"]={"date","has"} に残す。
+    財務なしは RECHECK 日後に再確認（後から載ることがある）、財務ありは30日有効。
+    判定不能（通信失敗）は従来どおり API で取りに行く。
+    Returns: (selected, skipped_no_data)
+    """
+    import time as _t
+    today = today or date.today()
+    checker = checker or (lambda c: _web_check(c, cfg))
+    sleep = sleep or _t.sleep
+    recheck = int(getattr(cfg, "EDINETDB_WEB_RECHECK_DAYS", 7))
+    max_checks = max(want, int(getattr(cfg, "EDINETDB_WEB_MAX_CHECKS", want * 5)))
+    selected, skipped, checks = [], [], 0
+    for code in candidates:
+        if len(selected) >= want:
+            break
+        info = dict(meta.get(code) or {})
+        wc = info.get("web_check") or {}
+        try:
+            age = (today - date.fromisoformat(str(wc.get("date", ""))[:10])).days
+        except ValueError:
+            age = 10 ** 6
+        if wc.get("has") is False and age < recheck:
+            skipped.append(code)
+            continue
+        if wc.get("has") is True and age < 30:
+            selected.append(code)
+            continue
+        if checks >= max_checks:
+            break
+        if checks:
+            sleep(1.0)          # 相手サイトへの配慮（1秒に1回まで）
+        checks += 1
+        has = checker(code)
+        if has is not None:
+            info["web_check"] = {"date": today.isoformat(), "has": has}
+            meta[code] = info
+        if has is False:
+            skipped.append(code)
+        else:
+            selected.append(code)
+    return selected, skipped
 
 
 def _plan_targets(companies: list[dict], cfg, meta: dict, budget: int) -> list[str]:
@@ -675,6 +766,14 @@ def run_edinetdb_ingest(
     targets = _plan_targets(companies, cfg, meta, company_budget)
     if target_limit is not None:
         targets = targets[:max(0, int(target_limit))]
+    web_skipped: list[str] = []
+    if getattr(cfg, "EDINETDB_WEB_PRECHECK", False) and targets:
+        # 候補を多めに選び、Webで財務が確認できた会社だけで枠を埋める
+        want = len(targets)
+        pool = _plan_targets(companies, cfg, meta, company_budget * 5)
+        targets, web_skipped = prefilter_targets(pool, want, meta, cfg)
+        print(f"    🔎 [edinetdb] Web事前確認: 採用{len(targets)}社 / "
+              f"財務なしで対象外{len(web_skipped)}社")
     success = failure = missing = 0
     # 2026-09-29: 取り込んだ会社を通知メールに載せるため、社名つきで返す
     ingested: list[dict] = []
@@ -844,6 +943,10 @@ def run_edinetdb_ingest(
         "doc_index_rows": doc_index_rows,
         "ingested": ingested,
         "missing_companies": missing_list,
+        "web_skipped": [
+            {"edinet_code": c, "sec_code": _sec4(by_edinet.get(c, {}).get("sec_code")),
+             "name": by_edinet.get(c, {}).get("name") or by_edinet.get(c, {}).get("name_ja") or ""}
+            for c in web_skipped],
         "reasons": reasons,
         "targets": targets, "budget": daily_budget, "api_calls": client.calls,
     }

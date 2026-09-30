@@ -132,3 +132,50 @@ def test_trace_md_has_three_sections(tmp_path):
     md = open(out["path"], encoding="utf-8").read()
     assert "## ✅ 通過 1銘柄" in md and "## 📐 9指標" in md and "PER 45.0" in md
     assert (tmp_path / "d" / "screener_rejections.json").exists()
+
+
+# ── EdinetDB Web事前確認（財務が無い会社は API で取りに行かず次の候補へ）──
+import edinetdb_ingestor as edi
+from datetime import date as _date
+
+
+def test_page_has_financials_markers():
+    assert edi.page_has_financials("…開示財務データ…FY2025に売上高83億円…") is True
+    assert edi.page_has_financials("…分析に必要なデータが不足しています…") is False
+    assert edi.page_has_financials("", 404) is False
+    assert edi.page_has_financials(None, 503) is None
+
+
+def test_prefilter_skips_no_data_and_fills_quota():
+    web = {"E1": False, "E2": True, "E3": False, "E4": True, "E5": True}
+    meta = {}
+    sel, skip = edi.prefilter_targets(["E1", "E2", "E3", "E4", "E5"], 2, meta,
+                                      _types.SimpleNamespace(), checker=web.get,
+                                      today=_date(2026, 9, 29), sleep=lambda s: None)
+    assert sel == ["E2", "E4"] and skip == ["E1", "E3"]
+    assert meta["E1"]["web_check"] == {"date": "2026-09-29", "has": False}
+    # 翌日は記録を使い、Web を見に行かない
+    calls = []
+    sel2, _ = edi.prefilter_targets(["E1", "E2"], 2, meta, _types.SimpleNamespace(),
+                                    checker=lambda c: calls.append(c) or True,
+                                    today=_date(2026, 9, 30), sleep=lambda s: None)
+    assert sel2 == ["E2"] and calls == []
+
+
+def test_prefilter_unknown_falls_back_to_api():
+    sel, skip = edi.prefilter_targets(["E1"], 1, {}, _types.SimpleNamespace(),
+                                      checker=lambda c: None, sleep=lambda s: None)
+    assert sel == ["E1"] and skip == []
+
+
+def test_ingest_alert_lists_web_skipped():
+    al = an.build_edinetdb_ingest_alert({"success": 1, "targets": ["E2"], "ingested": [
+        {"sec_code": "3983", "name": "オロ"}], "web_skipped": [{"sec_code": "154A", "name": "GAIA"}]})
+    assert "Webで財務なしのため取り込み対象外 1社: 154A GAIA" in al["body"]
+
+
+def test_alphanumeric_securities_codes():
+    """2024年以降の英字入り証券コード（624A 等）が空文字・3桁になっていた"""
+    import edinet_bq_client as ebc
+    assert [edi._sec4(x) for x in ["624A0", "39830", "154A.T", "ABCD"]] == ["624A", "3983", "154A", ""]
+    assert [ebc._fin_code(x) for x in ["624A.T", "7203.T", "285A0"]] == ["624A", "7203", "285A"]
