@@ -160,7 +160,10 @@ def _normalize(ticker: str, market: str, info: dict,
         # ── バリュエーション（無次元） ──────────────────────
         "per":       _clean(info.get("trailingPE")),
         "pbr":       _clean(info.get("priceToBook")),
-        "div_yield": _clean(info.get("dividendYield")),
+        # 2026-09-29: yfinance の dividendYield は %値（2.72 = 2.72%）。ここだけ比率化が
+        # 漏れており、スクリーナー経由の配当利回りが100倍（2.72 → 272%表示・4%以上の
+        # 高配当判定から漏れる）になっていた。finance_logic と同じ規則で比率にそろえる
+        "div_yield": _div_yield_ratio(info),
 
         # ── 収益性（比率） ──────────────────────────────────
         "roe":           _clean(info.get("returnOnEquity")),
@@ -218,6 +221,14 @@ def _normalize(ticker: str, market: str, info: dict,
 # ==============================================================
 # BLOCK 3: 公開API
 # ==============================================================
+
+def _div_yield_ratio(info: dict):
+    try:
+        from finance_logic import _yf_yield_ratio
+        return _yf_yield_ratio(info or {})
+    except Exception:
+        return None
+
 
 def fetch_quote(ticker: str, market: str, *,
                 cfg: Any = None,

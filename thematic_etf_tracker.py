@@ -548,7 +548,92 @@ def _calc_arxiv_trend_score(theme: dict, arxiv_result: Optional[dict],
 # BLOCK 3: テーマ単体スコアリング
 # ==============================================================
 
-def _score_theme(theme: dict, arxiv_result: Optional[dict], cfg=None) -> dict:
+# ==============================================================
+# arXiv 検索APIでテーマごとの論文数を直接数える（2026-09-29）
+# 以前は週次の ArXiv 監視が取った約150件（分野が偏る）をキーワードで数えており、
+# 8テーマ中6テーマが「該当なし＝固定50点」、1テーマが0点だった。
+# 実測（9/29）: 量子計算 直近4週741件←前4週592件・原子力13←6・サイバー149←124
+# ==============================================================
+_ARXIV_API = "https://export.arxiv.org/api/query"
+_ARXIV_THEME_CACHE = "arxiv_theme_counts.json"
+_ARXIV_LAG_DAYS = 3        # 直近数日は登録が遅れるので集計から外す
+_ARXIV_SMOOTH = 5          # 少数件の伸び率が極端にならないよう分母分子に足す
+
+
+def _arxiv_query(keywords: list, start: str, end: str, n: int = 1):
+    """(件数, [{title, url, published}]) を返す。失敗時は (None, [])。"""
+    import re
+    import urllib.parse
+    import urllib.request
+    kw = " OR ".join(f'all:"{k}"' for k in keywords)
+    q = f"({kw}) AND submittedDate:[{start}0000 TO {end}2359]"
+    url = _ARXIV_API + "?" + urllib.parse.urlencode({
+        "search_query": q, "max_results": max(1, n),
+        "sortBy": "submittedDate", "sortOrder": "descending"})
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "stock_analyzer/1.0"})
+            xml = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "ignore")
+            m = re.search(r"<opensearch:totalResults[^>]*>(\d+)<", xml)
+            papers = []
+            for e in re.findall(r"<entry>(.*?)</entry>", xml, re.S)[:n]:
+                t = re.search(r"<title>(.*?)</title>", e, re.S)
+                i = re.search(r"<id>(.*?)</id>", e)
+                d = re.search(r"<published>(.*?)</published>", e)
+                papers.append({"title": re.sub(r"\s+", " ", t.group(1)).strip() if t else "",
+                               "url": i.group(1) if i else "",
+                               "published": d.group(1)[:10] if d else ""})
+            return (int(m.group(1)) if m else None), papers
+        except Exception:
+            time.sleep(5 * (attempt + 1))
+    return None, []
+
+
+def arxiv_growth(recent: int, prev: int) -> float:
+    """平滑化した伸び率（%）。少数件の極端な値を抑える（純関数）。"""
+    return round(((recent + _ARXIV_SMOOTH) / (prev + _ARXIV_SMOOTH) - 1) * 100, 1)
+
+
+def fetch_arxiv_theme_counts(cfg=None, today: Optional[datetime] = None) -> dict:
+    """全テーマの直近4週・前4週の論文数と代表論文を返す（1日1回・キャッシュ）。"""
+    today = today or datetime.now()
+    key = today.strftime("%Y-%m-%d")
+    cache_p = (Path(getattr(cfg, "CACHE_DIR", "stock_data/cache")) if cfg
+               else Path("stock_data/cache")) / _ARXIV_THEME_CACHE
+    try:
+        c = json.loads(cache_p.read_text(encoding="utf-8"))
+        if c.get("date") == key and c.get("themes"):
+            return c["themes"]
+    except (OSError, ValueError):
+        pass
+    end = today - timedelta(days=_ARXIV_LAG_DAYS)
+    r0, r1 = end - timedelta(days=27), end
+    p0, p1 = end - timedelta(days=55), end - timedelta(days=28)
+    f = lambda d: d.strftime("%Y%m%d")
+    out: dict = {}
+    for th in THEME_DEFINITIONS:
+        kws = th.get("arxiv_keywords", [])
+        recent, papers = _arxiv_query(kws, f(r0), f(r1), n=3)
+        time.sleep(3.1)                      # arXiv API の利用規約（3秒に1回）
+        prev, _ = _arxiv_query(kws, f(p0), f(p1), n=1)
+        time.sleep(3.1)
+        if recent is None or prev is None:
+            continue
+        out[th["id"]] = {"recent_4w": recent, "prev_4w": prev,
+                         "growth_rate": arxiv_growth(recent, prev),
+                         "papers": papers, "window": f"{r0:%m/%d}-{r1:%m/%d}"}
+    if out:
+        try:
+            cache_p.parent.mkdir(parents=True, exist_ok=True)
+            cache_p.write_text(json.dumps({"date": key, "themes": out}, ensure_ascii=False),
+                               encoding="utf-8")
+        except OSError:
+            pass
+    return out
+
+
+def _score_theme(theme: dict, arxiv_result: Optional[dict], cfg=None,
+                 api_counts: Optional[dict] = None) -> dict:
     """
     1テーマのETFモメンタム + ArXivトレンドを統合してスコアを返す。
     """
@@ -561,8 +646,15 @@ def _score_theme(theme: dict, arxiv_result: Optional[dict], cfg=None) -> dict:
 
     etf_score    = _calc_etf_momentum_score(etf_details)
     _use_ss = getattr(cfg, "ENABLE_SEMANTIC_SCHOLAR", False) if cfg else False
-    arxiv_score, arxiv_detail = _calc_arxiv_trend_score(theme, arxiv_result,
-                                                          enable_semantic_scholar=_use_ss)
+    api = (api_counts or {}).get(theme["id"])
+    if api:
+        g = api["growth_rate"]
+        arxiv_score = round(max(0.0, min(100.0, (g + 50) / 150 * 100)), 1)
+        arxiv_detail = {**api, "source": "arxiv_api"}
+    else:
+        arxiv_score, arxiv_detail = _calc_arxiv_trend_score(theme, arxiv_result,
+                                                              enable_semantic_scholar=_use_ss)
+        arxiv_detail["source"] = "keyword_pool"
 
     # 熱量スコア: ETF 60% + ArXiv 40%
     heat_score = round(etf_score * 0.60 + arxiv_score * 0.40, 1)
@@ -709,10 +801,15 @@ def run_thematic_etf_tracker(cfg, arxiv_result: Optional[dict] = None) -> dict:
 
     print(f"  対象テーマ: {len(target_themes)}件")
 
+    api_counts = {}
+    if getattr(cfg, "ENABLE_ARXIV_THEME_API", True) if cfg else True:
+        api_counts = fetch_arxiv_theme_counts(cfg)
+        print(f"    📚 arXiv 検索API: {len(api_counts)}/{len(THEME_DEFINITIONS)}テーマの論文数を取得")
+
     results_list = []
     for theme in target_themes:
         print(f"  📌 {theme['name']} ({'/'.join(theme['etfs'])}) ...")
-        result = _score_theme(theme, arxiv_result, cfg=cfg)
+        result = _score_theme(theme, arxiv_result, cfg=cfg, api_counts=api_counts)
         results_list.append(result)
         print(
             f"    → 熱量:{result['heat_score']:.0f}  "

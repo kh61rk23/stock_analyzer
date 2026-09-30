@@ -46,8 +46,7 @@
 from __future__ import annotations
 
 import json
-import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -379,19 +378,33 @@ def _calc_screener_bonus(consec_pos: int, consec_neg: int) -> float:
 # BLOCK 3: キャッシュ管理
 # ==============================================================
 
-def _load_cache(cfg) -> dict:
-    """CACHE_HOURS 以内のキャッシュを返す。期限切れ or なければ {}。"""
+# 2026-09-29: 24時間でファイル全体を作り直す方式だと、前日の通過銘柄（約25社）の
+# 分だけしか持てなかった。銘柄ごとに analyzed_at を持たせ、TICKER_TTL_DAYS 以内なら
+# 使い回す（決算データは四半期に1度しか変わらない）。
+TICKER_TTL_DAYS = 7
+
+
+def _load_cache(cfg, max_age_days: float | None = None) -> dict:
+    """有効期限内の銘柄だけを返す（{ticker: result}）。"""
+    ttl = TICKER_TTL_DAYS if max_age_days is None else max_age_days
     try:
         p = Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / CACHE_FILENAME
         if not p.exists():
             return {}
         data = json.loads(p.read_text(encoding="utf-8"))
-        cached_at = datetime.fromisoformat(data.get("cached_at", "2000-01-01"))
-        if datetime.now() - cached_at < timedelta(hours=CACHE_HOURS):
-            return data.get("results", {})
+        file_at = str(data.get("cached_at", "2000-01-01"))
+        out = {}
+        for t, r in (data.get("results") or {}).items():
+            at = str((r or {}).get("analyzed_at") or file_at)
+            try:
+                age = (datetime.now() - datetime.fromisoformat(at[:19])).total_seconds() / 86400
+            except ValueError:
+                continue
+            if age <= ttl:
+                out[t] = r
+        return out
     except Exception:
-        pass
-    return {}
+        return {}
 
 
 def _save_cache(cfg, results: dict) -> None:
@@ -407,6 +420,59 @@ def _save_cache(cfg, results: dict) -> None:
         )
     except Exception:
         pass
+
+
+def _next_earnings_date(ticker: str) -> str | None:
+    """次回決算予定日（YYYY-MM-DD）。取れなければ None。"""
+    try:
+        import yf_cache as yf
+        cal = yf.Ticker(ticker).calendar
+        dates = (cal or {}).get("Earnings Date") if isinstance(cal, dict) else None
+        if dates:
+            d = dates[0] if isinstance(dates, (list, tuple)) else dates
+            return str(d)[:10]
+    except Exception:
+        pass
+    return None
+
+
+def apply_surprise_flags(candidates: list, cache: dict, cfg=None,
+                         today: str | None = None) -> dict:
+    """当日の分析結果で候補の高確率／ネガティブ判定をやり直す（純関数）。
+
+    以前はスクリーナーの時点（前日の分析結果）で判定していた。理由と次回決算日も付ける。
+    Returns: {"high_prob": n, "negative": n}
+    """
+    # スクリーナー（stock_screener の is_high_prob_surprise）と同じ閾値。
+    # acc_bonus は ±10点の尺度なので、このモジュールの SURPRISE_COMBO_*（0〜100尺度）は使わない
+    accel_min, cons_min, neg_accel, neg_cons = 7.0, 70.0, -7.0, 30.0
+    today = today or datetime.now().strftime("%Y-%m-%d")
+    n_hi = n_neg = 0
+    for c in candidates or []:
+        r = (cache or {}).get(c.get("ticker"))
+        if not r:
+            continue
+        acc = float(c.get("acc_bonus") or 0)
+        cons = float(r.get("conservatism_score") or 50)
+        c["conservatism_score"] = cons
+        c["is_high_prob_surprise"] = acc >= accel_min and cons >= cons_min
+        c["is_negative_risk"] = acc <= neg_accel and cons <= neg_cons
+        ne = r.get("next_earnings")
+        c["next_earnings"] = ne
+        try:
+            c["days_to_earnings"] = (datetime.strptime(ne, "%Y-%m-%d")
+                                     - datetime.strptime(today, "%Y-%m-%d")).days if ne else None
+        except ValueError:
+            c["days_to_earnings"] = None
+        avg = r.get("avg_beat_pct")
+        c["surprise_reason"] = (
+            f"EPS加速{acc:+.0f}pt × 会社予想の保守度{cons:.0f}点"
+            + (f"（過去{r.get('beat_count', 0)}回上振れ・平均{avg:+.1f}%）" if avg is not None else "")
+            + (f" | 直近{r.get('consecutive_pos')}期連続上振れ" if r.get("consecutive_pos") else "")
+            + (f" | 直近{r.get('consecutive_neg')}期連続下振れ" if r.get("consecutive_neg") else ""))
+        n_hi += c["is_high_prob_surprise"]
+        n_neg += c["is_negative_risk"]
+    return {"high_prob": n_hi, "negative": n_neg}
 
 
 # ==============================================================
@@ -479,6 +545,7 @@ def analyze_ticker(ticker: str) -> Optional[dict]:
         "is_conservative":    conserv_result["is_conservative"],
         "conservatism_bonus": conserv_bonus,
         "combo_flag":         combo,
+        "next_earnings":      _next_earnings_date(ticker),   # 2026-09-29
     }
 
 
@@ -548,11 +615,8 @@ def run_earnings_surprise(cfg, tickers: Optional[list] = None) -> dict:
     sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  📊 決算サプライズ分析開始...")
 
-    # キャッシュ確認
+    # 銘柄ごとのキャッシュ（7日有効）。期限切れ・未分析の銘柄だけ取り直す
     cached = _load_cache(cfg)
-    if cached:
-        print(f"    ✅ キャッシュ使用（{len(cached)}銘柄）")
-        return _build_summary(cached)
 
     # 対象銘柄を決定
     if not tickers:
@@ -563,23 +627,23 @@ def run_earnings_surprise(cfg, tickers: Optional[list] = None) -> dict:
         screener_candidates = getattr(cfg, "EDINET_SCREENER_CANDIDATES", [])
         tickers = list(set(tickers + screener_candidates))
 
-    n = len(tickers)
-    print(f"    対象: {n}銘柄 分析中...")
+    todo = [t for t in dict.fromkeys(tickers) if t not in cached]
+    print(f"    対象: {len(set(tickers))}銘柄（キャッシュ有効 {len(set(tickers)) - len(todo)} / "
+          f"新規分析 {len(todo)}）")
 
-    results = {}
-    for i, ticker in enumerate(tickers, 1):
-        result = analyze_ticker(ticker)
-        if result:
-            results[ticker] = result
-            bonus = result["screener_bonus"]
-            if abs(bonus) >= 2:
-                print(f"      {ticker}: {result['surprise_label']} bonus={bonus:+.0f}pt")
-        time.sleep(FETCH_DELAY)
-        if i % 10 == 0:
-            print(f"      ... {i}/{n}完了")
-
+    # 2026-09-29: 1銘柄ずつ（info＋履歴＋拡張履歴＋決算日）を5並列に
+    from concurrent.futures import ThreadPoolExecutor
+    workers = max(1, int(getattr(cfg, "EARNINGS_SURPRISE_WORKERS", 5)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        fetched = list(pool.map(analyze_ticker, todo))
+    now_iso = datetime.now().isoformat(timespec="seconds")
+    results = dict(_load_cache(cfg, max_age_days=30))   # 30日より古いものは捨てる
+    for t, r in zip(todo, fetched):
+        if r:
+            r["analyzed_at"] = now_iso
+            results[t] = r
     _save_cache(cfg, results)
-    summary = _build_summary(results)
+    summary = _build_summary({t: results[t] for t in tickers if t in results})
     print(
         f"    ✅ 決算サプライズ完了: {summary['total']}銘柄 "
         f"ポジ{summary['hit_pos']}社 / ネガ{summary['hit_neg']}社"

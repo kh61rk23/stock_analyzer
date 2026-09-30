@@ -97,7 +97,7 @@ FULL_INFO = {
     "averageVolume10days": 3_900_000,
     "trailingPE": 12.5,
     "priceToBook": 1.8,
-    "dividendYield": 0.023,
+    "dividendYield": 2.3,   # yfinance は %値で返す（2026-09-29 に比率化を入口でそろえた）
     "returnOnEquity": 0.15,
     "returnOnAssets": 0.08,
     "operatingMargins": 0.21,
@@ -385,6 +385,7 @@ JP_FULL = {
     'stockholders_equity': 8000000000.0, 'target_price': 120.0,
     'ticker': 'TEST.T', 'total_assets': 20000000000.0,
     'total_cash': 5000000000.0, 'total_debt': 2000000000.0,
+    'dividend_yield': 0.023,   # 2026-09-29 追加（比率）
 }
 
 JP_MINIMAL = {
@@ -397,7 +398,7 @@ JP_MINIMAL = {
     'payout_ratio': None, 'pbr': None, 'per': None, 'rec_key': '',
     'rec_mean': None, 'roe': None, 'stockholders_equity': None,
     'target_price': None, 'ticker': 'TEST.T', 'total_assets': None,
-    'total_cash': None, 'total_debt': None,
+    'total_cash': None, 'total_debt': None, 'dividend_yield': None,
 }
 
 JP_ZERO_PRICE = dict(JP_MINIMAL, current_price=0.0, target_price=120.0)
@@ -413,6 +414,7 @@ JP_NAN = {
     'per': None, 'rec_key': 'hold', 'rec_mean': None, 'roe': None,
     'stockholders_equity': None, 'target_price': None, 'ticker': 'TEST.T',
     'total_assets': None, 'total_cash': None, 'total_debt': None,
+    'dividend_yield': None,
 }
 
 

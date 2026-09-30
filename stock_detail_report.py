@@ -125,7 +125,9 @@ def _fetch_detail_data(ticker: str) -> dict:
             pass
 
         # 配当
-        div_yield = info.get("dividendYield") or 0
+        # 2026-09-29: dividendYield は %値。比率にそろえる（従来は 272% のように表示されていた）
+        from finance_logic import _yf_yield_ratio
+        div_yield = _yf_yield_ratio(info) or 0
         div_rate  = info.get("dividendRate") or 0
 
         # アナリスト推奨

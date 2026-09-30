@@ -1767,15 +1767,14 @@ ALERT_MIN_DIVIDEND_YIELD: float = 0.04   # 4%以上
 # 注目業種トップ3で業種ごとに出す代表銘柄の件数。
 # 従来 alert_notifier.py に 2 がハードコードされており「代表2銘柄しか
 # 出ない」状態だったため設定化した（既定値は従来と同じ 2 ＝挙動不変）。
-ALERT_SECTOR_TOP_COMPANIES: int = 2
+ALERT_SECTOR_TOP_COMPANIES: int = 3   # 2026-09-29: 業種のスクリーナー上位を出す（従来はBQ一覧の先頭2社で固定化）
 
 # 米国株サマリーを日次メールに載せるか。
 # us_screener は毎日900〜1000社を処理し300社超が通過しているのに、
 # alert_notifier.py に us_screener / us_sectors への参照が1つも無く、
 # 日次メールに米国株が一切載っていなかったため新設した。
 ALERT_ON_US_SUMMARY: bool = True
-ALERT_US_SECTOR_TOP_N: int = 3    # USセクターの上位表示件数（別途ワースト1件を付す）
-ALERT_US_TOP_PICKS:    int = 5    # USスクリーナー通過銘柄の表示件数
+ALERT_US_TOP_PICKS:    int = 10   # USスクリーナー通過銘柄の表示件数（2026-09-29: 5→10）
 
 # アナリスト強気推奨アラート
 ALERT_ON_STRONG_BUY: bool = True

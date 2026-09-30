@@ -362,6 +362,7 @@ def _fetch_ticker_data(ticker: str) -> Optional[dict]:
             "rec_key":        q["rec_key"],         # [F-1/U-4] 推奨キー（文字列）
             "target_price":   q["target_price"],    # [F-1/U-4] アナリスト目標株価平均
             "analyst_upside": q["analyst_upside"],  # [F-1/U-4] 目標株価乖離率
+            "dividend_yield": q["div_yield"],       # 比率（0.04 = 4%）2026-09-29
             # [M-3] ネットキャッシュ計算用
             "total_cash":     q["total_cash"],
             "total_debt":     q["total_debt"],
@@ -1658,6 +1659,8 @@ def _screen_sector(sector_code: str, sector_name: str,
             "analyst_count":  data.get("analyst_count"),
             # 2026-09-29: 9指標（candidate_kpi）の EV・ネットキャッシュ計算用
             "market_cap_raw": data.get("market_cap"),
+            "dividend_yield": data.get("dividend_yield"),
+            "payout_ratio":   data.get("payout_ratio"),
             "total_cash":     data.get("total_cash"),
             "total_debt":     data.get("total_debt"),
             "pass_filters":   passed,

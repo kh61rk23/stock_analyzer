@@ -3541,9 +3541,18 @@ def run_all_tasks(mode: str = "all") -> dict:
                         "/content/earnings_surprise.py",
                         cfg.DRIVE_BASE / "earnings_surprise.py",
                     )
-                    if _es and getattr(cfg, "ENABLE_EARNINGS_SURPRISE", True) and passed_tickers:
-                        es_result = _es.run_earnings_surprise(cfg, passed_tickers)
+                    # 2026-09-29: 通過銘柄だけ（約25社）→ スクリーナーが取得した全候補へ。
+                    # 分析直後に当日の結果で高確率/ネガティブ判定をやり直す
+                    #（以前はスクリーナー時点＝前日の分析結果で判定していた）
+                    _es_tickers = [c.get("ticker") for c in screen_result.get("candidates", [])
+                                   if c.get("ticker")] or passed_tickers
+                    if _es and getattr(cfg, "ENABLE_EARNINGS_SURPRISE", True) and _es_tickers:
+                        es_result = _es.run_earnings_surprise(cfg, _es_tickers)
                         results["earnings_surprise"] = es_result
+                        _flags = _es.apply_surprise_flags(
+                            screen_result.get("candidates", []), _es._load_cache(cfg), cfg)
+                        print(f"    🎯 決算サプライズ判定: 高確率{_flags['high_prob']}社 / "
+                              f"ネガティブ{_flags['negative']}社")
                         logger.add("earnings_surprise", "success",
                                    f"ポジ{es_result.get('hit_pos',0)}社/"
                                    f"ネガ{es_result.get('hit_neg',0)}社")
@@ -4184,34 +4193,6 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ ペーパートレード: スキップ（ENABLE_PAPER_TRADING=False）")
 
-    # ── アラート通知（5-B 追加）────────────────────────────────
-    if getattr(cfg, "ENABLE_ALERT", False):
-        try:
-            _an = _load_local_module(
-                "alert_notifier",
-                "/content/alert_notifier.py",
-                cfg.DRIVE_BASE / "alert_notifier.py",
-            )
-            if _an and isinstance(results, dict):
-                an_result = _an.run_alert_notifier(cfg, results)
-                results["alerts"] = an_result
-                if not an_result.get("skipped"):
-                    logger.add("alert_notifier", "success",
-                               f"送信:{an_result.get('alerts_sent',0)}件 "
-                               f"チャネル:{','.join(an_result.get('channels',[]))}")
-                for err in an_result.get("errors", []):
-                    logger.add("alert_notifier", "warn", err[:80])
-            elif _an:
-                print(f"  ⚠️ アラート通知をスキップ: results が辞書型ではありません (型: {type(results).__name__})")
-            else:
-                print("  ⚠️  alert_notifier.py が見つかりません")
-                logger.add("alert_notifier", "warn", "alert_notifier.py not found")
-        except Exception as e:
-            logger.add("alert_notifier", "error", str(e)[:100])
-            print(f"  ⚠️  アラート通知エラー: {str(e)[:80]}")
-    else:
-        print("  ⏩ アラート通知: スキップ（config.ENABLE_ALERT=False）")
-
 # ── IMF グローバルマクロ（デイリー）───────────────────────
     if getattr(cfg, "ENABLE_IMF", False) and _in_mode("imf"):
         print("\n  🌍 IMFグローバルマクロパイプラインを実行中...")
@@ -4280,6 +4261,36 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         if not getattr(cfg, "ENABLE_US_SCREENER", False):
             print("  ⏩ 米国株スクリーニング: スキップ（ENABLE_US_SCREENER=False）")
+
+    # 2026-09-29: メール送信は米国株スクリーナーの後に移動した。以前は送信後に
+    #   us_screener が走っており、メールの米国株サマリーが常にセクター4行だけだった
+    # ── アラート通知（5-B 追加）────────────────────────────────
+    if getattr(cfg, "ENABLE_ALERT", False):
+        try:
+            _an = _load_local_module(
+                "alert_notifier",
+                "/content/alert_notifier.py",
+                cfg.DRIVE_BASE / "alert_notifier.py",
+            )
+            if _an and isinstance(results, dict):
+                an_result = _an.run_alert_notifier(cfg, results)
+                results["alerts"] = an_result
+                if not an_result.get("skipped"):
+                    logger.add("alert_notifier", "success",
+                               f"送信:{an_result.get('alerts_sent',0)}件 "
+                               f"チャネル:{','.join(an_result.get('channels',[]))}")
+                for err in an_result.get("errors", []):
+                    logger.add("alert_notifier", "warn", err[:80])
+            elif _an:
+                print(f"  ⚠️ アラート通知をスキップ: results が辞書型ではありません (型: {type(results).__name__})")
+            else:
+                print("  ⚠️  alert_notifier.py が見つかりません")
+                logger.add("alert_notifier", "warn", "alert_notifier.py not found")
+        except Exception as e:
+            logger.add("alert_notifier", "error", str(e)[:100])
+            print(f"  ⚠️  アラート通知エラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ アラート通知: スキップ（config.ENABLE_ALERT=False）")
 
     # ── [DB移管 Ph1] 銘柄スナップショットをBQへ日次蓄積（両スクリーナー直後）──
     # 銘柄mdに出ている指標の約半分（technical系・FCFマージン・D/E・

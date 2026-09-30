@@ -242,13 +242,18 @@ def extract_alerts(cfg, results: dict) -> list:
             for t in display[:3]:
                 icon   = SIGNAL_ICONS.get(t["signal"], "➡️")
                 etfs   = "/".join(t["etfs"])
-                arxiv  = (f"ArXiv+{t['arxiv_detail']['growth_rate']:.0f}%"
-                          if t["arxiv_detail"].get("growth_rate") is not None
-                          else "")
+                ad     = t.get("arxiv_detail") or {}
                 lines.append(
-                    f"  {icon} {t['theme_name']}({etfs}): "
-                    f"熱量{t['heat_score']:.0f}点  {arxiv}"
-                )
+                    f"  {icon} {t['theme_name']}({etfs}): 熱量{t['heat_score']:.0f}点"
+                    f"（ETF {t.get('etf_momentum_score', 0):.0f}点 × 論文 {t.get('arxiv_trend_score', 0):.0f}点）")
+                # 2026-09-29: 論文の中身が分かるよう件数の推移と代表論文を出す
+                if ad.get("source") == "arxiv_api":
+                    lines.append(f"      論文 直近4週{ad.get('recent_4w', 0)}件"
+                                 f"（前4週{ad.get('prev_4w', 0)}件・{ad.get('growth_rate', 0):+.0f}%）")
+                    for pp in (ad.get("papers") or [])[:2]:
+                        lines.append(f"      ・{pp.get('title', '')[:70]}（{pp.get('published', '')}）")
+                elif ad.get("growth_rate") is not None:
+                    lines.append(f"      論文 {ad['growth_rate']:+.0f}%（週次の論文プールから推定）")
             alerts.append({
                 "trigger":  "etf_theme",
                 "title":    f"🌡️ テーマETF熱量 TOP{len(lines)}",
@@ -278,8 +283,25 @@ def extract_alerts(cfg, results: dict) -> list:
             # 代表銘柄の財務ハイライト（yfinance全フィールドから抽出）
             # 2026-07-28: 表示件数が 2 固定で「代表2銘柄しか出ない」状態だったため
             # config 化した（ALERT_SECTOR_TOP_COMPANIES / 既定は従来どおり 2）。
-            top_cos = r.get("top_companies", [])
-            _top_n = int(getattr(cfg, "ALERT_SECTOR_TOP_COMPANIES", 2))
+            # 2026-09-29: 代表銘柄は「BQ の業種一覧を証券コード順に数件」で、毎回同じ
+            # コード番号の若い銘柄が出ていた。その業種のスクリーナー通過上位（総合点順）を出す
+            _top_n = int(getattr(cfg, "ALERT_SECTOR_TOP_COMPANIES", 3))
+            _scr = [c for c in ((results.get("screener") or {}).get("candidates") or [])
+                    if c.get("pass_filters") and str(c.get("sector_code")) == str(code)]
+            _scr.sort(key=lambda c: (-(c.get("composite_score") or 0), -(c.get("base_score") or 0)))
+            for c in _scr[:_top_n]:
+                _dy = c.get("dividend_yield")
+                _pp = [f"{c.get('composite_score', 0):.0f}点"]
+                if c.get("per"):
+                    _pp.append(f"PER:{c['per']:.1f}x")
+                if c.get("pbr"):
+                    _pp.append(f"PBR:{c['pbr']:.1f}x")
+                if c.get("roe") is not None:
+                    _pp.append(f"ROE:{c['roe']:.0f}%")
+                if _dy:
+                    _pp.append(f"配当:{_dy*100:.1f}%")
+                line += f"\n    📌 {str(c.get('name', ''))[:14]}（{c.get('ticker', '')}）: {' | '.join(_pp)}"
+            top_cos = [] if _scr else r.get("top_companies", [])
             for c in top_cos[:_top_n]:
                 if not c.get("fetch_ok"):
                     continue
@@ -348,31 +370,23 @@ def extract_alerts(cfg, results: dict) -> list:
             _ok = [r for r in _sec_list
                    if isinstance(r, dict) and r.get("score_result", {}).get("fetch_ok")]
             if _ok:
-                _n = int(getattr(cfg, "ALERT_US_SECTOR_TOP_N", 3))
-                _us_lines.append("  【セクター】")
-                for r in _ok[:_n]:
+                # 2026-09-29: 上位3＋最下位1の4行だけだったのを全セクター（11）に
+                _us_lines.append(f"  【セクター】{len(_ok)}セクター（点数順）")
+                for r in sorted(_ok, key=lambda r: -((r.get("score_result") or {}).get("score") or 0)):
                     _s = r.get("sector", {}) or {}
                     _sr = r.get("score_result", {}) or {}
                     _nm = _s.get("name_ja") or _s.get("name_en") or _s.get("etf", "")
                     _risk = _sr.get("risk_level", "")
                     _risk_s = f" | リスク:{_risk}" if _risk else ""
                     _us_lines.append(
-                        f"    ▲ {_nm}（{_s.get('etf','')}）: "
-                        f"{_sr.get('score', 0):.0f}点{_risk_s}")
-                for r in _ok[-1:]:
-                    _s = r.get("sector", {}) or {}
-                    _sr = r.get("score_result", {}) or {}
-                    _nm = _s.get("name_ja") or _s.get("name_en") or _s.get("etf", "")
-                    _us_lines.append(
-                        f"    ▼ {_nm}（{_s.get('etf','')}）: "
-                        f"{_sr.get('score', 0):.0f}点")
+                        f"    {_nm}（{_s.get('etf','')}）: {_sr.get('score', 0):.0f}点{_risk_s}")
 
             # (b) USスクリーナー通過上位（us_stock_screener）
             _us_scr = results.get("us_screener", {}) or {}
             if not _us_scr.get("skipped"):
                 _picks = _us_scr.get("top_picks") or _us_scr.get("passed") or []
                 if _picks:
-                    _pn = int(getattr(cfg, "ALERT_US_TOP_PICKS", 5))
+                    _pn = int(getattr(cfg, "ALERT_US_TOP_PICKS", 10))
                     _us_lines.append(
                         f"  【スクリーニング】{_us_scr.get('pass_count', 0)}社通過 "
                         f"/ {_us_scr.get('screened_count', 0)}社中")
@@ -493,34 +507,14 @@ def extract_alerts(cfg, results: dict) -> list:
         except Exception as _dq_err:
             print(f"  ⚠️  [alert] 審議キュー生成失敗: {str(_dq_err)[:80]}")
 
-    # ── ⑦ 高配当銘柄アラート（新規） ──────────────────────────
-    min_dy = getattr(cfg, "ALERT_MIN_DIVIDEND_YIELD", 0.04)  # デフォルト4%
+    # ── ⑦ 高配当銘柄アラート ────────────────────────────────
+    # 2026-09-29: 各業種の代表2〜3銘柄（約90社）の中だけを見ており、しかも
+    # スクリーナー経由の利回りは yfinance の %値を比率扱いして100倍ずれていた。
+    # 日本株スクリーナーの全取得銘柄（約460社）と米国株スクリーナー（約830社）から探す。
     if getattr(cfg, "ALERT_ON_HIGH_DIVIDEND", True):
-        high_div_lines = []
-        for code, r in sector_results.items():
-            if not isinstance(r, dict):
-                continue
-            for c in r.get("top_companies", []):
-                if not c.get("fetch_ok"):
-                    continue
-                dy = c.get("dividend_yield")
-                # [バグ修正] yfinanceが一部銘柄で異常値を返すためバリデーション追加
-                # dividendYield は小数（0.04 = 4%）で返る。30%超は明らかなデータ異常
-                if dy and min_dy <= dy <= 0.30:
-                    pr = c.get("payout_ratio")
-                    # payoutRatio も小数（0.49 = 49%）で返る。2.0超（200%超）は異常
-                    pr_valid = pr if (pr is not None and 0.0 <= pr <= 2.0) else None
-                    pr_s = f"配当性向:{pr_valid*100:.0f}%" if pr_valid is not None else ""
-                    high_div_lines.append(
-                        f"  {c.get('name','')[:14]}: {dy*100:.1f}% {pr_s}"
-                )
-        if high_div_lines:
-            alerts.append({
-                "trigger":  "high_dividend",
-                "title":    f"💰 高配当銘柄 {len(high_div_lines)}社（{min_dy*100:.0f}%以上）",
-                "body":     "\n".join(high_div_lines[:8]),
-                "severity": "info",
-            })
+        _hd = build_high_dividend_alert(cfg, results, sector_results)
+        if _hd:
+            alerts.append(_hd)
 
     # ── ⑧ アナリスト強気推奨アラート（新規） ─────────────────
     if getattr(cfg, "ALERT_ON_STRONG_BUY", True):
@@ -1044,32 +1038,39 @@ def extract_alerts(cfg, results: dict) -> list:
             if c.get("is_negative_risk")
         ] if getattr(cfg, "ALERT_ON_NEGATIVE_RISK", True) else []
 
+        # 2026-09-29: 上位5社（ネガは3社）の名前だけで理由も決算日も無かった。
+        # 決算が近い順に最大10社、判定理由（EPS加速×会社予想の保守度・過去の上振れ）と
+        # 次回決算日を付ける
+        _n = int(getattr(cfg, "ALERT_SURPRISE_TOP_N", 10))
+
+        def _surprise_lines(rows, icon):
+            rows = sorted(rows, key=lambda x: (x.get("days_to_earnings") is None
+                                               or x.get("days_to_earnings") < 0,
+                                               x.get("days_to_earnings") or 0,
+                                               -(x.get("conservatism_score") or 0)))
+            out = []
+            for c in rows[:_n]:
+                d = c.get("days_to_earnings")
+                when = (f"決算 {c['next_earnings']}（あと{d}日）" if c.get("next_earnings") and d is not None and d >= 0
+                        else "次回決算日未取得")
+                out.append(f"  {icon} {str(c.get('name', ''))[:14]}（{c['ticker']}）| {when}")
+                if c.get("surprise_reason"):
+                    out.append(f"      {c['surprise_reason']}")
+            return out
+
         if high_prob:
-            lines = []
-            for c in sorted(high_prob,
-                            key=lambda x: x.get("conservatism_score", 0),
-                            reverse=True)[:5]:
-                lines.append(
-                    f"  🎯 {c.get('name','')[:14]}（{c['ticker']}）"
-                    f" 加速+{c.get('acc_bonus',0):.0f}pt"
-                    f" × 保守{c.get('conservatism_score',0):.0f}pt"
-                )
             alerts.append({
                 "trigger":  "high_prob_surprise",
                 "title":    f"🎯 決算サプライズ高確率候補 {len(high_prob)}社",
-                "body":     "\n".join(lines),
+                "body":     "\n".join(_surprise_lines(high_prob, "🎯")),
                 "severity": "high",
             })
 
         if neg_risk:
-            lines = [
-                f"  🔴 {c.get('name','')[:14]}（{c['ticker']}）"
-                for c in neg_risk[:3]
-            ]
             alerts.append({
                 "trigger":  "negative_surprise_risk",
                 "title":    f"🔴 ネガティブサプライズリスク {len(neg_risk)}社",
-                "body":     "\n".join(lines),
+                "body":     "\n".join(_surprise_lines(neg_risk, "🔴")),
                 "severity": "medium",
             })
      # ── ⑰ [R-3] miss_factor 閾値超え → ルール見直し推奨 ──────
@@ -1901,6 +1902,72 @@ def extract_alerts(cfg, results: dict) -> list:
             alerts.append(build_edinetdb_ingest_alert(ing))
 
     return alerts
+
+
+def collect_high_dividend(cfg, results: dict, sector_results: dict | None = None) -> dict:
+    """高配当銘柄を日米で集める（純関数）。利回りは比率（0.04 = 4%）。"""
+    min_dy = float(getattr(cfg, "ALERT_MIN_DIVIDEND_YIELD", 0.04))
+    max_dy = float(getattr(cfg, "ALERT_MAX_DIVIDEND_YIELD", 0.15))   # 超える値はデータ異常とみなす
+    seen: dict = {}
+
+    def _add(t, name, dy, pr, sector, market):
+        try:
+            dy = float(dy)
+        except (TypeError, ValueError):
+            return
+        if not t or not (min_dy <= dy <= max_dy):
+            return
+        try:
+            pr = float(pr) if pr is not None else None
+        except (TypeError, ValueError):
+            pr = None
+        if pr is not None and not (0.0 <= pr <= 2.0):
+            pr = None
+        if t not in seen or dy > seen[t]["dy"]:
+            seen[t] = {"ticker": t, "name": str(name or t), "dy": dy, "payout": pr,
+                       "sector": sector or "", "market": market}
+
+    for c in ((results.get("screener") or {}).get("candidates") or []):
+        _add(c.get("ticker"), c.get("name"), c.get("dividend_yield"), c.get("payout_ratio"),
+             c.get("sector_name"), "JP")
+    for c in ((results.get("us_screener") or {}).get("candidates") or []):
+        _add(c.get("ticker"), c.get("name"), c.get("div_yield"), c.get("payout_ratio"),
+             c.get("sector"), "US")
+    for code, r in (sector_results or {}).items():
+        if isinstance(r, dict):
+            for c in r.get("top_companies", []) or []:
+                if c.get("fetch_ok"):
+                    _add(c.get("ticker"), c.get("name"), c.get("dividend_yield"),
+                         c.get("payout_ratio"), r.get("sector_name_ja", code), "JP")
+    out = {"JP": [], "US": []}
+    for v in sorted(seen.values(), key=lambda x: -x["dy"]):
+        out[v["market"]].append(v)
+    return out
+
+
+def build_high_dividend_alert(cfg, results: dict, sector_results: dict | None = None):
+    found = collect_high_dividend(cfg, results, sector_results)
+    n_jp, n_us = len(found["JP"]), len(found["US"])
+    if not n_jp and not n_us:
+        return None
+    min_dy = float(getattr(cfg, "ALERT_MIN_DIVIDEND_YIELD", 0.04))
+    lines = []
+    for mk, label, top in (("JP", "日本株", 12), ("US", "米国株", 8)):
+        rows = found[mk]
+        if not rows:
+            continue
+        lines.append(f"  【{label}】{len(rows)}社（上位{min(top, len(rows))}社）")
+        for v in rows[:top]:
+            pr = f" | 配当性向{v['payout']*100:.0f}%" if v["payout"] is not None else ""
+            warn = " ⚠️性向100%超" if v["payout"] is not None and v["payout"] > 1.0 else ""
+            lines.append(f"    {v['name'][:16]}（{v['ticker']}）: {v['dy']*100:.1f}%"
+                         f"{pr} | {v['sector'][:12]}{warn}")
+    return {
+        "trigger":  "high_dividend",
+        "title":    f"💰 高配当銘柄 日本{n_jp}社・米国{n_us}社（{min_dy*100:.0f}%以上）",
+        "body":     "\n".join(lines),
+        "severity": "info",
+    }
 
 
 def build_edinetdb_ingest_alert(ing: dict) -> dict:
