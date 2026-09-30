@@ -1230,7 +1230,7 @@ SECTOR_REPRESENTATIVE_TICKERS = {
     "1029": ["8604.T", "8601.T"],             # 証券: 野村HD・大和証券G
     "1030": ["8766.T", "8725.T", "8630.T"],   # 保険: 東京海上・MS&AD・SOMPO
     "1031": ["8591.T", "8593.T"],             # その他金融: オリックス・三菱HCキャピタル
-    "1033": ["6098.T", "9613.T", "4324.T"],   # サービス: リクルート・NTTデータ・電通
+    "1033": ["6098.T", "4324.T"],   # サービス: リクルート・電通（NTTデータ 9613 は上場廃止で除外）
 }
 
 # ==============================================================
@@ -1541,6 +1541,10 @@ ENABLE_PAID_MEDIA_SEARCH: bool = False
 
 # Step C: 個別株スクリーニング設定
 SCREEN_TOP_N_SECTORS: int   = 7      # スクリーニング対象業種数（スコア上位N）
+# 2026-09-29: 対象を BQ に財務がある全社（約410社）×全業種へ広げる（健太の判断）。
+#   下位業種（BOT_TIER）は従来どおり評価しない。取得は5並列（SCREEN_FETCH_WORKERS）
+SCREEN_EXPAND_UNIVERSE: bool = True
+SCREEN_FETCH_WORKERS: int    = 5
 SCREEN_PER_MAX:       float = 30.0   # PER 上限
 SCREEN_PBR_MAX:       float = 5.0    # PBR 上限
 SCREEN_ROE_MIN:       float = 0.05   # ROE 下限（5% = 0.05）

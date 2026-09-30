@@ -226,6 +226,11 @@ def append_screener_history(cfg, screener_result: dict) -> None:
             if c.get("pass_filters")
         ]
 
+        # 2026-09-29: 対象拡大で通過が200件超になりうるため、総合点の上位だけ残す
+        # （90日保持×全件だとリポジトリが膨らむ。バックテスト・審議キューは上位で足りる）
+        cap = int(getattr(cfg, "SCREENER_HISTORY_MAX_ROWS", 80))
+        passed.sort(key=lambda c: (-(c.get("composite_score") or 0), -(c.get("base_score") or 0)))
+        passed = passed[:cap]
         history[today] = passed
 
         # 古いエントリを削除（HISTORY_RETAIN_DAYS 超過分）

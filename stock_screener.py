@@ -56,16 +56,16 @@ from typing import Optional
 
 JP_SECTOR_TICKERS = {
     "1001": ["1332.T", "1301.T", "1377.T"],
-    "1002": ["1662.T", "1605.T", "1642.T"],
+    "1002": ["1662.T", "1605.T"],
     "1003": ["1802.T", "1803.T", "1812.T", "1808.T", "1820.T"],
     "1004": ["2002.T", "2269.T", "2282.T", "2503.T", "2801.T",
              "2802.T", "2914.T"],
     "1005": ["3401.T", "3402.T", "3103.T"],
-    "1006": ["3861.T", "3893.T", "3941.T"],
+    "1006": ["3861.T", "3941.T"],
     "1007": ["4004.T", "4005.T", "4063.T", "4183.T", "4188.T", "4208.T"],
     "1008": ["4151.T", "4502.T", "4503.T", "4506.T", "4507.T",
              "4519.T", "4523.T", "4568.T"],
-    "1009": ["5001.T", "5002.T", "5019.T"],
+    "1009": ["5019.T"],
     "1010": ["5108.T", "5101.T"],
     "1011": ["5201.T", "5202.T", "5233.T", "5301.T"],
     "1012": ["5401.T", "5406.T", "5411.T", "5713.T"],
@@ -73,10 +73,10 @@ JP_SECTOR_TICKERS = {
     "1014": ["5631.T", "5901.T", "3436.T"],
     "1015": ["6273.T", "6301.T", "6302.T", "6305.T", "6326.T",
              "6361.T", "6366.T", "7011.T"],
-    "1016": ["6501.T", "6502.T", "6504.T", "6594.T", "6645.T",
+    "1016": ["6501.T", "6504.T", "6594.T", "6645.T",
              "6674.T", "6701.T", "6702.T", "6723.T", "6752.T",
              "6758.T", "6762.T", "6857.T", "8035.T"],
-    "1017": ["7201.T", "7202.T", "7203.T", "7205.T", "7211.T",
+    "1017": ["7201.T", "7202.T", "7203.T", "7211.T",
              "7261.T", "7267.T", "7269.T", "7270.T"],
     "1018": ["4902.T", "7733.T", "7741.T", "7731.T", "6146.T"],
     "1019": ["7832.T", "7974.T", "9684.T", "6460.T"],
@@ -85,15 +85,15 @@ JP_SECTOR_TICKERS = {
     "1022": ["9101.T", "9104.T", "9107.T"],
     "1023": ["9202.T", "9201.T"],
     "1024": ["9301.T", "9064.T"],
-    "1025": ["4307.T", "4704.T", "9613.T", "9432.T", "9433.T",
+    "1025": ["4307.T", "4704.T", "9432.T", "9433.T",
              "9434.T", "9984.T", "3659.T"],
     "1026": ["2768.T", "8001.T", "8002.T", "8031.T", "8053.T", "8058.T"],
-    "1027": ["2651.T", "2678.T", "3382.T", "7186.T", "8267.T",
+    "1027": ["2678.T", "3382.T", "7186.T", "8267.T",
              "9843.T", "9983.T"],
     "1028": ["8306.T", "8308.T", "8309.T", "8316.T", "8411.T"],
     "1029": ["8601.T", "8604.T", "8616.T"],
     "1030": ["8725.T", "8750.T", "8766.T"],
-    "1031": ["8515.T", "8566.T", "8572.T", "8591.T"],
+    "1031": ["8566.T", "8572.T", "8591.T"],
     "1032": ["3003.T", "8801.T", "8802.T", "8804.T", "8830.T"],
     "1033": ["2432.T", "4661.T", "6098.T", "9602.T", "9735.T"],
 }
@@ -1432,11 +1432,20 @@ def _screen_sector(sector_code: str, sector_name: str,
     raw_data_list = []
     print(f"    [{sector_code}] {sector_name}: {len(tickers)}銘柄チェック中...")
 
-    for ticker in tickers:
-        data = _fetch_ticker_data(ticker)
-        if data is not None:
-            raw_data_list.append((ticker, data))
-        time.sleep(0.2)
+    # 2026-09-29: 対象を約460銘柄へ広げたため、1銘柄ずつ（0.5秒/銘柄）から
+    # 5並列に（米国株スクリーナーと同じ）。並び順は入力順を保つ。
+    workers = max(1, int(getattr(cfg, "SCREEN_FETCH_WORKERS", 5)))
+    if workers > 1 and len(tickers) > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=workers) as _pool:
+            fetched = list(_pool.map(_fetch_ticker_data, tickers))
+        raw_data_list = [(t, d) for t, d in zip(tickers, fetched) if d is not None]
+    else:
+        for ticker in tickers:
+            data = _fetch_ticker_data(ticker)
+            if data is not None:
+                raw_data_list.append((ticker, data))
+            time.sleep(0.2)
 
     # 業種平均出来高算出（S-3: 未発見スコア用）
     vols = [d.get("avg_volume", 0) for (_, d) in raw_data_list if d.get("avg_volume")]
@@ -2079,6 +2088,24 @@ def run_stock_screener(cfg, sector_results: dict,
             pass
 
     top_n_sectors = getattr(cfg, "SCREEN_TOP_N_SECTORS", 5)
+    # 2026-09-29: 対象を「業種代表の数銘柄×上位7業種」から「BQに財務がある全社×全業種」へ
+    # 広げる（健太の判断・Actionsの空き時間の活用）。下位業種（BOT_TIER）は従来どおり評価しない
+    bq_sector_tickers: dict = {}
+    if getattr(cfg, "SCREEN_EXPAND_UNIVERSE", False):
+        try:
+            from edinet_bq_client import EDINETBQClient
+            by_ind = EDINETBQClient().get_tickers_with_financials_by_industry()
+            name_to_code = {v.get("name_ja"): k
+                            for k, v in (getattr(cfg, "JAPAN_SECTORS", {}) or {}).items()}
+            for ind, ts in by_ind.items():
+                code = name_to_code.get(ind)
+                if code:
+                    bq_sector_tickers.setdefault(code, []).extend(ts)
+            top_n_sectors = max(top_n_sectors, len(sector_results))
+            print(f"  📚 対象拡大: BQに財務がある {sum(len(v) for v in bq_sector_tickers.values())}社"
+                  f"（{len(bq_sector_tickers)}業種）を業種の銘柄一覧に追加")
+        except Exception as e:
+            print(f"  ⚠️  対象拡大の取得失敗（従来の銘柄一覧で続行）: {str(e)[:80]}")
 
     if not sector_results:
         print("  ⚠️  sector_results が空のためスクリーニングをスキップ")
@@ -2162,7 +2189,8 @@ def run_stock_screener(cfg, sector_results: dict,
             continue
         sector_score = sec_data.get("composite_score", 50.0)
         sector_name  = sec_data.get("sector_name_ja", code)
-        tickers      = JP_SECTOR_TICKERS.get(code, [])
+        tickers      = list(dict.fromkeys(
+            JP_SECTOR_TICKERS.get(code, []) + bq_sector_tickers.get(code, [])))
 
         if not tickers:
             print(f"    [{code}] {sector_name}: 銘柄マスタなし → スキップ")

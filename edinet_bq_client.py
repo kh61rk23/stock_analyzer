@@ -1070,6 +1070,27 @@ class EDINETBQClient:
             return {}
         return out
 
+    def get_tickers_with_financials_by_industry(self) -> dict:
+        """BQ に財務がある会社を {東証33業種名: [ticker, ...]} で返す（1クエリ・2026-09-29）。
+
+        スクリーナーの対象を「業種代表の数銘柄」から「財務がBQにある全社（約410社）」へ
+        広げるために使う（健太の判断）。
+        """
+        sql = f"""
+        SELECT DISTINCT c.industry, f.company_code
+        FROM `{self.dataset}.financials` f
+        JOIN `{self.dataset}.company` c USING (edinet_code)
+        WHERE f.company_code IS NOT NULL AND c.industry IS NOT NULL
+          AND NOT IFNULL(c.is_delisted, FALSE)
+        ORDER BY c.industry, f.company_code
+        """
+        out: dict = {}
+        for row in self.client.query(sql).result():
+            code = _fin_code(row["company_code"])
+            if code:
+                out.setdefault(str(row["industry"]), []).append(f"{code}.T")
+        return out
+
     def get_tickers_by_sector_bulk(self, limit: int = 10) -> dict:
         """
         全業種の ticker を1クエリでまとめて返す（{sector_code: [ticker, ...]}）。
