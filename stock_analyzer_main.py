@@ -3729,10 +3729,12 @@ def run_all_tasks(mode: str = "all") -> dict:
             if _cm:
                 cm_result = _cm.run_congress_monitor(cfg, results)
                 results["congress_monitor"] = cm_result or {}
+                _cmr = cm_result or {}
                 logger.add(
-                    "congress_monitor", "success",
-                    f"法案{(cm_result or {}).get('bill_count', 0)}件 "
-                    f"| ブースト{len((cm_result or {}).get('sector_boosts', {}))}業種",
+                    "congress_monitor",
+                    "success" if _cmr.get("fetched_count") else "warn",
+                    f"取得{_cmr.get('fetched_count', 0)}件 / 影響法案{_cmr.get('bill_count', 0)}件 "
+                    f"| ブースト{len(_cmr.get('sector_boosts', {}))}業種",
                 )
         except Exception as _cme:
             logger.add("congress_monitor", "error", str(_cme)[:100])

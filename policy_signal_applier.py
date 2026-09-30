@@ -717,7 +717,12 @@ def run_policy_signal_applier(
             _ttl_months = int(getattr(cfg,
                 "POLICY_STRUCTURAL_CACHE_TTL_MONTHS", 12))
 
-            # 既存の congress エントリを更新（同日分は上書き）
+            # 2026-09-29: 議会由来の行は毎回の全件取得で丸ごと入れ替える。業種単位の
+            # 上書きだと、消えた業種（RSS の偽法案由来など）が12か月残り続けた
+            if congress_result.get("fetched_count"):
+                _structural["signals"] = [
+                    s for s in _structural.get("signals", [])
+                    if s.get("source") != "congress_monitor"]
             _existing = {
                 s.get("sector_code"): i
                 for i, s in enumerate(_structural.get("signals", []))

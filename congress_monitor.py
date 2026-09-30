@@ -44,7 +44,7 @@
 from __future__ import annotations
 
 import json
-import time
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -77,11 +77,6 @@ _DEFAULT_L4_MAX_ADJ       = 25.0
 # Congress.gov API エンドポイント
 _CONGRESS_API_BASE = "https://api.congress.gov/v3"
 
-# フォールバック用キーワード検索対象 RSS
-_FALLBACK_RSS_URLS = [
-    "https://www.reuters.com/news/rss/us",
-    "https://feeds.bloomberg.com/politics/news.rss",
-]
 
 
 def _get_stage_multiplier(cfg) -> dict:
@@ -130,7 +125,9 @@ def _load_bill_cache(cfg) -> dict:
         bills = data.get("bills", {})
         cleaned = {
             bid: b for bid, b in bills.items()
-            if not (b.get("stage") == "signed"
+            # 2026-09-29: RSS フォールバックはニュース見出しを「法案」として保存していた
+            if b.get("source") != "rss_fallback" and not str(bid).startswith("RSS_")
+            and not (b.get("stage") == "signed"
                     and _safe_parse_date(b.get("last_updated", ""))
                     < cutoff)
         }
@@ -167,8 +164,8 @@ def _safe_parse_date(s: str) -> datetime:
 def _fetch_recent_bills(
     api_key:  str,
     congress: int = 119,   # 119th Congress (2025-2027)
-    limit:    int = 20,
-    timeout:  int = 15,
+    limit:    int = 250,   # API上限。直近更新20件だけでは改名法案ばかりで業種に効く法案が入らない
+    timeout:  int = 30,
 ) -> list[dict]:
     """
     Congress.gov API から最近更新された法案を取得する。
@@ -177,8 +174,9 @@ def _fetch_recent_bills(
         [{"bill_id": str, "title": str, "latest_action": str,
           "stage": str, "sponsor": str, "introduced_date": str}, ...]
     """
-    if not api_key:
-        return []
+    # 2026-09-29: キーが無くても api.data.gov の試用キー（DEMO_KEY・1時間30回/1日50回）
+    # で公式APIを呼べる。週1回・1リクエストなので十分。
+    api_key = api_key or "DEMO_KEY"
 
     url = (
         f"{_CONGRESS_API_BASE}/bill/{congress}"
@@ -278,7 +276,7 @@ def _classify_bill_type(title: str, action: str, cfg) -> list[str]:
             "tariff", "steel", "aluminum", "trade remedy",
         ],
         "pharma_pricing": [
-            "drug price", "prescription", "medicare negotiat",
+            "drug price", "prescription", "medicare negotiation",
             "pharmaceutical price",
         ],
         "defense_spending": [
@@ -298,7 +296,9 @@ def _classify_bill_type(title: str, action: str, cfg) -> list[str]:
     for bill_type, keywords in _BILL_KEYWORDS.items():
         if bill_type not in impact_map:
             continue
-        if any(kw in text for kw in keywords):
+        # 2026-09-29: 部分一致だと "green"（Greenville）・"fab"（fabric）・
+        # "wind"（window）等で誤爆する。単語として一致した場合だけ数える
+        if any(re.search(r"\b" + re.escape(kw) + r"s?\b", text) for kw in keywords):
             matched.append(bill_type)
 
     return matched
@@ -308,69 +308,8 @@ def _classify_bill_type(title: str, action: str, cfg) -> list[str]:
 # BLOCK 5: フォールバック RSS 検索
 # ==============================================================
 
-def _fetch_from_rss_fallback(cfg) -> list[dict]:
-    """
-    Congress.gov API が使えない場合のフォールバック。
-    ロイター等の RSS から議会関連ニュースをキーワード検索する。
+# （RSS フォールバックは 2026-09-29 に廃止。ニュース見出しを法案として扱っていた）
 
-    Returns:
-        [{"bill_id": str, "title": str, "stage": str, ...}]
-    """
-    items = []
-    try:
-        import feedparser
-    except ImportError:
-        return items
-
-    impact_map = _get_impact_map(cfg)
-
-    for url in _FALLBACK_RSS_URLS:
-        try:
-            parsed = feedparser.parse(url)
-            for entry in parsed.entries[:20]:
-                title   = getattr(entry, "title",   "") or ""
-                summary = getattr(entry, "summary", "") or ""
-                text    = f"{title} {summary}".lower()
-
-                # 議会関連キーワード検出
-                if not any(kw in text for kw in [
-                    "congress", "senate", "house", "bill",
-                    "legislation", "law", "vote",
-                ]):
-                    continue
-
-                # 法案種別判定
-                bill_types = _classify_bill_type(title, summary, cfg)
-                if not bill_types:
-                    continue
-
-                # ステージ推定
-                stage = _infer_stage_from_action(text)
-
-                bill_id = f"RSS_{abs(hash(title))}"
-                items.append({
-                    "bill_id":         bill_id,
-                    "title":           title[:120],
-                    "latest_action":   summary[:200],
-                    "stage":           stage,
-                    "sponsor":         "",
-                    "introduced_date": "",
-                    "last_updated":    datetime.now().strftime("%Y-%m-%d"),
-                    "url":             getattr(entry, "link", ""),
-                    "bill_types":      bill_types,
-                    "source":          "rss_fallback",
-                })
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"    ⚠️  [congress] RSS取得失敗 ({url[:40]}): "
-                  f"{str(e)[:40]}")
-
-    return items
-
-
-# ==============================================================
-# BLOCK 6: ステージ変化検出・スコア計算
-# ==============================================================
 
 def _detect_stage_changes(
     new_bills:   list[dict],
@@ -430,29 +369,29 @@ def _calc_sector_boosts(
     impact_map       = _get_impact_map(cfg)
     stage_multiplier = _get_stage_multiplier(cfg)
     l4_max           = _get_l4_max(cfg)
-    boosts: dict     = {}
-
+    # 2026-09-29 修正:
+    #  ① 逆風の base_score は config でマイナス定義（例: tariff_steel=-10）なのに、
+    #     さらに headwind で符号反転しており、逆風法案が追い風（プラス）になっていた
+    #  ② 同じ種別の法案を本数分足していたため、委員会段階の小さな法案が20本あると
+    #     業種加点が上限25点に張り付いた。種別ごとに「最も進んだ1本」の効果だけを使う
+    strongest: dict = {}   # (sector, bill_type) -> adj
     for bill in bills:
         stage      = bill.get("stage", "introduced")
         multiplier = stage_multiplier.get(stage, 0.20)
-        bill_types = bill.get("bill_types", [])
-
-        for bt in bill_types:
+        for bt in bill.get("bill_types", []):
             impact = impact_map.get(bt, {})
-            sectors    = impact.get("sectors", [])
-            base_score = float(impact.get("base_score", 0.0))
-            direction  = impact.get("direction", "tailwind")
-
-            adj = base_score * multiplier
-            if direction == "headwind":
+            base   = abs(float(impact.get("base_score", 0.0)))
+            adj    = base * multiplier
+            if impact.get("direction", "tailwind") == "headwind":
                 adj = -adj
+            for sc in impact.get("sectors", []):
+                key = (sc, bt)
+                if abs(adj) > abs(strongest.get(key, 0.0)):
+                    strongest[key] = adj
 
-            for sc in sectors:
-                boosts[sc] = round(
-                    max(-l4_max, min(l4_max,
-                                    boosts.get(sc, 0.0) + adj)), 2
-                )
-
+    boosts: dict = {}
+    for (sc, _bt), adj in strongest.items():
+        boosts[sc] = round(max(-l4_max, min(l4_max, boosts.get(sc, 0.0) + adj)), 2)
     return boosts
 
 
@@ -486,27 +425,21 @@ def run_congress_monitor(cfg, results: Optional[dict] = None) -> dict:
     # ── 法案取得 ─────────────────────────────────────────────
     raw_bills: list[dict] = []
 
-    if api_key:
-        print("    🔑 [congress] Congress.gov API で取得中...")
-        raw_bills = _fetch_recent_bills(
-            api_key  = api_key,
-            congress = int(getattr(cfg, "CONGRESS_SESSION", 119)),
-        )
-        # 法案種別を付与
-        for b in raw_bills:
-            b["bill_types"] = _classify_bill_type(
-                b.get("title", ""),
-                b.get("latest_action", ""),
-                cfg,
-            )
-        # 影響ある法案のみ残す
-        raw_bills = [b for b in raw_bills if b.get("bill_types")]
-    else:
-        print("    ⚠️  [congress] CONGRESS_API_KEY 未設定 → "
-              "RSS フォールバックで取得")
-        raw_bills = _fetch_from_rss_fallback(cfg)
+    # 2026-09-29: キー未設定時は RSS（Reuters=401 で死亡・Bloomberg=政治ニュース）を
+    # 「法案」として扱い、台湾の防衛予算やモロッコの道路命名の見出しから業種加点を
+    # 出していた。常に公式APIを使う（キーが無ければ試用キー）。
+    print(f"    🔑 [congress] Congress.gov API で取得中"
+          f"（{'登録キー' if api_key else '試用キー DEMO_KEY'}）...")
+    fetched = _fetch_recent_bills(
+        api_key  = api_key,
+        congress = int(getattr(cfg, "CONGRESS_SESSION", 119)),
+    )
+    for b in fetched:
+        b["bill_types"] = _classify_bill_type(
+            b.get("title", ""), b.get("latest_action", ""), cfg)
+    raw_bills = [b for b in fetched if b.get("bill_types")]
 
-    print(f"    📋 [congress] 影響法案: {len(raw_bills)}件")
+    print(f"    📋 [congress] 取得{len(fetched)}件 / 影響法案: {len(raw_bills)}件")
 
     # ── ステージ変化検出 ──────────────────────────────────────
     stage_changes = _detect_stage_changes(raw_bills, cached_bills)
@@ -545,6 +478,8 @@ def run_congress_monitor(cfg, results: Optional[dict] = None) -> dict:
     )
 
     return {
+        "bill_count":    len(raw_bills),
+        "fetched_count": len(fetched),
         "bills":         list(raw_bills[:20]),
         "sector_boosts": sector_boosts,
         "new_bills":     new_bills[:10],
