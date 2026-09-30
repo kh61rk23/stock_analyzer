@@ -248,7 +248,8 @@ class TestWeeklyWiring:
             {"ticker": "8306.T", "composite_score": 60},                                # 価格なし
         ]}
         got = {r["ticker"] for r in m.extract_backtest_records(history)}
-        assert got == {"6501.T", "7203.T"}
+        # 2026-09-29: 価格なしの行も残す（run_backtester がその日の終値で補う）
+        assert got == {"6501.T", "7203.T", "8306.T"}
 
     def test_screener_history_records_entry_price(self, tmp_path):
         import json as _json

@@ -206,21 +206,24 @@ def build_evaluation_batch(
             continue
 
         for c in candidates:
-            if not isinstance(c, dict) or not c.get("pass_filters"):
+            # 2026-09-29: screener_history には通過銘柄しか保存されず、pass_filters 欄は
+            # 9/21 以降しか無い。欄の無い過去行と current_price の無い行を落としていたため
+            # 毎週「有効レコード0件」だった。明示的に False の行だけ除外し、価格は終値で補う。
+            if not isinstance(c, dict) or c.get("pass_filters") is False:
                 continue
             ticker    = c.get("ticker", "")
             price     = c.get("current_price") or c.get("entry_price")
             score     = c.get("composite_score", 0) or 0
             sector    = c.get("sector_code", "")
             m_signals = c.get("macro_signals", [])
-            if not ticker or not price:
+            if not ticker:
                 continue
             exit_dt   = entry_dt + timedelta(days=hold_days)
             records.append({
                 "ticker":          ticker,
                 "entry_date":      date_str,
                 "exit_date":       exit_dt.strftime("%Y-%m-%d"),
-                "entry_price":     float(price),
+                "entry_price":     float(price) if price else None,
                 "composite_score": float(score),
                 "sector_code":     sector,
                 "macro_signals":   m_signals,
@@ -728,9 +731,18 @@ def run_self_evaluator(cfg) -> dict:
     bm_rets     = []
     n_success   = 0
 
+    # 2026-09-29: 1件ごとに yfinance を2回呼んでいた（約800件で1,600回）。
+    # 銘柄ごとに期間全体を1回で取り、取得時点・出口・日経平均を同じデータから引く。
+    from backtester import fetch_close_map, fill_prices, _price_window
+    _start, _end = _price_window(records)
+    _bench_t = BENCHMARK_TICKER
+    _closes = fetch_close_map({r["ticker"] for r in records} | {_bench_t}, _start, _end)
+    fill_prices(records, _closes, _closes.get(_bench_t, {}))
+
     for r in records:
-        ret = _fetch_return(r["ticker"], r["entry_date"], r["exit_date"])
-        bm  = _fetch_benchmark_return(r["entry_date"], r["exit_date"])
+        ep, xp = r.get("entry_price"), r.get("exit_price")
+        ret = round((xp - ep) / ep * 100, 3) if ep and xp else None
+        bm  = r.get("benchmark_return")
         bm_rets.append(bm or 0)
         if ret is None:
             continue
@@ -781,6 +793,9 @@ def run_self_evaluator(cfg) -> dict:
     # ── Wave 7: Pearl バックテスト本格評価 ──────────────────────
     # Pearl / 潜伏Pearl の的中率を pearl_backtest_log.json に蓄積する
     pearl_bt_result: dict = {}
+    # 2026-09-29: Pearl 条件に当たらないと bt_log が未定義のまま下の戻り値で参照され
+    # UnboundLocalError になっていた（レコード0件で手前で抜けていたため未発覚）
+    bt_log: dict = {}
     try:
         if getattr(cfg, "ENABLE_LATENT_PEARL_MANAGER", False) or \
            any(r.get("pearl_tier") for r in evaluated):

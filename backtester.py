@@ -139,14 +139,17 @@ def extract_backtest_records(
             ticker = c.get("ticker", "")
             price  = c.get("current_price")
             score  = c.get("composite_score", 0) or 0
-            if not ticker or not price:
+            # 2026-09-29: current_price は 9/21 以降しか保存されておらず、28日保有の
+            # 評価が 10/19 まで毎週「レコード不足(0件)」だった。無い行は None のまま
+            # 残し、run_backtester がその日の終値で補う。
+            if not ticker:
                 continue
 
             exit_dt = entry_dt + timedelta(days=hold_days)
             records.append({
                 "ticker":          ticker,
                 "entry_date":      date_str,
-                "entry_price":     float(price),
+                "entry_price":     float(price) if price else None,
                 "exit_date":       exit_dt.strftime("%Y-%m-%d"),
                 "composite_score": float(score),
                 "cluster_phase_bonus": float(c.get("cluster_phase_bonus", 0) or 0),
@@ -159,6 +162,62 @@ def extract_backtest_records(
 # ==============================================================
 # BLOCK 2: 出口価格・ベンチマーク取得
 # ==============================================================
+
+def fetch_close_map(tickers, start: str, end: str) -> dict:
+    """{ticker: {"YYYY-MM-DD": 終値}} を銘柄ごとに1回の取得で返す（2026-09-29）。
+
+    以前は評価レコード1件ごとに yfinance を呼んでいた（自己評価は1件2回）。
+    同じ銘柄・同じ期間を何百回も取り直さないよう、期間全体を1回で取る。
+    """
+    try:
+        import yf_cache as yf  # type: ignore
+    except ImportError:
+        return {}
+    out: dict = {}
+    for t in sorted(set(tickers)):
+        try:
+            hist = yf.Ticker(t).history(start=start, end=end, auto_adjust=True)
+            if hist is None or hist.empty:
+                continue
+            idx = hist.index.tz_localize(None) if getattr(hist.index, "tz", None) else hist.index
+            out[t] = {d.strftime("%Y-%m-%d"): float(v)
+                      for d, v in zip(idx, hist["Close"]) if v == v}
+            time.sleep(FETCH_DELAY)
+        except Exception:
+            continue
+    return out
+
+
+def price_on(closes: dict, date_str: str, forward_days: int = 5) -> Optional[float]:
+    """指定日かそれ以降の最初の営業日の終値（純関数）。"""
+    if not closes:
+        return None
+    dt = datetime.strptime(date_str, "%Y-%m-%d")
+    for off in range(forward_days):
+        v = closes.get((dt + timedelta(days=off)).strftime("%Y-%m-%d"))
+        if v:
+            return v
+    return None
+
+
+def fill_prices(records: list, closes: dict, bench: dict) -> None:
+    """entry_price の欠け・exit_price・同期間のベンチマークを埋める（純関数）。"""
+    for r in records:
+        c = closes.get(r["ticker"], {})
+        if not r.get("entry_price"):
+            r["entry_price"] = price_on(c, r["entry_date"])
+            r["entry_price_source"] = "close"
+        r["exit_price"] = price_on(c, r["exit_date"])
+        b0, b1 = price_on(bench, r["entry_date"]), price_on(bench, r["exit_date"])
+        r["benchmark_return"] = round((b1 - b0) / b0 * 100, 3) if b0 and b1 else None
+
+
+def _price_window(records: list) -> tuple[str, str]:
+    lo = min(r["entry_date"] for r in records)
+    hi = max(r["exit_date"] for r in records)
+    return ((datetime.strptime(lo, "%Y-%m-%d") - timedelta(days=5)).strftime("%Y-%m-%d"),
+            (datetime.strptime(hi, "%Y-%m-%d") + timedelta(days=7)).strftime("%Y-%m-%d"))
+
 
 def _fetch_exit_prices(records: list) -> dict:
     """
@@ -309,8 +368,8 @@ def run_backtest_analysis(records: list, exit_prices: dict) -> dict:
 
     for r in records:
         ticker   = r["ticker"]
-        exit_p   = (exit_prices.get(ticker) or {}).get(r["exit_date"])
-        entry_p  = r["entry_price"]
+        exit_p   = r.get("exit_price") or (exit_prices.get(ticker) or {}).get(r["exit_date"])
+        entry_p  = r.get("entry_price") or 0
 
         if not exit_p or entry_p <= 0:
             missing += 1
@@ -318,8 +377,9 @@ def run_backtest_analysis(records: list, exit_prices: dict) -> dict:
 
         ret = round((exit_p - entry_p) / entry_p * 100, 3)
 
-        # ベンチマーク（この期間のみ）
-        bm = _fetch_benchmark_return(r["entry_date"], r["exit_date"])
+        # ベンチマーク（この期間のみ）。fill_prices 済みならそれを使う（再取得しない）
+        bm = (r["benchmark_return"] if "benchmark_return" in r
+              else _fetch_benchmark_return(r["entry_date"], r["exit_date"]))
         bm_rets.append(bm or 0)
 
         evaluated.append({
@@ -533,9 +593,16 @@ def run_backtester(cfg) -> dict:
 
     print(f"    対象: {len(records)}レコード（{HOLD_DAYS}日ホールド）")
 
-    # 出口価格取得
-    print("    出口価格取得中...")
-    exit_prices = _fetch_exit_prices(records)
+    # 価格取得（銘柄ごとに1回。取得時点の価格が無い過去分はその日の終値で補う）
+    start, end = _price_window(records)
+    tickers = {r["ticker"] for r in records}
+    print(f"    価格取得中... {len(tickers)}銘柄 × 1回（{start}〜{end}）")
+    closes = fetch_close_map(tickers | {BENCHMARK_TICKER}, start, end)
+    fill_prices(records, closes, closes.get(BENCHMARK_TICKER, {}))
+    n_filled = sum(1 for r in records if r.get("entry_price_source") == "close")
+    if n_filled:
+        print(f"    取得時点の価格を終値で補完: {n_filled}件")
+    exit_prices = {}
 
     # バックテスト分析
     bt_result = run_backtest_analysis(records, exit_prices)
