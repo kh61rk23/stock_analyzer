@@ -52,6 +52,7 @@ def test_high_dividend_scans_all_candidates():
 def test_surprise_flags_use_todays_analysis_and_give_reason():
     cands = [{"ticker": "6504.T", "acc_bonus": 8.0}, {"ticker": "Z.T", "acc_bonus": -9.0}]
     cache = {"6504.T": {"conservatism_score": 75, "avg_beat_pct": 17.8, "beat_count": 3,
+                        "profit_accel": {"q_yoy": 0.4, "annual_yoy": 0.1, "accel": 0.3},
                         "consecutive_pos": 3, "next_earnings": "2026-10-29"},
              "Z.T": {"conservatism_score": 20, "avg_beat_pct": -8.0, "beat_count": 0,
                      "consecutive_neg": 2, "next_earnings": None}}
@@ -66,8 +67,8 @@ def test_surprise_flags_use_todays_analysis_and_give_reason():
 
 def test_earnings_cache_is_per_ticker(tmp_path):
     cfg = types.SimpleNamespace(DATA_DIR=str(tmp_path))
-    es._save_cache(cfg, {"A": {"analyzed_at": "2026-09-28T10:00:00"},
-                         "B": {"analyzed_at": "2026-08-01T10:00:00"}})
+    es._save_cache(cfg, {"A": {"analyzed_at": "2026-09-28T10:00:00", "profit_accel": None},
+                         "B": {"analyzed_at": "2026-08-01T10:00:00", "profit_accel": None}})
     got = es._load_cache(cfg, max_age_days=10 ** 4)
     assert set(got) == {"A", "B"}
     assert "B" not in es._load_cache(cfg), "7日より古い銘柄は取り直す"

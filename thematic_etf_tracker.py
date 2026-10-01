@@ -58,9 +58,10 @@ THEME_DEFINITIONS = [
         "name_en":  "Quantum Computing",
         "etfs":     ["QTUM"],
         "arxiv_keywords": [
-            "quantum computing", "quantum algorithm", "qubit",
-            "quantum supremacy", "quantum error correction",
+            "quantum computing", "quantum computer", "qubit",
+            "quantum error correction", "quantum algorithm",
         ],
+        "arxiv_api_cats": ["quant-ph"],
         "arxiv_categories": ["quant-ph", "cs.ET"],
     },
     {
@@ -69,9 +70,11 @@ THEME_DEFINITIONS = [
         "name_en":  "Uranium & Nuclear",
         "etfs":     ["URA", "NLR"],
         "arxiv_keywords": [
-            "nuclear energy", "uranium", "small modular reactor", "SMR",
-            "nuclear fusion", "fission reactor",
+            "nuclear reactor", "small modular reactor", "nuclear power plant",
+            "nuclear fuel", "uranium enrichment", "fusion reactor", "nuclear power",
         ],
+        "arxiv_api_cats": ["nucl-ex", "nucl-th", "physics.plasm-ph", "physics.app-ph",
+                           "physics.ins-det", "physics.soc-ph", "eess.SY"],
         "arxiv_categories": ["physics.app-ph"],
     },
     {
@@ -80,9 +83,11 @@ THEME_DEFINITIONS = [
         "name_en":  "Lithium & Battery",
         "etfs":     ["LIT"],
         "arxiv_keywords": [
-            "lithium battery", "lithium ion", "solid state battery",
-            "battery technology", "energy storage",
+            "lithium-ion battery", "lithium battery", "solid-state battery",
+            "solid-state electrolyte", "battery cathode", "sodium-ion battery",
         ],
+        "arxiv_api_cats": ["cond-mat.mtrl-sci", "physics.chem-ph", "physics.app-ph",
+                           "cond-mat.soft", "eess.SY"],
         "arxiv_categories": ["cond-mat.mtrl-sci"],
     },
     {
@@ -91,9 +96,12 @@ THEME_DEFINITIONS = [
         "name_en":  "Copper & Rare Metals",
         "etfs":     ["COPX", "REMX"],
         "arxiv_keywords": [
-            "copper demand", "rare earth", "critical minerals",
-            "electric vehicle materials", "battery metals",
+            "critical minerals", "critical raw materials", "rare earth supply",
+            "rare earth elements", "copper mining", "mineral exploration",
+            "mineral deposits", "critical metals", "copper supply", "mining industry",
         ],
+        "arxiv_api_cats": ["physics.geo-ph", "econ.GN", "q-fin.GN", "physics.soc-ph",
+                           "cond-mat.mtrl-sci"],
         "arxiv_categories": ["cond-mat.mtrl-sci"],
     },
     {
@@ -102,9 +110,11 @@ THEME_DEFINITIONS = [
         "name_en":  "Space & Aerospace",
         "etfs":     ["UFO", "ARKX"],
         "arxiv_keywords": [
-            "satellite", "space exploration", "rocket propulsion",
-            "space economy", "low earth orbit",
+            "satellite constellation", "launch vehicle", "rocket engine",
+            "spacecraft", "low earth orbit", "space mission",
         ],
+        "arxiv_api_cats": ["astro-ph.IM", "physics.space-ph", "eess.SP", "eess.SY",
+                           "cs.NI", "cs.RO"],
         "arxiv_categories": ["astro-ph.IM"],
     },
     {
@@ -114,8 +124,9 @@ THEME_DEFINITIONS = [
         "etfs":     ["CIBR"],
         "arxiv_keywords": [
             "cybersecurity", "cyber attack", "intrusion detection",
-            "ransomware", "zero-day", "adversarial attack",
+            "ransomware", "malware", "vulnerability detection",
         ],
+        "arxiv_api_cats": ["cs.CR"],
         "arxiv_categories": ["cs.CR"],
     },
     {
@@ -124,9 +135,10 @@ THEME_DEFINITIONS = [
         "name_en":  "AI & Robotics",
         "etfs":     ["BOTZ"],
         "arxiv_keywords": [
-            "large language model", "transformer", "deep learning",
-            "generative AI", "reinforcement learning", "robotics",
+            "large language model", "generative AI", "foundation model",
+            "AI agent", "robot learning", "humanoid robot",
         ],
+        "arxiv_api_cats": ["cs.AI", "cs.LG", "cs.CL", "cs.RO", "cs.CV"],
         "arxiv_categories": ["cs.AI", "cs.LG", "cs.RO"],
     },
     {
@@ -135,9 +147,11 @@ THEME_DEFINITIONS = [
         "name_en":  "Hydrogen & Clean Energy",
         "etfs":     ["ICLN"],
         "arxiv_keywords": [
-            "hydrogen energy", "fuel cell", "green hydrogen",
-            "electrolysis", "renewable energy storage",
+            "green hydrogen", "hydrogen production", "water electrolysis",
+            "fuel cell", "hydrogen storage", "electrolyzer",
         ],
+        "arxiv_api_cats": ["cond-mat.mtrl-sci", "physics.chem-ph", "physics.app-ph",
+                           "eess.SY", "physics.soc-ph"],
         "arxiv_categories": ["cond-mat.mtrl-sci", "physics.app-ph"],
     },
 ]
@@ -558,18 +572,32 @@ _ARXIV_API = "https://export.arxiv.org/api/query"
 _ARXIV_THEME_CACHE = "arxiv_theme_counts.json"
 _ARXIV_LAG_DAYS = 3        # 直近数日は登録が遅れるので集計から外す
 _ARXIV_SMOOTH = 5          # 少数件の伸び率が極端にならないよう分母分子に足す
+_ARXIV_MIN_SAMPLE = 40     # 直近+前期の合計がこれ未満なら点数を中立へ寄せる（2026-10-01）
 
 
-def _arxiv_query(keywords: list, start: str, end: str, n: int = 1):
+def build_arxiv_query(keywords: list, cats: list, start: str, end: str) -> str:
+    """題名・要旨の語句一致 × 分野カテゴリ × 投稿日で絞る検索式（純関数）。
+
+    2026-10-01: 旧版は all:（著者・コメント欄も含む全文）で広い語（SMR, energy storage,
+    transformer 等）を引いており、ウランに AI 評価の論文、電池に AutoML の論文が混ざっていた。
+    """
+    kw = " OR ".join(f'ti:"{k}" OR abs:"{k}"' for k in keywords)
+    q = f"({kw})"
+    if cats:
+        q += " AND (" + " OR ".join(f"cat:{c}" for c in cats) + ")"
+    return q + f" AND submittedDate:[{start}0000 TO {end}2359]"
+
+
+def _arxiv_query(keywords: list, start: str, end: str, n: int = 1, cats: list = ()):
     """(件数, [{title, url, published}]) を返す。失敗時は (None, [])。"""
     import re
     import urllib.parse
     import urllib.request
-    kw = " OR ".join(f'all:"{k}"' for k in keywords)
-    q = f"({kw}) AND submittedDate:[{start}0000 TO {end}2359]"
+    q = build_arxiv_query(keywords, list(cats or []), start, end)
     url = _ARXIV_API + "?" + urllib.parse.urlencode({
         "search_query": q, "max_results": max(1, n),
-        "sortBy": "submittedDate", "sortOrder": "descending"})
+        # 件数は並び順に依存しない。代表論文は関連度順の方がテーマに沿う（2026-10-01）
+        "sortBy": "relevance", "sortOrder": "descending"})
     for attempt in range(3):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "stock_analyzer/1.0"})
@@ -613,9 +641,10 @@ def fetch_arxiv_theme_counts(cfg=None, today: Optional[datetime] = None) -> dict
     out: dict = {}
     for th in THEME_DEFINITIONS:
         kws = th.get("arxiv_keywords", [])
-        recent, papers = _arxiv_query(kws, f(r0), f(r1), n=3)
+        cats = th.get("arxiv_api_cats", [])
+        recent, papers = _arxiv_query(kws, f(r0), f(r1), n=3, cats=cats)
         time.sleep(3.1)                      # arXiv API の利用規約（3秒に1回）
-        prev, _ = _arxiv_query(kws, f(p0), f(p1), n=1)
+        prev, _ = _arxiv_query(kws, f(p0), f(p1), n=1, cats=cats)
         time.sleep(3.1)
         if recent is None or prev is None:
             continue
@@ -649,8 +678,12 @@ def _score_theme(theme: dict, arxiv_result: Optional[dict], cfg=None,
     api = (api_counts or {}).get(theme["id"])
     if api:
         g = api["growth_rate"]
-        arxiv_score = round(max(0.0, min(100.0, (g + 50) / 150 * 100)), 1)
-        arxiv_detail = {**api, "source": "arxiv_api"}
+        raw = max(0.0, min(100.0, (g + 50) / 150 * 100))
+        # 件数が少ないテーマ（ウラン・銅など）は伸び率がぶれやすいので中立(50)に寄せる
+        n = int(api.get("recent_4w") or 0) + int(api.get("prev_4w") or 0)
+        conf = min(1.0, n / _ARXIV_MIN_SAMPLE)
+        arxiv_score = round(50 + (raw - 50) * conf, 1)
+        arxiv_detail = {**api, "source": "arxiv_api", "confidence": round(conf, 2)}
     else:
         arxiv_score, arxiv_detail = _calc_arxiv_trend_score(theme, arxiv_result,
                                                               enable_semantic_scholar=_use_ss)
@@ -739,6 +772,8 @@ def _save_etf_report(result: dict, cfg) -> None:
                     f"前4週{ad['prev_4w']}件 "
                     f"（増加率: {ad['growth_rate']:+.1f}%）"
                 )
+                for pp in (ad.get("papers") or [])[:3]:
+                    lines.append(f"  - {pp.get('title', '')}（{pp.get('published', '')}） {pp.get('url', '')}")
             lines.append("")
 
         out = etf_dir / f"thematic_{today}.md"

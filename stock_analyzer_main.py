@@ -2792,9 +2792,11 @@ def run_all_tasks(mode: str = "all") -> dict:
                 logger.add("policy_tracker", "success",
                            f"新規イベント:{n_new}件 / 累積:{n_all}件")
                 if n_new:
+                    # 2026-10-01: 市場イベントの検知は正常動作なので warn にしない
+                    # （台帳が毎回「要確認」になり、本当の不具合が埋もれていた）
                     for ev in pt_result["new_events"]:
-                        logger.add("policy_event", "warn",
-                                   f"[{ev['bank']}] {ev['label']} "
+                        logger.add("policy_event", "success",
+                                   f"検知 [{ev['bank']}] {ev['label']} "
                                    f"{ev['change_pt']:+.3f}%pt {ev['direction']}")
             else:
                 print("  ⚠️  policy_tracker.py が見つかりません")

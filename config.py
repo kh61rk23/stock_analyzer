@@ -1335,13 +1335,17 @@ EDINETDB_BASE_URL: str = os.getenv("EDINETDB_BASE_URL", "https://edinetdb.jp/v1"
 EDINETDB_WEB_PRECHECK: bool = True
 EDINETDB_WEB_BASE: str = "https://edinetdb.jp/company/"
 EDINETDB_WEB_RECHECK_DAYS: int = 7     # 財務なしの会社を再確認するまでの日数
+EDINETDB_WEB_MAX_CHECKS: int = 80      # 1日のWeb確認の上限（1秒に1回・2026-10-01）
 EDINETDB_LOOKBACK_DAYS: int = 7
 # 2026-07-30: 90→46 に変更。日次で EdinetDB を叩く方針にしたため、
 # 日次予算が月次枠と整合していないと月半ばで枠切れし、残り2週間まるごと
 # 取得が止まる（doc_index も道連れになる）。1450÷31≈46 で月末まで均等に回す。
 # 旧値90のままだと 90×16日=1440 で16日目に枯渇していた。
-EDINETDB_DAILY_BUDGET: int = 46
-EDINETDB_MONTHLY_GUARD: int = 1450
+# 2026-10-01: 46→95、1450→2950。EdinetDB の上限は「1日100回・月は100×在籍日数
+# （31日月で約3,100回）」で、月1,450回という前提が誤っていた（edinetdb.jp/pricing）。
+# 実測でも1日の残量は毎日56〜77回残っていた。5回は手動確認用に残す。
+EDINETDB_DAILY_BUDGET: int = 95
+EDINETDB_MONTHLY_GUARD: int = 2950
 EDINETDB_REFRESH_DAYS: int = 180
 EDINETDB_TEXTBLOCK_EVERY_N: int = 2
 EDINETDB_ROTATION_META: str = "edinetdb_rotation_meta.json"
@@ -1566,7 +1570,7 @@ DAILY_MODULES = [
     "key_health",    # APIキー生存判定（Issue J-2・最序盤で実行）
     # 2026-07-30（健太決定）: 日次でも EdinetDB を叩く。
     # 旧方針（D-①「日次経路はBQ読み取り専用」）からの変更。
-    # 月次コール枠（EDINETDB_MONTHLY_GUARD=1450）を使い切ったら
+    # 月次コール枠（EDINETDB_MONTHLY_GUARD=2950）を使い切ったら
     # edinetdb_ingestor 側が自動でスキップする。
     # 取得ローテの前に BQ の取得済みを台帳へ反映するため
     # （EDINETDB_RECONCILE_WITH_BQ）、既にBQにある企業へAPIは使わない。

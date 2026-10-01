@@ -1701,8 +1701,10 @@ def _screen_sector(sector_code: str, sector_name: str,
                 and (surprise_cache.get(ticker, {}).get("conservatism_score", 0) or 0) >= 70.0
             ) if surprise_cache else False,
             "is_negative_risk": (
+                # 2026-10-01: 未分析の銘柄を保守度0点扱いにしてネガ判定していた（メールで43社）
                 scores.get("acc_bonus", 0) <= -7.0
-                and (surprise_cache.get(ticker, {}).get("conservatism_score", 0) or 0) <= 30.0
+                and surprise_cache.get(ticker, {}).get("conservatism_score") is not None
+                and surprise_cache[ticker]["conservatism_score"] <= 30.0
             ) if surprise_cache else False,
             "bq_bonus":             scores.get("bq_bonus", 0.0),   # ★ P-2
             # [I-3] 経営者スコア

@@ -183,6 +183,12 @@ def main(argv: list[str] | None = None) -> int:
                 tail = (r.stderr or r.stdout or "")[-300:]
                 status["steps"][name] += f" / {tail}"
                 print(f"  ❌ {name}: exit {r.returncode}\n{tail}")
+        except subprocess.TimeoutExpired as e:
+            # 2026-10-01: 打ち切り時に出力を捨てていたため、どこで止まったか分からなかった
+            status["ok"] = False
+            out = e.stdout.decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+            status["steps"][name] = f"timeout {e.timeout}s / {out[-300:]}"
+            print(f"  ❌ {name}: {e.timeout}秒で打ち切り\n{out[-600:]}")
         except Exception as e:
             status["ok"] = False
             status["steps"][name] = f"error: {str(e)[:120]}"

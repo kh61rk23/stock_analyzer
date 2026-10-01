@@ -249,7 +249,8 @@ def extract_alerts(cfg, results: dict) -> list:
                 # 2026-09-29: 論文の中身が分かるよう件数の推移と代表論文を出す
                 if ad.get("source") == "arxiv_api":
                     lines.append(f"      論文 直近4週{ad.get('recent_4w', 0)}件"
-                                 f"（前4週{ad.get('prev_4w', 0)}件・{ad.get('growth_rate', 0):+.0f}%）")
+                                 f"（前4週{ad.get('prev_4w', 0)}件・{ad.get('growth_rate', 0):+.0f}%）"
+                                 + ("・件数が少なく参考値" if (ad.get("confidence") or 1) < 1 else ""))
                     for pp in (ad.get("papers") or [])[:2]:
                         lines.append(f"      ・{pp.get('title', '')[:70]}（{pp.get('published', '')}）")
                 elif ad.get("growth_rate") is not None:

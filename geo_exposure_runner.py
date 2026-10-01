@@ -164,6 +164,8 @@ def run(cfg=None, dry_run: bool = False, force: bool = False,
             if not dry_run:
                 state[key] = {"last_run": today.isoformat(),
                               "merged": merged, "total": total}
+                # 途中で打ち切られても済んだ抽出器はやり直さない（2026-10-01）
+                _save_state(cfg, state)
         else:
             # BQ認証なし等。日次分析は止めないので ok は落とさず warn 扱い。
             err = str(result.get("error", ""))[:150]

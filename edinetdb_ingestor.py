@@ -767,13 +767,22 @@ def run_edinetdb_ingest(
     if target_limit is not None:
         targets = targets[:max(0, int(target_limit))]
     web_skipped: list[str] = []
-    if getattr(cfg, "EDINETDB_WEB_PRECHECK", False) and targets:
-        # 候補を多めに選び、Webで財務が確認できた会社だけで枠を埋める
-        want = len(targets)
-        pool = _plan_targets(companies, cfg, meta, company_budget * 5)
-        targets, web_skipped = prefilter_targets(pool, want, meta, cfg)
-        print(f"    🔎 [edinetdb] Web事前確認: 採用{len(targets)}社 / "
-              f"財務なしで対象外{len(web_skipped)}社")
+    # 2026-10-01: 計画は1社3回で見積もるが、text-blocks は2回に1回しか取らないため
+    # 実際は約2.5回/社で、毎日10回前後の枠が使われずに残っていた。
+    # 予備の候補を後ろに足しておき、ループ側で「残り枠が1社分(3回)を切るまで」回す。
+    reserve_calls = (max(0, int(getattr(cfg, "EDINETDB_DOC_INDEX_RESERVE", 11)))
+                     if budget is None else 0)
+    if target_limit is None and targets:
+        # 全社が2回/社で済んだ場合でも枠を埋められる数まで候補を広げる
+        pool = _plan_targets(companies, cfg, meta, company_budget * 3 // 2 + 3)
+        if getattr(cfg, "EDINETDB_WEB_PRECHECK", False):
+            # 候補を多めに選び、Webで財務が確認できた会社だけで枠を埋める
+            wide = _plan_targets(companies, cfg, meta, company_budget * 5)
+            targets, web_skipped = prefilter_targets(wide, len(pool), meta, cfg)
+            print(f"    🔎 [edinetdb] Web事前確認: 採用{len(targets)}社 / "
+                  f"財務なしで対象外{len(web_skipped)}社")
+        else:
+            targets = pool
     success = failure = missing = 0
     # 2026-09-29: 取り込んだ会社を通知メールに載せるため、社名つきで返す
     ingested: list[dict] = []
@@ -832,6 +841,9 @@ def run_edinetdb_ingest(
         # 打ち切りが無かったため、2026-08-27 は予算切れ後も11社を回して
         # failure だけを積み上げていた（成功0/11）。
         if _stop_ingest(client):
+            break
+        # 残り枠が1社分（最大3回）を切ったら止める（doc_index 用の予約は残す）
+        if getattr(client, "daily_budget", daily_budget) - client.calls - reserve_calls < 3:
             break
         financials = client.get(f"/companies/{code}/financials", {"years": 5, "period": "annual"})
         if not isinstance(financials, list):

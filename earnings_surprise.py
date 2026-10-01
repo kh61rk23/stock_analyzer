@@ -400,7 +400,8 @@ def _load_cache(cfg, max_age_days: float | None = None) -> dict:
                 age = (datetime.now() - datetime.fromisoformat(at[:19])).total_seconds() / 86400
             except ValueError:
                 continue
-            if age <= ttl:
+            # 2026-10-01: 利益の加速度（profit_accel）が無い旧形式の結果は分析し直す
+            if age <= ttl and "profit_accel" in (r or {}):
                 out[t] = r
         return out
     except Exception:
@@ -436,6 +437,68 @@ def _next_earnings_date(ticker: str) -> str | None:
     return None
 
 
+def calc_profit_acceleration(quarterly: list, annual: list) -> dict | None:
+    """利益の加速度（純関数）。
+
+    2026-10-01: 旧来の「EPS加速」は yfinance の earningsQuarterlyGrowth×4 − earningsGrowth
+    だったが、両者はどちらも前年同期比でほぼ同値（7203.T 0.756/0.869）。結果は
+    「増益率の約3倍」で、増益なら一律に加速扱いになっていた（121社中48社が高確率）。
+    ここでは 直近四半期の前年同期比 − 通期の前年比 を加速度とする。
+    quarterly / annual は [(期末日 "YYYY-MM-DD", 値)]。日本株は四半期が
+    「直近期と前年同期」の2列しか無いことが多いので、列順ではなく日付で前年同期を探す。
+    赤字を含む比較は伸び率が意味を持たないので None。
+    """
+    from datetime import date as _d
+
+    def _clean(rows):
+        out = []
+        for dt, v in rows or []:
+            try:
+                v = float(v)
+                if v != v:
+                    continue
+                out.append((_d.fromisoformat(str(dt)[:10]), v))
+            except (TypeError, ValueError):
+                continue
+        return sorted(out, reverse=True)
+
+    def _yoy(cur, base):
+        return cur / base - 1 if cur > 0 and base > 0 else None
+
+    q, a = _clean(quarterly), _clean(annual)
+    if not q or len(a) < 2:
+        return None
+    d0, v0 = q[0]
+    prev = [v for d, v in q[1:] if 345 <= (d0 - d).days <= 385]
+    qy = _yoy(v0, prev[0]) if prev else None
+    ay = _yoy(a[0][1], a[1][1]) if 345 <= (a[0][0] - a[1][0]).days <= 385 else None
+    if qy is None or ay is None:
+        return None
+    return {"q_yoy": round(qy, 4), "annual_yoy": round(ay, 4), "accel": round(qy - ay, 4),
+            "quarter": d0.isoformat()}
+
+
+def _fetch_profit_acceleration(ticker: str) -> dict | None:
+    """四半期・通期の損益計算書から加速度を出す（純利益、無ければ希薄化EPS）。"""
+    try:
+        import yf_cache as yf
+        t = yf.Ticker(ticker)
+        qis, ais = t.quarterly_income_stmt, t.income_stmt
+        if qis is None or ais is None:
+            return None
+        # 伸び率どうしの比較なので、四半期と通期で別の行（純利益/EPS）を使ってよい
+        rows = ("Net Income", "Net Income Common Stockholders", "Diluted EPS", "Basic EPS")
+        for qr in (r for r in rows if r in qis.index):
+            for ar in (r for r in rows if r in ais.index):
+                r = calc_profit_acceleration(list(zip(qis.columns, qis.loc[qr].values)),
+                                             list(zip(ais.columns, ais.loc[ar].values)))
+                if r:
+                    return r
+        return None
+    except Exception:
+        return None
+
+
 def apply_surprise_flags(candidates: list, cache: dict, cfg=None,
                          today: str | None = None) -> dict:
     """当日の分析結果で候補の高確率／ネガティブ判定をやり直す（純関数）。
@@ -443,20 +506,34 @@ def apply_surprise_flags(candidates: list, cache: dict, cfg=None,
     以前はスクリーナーの時点（前日の分析結果）で判定していた。理由と次回決算日も付ける。
     Returns: {"high_prob": n, "negative": n}
     """
-    # スクリーナー（stock_screener の is_high_prob_surprise）と同じ閾値。
-    # acc_bonus は ±10点の尺度なので、このモジュールの SURPRISE_COMBO_*（0〜100尺度）は使わない
-    accel_min, cons_min, neg_accel, neg_cons = 7.0, 70.0, -7.0, 30.0
+    # 2026-10-01: 判定は当日の分析結果（利益の加速度×会社予想の保守度）で行う。
+    #   高確率: 加速 +15pt 以上 × 保守度70以上 × 直近決算が下振れでない
+    #   ネガ  : (加速 −15pt 以下 × 保守度45以下) または 2期以上連続の下振れ
+    # 分析結果が無い銘柄は、スクリーナー時点の仮判定を残さず「判定なし」にする。
+    accel_min, cons_min, neg_accel, neg_cons = 0.15, 70.0, -0.15, 45.0
     today = today or datetime.now().strftime("%Y-%m-%d")
     n_hi = n_neg = 0
     for c in candidates or []:
         r = (cache or {}).get(c.get("ticker"))
         if not r:
+            c["is_high_prob_surprise"] = c["is_negative_risk"] = False
             continue
-        acc = float(c.get("acc_bonus") or 0)
+        pa = r.get("profit_accel") or {}
+        acc = pa.get("accel")
         cons = float(r.get("conservatism_score") or 50)
+        last = ((r.get("latest_q") or {}).get("surprise_pct"))
         c["conservatism_score"] = cons
-        c["is_high_prob_surprise"] = acc >= accel_min and cons >= cons_min
-        c["is_negative_risk"] = acc <= neg_accel and cons <= neg_cons
+        c["profit_accel"] = acc
+        avg = r.get("avg_beat_pct")
+        # 加速度が出せない銘柄（yfinance の日本株は四半期が1期分だけのことが多い）は、
+        # 会社予想が一貫して保守的で3期以上連続上振れのときだけ高確率とする
+        streak_only = (acc is None and cons >= 80 and int(r.get("consecutive_pos") or 0) >= 3
+                       and avg is not None and 0 < avg <= 100)
+        c["is_high_prob_surprise"] = streak_only or (
+            acc is not None and acc >= accel_min and cons >= cons_min
+            and (last is None or last >= 0))
+        c["is_negative_risk"] = ((acc is not None and acc <= neg_accel and cons <= neg_cons)
+                                 or int(r.get("consecutive_neg") or 0) >= 2)
         ne = r.get("next_earnings")
         c["next_earnings"] = ne
         try:
@@ -464,9 +541,10 @@ def apply_surprise_flags(candidates: list, cache: dict, cfg=None,
                                      - datetime.strptime(today, "%Y-%m-%d")).days if ne else None
         except ValueError:
             c["days_to_earnings"] = None
-        avg = r.get("avg_beat_pct")
         c["surprise_reason"] = (
-            f"EPS加速{acc:+.0f}pt × 会社予想の保守度{cons:.0f}点"
+            (f"純利益 直近四半期 前年比{pa['q_yoy'] * 100:+.0f}% vs 通期{pa['annual_yoy'] * 100:+.0f}%"
+             f"（加速{acc * 100:+.0f}pt）" if acc is not None else "利益の加速度 算出不可")
+            + f" × 会社予想の保守度{cons:.0f}点"
             + (f"（過去{r.get('beat_count', 0)}回上振れ・平均{avg:+.1f}%）" if avg is not None else "")
             + (f" | 直近{r.get('consecutive_pos')}期連続上振れ" if r.get("consecutive_pos") else "")
             + (f" | 直近{r.get('consecutive_neg')}期連続下振れ" if r.get("consecutive_neg") else ""))
@@ -546,6 +624,7 @@ def analyze_ticker(ticker: str) -> Optional[dict]:
         "conservatism_bonus": conserv_bonus,
         "combo_flag":         combo,
         "next_earnings":      _next_earnings_date(ticker),   # 2026-09-29
+        "profit_accel":       _fetch_profit_acceleration(ticker),   # 2026-10-01
     }
 
 
