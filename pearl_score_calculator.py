@@ -206,15 +206,19 @@ def _calc_d1_direction(data: dict) -> tuple[float, list[str]]:
 
         # ── ② EPS加速度: max 30pt ────────────────────────────
         # 直接渡された acceleration フィールド or 生の成長率から計算
+        # 2026-10-01: 旧式の「四半期成長率×4 − 年率」は、yfinance の2つがどちらも
+        # 前年同期比でほぼ同値のため実質「増益率×3」だった。四半期の前年同期比 −
+        # 通期の前年比（earnings_surprise.calc_profit_acceleration）に統一する。
         accel = data.get("earnings_acceleration")
         if accel is None:
-            eg_ann = data.get("earnings_growth")
-            eg_qtr = data.get("earnings_qgrowth") or data.get("earningsQuarterlyGrowth")
-            if eg_ann is not None and eg_qtr is not None:
+            pa = data.get("profit_accel")
+            if pa is None and data.get("ticker") and not data.get("_offline"):
                 try:
-                    accel = float(eg_qtr) * 4 - float(eg_ann)
-                except (TypeError, ValueError):
-                    accel = None
+                    import earnings_surprise as _es
+                    pa = _es._fetch_profit_acceleration(str(data["ticker"]))
+                except Exception:
+                    pa = None
+            accel = (pa or {}).get("accel")
 
         if accel is not None:
             try:

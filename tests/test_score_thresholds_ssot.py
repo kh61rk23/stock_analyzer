@@ -27,8 +27,9 @@ def _cfg():
     return m
 
 
-def _data(eg_annual, eg_quarter):
-    return {"earnings_growth": eg_annual, "earnings_qgrowth": eg_quarter,
+def _data(accel):
+    # 2026-10-01: 加速度は profit_accel（四半期前年比 − 通期前年比）から読む
+    return {"profit_accel": None if accel is None else {"accel": accel},
             "per": 15.0, "pbr": 1.2, "roe": 0.12, "sector_code": "1016"}
 
 
@@ -46,9 +47,8 @@ class TestEpsAccelerationI1:
 
     def test_wiring_does_not_change_behaviour(self):
         cfg = _cfg()
-        for eg_a, eg_q in ((0.10, 0.15), (0.05, 0.30), (0.40, 0.05),
-                           (0.20, 0.06), (0.30, 0.02), (None, 0.35)):
-            d = _data(eg_a, eg_q)
+        for a in (0.40, 0.20, 0.10, 0.0, -0.10, -0.20, -0.40, None):
+            d = _data(a)
             assert (ss._calc_scores(d, 60.0, cfg=cfg).get("acc_bonus")
                     == ss._calc_scores(d, 60.0, cfg=None).get("acc_bonus"))
 
@@ -62,18 +62,16 @@ class TestEpsAccelerationI1:
             ACCEL_MID_DOWN = -4.00
             ACCEL_STRONG_DOWN = -5.00
 
-        d = _data(0.10, 0.15)   # 既定では強加速 +10pt
+        d = _data(0.40)   # 既定では強加速 +10pt
         assert ss._calc_scores(d, 60.0, cfg=None).get("acc_bonus") == 10.0
         assert ss._calc_scores(d, 60.0, cfg=Strict).get("acc_bonus") == 0.0
 
-    def test_quarter_only_fallback_uses_strong_up(self):
-        """年率データなしの分岐も強加速閾値を参照すること。"""
-        class Loose:
-            ACCEL_STRONG_UP = 0.01
-
-        d = _data(None, 0.05)   # 既定(0.30)では発火しない
+    def test_growth_without_acceleration_gets_no_bonus(self):
+        """2026-10-01: 増益率だけでは加点しない（旧式は増益率×3で+7〜+10だった）。"""
+        d = {"earnings_growth": 0.20, "earnings_qgrowth": 0.20,
+             "per": 15.0, "pbr": 1.2, "roe": 0.12, "sector_code": "1016"}
         assert ss._calc_scores(d, 60.0, cfg=None).get("acc_bonus") == 0.0
-        assert ss._calc_scores(d, 60.0, cfg=Loose).get("acc_bonus") == 5.0
+        assert ss._calc_scores(_data(-0.02), 60.0, cfg=None).get("acc_bonus") == 0.0
 
 
 class TestConservatismQuartersI2:

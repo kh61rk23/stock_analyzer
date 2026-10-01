@@ -314,6 +314,15 @@ ACCRUAL_TIERS = [
 # BLOCK 1: yfinanceデータ取得（v3.0: analyst_count追加）
 # ==============================================================
 
+def _profit_accel(ticker: str):
+    """earnings_surprise と同じ定義の利益加速度（取れなければ None）。"""
+    try:
+        import importlib as _imp
+        return _imp.import_module("earnings_surprise")._fetch_profit_acceleration(ticker)
+    except Exception:
+        return None
+
+
 def _fetch_ticker_data(ticker: str) -> Optional[dict]:
     """
     1銘柄の財務データを yfinance で取得する。
@@ -357,6 +366,8 @@ def _fetch_ticker_data(ticker: str) -> Optional[dict]:
             # [I-1] EPS成長率（加速度計算用）
             "earnings_growth":  q["earnings_growth"],    # 直近年率成長率
             "earnings_qgrowth": q["earnings_qgrowth"],   # 直近四半期成長率
+            # 2026-10-01: 利益の加速度（四半期の前年同期比 − 通期の前年比）
+            "profit_accel":     _profit_accel(ticker),
             "analyst_count":  q["analyst_count"],   # v3.0追加
             "rec_mean":       q["rec_mean"],        # [F-1/U-4] アナリスト推奨平均
             "rec_key":        q["rec_key"],         # [F-1/U-4] 推奨キー（文字列）
@@ -925,36 +936,26 @@ def _calc_scores(
     except Exception:
         _bm_norm_type = "NORM_STANDARD"
     inv_bonus = 0.0   # if roe ブロック外で初期化（ROEなし銘柄でも参照できるよう）
-    # [I-1] EPS加速度スコア計算
-    # earnings_growth（直近年率）と earnings_qgrowth（直近四半期）の差から加速度を算出
+    # [I-1] 利益の加速度スコア
+    # 2026-10-01: 旧式は earnings_qgrowth×4 − earnings_growth だったが、yfinance の
+    # 2つはどちらも前年同期比でほぼ同値（7203.T 0.756/0.869）で、結果は「増益率×約3」。
+    # 増益ならほぼ一律に +7〜+10 になっていた。四半期の前年同期比 − 通期の前年比
+    # （earnings_surprise.calc_profit_acceleration）で測る。取れない銘柄は 0（中立）。
     acc_bonus = 0.0
-    eg_annual  = data.get("earnings_growth")    # 例: 0.25 = 25%
-    eg_quarter = data.get("earnings_qgrowth")   # 例: 0.40 = 40%（四半期）
-    # 2026-07-25 バッチ3: 閾値を config.py BLOCK I-1 から読むよう是正。
-    # 従来は 0.30 / 0.15 / 0.05 を直書きしており、config の ACCEL_* を
-    # 編集しても加速度判定は一切変わらなかった（SSOT違反）。
-    # 既定値は従来の直書き値。config が読めない環境でも挙動は変わらない。
     _a_su = float(getattr(cfg, "ACCEL_STRONG_UP",    0.30))
     _a_mu = float(getattr(cfg, "ACCEL_MID_UP",       0.15))
     _a_lu = float(getattr(cfg, "ACCEL_MILD_UP",      0.05))
     _a_ld = float(getattr(cfg, "ACCEL_MILD_DOWN",   -0.05))
     _a_md = float(getattr(cfg, "ACCEL_MID_DOWN",    -0.15))
     _a_sd = float(getattr(cfg, "ACCEL_STRONG_DOWN", -0.30))
-    if eg_annual is not None and eg_quarter is not None:
-        # 四半期成長率（年換算）と年率成長率の差 = 加速度の近似
-        # 四半期成長率を年換算: (1+q)^4 - 1 の近似として q*4 を使用
-        eg_quarter_annualized = eg_quarter * 4
-        acceleration = eg_quarter_annualized - eg_annual
-        # 加速度をボーナスに変換（±10pt を上限）
-        if acceleration > _a_su:    acc_bonus = 10.0   # 強加速（既定: 年換算30%以上上振れ）
+    acceleration = (data.get("profit_accel") or {}).get("accel")
+    if acceleration is not None:
+        if acceleration > _a_su:    acc_bonus = 10.0   # 強加速
         elif acceleration > _a_mu:  acc_bonus =  7.0
         elif acceleration > _a_lu:  acc_bonus =  4.0
         elif acceleration < _a_sd:  acc_bonus = -10.0  # 強減速
         elif acceleration < _a_md:  acc_bonus =  -7.0
         elif acceleration < _a_ld:  acc_bonus =  -4.0
-    elif eg_quarter is not None and eg_quarter > _a_su:
-        # 年率データなしでも四半期成長率が強加速閾値を超えるなら加速シグナル扱い
-        acc_bonus = 5.0
     # クォリティスコア base (0-100): ROEベース
     if roe is not None:
         quality_base = max(0, min(100, roe / 0.30 * 100))
@@ -1075,10 +1076,8 @@ def _calc_scores(
                         )
             except Exception:
                 pass
-            if eg_annual is not None and eg_quarter is not None:
-                data["earnings_acceleration"] = round(
-                    float(eg_quarter) * 4 - float(eg_annual), 3
-                )
+            if acceleration is not None:
+                data["earnings_acceleration"] = round(float(acceleration), 3)
             _pr = _calc_pearl(data, _cfg_pearl, market="JP", ticker=_ticker)
             pearl_score   = _pr.get("pearl_score", 0.0)
             pearl_bonus   = _pr.get("pearl_bonus", 0.0)
@@ -1137,9 +1136,8 @@ def _calc_scores(
         "accrual_bonus":      round(acr_bonus + relative_bonus, 1),
         "surprise_bonus":     surprise_bonus,
         "acc_bonus":          round(acc_bonus, 1),
-        "earnings_acceleration": round(eg_quarter * 4 - eg_annual, 3)
-                                 if (eg_annual is not None and eg_quarter is not None)
-                                 else None,
+        "earnings_acceleration": (round(float(acceleration), 3)
+                                  if acceleration is not None else None),
         "bq_bonus":           round(bq_bonus, 1),
         "pearl_score":        round(pearl_score, 1),
         "pearl_bonus":        round(pearl_bonus, 1),
@@ -1758,6 +1756,12 @@ def _screen_sector(sector_code: str, sector_name: str,
             get_catalyst_flags                 as _get_cat_flags,
             get_combined_score                 as _get_comb,
         )
+        try:
+            from latent_pearl_manager import get_latent_pearls_list as _get_lpl_scores
+            _lp_scores = {e.get("ticker"): float(e.get("latent_pearl_score") or 0)
+                          for e in _get_lpl_scores(cfg)}
+        except Exception:
+            _lp_scores = {}
         for _c in candidates:
             if not _c.get("pass_filters"):
                 continue
@@ -1782,20 +1786,10 @@ def _screen_sector(sector_code: str, sector_name: str,
                 _c["catalyst_flags"]  = _ind_result.get("catalyst_flags", [])
 
             # ③ latent_pearl_cache から潜伏Pearlスコアを補完
-            _lp_score = 0.0
-            try:
-                # Wave 7: run_latent_pearl_manager をキャッシュ優先で呼び出す
-                # （force_refresh=False でキャッシュ TTL 内なら再計算しない）
-                from latent_pearl_manager import (
-                    run_latent_pearl_manager as _run_lpm_w7,
-                    get_promoted_tickers     as _get_promoted,
-                )
-                # キャッシュが存在しない場合のみ実行
-                _promoted = _get_promoted()
-                if not _promoted:
-                    _run_lpm_w7(cfg=cfg, force_refresh=False)
-            except Exception:
-                    pass
+            # 2026-10-01: 旧版は _lp_score を一度もキャッシュから読まず常に0点で、
+            # しかも昇格銘柄が無い日は銘柄ごとに管理処理を呼び直していた（1日170回）。
+            # 管理処理は main が日次で1回回すので、ここはキャッシュを読むだけにする。
+            _lp_score = float(_lp_scores.get(_c.get("ticker", ""), 0.0))
             _c["latent_pearl_score"] = _lp_score
 
             # ④ is_latent_pearl 判定（Wave 7版: latent_pearl_cache 優先）
@@ -1815,25 +1809,10 @@ def _screen_sector(sector_code: str, sector_name: str,
     except Exception as _inde:
         pass   # Independence Score 失敗でもスクリーニングを継続
 
-    # ── [Wave 3 - Independence Ph1] Latent Pearl Manager 更新 ────
-    try:
-        from independence_score_calculator import get_latent_pearl_candidates as _glc
-        from latent_pearl_manager import run_latent_pearl_manager as _run_lpm
-        _latent_cands = _glc(
-            {c.get("ticker", ""): {
-                "independence_score": c.get("independence_score", 0.0),
-                "phase": "LATENT_PEARL" if c.get("is_latent_pearl") else "UNKNOWN",
-                "beta_sector": 1.0,
-                "epsilon_mean": 0.0,
-                "sector_code": sector_code,
-             }
-             for c in candidates if c.get("independence_score", 0) >= 70
-            }
-        )
-        if _latent_cands:
-            _run_lpm(_latent_cands, cfg=cfg)
-    except Exception:
-        pass
+    # 2026-10-01: ここにあった「Latent Pearl Manager 更新」は
+    # run_latent_pearl_manager(候補リスト, cfg=cfg) と呼んでおり、引数の型が合わず
+    # 毎回 TypeError で空振りしていた。管理処理は候補を自前で集め、main が日次で
+    # 1回実行するため削除した。
 
     # ログ出力
     passed_list = [c for c in candidates if c["pass_filters"]]

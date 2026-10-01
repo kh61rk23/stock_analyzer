@@ -46,6 +46,8 @@ class _FakeTicker:
 
 def _install(monkeypatch, info):
     """sys.modules["yfinance"] を、渡した info を返すフェイクに差し替える。"""
+    # 2026-10-01: 利益加速度（損益計算書の取得）はこの同値性テストの対象外
+    monkeypatch.setattr(ss, "_profit_accel", lambda t: None, raising=False)
     monkeypatch.setitem(
         sys.modules, "yfinance",
         SimpleNamespace(Ticker=lambda ticker: _FakeTicker(info)),
@@ -375,7 +377,7 @@ class TestRetry:
 JP_FULL = {
     'analyst_count': 24, 'analyst_upside': 0.2, 'avg_volume': 4500000,
     'beta': 1.05, 'current_price': 100.0, 'debt_to_equity': 35.2,
-    'earnings_growth': 0.19, 'earnings_qgrowth': 0.07, 'equity_ratio': 55.5,
+    'earnings_growth': 0.19, 'earnings_qgrowth': 0.07, 'profit_accel': None, 'equity_ratio': 55.5,
     'gross_margin': 0.44, 'inventory_turnover': 4.0,
     'market_cap': 1234500000000.0, 'market_cap_b': 12345.0,
     'name': 'Test Corporation Of Very Long Name Indee',
@@ -391,7 +393,7 @@ JP_FULL = {
 JP_MINIMAL = {
     'analyst_count': None, 'analyst_upside': None, 'avg_volume': 0,
     'beta': None, 'current_price': 50.0, 'debt_to_equity': None,
-    'earnings_growth': None, 'earnings_qgrowth': None, 'equity_ratio': None,
+    'earnings_growth': None, 'earnings_qgrowth': None, 'profit_accel': None, 'equity_ratio': None,
     'gross_margin': None, 'inventory_turnover': None, 'market_cap': None,
     'market_cap_b': 0.0, 'name': 'TEST.T', 'net_income': None,
     'net_margin': None, 'op_margin': None, 'operating_cashflow': None,
@@ -406,7 +408,7 @@ JP_ZERO_PRICE = dict(JP_MINIMAL, current_price=0.0, target_price=120.0)
 JP_NAN = {
     'analyst_count': None, 'analyst_upside': None, 'avg_volume': 12345,
     'beta': None, 'current_price': 80.0, 'debt_to_equity': None,
-    'earnings_growth': None, 'earnings_qgrowth': None, 'equity_ratio': None,
+    'earnings_growth': None, 'earnings_qgrowth': None, 'profit_accel': None, 'equity_ratio': None,
     'gross_margin': None, 'inventory_turnover': 14.29,
     'market_cap': 7777000000.0, 'market_cap_b': 77.8, 'name': 'TEST.T',
     'net_income': None, 'net_margin': None, 'op_margin': None,

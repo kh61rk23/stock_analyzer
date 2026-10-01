@@ -125,6 +125,8 @@ class TestJpCalcScores:
             "inventory_turnover": 8.0,
             "earnings_growth": 0.10,
             "earnings_qgrowth": 0.20,
+            # 2026-10-01: 加速度は profit_accel（四半期前年比−通期前年比）から取る
+            "profit_accel": {"accel": 0.7},
             "market_cap": 3_000_000_000_000,
             "market_cap_b": 30000.0,
             "avg_volume": 5_000_000,
