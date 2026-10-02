@@ -153,7 +153,8 @@ def test_prefilter_skips_no_data_and_fills_quota():
                                       _types.SimpleNamespace(), checker=web.get,
                                       today=_date(2026, 9, 29), sleep=lambda s: None)
     assert sel == ["E2", "E4"] and skip == ["E1", "E3"]
-    assert meta["E1"]["web_check"] == {"date": "2026-09-29", "has": False}
+    assert meta["E1"]["web_check"] == {"date": "2026-09-29", "has": False,
+                                       "latest_fy": None, "fy_month": None}   # 2026-10-02 項目追加
     # 翌日は記録を使い、Web を見に行かない
     calls = []
     sel2, _ = edi.prefilter_targets(["E1", "E2"], 2, meta, _types.SimpleNamespace(),

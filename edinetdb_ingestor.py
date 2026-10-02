@@ -397,11 +397,14 @@ def select_ingest_targets(
         return str(item or "").strip()
 
     def fresh(code: str) -> bool:
-        value = str((meta.get(code) or {}).get("last_fetched") or "")[:10]
+        info = meta.get(code) or {}
+        value = str(info.get("last_fetched") or "")[:10]
         try:
-            return (today - date.fromisoformat(value)).days < refresh_days
+            recent = (today - date.fromisoformat(value)).days < refresh_days
         except ValueError:
             return False
+        # 新年度の有報が出ているはずなら、180日以内でも取り直す（2026-10-02）
+        return recent and not report_due(info, today)
 
     def backing_off(code: str) -> bool:
         """直近に失敗した企業を一定日数スキップする。
@@ -432,7 +435,10 @@ def select_ingest_targets(
             (meta.get(code_of(item)) or {}).get("last_fetched") or "0000-00-00"
         ),
     )
-    for group in (holdings, screener, representatives, remaining_fifo):
+    # 新年度の有報が出ているはずの会社は、代表銘柄・未取得より先に取り直す
+    due_group = [item for item in remaining or []
+                 if report_due(meta.get(code_of(item)) or {}, today)]
+    for group in (holdings, screener, due_group, representatives, remaining_fifo):
         for item in group or []:
             code = code_of(item)
             if not code or code in seen:
@@ -556,16 +562,81 @@ def page_has_financials(html: str | None, status: int = 200):
     return None
 
 
-def _web_check(code: str, cfg) -> bool | None:
+def parse_company_page(html: str | None, status: int = 200) -> dict:
+    """会社ページから財務の有無・掲載中の最新年度・決算月を読む（純関数）。
+
+    2026-10-02: 最新年度と決算月も読む。例: ザインエレクトロニクスは「12月期」
+    「FY2025 開示財務データ」（2025年12月期が最新・2026-03-26提出）。
+    """
+    import re as _re
+    out = {"has": page_has_financials(html, status), "latest_fy": None, "fy_month": None}
+    if not html or status != 200:
+        return out
+    fys = [int(y) for y in _re.findall(r"FY(20\d\d)\s*開示財務データ", html)]
+    fys += [int(y) for y in _re.findall(r'"fiscalYear":\s*(20\d\d)', html)]
+    if fys:
+        out["latest_fy"] = max(fys)
+    m = _re.search(r"(?<![0-9])(1[0-2]|[1-9])月期", html)
+    if m:
+        out["fy_month"] = int(m.group(1))
+    return out
+
+
+def _web_check(code: str, cfg) -> dict:
     base = getattr(cfg, "EDINETDB_WEB_BASE", "https://edinetdb.jp/company/")
     try:
         import requests
         r = requests.get(base + code, timeout=15, headers={
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                           "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"})
-        return page_has_financials(r.text, r.status_code)
+        return parse_company_page(r.text, r.status_code)
     except Exception:
+        return {"has": None, "latest_fy": None, "fy_month": None}
+
+
+def fiscal_year_end_date(fiscal_year, fy_month) -> str | None:
+    """FY ラベル（決算期末の年）と決算月から期末日を返す。EdinetDB の FY2025 は
+    12月決算なら 2025-12-31、3月決算なら 2025-03-31（期末の年）。"""
+    import calendar
+    try:
+        y, m = int(fiscal_year), int(fy_month)
+        return date(y, m, calendar.monthrange(y, m)[1]).isoformat()
+    except (TypeError, ValueError):
         return None
+
+
+def report_due(info: dict, today: date | None = None, grace_days: int = 100,
+               retry_days: int = 14) -> bool:
+    """新しい年度の有報が出ているはずなのに、手元の最新年度が古いか（純関数）。
+
+    2026-10-02: 鮮度は「最終取得から180日」だけで見ていたため、取得直後に
+    新しい有報が出ると最大180日古いまま残る。決算月から「期末+100日」を過ぎた
+    年度を期待年度とし、手元（held_fy）がそれより古ければ取り直す。
+    Webページに新しい年度が載っていれば、それも根拠にする。
+    直近 retry_days 以内に取り直して増えていなければ待つ（EdinetDB側の反映待ち）。
+    """
+    today = today or date.today()
+    held = info.get("held_fy")
+    if held is None:
+        return False
+    held = int(held)
+    try:
+        last = date.fromisoformat(str(info.get("last_fetched") or "")[:10])
+        if (today - last).days < retry_days:
+            return False
+    except ValueError:
+        pass
+    web_fy = (info.get("web_check") or {}).get("latest_fy")
+    if web_fy and int(web_fy) > held:
+        return True
+    m = info.get("fy_month")
+    if not m:
+        return held < today.year - 1
+    expected = today.year
+    end = fiscal_year_end_date(expected, m)
+    if end is None or (today - date.fromisoformat(end)).days < grace_days:
+        expected -= 1
+    return held < expected
 
 
 def prefilter_targets(candidates: list[str], want: int, meta: dict, cfg,
@@ -597,17 +668,26 @@ def prefilter_targets(candidates: list[str], want: int, meta: dict, cfg,
         if wc.get("has") is False and age < recheck:
             skipped.append(code)
             continue
-        if wc.get("has") is True and age < 30:
+        # 決算月が未記録の旧形式は、ついでに読み直す（2026-10-02）
+        if wc.get("has") is True and age < 30 and "fy_month" in wc:
             selected.append(code)
             continue
         if checks >= max_checks:
+            if wc.get("has") is True:
+                selected.append(code)
+                continue
             break
         if checks:
             sleep(1.0)          # 相手サイトへの配慮（1秒に1回まで）
         checks += 1
-        has = checker(code)
+        res = checker(code)
+        if not isinstance(res, dict):
+            res = {"has": res, "latest_fy": None, "fy_month": None}
+        has = res.get("has")
         if has is not None:
-            info["web_check"] = {"date": today.isoformat(), "has": has}
+            info["web_check"] = {"date": today.isoformat(), **res}
+            if res.get("fy_month"):
+                info["fy_month"] = res["fy_month"]
             meta[code] = info
         if has is False:
             skipped.append(code)
@@ -743,7 +823,9 @@ def run_edinetdb_ingest(
     companies = cached_companies
     cache_date = str(company_cache.get("fetched_at", ""))[:10] if isinstance(company_cache, dict) else ""
     try:
-        cache_fresh = (date.today() - date.fromisoformat(cache_date)).days < 30
+        # 2026-10-02: 30→7日。社名変更・上場廃止・持株会社化を早く反映する（1回で全社取得）
+        cache_fresh = (date.today() - date.fromisoformat(cache_date)).days < int(
+            getattr(cfg, "EDINETDB_COMPANY_CACHE_DAYS", 7))
     except ValueError:
         cache_fresh = False
     if not companies or not cache_fresh:
@@ -842,9 +924,12 @@ def run_edinetdb_ingest(
         # failure だけを積み上げていた（成功0/11）。
         if _stop_ingest(client):
             break
-        # 残り枠が1社分（最大3回）を切ったら止める（doc_index 用の予約は残す）
-        if getattr(client, "daily_budget", daily_budget) - client.calls - reserve_calls < 3:
-            break
+        # 残り枠がこの会社の分（2回＋本文を取る回なら1回）を切ったら止める。
+        # 3回固定で見ていたため、2回で済む会社の分の枠が毎日余っていた（2026-10-02）
+        _fc = int((meta.get(code) or {}).get("fetch_count", 0))
+        _need = 2 + (1 if _fc % max(1, int(getattr(cfg, "EDINETDB_TEXTBLOCK_EVERY_N", 2))) == 0 else 0)
+        if getattr(client, "daily_budget", daily_budget) - client.calls - reserve_calls < _need:
+            continue
         financials = client.get(f"/companies/{code}/financials", {"years": 5, "period": "annual"})
         if not isinstance(financials, list):
             # 予算枯渇・レート制限で落ちた分は「その企業の失敗」ではないので
@@ -865,6 +950,12 @@ def run_edinetdb_ingest(
             map_edinetdb_financials(item, edinet_code=code, company_code=company_code, now=now)
             for item in financials if isinstance(item, dict)
         ]
+        # 2026-10-02: APIに期末日が無く fiscal_year_end が全行空だった。
+        # 会社ページの決算月（例「12月期」）から埋める
+        _fm = (meta.get(code) or {}).get("fy_month")
+        for _r in fin_rows:
+            if not _r.get("fiscal_year_end") and _fm:
+                _r["fiscal_year_end"] = fiscal_year_end_date(_r.get("fiscal_year"), _fm)
         # 書類一覧は同じ財務応答から作る（追加のAPI呼び出しなし）
         doc_rows = [
             r for r in (
@@ -873,6 +964,11 @@ def run_edinetdb_ingest(
                 for item in financials if isinstance(item, dict)
             ) if r
         ]
+        # 書類一覧の期末日も、同じ書類IDの財務行から埋める
+        _fye_by_doc = {r.get("doc_id"): r.get("fiscal_year_end") for r in fin_rows}
+        for _d in doc_rows:
+            if not _d.get("fiscal_year_end"):
+                _d["fiscal_year_end"] = _fye_by_doc.get(_d.get("doc_id"))
         latest_year = max(
             [row.get("fiscal_year") for row in fin_rows if row.get("fiscal_year") is not None],
             default=None,
@@ -908,9 +1004,13 @@ def run_edinetdb_ingest(
             bq.merge_rows("segment_finance", sf_rows, ["sf_id"])
             bq.merge_rows("text_analysis", text_rows, ["text_id"])
             # 成功したら失敗カウンタを消す（バックオフを解除する）
+            _prev = meta.get(code) or {}
             meta[code] = {
                 "last_fetched": today_str,
                 "fetch_count": fetch_count + 1, "company_code": company_code,
+                "held_fy": latest_year,
+                # 決算月とWeb確認の結果は残す（次の取り直し時期の判定に使う）
+                **{k: _prev[k] for k in ("fy_month", "web_check") if k in _prev},
             }
             success += 1
             ingested.append({

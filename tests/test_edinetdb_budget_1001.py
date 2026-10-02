@@ -53,8 +53,8 @@ def test_leftover_calls_are_used_for_more_companies(tmp_path, monkeypatch):
         DATA_DIR=tmp_path, SECTOR_REPRESENTATIVE_TICKERS={},
     )
     r = module.run_edinetdb_ingest(cfg)
-    # 計画は (30-2-11)//3 = 5社だが、1社2回なので 8社まで取れる
-    assert r["success"] == 8
+    # 計画は (30-2-11)//3 = 5社だが、1社2回なので 9社（30−1−11=18回）まで取れる
+    assert r["success"] == 9
     # doc_index 用の11回は残す
     assert 30 - r["api_calls"] >= 11
 

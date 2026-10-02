@@ -408,13 +408,33 @@ def _load_cache(cfg, max_age_days: float | None = None) -> dict:
         return {}
 
 
-def _save_cache(cfg, results: dict) -> None:
+def _load_no_data(cfg) -> dict:
+    """結果が出なかった銘柄 {ticker: analyzed_at}（TICKER_TTL_DAYS 以内のもの）。"""
+    try:
+        p = Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / CACHE_FILENAME
+        raw = json.loads(p.read_text(encoding="utf-8")).get("no_data") or {}
+    except (OSError, ValueError, AttributeError):
+        return {}
+    out = {}
+    for t, at in raw.items():
+        try:
+            if (datetime.now() - datetime.fromisoformat(str(at)[:19])).days < TICKER_TTL_DAYS:
+                out[t] = at
+        except ValueError:
+            continue
+    return out
+
+
+def _save_cache(cfg, results: dict, no_data: dict | None = None) -> None:
     try:
         p = Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / CACHE_FILENAME
         p.parent.mkdir(parents=True, exist_ok=True)
+        if no_data is None:
+            no_data = _load_no_data(cfg)
         p.write_text(
             json.dumps(
-                {"cached_at": datetime.now().isoformat(), "results": results},
+                {"cached_at": datetime.now().isoformat(), "results": results,
+                 "no_data": no_data},
                 ensure_ascii=False, indent=2,
             ),
             encoding="utf-8",
@@ -706,7 +726,10 @@ def run_earnings_surprise(cfg, tickers: Optional[list] = None) -> dict:
         screener_candidates = getattr(cfg, "EDINET_SCREENER_CANDIDATES", [])
         tickers = list(set(tickers + screener_candidates))
 
-    todo = [t for t in dict.fromkeys(tickers) if t not in cached]
+    # 2026-10-02: アナリスト予想が無く結果が出ない銘柄（実測364社中232社）も
+    # 毎日取り直していた。「データ無し」も7日間は記録を使う
+    no_data = _load_no_data(cfg)
+    todo = [t for t in dict.fromkeys(tickers) if t not in cached and t not in no_data]
     print(f"    対象: {len(set(tickers))}銘柄（キャッシュ有効 {len(set(tickers)) - len(todo)} / "
           f"新規分析 {len(todo)}）")
 
@@ -721,7 +744,10 @@ def run_earnings_surprise(cfg, tickers: Optional[list] = None) -> dict:
         if r:
             r["analyzed_at"] = now_iso
             results[t] = r
-    _save_cache(cfg, results)
+            no_data.pop(t, None)
+        else:
+            no_data[t] = now_iso
+    _save_cache(cfg, results, no_data)
     summary = _build_summary({t: results[t] for t in tickers if t in results})
     print(
         f"    ✅ 決算サプライズ完了: {summary['total']}銘柄 "

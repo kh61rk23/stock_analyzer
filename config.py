@@ -1344,8 +1344,10 @@ EDINETDB_LOOKBACK_DAYS: int = 7
 # 2026-10-01: 46→95、1450→2950。EdinetDB の上限は「1日100回・月は100×在籍日数
 # （31日月で約3,100回）」で、月1,450回という前提が誤っていた（edinetdb.jp/pricing）。
 # 実測でも1日の残量は毎日56〜77回残っていた。5回は手動確認用に残す。
-EDINETDB_DAILY_BUDGET: int = 95
-EDINETDB_MONTHLY_GUARD: int = 2950
+# 2026-10-02: 95→100、2950→3100（上限まで使う。月の実残量は /usage の monthly_remaining で抑える）
+EDINETDB_DAILY_BUDGET: int = 100
+EDINETDB_MONTHLY_GUARD: int = 3100
+EDINETDB_COMPANY_CACHE_DAYS: int = 7   # 会社マスタ（社名・上場区分）の取り直し間隔
 EDINETDB_REFRESH_DAYS: int = 180
 EDINETDB_TEXTBLOCK_EVERY_N: int = 2
 EDINETDB_ROTATION_META: str = "edinetdb_rotation_meta.json"
@@ -1570,7 +1572,7 @@ DAILY_MODULES = [
     "key_health",    # APIキー生存判定（Issue J-2・最序盤で実行）
     # 2026-07-30（健太決定）: 日次でも EdinetDB を叩く。
     # 旧方針（D-①「日次経路はBQ読み取り専用」）からの変更。
-    # 月次コール枠（EDINETDB_MONTHLY_GUARD=2950）を使い切ったら
+    # 月次コール枠（EDINETDB_MONTHLY_GUARD=3100）を使い切ったら
     # edinetdb_ingestor 側が自動でスキップする。
     # 取得ローテの前に BQ の取得済みを台帳へ反映するため
     # （EDINETDB_RECONCILE_WITH_BQ）、既にBQにある企業へAPIは使わない。
