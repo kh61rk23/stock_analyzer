@@ -345,6 +345,17 @@ jobs:
       # 月初判定は monthly_runner 側（config.MONTHLY_RUN_MAX_DAY）が持つので
       # ここは常時呼び、対象外の日は runner が自分でスキップする。
       # continue-on-error: 月次提案の失敗で日次の状態コミットを落とさない。
+      # 2026-10-03: 自然言語→SQL 用の DB構造台帳（stock_data/data/db_catalog.md）を毎日作り直す。
+      # INFORMATION_SCHEMA と __TABLES__ だけを読むので課金はほぼ0。失敗しても日次は止めない。
+      - name: 🗂️ Refresh DB catalog
+        if: steps.set-mode.outputs.mode != 'single'
+        continue-on-error: true
+        env:
+          STOCK_ANALYZER_BASE:  ${{ github.workspace }}/stock_data
+          BQ_PROJECT_ID:        ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS:       ${{ secrets.BQ_CREDENTIALS }}
+        run: python -u db_catalog_gen.py 2>&1
+
       - name: 🗓️ Run monthly runner (month start only)
         if: steps.set-mode.outputs.mode != 'single'
         continue-on-error: true
