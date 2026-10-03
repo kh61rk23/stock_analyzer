@@ -1,0 +1,61 @@
+name: EdinetDB Web Backfill
+
+# 2026-10-03: EdinetDB の公開会社ページ（API枠を使わない）から財務・財務細目・書類一覧を補完する。
+# 手動実行のみ。1秒に1社のペースで読む（約480社で約10分）。
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: "ingested=BQに取込済みの会社 / all=上場全社"
+        default: "ingested"
+        type: choice
+        options: [ingested, all]
+      limit:
+        description: "対象社数の上限（空=全部）"
+        default: ""
+      years:
+        description: "直近何年度ぶん入れるか"
+        default: "10"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: stock-analyzer
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install dependencies
+        run: pip install google-cloud-bigquery google-auth pandas requests
+      - name: Backfill from EdinetDB web pages
+        env:
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+          STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
+        run: |
+          ARGS="--scope ${{ inputs.scope }} --years ${{ inputs.years }}"
+          if [ -n "${{ inputs.limit }}" ]; then ARGS="$ARGS --limit ${{ inputs.limit }}"; fi
+          python -u edinetdb_web_backfill.py $ARGS
+      - name: Commit rotation meta
+        if: always()
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add stock_data/data/edinetdb_rotation_meta.json
+          git diff --cached --quiet && exit 0
+          git commit -m "auto: edinetdb web backfill meta"
+          for i in 1 2 3; do
+            git pull --rebase origin main && git push && exit 0
+            sleep 10
+          done
+          echo "⚠️ push失敗"

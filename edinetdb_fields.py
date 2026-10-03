@@ -164,6 +164,15 @@ FINANCIAL_ITEMS = [
     ('trust_executive_count', '株式', '信託保有株数のうち役員向け株式給付信託', '株'),
     ('trust_period_start_count', '株式', '信託保有株数の期首値', '株'),
     ('trust_shares_count', '株式', '信託保有株数', ''),
+    # 2026-10-03: 会社ページ（edinetdb.jp/company/）の埋め込みデータにだけある数値項目
+    ('accumulated_oci', 'BS', 'その他の包括利益累計額', '円'),
+    ('capital_stock', 'BS', '資本金', '円'),
+    ('dividend_yield', '指標', '配当利回り', '小数'),
+    ('doe', '指標', 'DOE（株主資本配当率）', '小数'),
+    ('interim_dividend', '指標', '中間配当（1株）', '円'),
+    ('num_employees_non_consolidated', '人的資本', '単体従業員数', '人'),
+    ('officers_over100m_count', '人的資本', '報酬1億円以上の役員数', '人'),
+    ('pbr', '指標', 'PBR', '倍'),
 ]
 
 ITEM_META = {k: (st, label, unit) for k, st, label, unit in FINANCIAL_ITEMS}
