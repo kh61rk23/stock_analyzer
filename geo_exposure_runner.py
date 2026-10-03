@@ -168,7 +168,12 @@ def run(cfg=None, dry_run: bool = False, force: bool = False,
                 _save_state(cfg, state)
         else:
             # BQ認証なし等。日次分析は止めないので ok は落とさず warn 扱い。
+            # 2026-10-03: ただし「抽出できたのに書き込めなかった」は失敗にする。
+            # MERGE文の構文エラーで全件失敗していたのに、ここが warn のため
+            # 月次台帳は毎月「success」と記録し、テーブルは導入以来0行だった。
             err = str(result.get("error", ""))[:150]
+            if int(result.get("total") or 0) > 0 and not dry_run:
+                summary["ok"] = False
             summary["steps"][key] = f"warn / {err or 'success=False'}"
             print(f"  ⚠️ {key}: {err or 'success=False'}")
 

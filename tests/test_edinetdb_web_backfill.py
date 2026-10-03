@@ -43,3 +43,13 @@ def test_infer_fy_month_from_submissions():
     assert ing.infer_fy_month(["2026-03-26", "2025-03-27"]) == 12
     assert ing.infer_fy_month(["2025-08-28", "2024-08-29", "2023-08-30"]) == 5   # E00004 カネコ種苗
     assert ing.infer_fy_month([None, "x"]) is None
+
+
+def test_exposure_merge_query_is_valid_struct():
+    """2026-10-03: STRUCT の「<」欠落で全MERGEが構文エラー（権益テーブルは導入以来0行）。"""
+    import re
+    import jogmec_scraper as j
+    q = j._build_exposure_merge_query("p", [{"ticker": "1605.T", "country_code": "AUS",
+                                              "rationale": "Ichthys's LNG"}])
+    assert re.search(r"STRUCT<\s*\n\s*exposure_id STRING", q)
+    assert "Ichthys\\'s" in q

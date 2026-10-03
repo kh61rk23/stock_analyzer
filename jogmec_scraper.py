@@ -535,7 +535,9 @@ def _build_exposure_merge_query(
 MERGE `{project_id}.geopolitics.company_country_exposure` AS T
 USING (
   SELECT * FROM UNNEST([
-    STRUCT
+    -- 2026-10-03: 「STRUCT<」の「<」が抜けており、構文エラーで全MERGEが失敗していた
+    --   （geopolitics.company_country_exposure は導入以来0行。SEC抽出器も同じ関数を共用）
+    STRUCT<
       exposure_id STRING,
       ticker STRING,
       company_id STRING,
