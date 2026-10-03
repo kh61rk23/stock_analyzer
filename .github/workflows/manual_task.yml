@@ -9,6 +9,7 @@ on:
         type: choice
         options:
           - geo_exposure_force
+          - country_profile
 
 permissions:
   contents: write
@@ -38,6 +39,7 @@ jobs:
         run: |
           case "${{ inputs.task }}" in
             geo_exposure_force) python -u geo_exposure_runner.py --force ;;
+            country_profile) python -u country_profile_builder.py ;;
           esac
       - name: Commit state
         if: always()

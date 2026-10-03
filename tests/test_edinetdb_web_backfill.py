@@ -53,3 +53,10 @@ def test_exposure_merge_query_is_valid_struct():
                                               "rationale": "Ichthys's LNG"}])
     assert re.search(r"STRUCT<\s*\n\s*exposure_id STRING", q)
     assert "Ichthys\\'s" in q
+
+
+def test_country_profile_merge_query_types():
+    """2026-10-03: STRUCT の「<」欠落と、JSON列への文字列リテラルで country_profile は0行だった。"""
+    import country_profile_builder as c
+    q = c._build_merge_query("p", c.COUNTRY_PROFILES[:1])
+    assert "STRUCT<" in q and "JSON '[" in q

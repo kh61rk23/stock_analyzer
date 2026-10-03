@@ -1099,7 +1099,8 @@ def _build_merge_query(project_id: str, rows: list[dict]) -> str:
             """list/dict → JSON文字列としてSQL表現"""
             if v is None:
                 return "NULL"
-            return "'" + json.dumps(v, ensure_ascii=False).replace("'", "\\'") + "'"
+            # 2026-10-03: JSON 列へ文字列リテラルは入らない（型不一致）。JSON リテラルにする
+            return "JSON '" + json.dumps(v, ensure_ascii=False).replace("'", "\\'") + "'"
 
         value_rows.append(
             f"  ({_s(r['country_code'])}, {_s(r['country_name_ja'])}, "
@@ -1118,7 +1119,8 @@ def _build_merge_query(project_id: str, rows: list[dict]) -> str:
 MERGE `{project_id}.geopolitics.country_profile` AS T
 USING (
   SELECT * FROM UNNEST([
-    STRUCT
+    -- 2026-10-03: 「STRUCT<」の「<」欠落で構文エラーだった（country_profile は0行のまま）
+    STRUCT<
       country_code STRING,
       country_name_ja STRING,
       region STRING,
