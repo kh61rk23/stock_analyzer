@@ -60,3 +60,34 @@ def test_country_profile_merge_query_types():
     import country_profile_builder as c
     q = c._build_merge_query("p", c.COUNTRY_PROFILES[:1])
     assert "STRUCT<" in q and "JSON '[" in q
+
+
+def test_due_targets_order_and_exclusions():
+    from datetime import date
+    meta = {"E1": {"items_v1": "2026-05-01", "held_fy": 2025, "fy_month": 3},   # 3月決算・新年度が出ている
+            "E2": {"items_v1": "2026-09-30", "held_fy": 2025, "fy_month": 12},  # 12月決算・最新
+            "E4": {"web_check": {"has": False}}}                               # 財務なし
+    companies = [{"edinet_code": c} for c in ("E1", "E2", "E3", "E4")] + [
+        {"edinet_code": "E5", "is_delisted": True}]
+    assert w.due_targets(meta, companies, date(2026, 10, 3)) == ["E1", "E3"]
+
+
+def test_quarterly_items_keyed_by_quarter():
+    import edinetdb_ingestor as ing
+    rows = ing.map_edinetdb_quarterly_items(
+        {"fiscal_year": 2026, "quarter": "Q1", "net_income": 100, "revenue": 1000,
+         "derivation_method": "direct"}, edinet_code="E1", company_code="1301", now="t")
+    by = {r["item"]: r for r in rows}
+    assert by["net_income"]["item_id"] == "E1_2026_Q1_net_income" and by["revenue"]["quarter"] == "Q1"
+    assert ing.map_edinetdb_quarterly_items({"fiscal_year": 2026, "net_income": 1},
+                                            edinet_code="E1") == []
+
+
+def test_accel_from_edinetdb_quarters():
+    import earnings_surprise as es
+    q = [(2026, "Q1", 150.0), (2025, "Q1", 100.0), (2025, "Q4", 80.0)]
+    a = [(2026, 1100.0), (2025, 1000.0)]
+    r = es.calc_accel_from_quarters(q, a)
+    assert (r["q_yoy"], r["annual_yoy"], r["accel"], r["quarter"]) == (0.5, 0.1, 0.4, "FY2026Q1")
+    assert es.calc_accel_from_quarters([(2026, "Q1", 150.0)], a) is None          # 前年同期なし
+    assert es.calc_accel_from_quarters(q, [(2026, 1100.0), (2024, 900.0)]) is None  # 年次が連続しない

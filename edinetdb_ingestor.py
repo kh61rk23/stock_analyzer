@@ -176,6 +176,26 @@ def map_edinetdb_financial_items(
     return out
 
 
+def map_edinetdb_quarterly_items(row: dict, *, edinet_code: str, company_code: str = "",
+                                 now: str | None = None) -> list[dict]:
+    """単四半期（period=quarterly_standalone）の1行を edinet.financial_items_q の縦持ち行にする。
+
+    2026-10-03: yfinance の日本株は四半期損益が1〜2期分しか無く、利益の加速度
+    （四半期の前年同期比−通期の前年比）が約半数の銘柄で計算できなかった。EdinetDB API の
+    単四半期データで補う。キーは <EDINETコード>_<年度>_<Qn>_<項目>。
+    """
+    q = str(row.get("quarter") or "").upper()
+    rows = map_edinetdb_financial_items(row, edinet_code=edinet_code, company_code=company_code,
+                                        now=now)
+    if not q:
+        return []
+    for r in rows:
+        r["item_id"] = f"{edinet_code}_{r['fiscal_year']}_{q}_{r['item']}"
+        r["quarter"] = q
+        r["derivation_method"] = row.get("derivation_method")
+    return rows
+
+
 def map_edinetdb_doc_index(
     row: dict,
     company: dict,
@@ -427,6 +447,7 @@ def select_ingest_targets(
     refresh_days: int = 180,
     fail_backoff_max_days: int = 30,
     today: date | None = None,
+    web_annual: bool = False,
 ) -> list[str]:
     """P1→P4順、重複排除、鮮度除外、予算上限で対象を返す純関数。"""
     today = today or date.today()
@@ -442,6 +463,10 @@ def select_ingest_targets(
 
     def fresh(code: str) -> bool:
         info = meta.get(code) or {}
+        # 2026-10-03: 年次財務を会社ページから取る運用では、API は「本文・セグメント」用。
+        # 手元の最新年度（held_fy＝Webで更新）より API で本文を取った年度（api_fy）が古ければ取り直す
+        if web_annual and info.get("held_fy") is not None:
+            return info.get("api_fy") is not None and int(info["api_fy"]) >= int(info["held_fy"])
         value = str(info.get("last_fetched") or "")[:10]
         try:
             recent = (today - date.fromisoformat(value)).days < refresh_days
@@ -480,8 +505,8 @@ def select_ingest_targets(
         ),
     )
     # 新年度の有報が出ているはずの会社は、代表銘柄・未取得より先に取り直す
-    due_group = [item for item in remaining or []
-                 if report_due(meta.get(code_of(item)) or {}, today)]
+    due_group = [] if web_annual else [item for item in remaining or []
+                                       if report_due(meta.get(code_of(item)) or {}, today)]
     for group in (holdings, screener, due_group, representatives, remaining_fifo):
         for item in group or []:
             code = code_of(item)
@@ -777,6 +802,7 @@ def _plan_targets(companies: list[dict], cfg, meta: dict, budget: int) -> list[s
         [company.get("edinet_code") for company in companies if not company.get("is_delisted")],
         meta, budget, calls_per_company=3,
         refresh_days=int(getattr(cfg, "EDINETDB_REFRESH_DAYS", 180)),
+        web_annual=bool(getattr(cfg, "EDINETDB_ANNUAL_FROM_WEB", False)),
     )
 
 
@@ -997,6 +1023,51 @@ def run_edinetdb_ingest(
         items_done.add(code)
         return rows
 
+    # 2026-10-03: 四半期財務（単四半期）。保有・スクリーナー候補を優先し、30日に1回取り直す。
+    # 利益の加速度（決算サプライズ・スクリーナーの加速点）を日本株でも計算できるようにする
+    q_rows: list[dict] = []
+    q_done: list[str] = []
+    q_budget = int(getattr(cfg, "EDINETDB_QUARTERLY_DAILY_CALLS", 0) or 0)
+    if q_budget > 0 and not _stop_ingest(client):
+        q_refresh = int(getattr(cfg, "EDINETDB_QUARTERLY_REFRESH_DAYS", 30))
+        holdings_t, screener_t, _reps = _priority_tickers(cfg)
+        by_sec = {_sec4(c.get("sec_code")): c.get("edinet_code") for c in companies if c.get("sec_code")}
+        q_targets = []
+        for t in list(holdings_t) + list(screener_t):
+            ec = by_sec.get(_sec4(t))
+            if not ec or ec in q_targets:
+                continue
+            last = str((meta.get(ec) or {}).get("q_fetched") or "")[:10]
+            try:
+                if (date.today() - date.fromisoformat(last)).days < q_refresh:
+                    continue
+            except ValueError:
+                pass
+            q_targets.append(ec)
+        for ec in q_targets[:q_budget]:
+            if _stop_ingest(client) or (
+                    getattr(client, "daily_budget", daily_budget) - client.calls - reserve_calls < 1):
+                break
+            qs = client.get(f"/companies/{ec}/financials",
+                            {"years": 3, "period": "quarterly_standalone"})
+            if not isinstance(qs, list):
+                continue
+            cc = _sec4((by_edinet.get(ec) or {}).get("sec_code"))
+            for item in qs:
+                if isinstance(item, dict):
+                    q_rows += map_edinetdb_quarterly_items(item, edinet_code=ec, company_code=cc, now=now)
+            q_done.append(ec)
+        if q_rows:
+            try:
+                for i in range(0, len(q_rows), 4000):
+                    bq.merge_rows("financial_items_q", q_rows[i:i + 4000], ["item_id"])
+                for ec in q_done:
+                    meta.setdefault(ec, {})["q_fetched"] = today_str
+            except Exception as exc:
+                print(f"    ⚠️  [edinetdb] financial_items_q MERGE失敗: {type(exc).__name__}: {_brief_error(exc)}")
+                q_done = []
+        print(f"    📅 [edinetdb] 四半期財務: {len(q_done)}社 / {len(q_rows)}行（候補{len(q_targets)}社）")
+
     for code in targets:
         company = by_edinet.get(code, {})
         company_code = _sec4(company.get("sec_code"))
@@ -1008,10 +1079,17 @@ def run_edinetdb_ingest(
         # 残り枠がこの会社の分（2回＋本文を取る回なら1回）を切ったら止める。
         # 3回固定で見ていたため、2回で済む会社の分の枠が毎日余っていた（2026-10-02）
         _fc = int((meta.get(code) or {}).get("fetch_count", 0))
-        _need = 2 + (1 if _fc % max(1, int(getattr(cfg, "EDINETDB_TEXTBLOCK_EVERY_N", 2))) == 0 else 0)
+        _held = (meta.get(code) or {}).get("held_fy")
+        # 2026-10-03: 年次財務は会社ページ（edinetdb_web_backfill）から取る。API は本文・セグメントだけ
+        web_annual = bool(getattr(cfg, "EDINETDB_ANNUAL_FROM_WEB", False)) and _held is not None
+        if web_annual:
+            _need = 2
+        else:
+            _need = 2 + (1 if _fc % max(1, int(getattr(cfg, "EDINETDB_TEXTBLOCK_EVERY_N", 2))) == 0 else 0)
         if getattr(client, "daily_budget", daily_budget) - client.calls - reserve_calls < _need:
             continue
-        financials = client.get(f"/companies/{code}/financials", {"years": 5, "period": "annual"})
+        financials = [] if web_annual else client.get(
+            f"/companies/{code}/financials", {"years": 5, "period": "annual"})
         if not isinstance(financials, list):
             # 予算枯渇・レート制限で落ちた分は「その企業の失敗」ではないので
             # 台帳を進めない（次回そのまま再試行させる）。
@@ -1057,6 +1135,8 @@ def run_edinetdb_ingest(
             [row.get("fiscal_year") for row in fin_rows if row.get("fiscal_year") is not None],
             default=None,
         )
+        if web_annual:
+            latest_year = int(_held)
         seg_rows, sf_rows = map_edinetdb_segments(
             code, segments if isinstance(segments, list) else [], latest_year,
             company_code=company_code, now=now,
@@ -1064,7 +1144,7 @@ def run_edinetdb_ingest(
         text_rows = []
         fetch_count = int((meta.get(code) or {}).get("fetch_count", 0))
         every_n = max(1, int(getattr(cfg, "EDINETDB_TEXTBLOCK_EVERY_N", 2)))
-        if fetch_count % every_n == 0:
+        if web_annual or fetch_count % every_n == 0:
             blocks = client.get(
                 f"/companies/{code}/text-blocks",
                 text_block_params(latest_year),
@@ -1092,9 +1172,10 @@ def run_edinetdb_ingest(
             meta[code] = {
                 "last_fetched": today_str,
                 "fetch_count": fetch_count + 1, "company_code": company_code,
-                "held_fy": latest_year,
+                "held_fy": max(int(latest_year or 0), int(_held or 0)) or None,
+                "api_fy": latest_year if (web_annual or text_rows) else (meta.get(code) or {}).get("api_fy"),
                 # 決算月とWeb確認の結果は残す（次の取り直し時期の判定に使う）
-                **{k: _prev[k] for k in ("fy_month", "web_check") if k in _prev},
+                **{k: _prev[k] for k in ("fy_month", "web_check", "items_v1", "q_fetched") if k in _prev},
             }
             success += 1
             ingested.append({
@@ -1197,6 +1278,7 @@ def run_edinetdb_ingest(
         "targets": targets, "budget": daily_budget, "api_calls": client.calls,
         "items_rows": items_merged, "items_companies": len(items_done),
         "items_backfilled": backfilled,
+        "quarterly_companies": len(q_done), "quarterly_rows": len(q_rows),
     }
 
 

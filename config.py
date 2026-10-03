@@ -1350,7 +1350,14 @@ EDINETDB_MONTHLY_GUARD: int = 3100
 EDINETDB_COMPANY_CACHE_DAYS: int = 7   # 会社マスタ（社名・上場区分）の取り直し間隔
 # 2026-10-03: 財務三表の細目（edinet.financial_items）。取得済みの会社は残り枠で
 # /financials だけ取り直して細目を埋める（1社1回）
-EDINETDB_ITEMS_BACKFILL: bool = True
+EDINETDB_ITEMS_BACKFILL: bool = False   # 2026-10-03: 年次はWeb補完へ移管したため API での細目補完は止める
+# 2026-10-03（健太決定）: 年次財務は会社ページ（edinetdb_web_backfill・日次 --scope due）から取り、
+# API の1日100回は ①有報本文・セグメント（新しい年度が出た会社だけ・1社2回）と
+# ②四半期財務（保有・スクリーナー候補・30日に1回・1社1回）に使う
+EDINETDB_ANNUAL_FROM_WEB: bool = True
+EDINETDB_QUARTERLY_DAILY_CALLS: int = 40
+EDINETDB_QUARTERLY_REFRESH_DAYS: int = 30
+EDINETDB_WEB_DAILY_LIMIT: int = 100      # 日次のWeb更新（新年度の有報が出た会社＋未取得）の社数上限
 EDINETDB_ITEMS_MERGE_CHUNK: int = 4000
 EDINETDB_REFRESH_DAYS: int = 180
 EDINETDB_TEXTBLOCK_EVERY_N: int = 2

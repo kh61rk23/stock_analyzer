@@ -168,6 +168,26 @@ def _statements(project: str) -> list[str]:
           source STRING,
           updated_at TIMESTAMP
         ) CLUSTER BY edinet_code, statement, item""",
+        # 2026-10-03: 単四半期の財務細目（EdinetDB period=quarterly_standalone）
+        f"""CREATE TABLE IF NOT EXISTS `{project}.edinet.financial_items_q` (
+          item_id STRING NOT NULL,
+          edinet_code STRING NOT NULL,
+          company_code STRING,
+          fiscal_year INT64,
+          quarter STRING,
+          fiscal_year_end DATE,
+          statement STRING,
+          item STRING NOT NULL,
+          label_ja STRING,
+          unit STRING,
+          value FLOAT64,
+          accounting_standard STRING,
+          basis STRING,
+          derivation_method STRING,
+          doc_id STRING,
+          source STRING,
+          updated_at TIMESTAMP
+        ) CLUSTER BY edinet_code, item""",
     ]
 
 

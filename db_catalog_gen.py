@@ -30,6 +30,7 @@ TABLE_NOTES = {
     "edinet.company": "上場会社マスタ（EdinetDB）。1社1行。edinet_code ⇔ sec_code（証券コード5桁・先頭4桁が銘柄コード）",
     "edinet.financials": "年次財務の主要約25項目。1社1年度1行。キー (edinet_code, fiscal_year)。fiscal_year＝決算期末の年（3月決算 FY2026＝2026年3月期）。金額は円",
     "edinet.financial_items": "財務三表の細目（縦持ち）。1社1年度1項目1行。statement=PL/BS/CF/株式/人的資本/環境/指標、item=項目キー（下の一覧）、value=値。company_code は証券コード4桁",
+    "edinet.financial_items_q": "単四半期の財務細目（EdinetDB period=quarterly_standalone）。1社1年度1四半期1項目1行。quarter='Q1'〜'Q4'。保有・スクリーナー候補を30日ごとに更新",
     "edinet.doc_index": "有価証券報告書の一覧。disclosure_date＝提出日、fiscal_year_end＝決算期末",
     "edinet.segments": "セグメント（事業・地域）。company_code 単位。segment_finance と segment_id で結合",
     "edinet.segment_finance": "セグメント別の売上・利益・資産。segments.segment_id と結合",

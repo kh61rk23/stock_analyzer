@@ -498,6 +498,64 @@ def calc_profit_acceleration(quarterly: list, annual: list) -> dict | None:
             "quarter": d0.isoformat()}
 
 
+def calc_accel_from_quarters(q_rows: list, annual_rows: list) -> dict | None:
+    """EdinetDB の単四半期・年次の純利益から加速度を出す（純関数）。
+
+    q_rows: [(fiscal_year, "Q1".."Q4", value)]、annual_rows: [(fiscal_year, value)]。
+    最新の四半期と前年同四半期を比べ、最新2年度の年次の伸びとの差を返す。
+    """
+    order = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4}
+    qs = {(int(fy), q): float(v) for fy, q, v in q_rows if q in order and v is not None}
+    if not qs:
+        return None
+    fy, q = max(qs, key=lambda k: (k[0], order[k[1]]))
+    prev = qs.get((fy - 1, q))
+    ann = {int(y): float(v) for y, v in annual_rows if v is not None}
+    years = sorted(ann, reverse=True)
+    if prev is None or len(years) < 2 or years[0] - years[1] != 1:
+        return None
+    cur, a0, a1 = qs[(fy, q)], ann[years[0]], ann[years[1]]
+    if cur <= 0 or prev <= 0 or a0 <= 0 or a1 <= 0:
+        return None
+    qy, ay = cur / prev - 1, a0 / a1 - 1
+    return {"q_yoy": round(qy, 4), "annual_yoy": round(ay, 4), "accel": round(qy - ay, 4),
+            "quarter": f"FY{fy}{q}", "source": "edinetdb"}
+
+
+_JP_Q_CACHE: dict | None = None
+_JP_Q_LOCK = __import__("threading").Lock()
+
+
+def _jp_quarterly_accel(ticker: str) -> dict | None:
+    """日本株の加速度を BQ（edinet.financial_items_q / financial_items）から。初回に1回だけ全社分を読む。"""
+    global _JP_Q_CACHE
+    if not ticker.upper().endswith(".T"):
+        return None
+    with _JP_Q_LOCK:
+        if _JP_Q_CACHE is None:
+            _JP_Q_CACHE = {}
+            try:
+                from edinet_bq_client import EDINETBQClient
+                bq = EDINETBQClient()
+                p = bq.project
+                qrows = bq.client.query(
+                    f"SELECT company_code, fiscal_year, quarter, value FROM `{p}.edinet.financial_items_q` "
+                    "WHERE item = 'net_income'").result()
+                arows = bq.client.query(
+                    f"SELECT company_code, fiscal_year, value FROM `{p}.edinet.financial_items` "
+                    "WHERE item = 'net_income' AND fiscal_year >= EXTRACT(YEAR FROM CURRENT_DATE()) - 3").result()
+                for r in qrows:
+                    _JP_Q_CACHE.setdefault(r.company_code, {"q": [], "a": []})["q"].append(
+                        (r.fiscal_year, r.quarter, r.value))
+                for r in arows:
+                    _JP_Q_CACHE.setdefault(r.company_code, {"q": [], "a": []})["a"].append(
+                        (r.fiscal_year, r.value))
+            except Exception as exc:
+                print(f"    ⚠️ [earnings_surprise] EdinetDB四半期の読込失敗: {type(exc).__name__}: {str(exc)[:80]}")
+    d = _JP_Q_CACHE.get(ticker.upper().replace(".T", ""))
+    return calc_accel_from_quarters(d["q"], d["a"]) if d else None
+
+
 def _fetch_profit_acceleration(ticker: str) -> dict | None:
     """四半期・通期の損益計算書から加速度を出す（純利益、無ければ希薄化EPS）。"""
     try:
@@ -505,7 +563,7 @@ def _fetch_profit_acceleration(ticker: str) -> dict | None:
         t = yf.Ticker(ticker)
         qis, ais = t.quarterly_income_stmt, t.income_stmt
         if qis is None or ais is None:
-            return None
+            return _jp_quarterly_accel(ticker)
         # 伸び率どうしの比較なので、四半期と通期で別の行（純利益/EPS）を使ってよい
         rows = ("Net Income", "Net Income Common Stockholders", "Diluted EPS", "Basic EPS")
         for qr in (r for r in rows if r in qis.index):
@@ -514,9 +572,10 @@ def _fetch_profit_acceleration(ticker: str) -> dict | None:
                                              list(zip(ais.columns, ais.loc[ar].values)))
                 if r:
                     return r
-        return None
+        # 2026-10-03: yfinance に四半期が無い日本株は EdinetDB の単四半期で補う
+        return _jp_quarterly_accel(ticker)
     except Exception:
-        return None
+        return _jp_quarterly_accel(ticker)
 
 
 def apply_surprise_flags(candidates: list, cache: dict, cfg=None,

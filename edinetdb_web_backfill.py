@@ -78,7 +78,30 @@ def build_rows(code: str, company_code: str, records: list[dict], fy_month,
     return {"financials": fin, "financial_items": items, "doc_index": docs}
 
 
-def _targets(bq, scope: str, companies: list[dict]) -> list[str]:
+def due_targets(meta: dict, companies: list[dict], today: date | None = None) -> list[str]:
+    """日次のWeb更新対象（純関数）。①新しい年度の有報が出ているはずの会社 ②未取得の会社。
+
+    2026-10-03: 年次財務は会社ページから取る運用に変更。有報の提出は6月下旬（3月決算）などに
+    集中するので、新年度の会社を先に、未取得の会社を後に並べる。財務なしと確認済みの会社は除く。
+    """
+    today = today or date.today()
+    listed = [c.get("edinet_code") for c in companies
+              if c.get("edinet_code") and not c.get("is_delisted")]
+    due, never = [], []
+    for code in listed:
+        info = meta.get(code) or {}
+        if (info.get("web_check") or {}).get("has") is False:
+            continue
+        if not info.get("items_v1"):
+            never.append(code)
+        elif ing.report_due({**info, "last_fetched": info.get("items_v1")}, today):
+            due.append(code)
+    return due + never
+
+
+def _targets(bq, scope: str, companies: list[dict], meta: dict | None = None) -> list[str]:
+    if scope == "due":
+        return due_targets(meta or {}, companies)
     if scope == "all":
         return [c["edinet_code"] for c in companies
                 if c.get("edinet_code") and not c.get("is_delisted")]
@@ -99,7 +122,9 @@ def run(cfg, scope: str = "ingested", limit: int | None = None, years: int = 10,
     by_code = {c.get("edinet_code"): c for c in companies}
     meta_path = data_dir / getattr(cfg, "EDINETDB_ROTATION_META", "edinetdb_rotation_meta.json")
     meta = ing._load_json(meta_path, {})
-    codes = _targets(bq, scope, companies)
+    codes = _targets(bq, scope, companies, meta)
+    if scope == "due":
+        redo = True        # 新年度の会社は30日以内に補完済みでも取り直す
     # 2026-10-03: 全社（約4,000社）は6時間のジョブ上限を超えうるので、直近に補完済みの会社は
     # 飛ばして続きから再開できるようにする（--redo で全部やり直し）
     if not redo:
@@ -189,13 +214,15 @@ def run(cfg, scope: str = "ingested", limit: int | None = None, years: int = 10,
 if __name__ == "__main__":
     import config as cfg
     ap = argparse.ArgumentParser()
-    ap.add_argument("--scope", default="ingested", choices=["ingested", "all"])
-    ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--scope", default="ingested", choices=["ingested", "all", "due"])
+    ap.add_argument("--limit", type=int, default=None)  # due の既定は config.EDINETDB_WEB_DAILY_LIMIT
     ap.add_argument("--years", type=int, default=10)
     ap.add_argument("--redo", action="store_true", help="補完済みも含めてやり直す")
     ap.add_argument("--time-budget-min", type=float, default=None)
     a = ap.parse_args()
-    s = run(cfg, a.scope, a.limit, a.years, redo=a.redo, time_budget_min=a.time_budget_min)
+    lim = a.limit if a.limit is not None else (
+        int(getattr(cfg, "EDINETDB_WEB_DAILY_LIMIT", 100)) if a.scope == "due" else None)
+    s = run(cfg, a.scope, lim, a.years, redo=a.redo, time_budget_min=a.time_budget_min)
     # GitHub Actions へ「時間切れで中断したか」を渡す（続きを自動で起動するため）
     import os
     if os.environ.get("GITHUB_OUTPUT"):
