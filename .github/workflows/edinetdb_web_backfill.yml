@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: stock-analyzer
@@ -38,6 +39,7 @@ jobs:
       - name: Install dependencies
         run: pip install google-cloud-bigquery google-auth pandas requests
       - name: Backfill from EdinetDB web pages
+        id: backfill
         env:
           BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
           BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
@@ -60,3 +62,13 @@ jobs:
             sleep 10
           done
           echo "⚠️ push失敗"
+      # 2026-10-03: 時間切れで中断した場合は、同じ条件で自分をもう一度起動する（全社は約7〜8時間かかる）。
+      # GITHUB_TOKEN による workflow_dispatch は新しい実行を作れる（GitHub の例外規定）。
+      - name: Continue if paused
+        if: steps.backfill.outputs.paused == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run edinetdb_web_backfill.yml --ref main \
+            -f scope=${{ inputs.scope }} -f years=${{ inputs.years }} -f limit="${{ inputs.limit }}"
+          echo "▶ 続きを起動しました"

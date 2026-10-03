@@ -147,6 +147,7 @@ def run(cfg, scope: str = "ingested", limit: int | None = None, years: int = 10,
     for n, code in enumerate(codes, 1):
         if time_budget_min and (time.time() - t_start) / 60 > time_budget_min:
             print(f"  ⏸ 時間上限 {time_budget_min:.0f}分に達したので中断（次回は続きから）: {n - 1}/{len(codes)}社")
+            stats["paused"] = True
             break
         if n > 1:
             time.sleep(sleep_sec)          # 相手サイトへの配慮（1秒に1社）
@@ -195,4 +196,9 @@ if __name__ == "__main__":
     ap.add_argument("--time-budget-min", type=float, default=None)
     a = ap.parse_args()
     s = run(cfg, a.scope, a.limit, a.years, redo=a.redo, time_budget_min=a.time_budget_min)
+    # GitHub Actions へ「時間切れで中断したか」を渡す（続きを自動で起動するため）
+    import os
+    if os.environ.get("GITHUB_OUTPUT"):
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+            fh.write(f"paused={'true' if s.get('paused') else 'false'}\n")
     raise SystemExit(0 if s["ok"] or s["error"] == 0 else 1)
