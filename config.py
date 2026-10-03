@@ -1574,6 +1574,9 @@ NEWS_ALERT_MAX_ARTICLES: int = 5  # Gmailアラートに含める記事数
 # 実行対象モジュールキー（ENABLE_* フラグが True の場合のみ実際に動く）
 DAILY_MODULES = [
     "key_health",    # APIキー生存判定（Issue J-2・最序盤で実行）
+    # 2026-10-03: 13F（機関投資家の保有）。旧条件 _in_mode("all") で一度も動いていなかった。
+    # 取得は四半期の提出期間（1/4/7/10月15日〜末日）だけで、それ以外はキャッシュ参照
+    "institutional_13f",
     # 2026-07-30（健太決定）: 日次でも EdinetDB を叩く。
     # 旧方針（D-①「日次経路はBQ読み取り専用」）からの変更。
     # 月次コール枠（EDINETDB_MONTHLY_GUARD=3100）を使い切ったら

@@ -3666,7 +3666,10 @@ def run_all_tasks(mode: str = "all") -> dict:
     # ── [17.7] institutional_13f_monitor（Wave 4 - Policy Ph3）───────
     # 四半期フラグ: 1月/4月/7月/10月の15日〜末日のみフル取得。
     # それ以外はキャッシュを利用（SEC EDGAR 負荷軽減）。
-    if getattr(cfg, "ENABLE_INSTITUTIONAL_13F", True) and _in_mode("all"):
+    # 2026-10-03: 旧条件 _in_mode("all") は日次モードで常に偽（mode名をキーに使う落とし穴）。
+    # 導入以来一度も実行されず us.institutional_positions は0行だった。DAILY_MODULES に登録し、
+    # 取得頻度は _is_quarter_filing_period()（1/4/7/10月15日〜末日）が絞る。
+    if getattr(cfg, "ENABLE_INSTITUTIONAL_13F", True) and _in_mode("institutional_13f"):
         try:
             _i13f = _load_local_module(
                 "institutional_13f_monitor",
@@ -3816,7 +3819,10 @@ def run_all_tasks(mode: str = "all") -> dict:
     # confidence 低下・screener 順位急変を検出し、
     # EDINET 深掘り対象を cfg.EDINET_DEEP_DIVE_TICKERS に注入する。
     # edinet_rotation_manager は後続の [18] で priority=0 として処理する。
-    if getattr(cfg, "ENABLE_DEEP_DIVE_TRIGGER", True) and _in_mode("all"):
+    # 2026-10-03: _in_mode("all") は日次で常に偽のため導入以来未実行。受け手の
+    # edinet_rotation_manager（EDINETローテ）は 2026-09 に廃止済みで、有効化しても効果が無い。
+    # 配線は残し、モジュールキーで判定する形にだけ直す（DAILY_MODULES には未登録＝停止のまま）。
+    if getattr(cfg, "ENABLE_DEEP_DIVE_TRIGGER", True) and _in_mode("deep_dive_trigger"):
         try:
             _ddt = _load_local_module(
                 "deep_dive_trigger",
