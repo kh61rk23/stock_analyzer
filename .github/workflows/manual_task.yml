@@ -15,7 +15,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: stock-analyzer
+  group: manual-${{ inputs.task }}
   cancel-in-progress: false
 
 jobs:
