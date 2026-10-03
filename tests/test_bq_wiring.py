@@ -32,11 +32,29 @@ class TestWeeklyGateKeys:
 
     def test_main_never_gates_on_a_mode_name(self):
         src = (REPO / "stock_analyzer_main.py").read_text(encoding="utf-8")
-        for name in ("weekly", "daily"):
-            assert f'_in_mode("{name}")' not in src, (
+        # 2026-10-03: "all" も追加（13F・deep_dive_trigger が _in_mode("all") で導入以来未実行だった）
+        code = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
+        for name in ("weekly", "daily", "all"):
+            assert f'_in_mode("{name}")' not in code, (
                 f'_in_mode("{name}") はモード名でありモジュールキーではない。'
                 "判定が常に False になり、そのブロックは一度も実行されない"
             )
+
+    def test_every_gate_key_is_registered_or_retired(self):
+        """_in_mode に渡すキーは DAILY/WEEKLY_MODULES のどちらかにあること（2026-10-03）。
+
+        どちらにも無いキーは日次・週次とも常に False＝一度も動かない。
+        意図して止めている（廃止済み）ものだけを下に列挙する。
+        """
+        import re
+        src = (REPO / "stock_analyzer_main.py").read_text(encoding="utf-8")
+        code = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
+        keys = set(re.findall(r'_in_mode\("([^"]+)"\)', code))
+        retired = {"deep_dive_trigger",          # 受け手の EDINET ローテ廃止（2026-09）
+                   "facility_expansion", "job_posting",
+                   "jp_us_sector_correlation"}   # 2026-09-29 廃止（健太の判断）
+        registered = set(config.DAILY_MODULES) | set(config.WEEKLY_MODULES)
+        assert sorted(keys - registered - retired) == []
 
     def test_bq_writing_monitors_run_in_weekly(self):
         # BQ us.job_signal_cache / executive_transitions / facility_signals の

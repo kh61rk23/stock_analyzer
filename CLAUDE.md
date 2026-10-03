@@ -36,7 +36,14 @@ python3 maintenance_packet.py   # 全監査+台帳+直近変更を MAINTENANCE_P
 2. 開発ログ台帳に記録（2026-09-26〜。CHANGELOG.md は凍結）:
    `python3 ~/Documents/Obsidian_Local/Vault2_ClaudeCode_Local/board/devlog.py add --project stock_analyzer --kind 修正 --title "…" --detail "…" --files a.py --commit abc1234`
    （board「システム › 開発」/dev で全プロジェクト横断に見られる）
-3. MODULE_INDEX.md / SPEC_core.md に構造変更を反映
+3. **構成管理資料を必ず更新する**（2026-10-03 健太指示：改修のたびに更新）
+   - `02_ファイル構成/MODULE_INDEX.md`：追加・変更したモジュールとワークフローの行
+   - `02_ファイル構成/SPEC_db_schema.md`：テーブル・列・書き手・実測行数（§0-1）を変えたら必ず
+   - `02_ファイル構成/CONFIG_REFERENCE.md`：`python3 config_reference_gen.py` で再生成（手編集しない）
+   - `08_jsonファイル,テーブル定義/bq_all_schemas_<日付>.json`：BQの表・列を変えたら取り直す
+   - SPEC_core.md：処理の流れ・構造を変えたら
+4. **開発ダッシュボードを更新する**：board の G-dev `10_案件台帳.md` の stock_analyzer 行
+   （概要・現在地／次アクション）を最新にする（開発ログ＝/dev の明細と、台帳＝現在地の両方）
 
 ## このシステムの構造（30秒）
 
@@ -64,7 +71,9 @@ python3 maintenance_packet.py   # 全監査+台帳+直近変更を MAINTENANCE_P
    DAILY/WEEKLY_MODULES のどちらにも無いため**常に False**。そのブロックは
    一度も実行されない（2026-09 に求人票/役員転職/施設着工の3件が該当し、
    対応する BQ テーブルが作成以来ずっと0行だった）
-   → `tests/test_bq_wiring.py` が機械検査する
+   → `tests/test_bq_wiring.py` が機械検査する。2026-10 に `_in_mode("all")` でも同じ事故
+     （13F が導入以来未実行・us.institutional_positions 0行）。現在は「_in_mode に渡すキーは
+     DAILY/WEEKLY_MODULES に登録済みか、廃止済みリストにあること」まで検査している
 6. **外部APIの間隔なし連打**: 送信間隔を空けずGETを連発すると429を誘発し、
    その再試行が日次予算を食い潰して全件失敗する。さらに予算切れパスで
    `last_error` を立て忘れると呼び出し側の打ち切りが発火せず空振り周回する
@@ -86,6 +95,12 @@ python3 maintenance_packet.py   # 全監査+台帳+直近変更を MAINTENANCE_P
    71日連続 alert（パス3件・時刻キー1件・半減期1件のズレ）
    → 監視項目を足すときは**産出側の実ファイルを1度は開いて確認**する。
      「未生成」と「陳腐化」は別状態として扱うこと
+10. **文字列で組み立てたSQLの構文エラー＋失敗の格下げ**: f文字列でMERGE文を組む箇所で
+   `STRUCT<` の `<` が抜け（JSON列には文字列リテラルを渡し）、全件が構文エラーだった。
+   しかも呼び出し側が「書けなかった」を warn 扱いにして終了コード0を返し、月次台帳は毎月
+   success。geopolitics.company_country_exposure / country_profile が導入以来0行（2026-10-03 発覚）
+   → SQL生成関数を足したら **BQ MCP の dryRun で構文と型を一度通す**。
+     「抽出できたのに書けなかった」は失敗として返す
 
 ## データが入らない系の調査手順（BQ実データ起点）
 
