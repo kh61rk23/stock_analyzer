@@ -89,7 +89,8 @@ def _targets(bq, scope: str, companies: list[dict]) -> list[str]:
 
 
 def run(cfg, scope: str = "ingested", limit: int | None = None, years: int = 10,
-        sleep_sec: float = 1.0, flush_every: int = 25) -> dict:
+        sleep_sec: float = 1.0, flush_every: int = 25, redo: bool = False,
+        time_budget_min: float | None = None) -> dict:
     from edinet_bq_client import EDINETBQClient
     import requests
     bq = EDINETBQClient()
@@ -99,6 +100,19 @@ def run(cfg, scope: str = "ingested", limit: int | None = None, years: int = 10,
     meta_path = data_dir / getattr(cfg, "EDINETDB_ROTATION_META", "edinetdb_rotation_meta.json")
     meta = ing._load_json(meta_path, {})
     codes = _targets(bq, scope, companies)
+    # 2026-10-03: 全社（約4,000社）は6時間のジョブ上限を超えうるので、直近に補完済みの会社は
+    # 飛ばして続きから再開できるようにする（--redo で全部やり直し）
+    if not redo:
+        cutoff = date.today().toordinal() - 30
+        def _recent(c):
+            try:
+                return date.fromisoformat(str((meta.get(c) or {}).get("items_v1") or "")[:10]).toordinal() >= cutoff
+            except ValueError:
+                return False
+        skipped = [c for c in codes if _recent(c)]
+        codes = [c for c in codes if not _recent(c)]
+        if skipped:
+            print(f"  ⏩ 30日以内に補完済み {len(skipped)}社は飛ばす")
     if limit:
         codes = codes[:limit]
     print(f"🌐 EdinetDB Web補完: 対象{len(codes)}社（scope={scope} / 直近{years}年度）")
@@ -129,7 +143,11 @@ def run(cfg, scope: str = "ingested", limit: int | None = None, years: int = 10,
         done.clear()
         ing._save_json(meta_path, meta)
 
+    t_start = time.time()
     for n, code in enumerate(codes, 1):
+        if time_budget_min and (time.time() - t_start) / 60 > time_budget_min:
+            print(f"  ⏸ 時間上限 {time_budget_min:.0f}分に達したので中断（次回は続きから）: {n - 1}/{len(codes)}社")
+            break
         if n > 1:
             time.sleep(sleep_sec)          # 相手サイトへの配慮（1秒に1社）
         try:
@@ -173,6 +191,8 @@ if __name__ == "__main__":
     ap.add_argument("--scope", default="ingested", choices=["ingested", "all"])
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--years", type=int, default=10)
+    ap.add_argument("--redo", action="store_true", help="補完済みも含めてやり直す")
+    ap.add_argument("--time-budget-min", type=float, default=None)
     a = ap.parse_args()
-    s = run(cfg, a.scope, a.limit, a.years)
-    raise SystemExit(0 if s["ok"] else 1)
+    s = run(cfg, a.scope, a.limit, a.years, redo=a.redo, time_budget_min=a.time_budget_min)
+    raise SystemExit(0 if s["ok"] or s["error"] == 0 else 1)

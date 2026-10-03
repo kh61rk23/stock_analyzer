@@ -27,7 +27,7 @@ concurrency:
 jobs:
   backfill:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -43,7 +43,8 @@ jobs:
           BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
           STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
         run: |
-          ARGS="--scope ${{ inputs.scope }} --years ${{ inputs.years }}"
+          # 6時間のジョブ上限より手前で止め、メタを保存してから終える（次回は続きから）
+          ARGS="--scope ${{ inputs.scope }} --years ${{ inputs.years }} --time-budget-min 320"
           if [ -n "${{ inputs.limit }}" ]; then ARGS="$ARGS --limit ${{ inputs.limit }}"; fi
           python -u edinetdb_web_backfill.py $ARGS
       - name: Commit rotation meta
