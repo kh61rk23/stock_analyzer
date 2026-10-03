@@ -188,50 +188,50 @@ def _extract_weekly_scores(
     if not history_all:
         return []
 
-    # 全日付を降順にソート
-    all_dates = sorted(history_all.keys(), reverse=True)
-    if not all_dates:
-        return []
-
-    # 週次サンプリング: 7日ごとに最新日付から遡る
-    results   = []
-    now       = datetime.now()
-    cutoff    = now - timedelta(weeks=n_weeks)
-
-    seen_weeks: set = set()
-
-    for date_str in all_dates:
+    # 2026-10-03: 旧版は ISO 週ごとに「その週の最新日」を1件ずつ取っていたため、
+    # 比較相手が「7日前」ではなく「前の週の最終日」になり、曜日で間隔が1〜13日ぶれ、
+    # 週の間は毎日同じ基準日と比べ続けていた（10/2・10/3 とも 石油・石炭 48→81pt）。
+    # 最新日から7日刻みで遡り、各時点「以前で最も近い日」を取る。
+    dated = []
+    for date_str in history_all.keys():
         try:
-            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            dated.append((datetime.strptime(date_str, "%Y-%m-%d"), date_str))
         except Exception:
             continue
-        if dt < cutoff:
-            break
+    if not dated:
+        return []
+    dated.sort(reverse=True)
+    cutoff = datetime.now() - timedelta(weeks=n_weeks)
+    latest_dt = dated[0][0]
 
-        # 週番号で重複排除（ISO週番号）
-        week_key = f"{dt.isocalendar()[0]}W{dt.isocalendar()[1]}"
-        if week_key in seen_weeks:
-            continue
-        seen_weeks.add(week_key)
-
+    def _score_of(date_str):
         day_data = history_all.get(date_str, {})
         if not isinstance(day_data, dict):
-            continue
-
+            return None
         entry = day_data.get(sector_code)
         if entry is None:
-            continue
-
+            return None
         if isinstance(entry, dict):
-            score = entry.get("score")
-        else:
-            try:
-                score = float(entry)
-            except (TypeError, ValueError):
-                score = None
+            entry = entry.get("score")
+        try:
+            return float(entry)
+        except (TypeError, ValueError):
+            return None
 
-        if score is not None:
-            results.append({"date": date_str, "score": float(score)})
+    results = []
+    used: set = set()
+    for k in range(n_weeks + 1):
+        target = latest_dt - timedelta(days=7 * k)
+        if target < cutoff:
+            break
+        # 目標日以前で最も近い日（3日以内）。休場日・欠測日を吸収する
+        for dt, date_str in dated:
+            if dt <= target and (target - dt).days <= 3 and date_str not in used:
+                score = _score_of(date_str)
+                if score is not None:
+                    results.append({"date": date_str, "score": score})
+                    used.add(date_str)
+                    break
 
     # 昇順に戻す
     results.sort(key=lambda x: x["date"])

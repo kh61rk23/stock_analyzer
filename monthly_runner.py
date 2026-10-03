@@ -152,7 +152,23 @@ def main(argv: list[str] | None = None) -> int:
     yyyymm = args.month or prev_month(today)
     steps = build_steps(cfg, yyyymm, today)
 
-    print(f"📅 月次ランナー開始: 対象月={yyyymm} / 実行日={today}")
+    # 2026-10-03: 月初3日間は毎日すべてのステップを再実行していた（10/1〜10/3 で3回）。
+    # 同じ対象月で成功済みのステップは飛ばし、失敗・未実行のものだけやり直す。
+    prev = {}
+    if not args.force and not args.dry_run:
+        try:
+            _p = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+            if _p.get("target_month") == yyyymm:
+                prev = _p.get("steps") or {}
+        except (OSError, ValueError):
+            prev = {}
+    done = {n for n, v in prev.items() if str(v).startswith(("success", "skipped"))}
+    if steps and all(name in done for name, *_ in steps):
+        print(f"⏩ 月次ランナー: 対象月={yyyymm} は全ステップ完了済み — 再実行は --force")
+        return 0
+
+    print(f"📅 月次ランナー開始: 対象月={yyyymm} / 実行日={today}"
+          + (f"（完了済み{len(done)}件は飛ばす）" if done else ""))
     status = {
         "run_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "target_month": yyyymm,
@@ -161,6 +177,9 @@ def main(argv: list[str] | None = None) -> int:
     }
 
     for name, enabled, cmd, skip_reason in steps:
+        if name in done:
+            status["steps"][name] = prev[name]
+            continue
         if not enabled:
             print(f"  ⏩ {name}: スキップ（{skip_reason}）")
             status["steps"][name] = f"skipped / {skip_reason}"

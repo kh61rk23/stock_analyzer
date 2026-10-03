@@ -211,7 +211,8 @@ def test_ingest_calls_real_individual_contracts_and_merges_all_tables(
     ]
     assert requests[-1][1] == {"full": "true", "fiscal_year": 2025}
     assert [table for _dataset, table, _rows, _keys in captured["bq"].merges] == [
-        "company", "financials", "segments", "segment_finance", "text_analysis"
+        "company", "financials", "segments", "segment_finance", "text_analysis",
+        "financial_items",   # 2026-10-03: 財務三表の細目（最後にまとめてMERGE）
     ]
 
 

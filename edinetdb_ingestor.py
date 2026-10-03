@@ -132,6 +132,50 @@ def map_edinetdb_financials(
     }
 
 
+def map_edinetdb_financial_items(
+    row: dict,
+    *,
+    edinet_code: str,
+    company_code: str = "",
+    fiscal_year_end: str | None = None,
+    now: str | None = None,
+) -> list[dict]:
+    """1年度分の財務レコードを、数値項目ごとの縦持ち行（edinet.financial_items）にする。
+
+    2026-10-03: /financials は1年度178項目（売上原価・販管費・研究開発費・支払利息・
+    棚卸資産・のれん・支払配当金など）を返すが、edinet.financials へは約25項目しか
+    写しておらず残りは捨てていた。追加のAPI呼び出しなしで全数値項目を残す。
+    定義に無い数値項目（API側の追加分）も区分「その他」で残す。
+    """
+    from edinetdb_fields import ITEM_META
+    now = now or datetime.now(timezone.utc).isoformat()
+    fy = _integer(row.get("fiscal_year") or row.get("fiscalYear"))
+    if not edinet_code or fy is None:
+        return []
+    doc_id = str(row.get("doc_id") or row.get("docId") or "") or None
+    out = []
+    for key, raw in row.items():
+        if key in ("fiscal_year", "fiscalYear") or isinstance(raw, bool):
+            continue
+        if not isinstance(raw, (int, float)):
+            continue
+        value = _number(raw)
+        if value is None or value != value:   # NaN
+            continue
+        statement, label, unit = ITEM_META.get(key, ("その他", key, ""))
+        out.append({
+            "item_id": f"{edinet_code}_{fy}_{key}",
+            "edinet_code": edinet_code, "company_code": company_code or None,
+            "fiscal_year": fy, "fiscal_year_end": fiscal_year_end,
+            "statement": statement, "item": key, "label_ja": label, "unit": unit,
+            "value": value,
+            "accounting_standard": row.get("accounting_standard"),
+            "basis": row.get("basis"),
+            "doc_id": doc_id, "source": "edinetdb", "updated_at": now,
+        })
+    return out
+
+
 def map_edinetdb_doc_index(
     row: dict,
     company: dict,
@@ -916,6 +960,21 @@ def run_edinetdb_ingest(
             failure += 1
         _note_attempt(code, company_code, missing=is_missing)
 
+    item_rows: list[dict] = []          # 2026-10-03: 財務三表の細目（edinet.financial_items）
+    items_done: set[str] = set()
+
+    def _items_from(financials, code, company_code, fin_rows):
+        fye = {r.get("fiscal_year"): r.get("fiscal_year_end") for r in fin_rows}
+        rows = []
+        for item in financials:
+            if isinstance(item, dict):
+                fy = _integer(item.get("fiscal_year") or item.get("fiscalYear"))
+                rows += map_edinetdb_financial_items(
+                    item, edinet_code=code, company_code=company_code,
+                    fiscal_year_end=fye.get(fy), now=now)
+        items_done.add(code)
+        return rows
+
     for code in targets:
         company = by_edinet.get(code, {})
         company_code = _sec4(company.get("sec_code"))
@@ -964,6 +1023,7 @@ def run_edinetdb_ingest(
                 for item in financials if isinstance(item, dict)
             ) if r
         ]
+        item_rows.extend(_items_from(financials, code, company_code, fin_rows))
         # 書類一覧の期末日も、同じ書類IDの財務行から埋める
         _fye_by_doc = {r.get("doc_id"): r.get("fiscal_year_end") for r in fin_rows}
         for _d in doc_rows:
@@ -1040,6 +1100,54 @@ def run_edinetdb_ingest(
             reasons["bq_merge"] += 1
             failure += 1
             _note_attempt(code, company_code, missing=False)
+    # 2026-10-03: 取得済みの会社は細目（financial_items）が未格納。残り枠で
+    # /financials だけ（1社1回）取り直して埋める。最近取った会社から順に。
+    backfilled = 0
+    if not _stop_ingest(client) and getattr(cfg, "EDINETDB_ITEMS_BACKFILL", True):
+        pending = sorted(
+            (c for c, info in meta.items()
+             if isinstance(info, dict) and info.get("last_fetched")
+             and not info.get("items_v1") and c not in items_done and c in by_edinet),
+            key=lambda c: str(meta[c].get("last_fetched")), reverse=True)
+        for code in pending:
+            if _stop_ingest(client) or (
+                    getattr(client, "daily_budget", daily_budget) - client.calls - reserve_calls < 1):
+                break
+            company = by_edinet.get(code, {})
+            company_code = _sec4(company.get("sec_code"))
+            financials = client.get(f"/companies/{code}/financials", {"years": 5, "period": "annual"})
+            if not isinstance(financials, list):
+                continue
+            fin_rows = [map_edinetdb_financials(item, edinet_code=code, company_code=company_code, now=now)
+                        for item in financials if isinstance(item, dict)]
+            _fm = (meta.get(code) or {}).get("fy_month")
+            for _r in fin_rows:
+                if not _r.get("fiscal_year_end") and _fm:
+                    _r["fiscal_year_end"] = fiscal_year_end_date(_r.get("fiscal_year"), _fm)
+            try:
+                bq.merge_rows("financials", fin_rows, ["edinet_code", "fiscal_year"])
+            except Exception as exc:
+                print(f"    ⚠️  [edinetdb] 細目補完の financials MERGE失敗 [{code}]: {_brief_error(exc)}")
+                continue
+            item_rows.extend(_items_from(financials, code, company_code, fin_rows))
+            backfilled += 1
+
+    items_merged = 0
+    if item_rows:
+        chunk = int(getattr(cfg, "EDINETDB_ITEMS_MERGE_CHUNK", 4000))
+        for i in range(0, len(item_rows), chunk):
+            part = item_rows[i:i + chunk]
+            try:
+                bq.merge_rows("financial_items", part, ["item_id"])
+                items_merged += len(part)
+            except Exception as exc:
+                print(f"    ⚠️  [edinetdb] financial_items MERGE失敗: {type(exc).__name__}: "
+                      f"{_brief_error(exc)}")
+                items_done.difference_update({r["edinet_code"] for r in part})
+        for code in items_done:
+            if code in meta and isinstance(meta[code], dict):
+                meta[code]["items_v1"] = today_str
+        print(f"    🧾 [edinetdb] 財務細目: {items_merged}行（{len(items_done)}社・うち補完{backfilled}社）")
     _save_json(meta_path, meta)
     if failure or missing:
         print(f"    ℹ️  [edinetdb] 失敗{failure}件 / データ無し{missing}件の内訳: "
@@ -1061,6 +1169,8 @@ def run_edinetdb_ingest(
             for c in web_skipped],
         "reasons": reasons,
         "targets": targets, "budget": daily_budget, "api_calls": client.calls,
+        "items_rows": items_merged, "items_companies": len(items_done),
+        "items_backfilled": backfilled,
     }
 
 

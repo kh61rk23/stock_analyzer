@@ -1348,6 +1348,10 @@ EDINETDB_LOOKBACK_DAYS: int = 7
 EDINETDB_DAILY_BUDGET: int = 100
 EDINETDB_MONTHLY_GUARD: int = 3100
 EDINETDB_COMPANY_CACHE_DAYS: int = 7   # 会社マスタ（社名・上場区分）の取り直し間隔
+# 2026-10-03: 財務三表の細目（edinet.financial_items）。取得済みの会社は残り枠で
+# /financials だけ取り直して細目を埋める（1社1回）
+EDINETDB_ITEMS_BACKFILL: bool = True
+EDINETDB_ITEMS_MERGE_CHUNK: int = 4000
 EDINETDB_REFRESH_DAYS: int = 180
 EDINETDB_TEXTBLOCK_EVERY_N: int = 2
 EDINETDB_ROTATION_META: str = "edinetdb_rotation_meta.json"

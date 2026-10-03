@@ -147,6 +147,27 @@ def _statements(project: str) -> list[str]:
           source STRING,
           ingested_at TIMESTAMP
         ) PARTITION BY trade_date CLUSTER BY ticker""",
+        # 2026-10-03: 財務三表の細目（売上原価・販管費・研究開発費・支払利息・棚卸資産・
+        # のれん・支払配当金など154項目）。EdinetDB /financials は1年度178項目を返すのに
+        # edinet.financials へは約25項目しか入れておらず、残りは受け取って捨てていた。
+        # 項目定義は edinetdb_fields.py（区分 PL/BS/CF/株式/人的資本/環境/指標）。
+        f"""CREATE TABLE IF NOT EXISTS `{project}.edinet.financial_items` (
+          item_id STRING NOT NULL,
+          edinet_code STRING NOT NULL,
+          company_code STRING,
+          fiscal_year INT64,
+          fiscal_year_end DATE,
+          statement STRING,
+          item STRING NOT NULL,
+          label_ja STRING,
+          unit STRING,
+          value FLOAT64,
+          accounting_standard STRING,
+          basis STRING,
+          doc_id STRING,
+          source STRING,
+          updated_at TIMESTAMP
+        ) CLUSTER BY edinet_code, statement, item""",
     ]
 
 
