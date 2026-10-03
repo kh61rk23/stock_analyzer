@@ -2,9 +2,9 @@
   "category": "materials_agtech",
   "business_model": "commodity",
   "description": "素材・化学・農業テック",
-  "updated": "2026-03-10",
+  "updated": "2026-10-03",
   "tickers": [
-    "5183",
+    "5183.KL",
     "5713.T",
     "600111.SS",
     "600392.SS",
@@ -45,7 +45,6 @@
     "KGH.WA",
     "LAC",
     "LIN",
-    "LTHM",
     "LUN.TO",
     "LYC.AX",
     "MLM",
@@ -57,9 +56,9 @@
     "NTR",
     "NTR.TO",
     "NUE",
-    "OCI",
+    "OCI.AS",
     "PAAS",
-    "PLL",
+    "ELVR",
     "PLS.AX",
     "RIO",
     "SCCO",
@@ -73,7 +72,7 @@
     "USAS",
     "VALE",
     "WPM",
-    "YAR",
+    "YAR.OL",
     "ZTS"
   ]
 }

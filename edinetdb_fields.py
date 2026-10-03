@@ -173,6 +173,7 @@ FINANCIAL_ITEMS = [
     ('num_employees_non_consolidated', '人的資本', '単体従業員数', '人'),
     ('officers_over100m_count', '人的資本', '報酬1億円以上の役員数', '人'),
     ('pbr', '指標', 'PBR', '倍'),
+    ('payout_ratio_calc', '指標', '配当性向（自前計算）', '小数'),
 ]
 
 ITEM_META = {k: (st, label, unit) for k, st, label, unit in FINANCIAL_ITEMS}

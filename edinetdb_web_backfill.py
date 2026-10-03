@@ -145,12 +145,14 @@ def run(cfg, scope: str = "ingested", limit: int | None = None, years: int = 10,
             stats["no_data"] += 1
             continue
         company_code = ing._sec4((by_code.get(code) or {}).get("sec_code"))
-        rows = build_rows(code, company_code, records, page.get("fy_month"), years, now)
+        fy_month = page.get("fy_month") or ing.infer_fy_month(
+            [r.get("submit_date_time") for r in records])
+        rows = build_rows(code, company_code, records, fy_month, years, now)
         for k, v in rows.items():
             buf[k] += v
         info = meta.setdefault(code, {})
-        if page.get("fy_month"):
-            info["fy_month"] = page["fy_month"]
+        if fy_month:
+            info["fy_month"] = fy_month
         info["web_check"] = {"date": today, **page}
         info["held_fy"] = max(info.get("held_fy") or 0, records[0].get("fiscal_year") or 0) or None
         done.append(code)

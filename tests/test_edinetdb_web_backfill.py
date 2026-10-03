@@ -35,3 +35,11 @@ def test_build_rows_fills_fye_items_and_docs():
     assert items["sga"]["statement"] == "PL" and items["rnd_expenses"]["value"] == 6.0e8
     assert items["cross_shareholding_book_value_nonlisted"]["statement"] == "株式"
     assert rows["doc_index"][0]["disclosure_date"] == "2026-03-26"
+
+
+def test_infer_fy_month_from_submissions():
+    import edinetdb_ingestor as ing
+    assert ing.infer_fy_month(["2026-06-25 15:00", "2025-06-26", "2024-06-27"]) == 3
+    assert ing.infer_fy_month(["2026-03-26", "2025-03-27"]) == 12
+    assert ing.infer_fy_month(["2025-08-28", "2024-08-29", "2023-08-30"]) == 5   # E00004 カネコ種苗
+    assert ing.infer_fy_month([None, "x"]) is None

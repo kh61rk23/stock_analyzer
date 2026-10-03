@@ -649,6 +649,28 @@ def fiscal_year_end_date(fiscal_year, fy_month) -> str | None:
         return None
 
 
+def infer_fy_month(submit_dates) -> int | None:
+    """有報の提出日から決算月を推定する（純関数）。
+
+    有報は決算期末から3か月以内に出し、ほぼ全社が3か月目に提出する
+    （3月決算→6月、12月決算→3月）。年度ごとの「提出月−3」の最頻値を返す。
+    会社ページに「◯月期」の表記が無い会社（例 E00004）の期末日補完に使う。
+    """
+    import collections
+    months = []
+    for v in submit_dates or []:
+        try:
+            m = int(str(v)[5:7])
+        except (TypeError, ValueError):
+            continue
+        if 1 <= m <= 12:
+            months.append((m - 3 - 1) % 12 + 1)
+    if not months:
+        return None
+    month, count = collections.Counter(months).most_common(1)[0]
+    return month if count * 2 > len(months) or len(months) == 1 else None
+
+
 def report_due(info: dict, today: date | None = None, grace_days: int = 100,
                retry_days: int = 14) -> bool:
     """新しい年度の有報が出ているはずなのに、手元の最新年度が古いか（純関数）。
@@ -1011,7 +1033,9 @@ def run_edinetdb_ingest(
         ]
         # 2026-10-02: APIに期末日が無く fiscal_year_end が全行空だった。
         # 会社ページの決算月（例「12月期」）から埋める
-        _fm = (meta.get(code) or {}).get("fy_month")
+        _fm = (meta.get(code) or {}).get("fy_month") or infer_fy_month(
+            [_field(i, "submit_date_time", "submitDateTime", "submit_date") for i in financials
+             if isinstance(i, dict)])
         for _r in fin_rows:
             if not _r.get("fiscal_year_end") and _fm:
                 _r["fiscal_year_end"] = fiscal_year_end_date(_r.get("fiscal_year"), _fm)
@@ -1120,7 +1144,9 @@ def run_edinetdb_ingest(
                 continue
             fin_rows = [map_edinetdb_financials(item, edinet_code=code, company_code=company_code, now=now)
                         for item in financials if isinstance(item, dict)]
-            _fm = (meta.get(code) or {}).get("fy_month")
+            _fm = (meta.get(code) or {}).get("fy_month") or infer_fy_month(
+                [_field(i, "submit_date_time", "submitDateTime", "submit_date") for i in financials
+                 if isinstance(i, dict)])
             for _r in fin_rows:
                 if not _r.get("fiscal_year_end") and _fm:
                     _r["fiscal_year_end"] = fiscal_year_end_date(_r.get("fiscal_year"), _fm)

@@ -2,7 +2,7 @@
   "category": "metaverse",
   "business_model": "subscription",
   "description": "メタバース・AR/VR・空間コンピューティング・XR",
-  "updated": "2026-03-10",
+  "updated": "2026-10-03",
   "tickers": [
     "AAPL",
     "AMD",
@@ -26,8 +26,6 @@
     "SNAP",
     "TTWO",
     "U",
-    "VUZI",
-    "XR",
-    "ZNGA"
+    "VUZI"
   ]
 }

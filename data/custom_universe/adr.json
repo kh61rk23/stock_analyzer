@@ -2,7 +2,7 @@
   "category": "adr",
   "business_model": "mixed",
   "description": "ADR（欧州・アジア優良株）",
-  "updated": "2026-03-10",
+  "updated": "2026-10-03",
   "tickers": [
     "ABBV",
     "ASML",
@@ -24,7 +24,7 @@
     "MELI",
     "MNSO",
     "NIO",
-    "NOVNF",
+    "NVS",
     "NSRGY",
     "NTES",
     "NU",

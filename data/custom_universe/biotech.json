@@ -2,10 +2,9 @@
   "category": "biotech",
   "business_model": "biotech",
   "description": "バイオ・創薬・医療機器",
-  "updated": "2026-03-10",
+  "updated": "2026-10-03",
   "tickers": [
     "ACAD",
-    "ACLX",
     "ALNY",
     "AMGN",
     "ARGX",
@@ -17,7 +16,6 @@
     "BNTX",
     "CRSP",
     "EDIT",
-    "FOLD",
     "GILD",
     "ILMN",
     "IMVT",
@@ -37,7 +35,6 @@
     "REGN",
     "ROIV",
     "RVMD",
-    "SGEN",
     "UTHR",
     "VRTX"
   ]

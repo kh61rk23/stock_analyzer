@@ -381,6 +381,22 @@ def _fetch_batch(entries: list, max_workers: int = 5,
                       f"速度:{rate:.1f}社/秒 "
                       f"残り:{eta_min:.0f}分")
 
+    # 2026-10-03: 一括取得の途中で Yahoo の一時的な制限に当たると空応答が続き、
+    # 失敗した銘柄はそのまま捨てていた（10/3 実測 1,106社中253社失敗、700〜900社目は
+    # 200社中14社しか取れず）。手元で失敗分を間隔を空けて取り直すと6割が回復した。
+    got = {r.get("ticker") for r in results}
+    retry = [e for e in entries if e.get("ticker") not in got]
+    if retry:
+        def _slow(e):
+            time.sleep(0.3)
+            return _fetch_one(e, max_retries=1)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            recovered = [r for r in executor.map(_slow, retry) if r]
+        results.extend(recovered)
+        lost = sorted({e.get("ticker") for e in retry} - {r.get("ticker") for r in recovered})
+        print(f"    🔁 再取得: {len(recovered)}/{len(retry)}社 回復"
+              + (f" / 取得不可{len(lost)}社: {', '.join(lost[:30])}" if lost else ""))
+
     return results
 
 def _calc_catalyst_bonus_us(
