@@ -29,6 +29,10 @@ _KEY_OVERRIDES = {
 }
 
 
+def re_name(name: str) -> str:
+    return re.sub(r"(株式会社|（株）)", "", str(name or "")).strip()
+
+
 def snake(key: str) -> str:
     s = re.sub(r"(?<=[a-z0-9])([A-Z])", r"_\1", key)
     s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", s).lower()
@@ -93,6 +97,12 @@ def due_targets(meta: dict, companies: list[dict], today: date | None = None) ->
         if (info.get("web_check") or {}).get("has") is False:
             continue
         if not info.get("items_v1"):
+            nr = str(info.get("web_no_records") or "")[:10]
+            try:
+                if nr and (today - date.fromisoformat(nr)).days < 30:
+                    continue          # 30日以内に「財務なし」を確認済み
+            except ValueError:
+                pass
             never.append(code)
         elif ing.report_due({**info, "last_fetched": info.get("items_v1")}, today):
             due.append(code)
@@ -186,7 +196,10 @@ def run(cfg, scope: str = "ingested", limit: int | None = None, years: int = 10,
         page = ing.parse_company_page(r.text, r.status_code)
         records = extract_financial_records(r.text) if r.status_code == 200 else []
         if not records:
+            # 2026-10-05: 財務の載っていない会社を記録しておらず、日次の --scope due が
+            # 毎日同じ178社を先頭から取り直して100社とも「データ無し」になっていた
             stats["no_data"] += 1
+            meta.setdefault(code, {})["web_no_records"] = today
             continue
         company_code = ing._sec4((by_code.get(code) or {}).get("sec_code"))
         fy_month = page.get("fy_month") or ing.infer_fy_month(
@@ -201,10 +214,23 @@ def run(cfg, scope: str = "ingested", limit: int | None = None, years: int = 10,
         info["held_fy"] = max(info.get("held_fy") or 0, records[0].get("fiscal_year") or 0) or None
         done.append(code)
         stats["ok"] += 1
+        stats.setdefault("companies", []).append({
+            "edinet_code": code, "sec_code": company_code,
+            "name": re_name((by_code.get(code) or {}).get("name") or records[0].get("filer_name") or ""),
+            "fiscal_year": records[0].get("fiscal_year")})
         if n % flush_every == 0:
             flush()
             print(f"  … {n}/{len(codes)}社 / 細目{stats['rows']['financial_items']:,}行")
     flush()
+    # 2026-10-05: 日次メール（EdinetDB節）が読む本日の結果
+    try:
+        (data_dir / "edinetdb_web_last.json").write_text(json.dumps({
+            "date": today, "scope": scope, "ok": stats["ok"], "no_data": stats["no_data"],
+            "error": stats["error"], "financials": stats["rows"]["financials"],
+            "items": stats["rows"]["financial_items"], "companies": stats.get("companies", [])[:50],
+        }, ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError:
+        pass
     print(f"✅ 完了: 成功{stats['ok']}社 / データ無し{stats['no_data']}社 / 失敗{stats['error']}件 / "
           f"financials {stats['rows']['financials']:,}行・細目 {stats['rows']['financial_items']:,}行・"
           f"書類 {stats['rows']['doc_index']:,}行")

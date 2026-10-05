@@ -3298,8 +3298,12 @@ def run_all_tasks(mode: str = "all") -> dict:
                         print("    ✅ セクター振り分け完了")
                 except Exception as _se:
                     print(f"    ⚠️  セクター振り分けエラー: {_se}")
-                logger.add("stock_screener", "success",
-                           f"通過:{screen_result.get('pass_count',0)}銘柄")
+                _serr = screen_result.get("sector_errors") or []
+                logger.add("stock_screener", "warn" if _serr else "success",
+                           f"通過:{screen_result.get('pass_count',0)}銘柄"
+                           + (f" / 例外で飛ばした業種{len(_serr)}: "
+                              + "; ".join(f"{e['sector']} {e['where']}" for e in _serr)[:200]
+                              if _serr else ""))
 
                 # ── [C-1] VaR制約付きスクリーニング ──────────────
                 if getattr(cfg, "ENABLE_VAR_CONSTRAINT", True):

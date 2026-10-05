@@ -12,9 +12,10 @@ def test_ingest_alert_lists_companies():
         "missing_companies": [{"sec_code": "5866", "name": "新規上場A"}],
         "doc_index_rows": 14, "api_calls": 20})
     assert al["channel"] == "gmail" and al["severity"] == "info"
-    assert "3983 オロ" in al["body"] and "7203 トヨタ自動車" in al["body"]
-    assert "5866 新規上場A" in al["body"]
-    assert al["title"] == "🗂 EDINET DB 取り込み 2社"
+    # 2026-10-05: 証券コードと銘柄名を列で分け、年次（Web）・本文（API）・四半期（API）を分けて表示
+    assert "3983 | オロ" in al["body"] and "7203 | トヨタ自動車" in al["body"]
+    assert "5866 | 新規上場A" in al["body"] and "【API使用】20/100回" in al["body"]
+    assert al["title"].startswith("🗂 EDINET DB 本日 年次0社・本文2社")
 
 
 def test_zero_ingest_is_flagged():
@@ -172,7 +173,7 @@ def test_prefilter_unknown_falls_back_to_api():
 def test_ingest_alert_lists_web_skipped():
     al = an.build_edinetdb_ingest_alert({"success": 1, "targets": ["E2"], "ingested": [
         {"sec_code": "3983", "name": "オロ"}], "web_skipped": [{"sec_code": "154A", "name": "GAIA"}]})
-    assert "Webで財務なしのため取り込み対象外 1社: 154A GAIA" in al["body"]
+    assert "Webで財務なしのため対象外 1社: 154A | GAIA" in al["body"]
 
 
 def test_alphanumeric_securities_codes():

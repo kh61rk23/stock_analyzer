@@ -2078,7 +2078,8 @@ def run_stock_screener(cfg, sector_results: dict,
     if getattr(cfg, "SCREEN_EXPAND_UNIVERSE", False):
         try:
             from edinet_bq_client import EDINETBQClient
-            by_ind = EDINETBQClient().get_tickers_with_financials_by_industry()
+            by_ind = EDINETBQClient().get_tickers_with_financials_by_industry(
+                int(getattr(cfg, "SCREEN_EXPAND_PER_SECTOR", 25)))
             name_to_code = {v.get("name_ja"): k
                             for k, v in (getattr(cfg, "JAPAN_SECTORS", {}) or {}).items()}
             for ind, ts in by_ind.items():
@@ -2086,7 +2087,7 @@ def run_stock_screener(cfg, sector_results: dict,
                 if code:
                     bq_sector_tickers.setdefault(code, []).extend(ts)
             top_n_sectors = max(top_n_sectors, len(sector_results))
-            print(f"  📚 対象拡大: BQに財務がある {sum(len(v) for v in bq_sector_tickers.values())}社"
+            print(f"  📚 対象拡大: BQに財務がある会社から業種ごとに売上上位 {sum(len(v) for v in bq_sector_tickers.values())}社"
                   f"（{len(bq_sector_tickers)}業種）を業種の銘柄一覧に追加")
         except Exception as e:
             print(f"  ⚠️  対象拡大の取得失敗（従来の銘柄一覧で続行）: {str(e)[:80]}")
@@ -2168,6 +2169,7 @@ def run_stock_screener(cfg, sector_results: dict,
     all_candidates  = []
     all_comp_scores = []   # [S-3] 全銘柄スコアを蓄積（閾値計算用）
 
+    screen_errors: list = []
     for code, sec_data in sorted_sectors:
         if not isinstance(sec_data, dict):
             continue
@@ -2180,27 +2182,40 @@ def run_stock_screener(cfg, sector_results: dict,
             print(f"    [{code}] {sector_name}: 銘柄マスタなし → スキップ")
             continue
 
-        candidates = _screen_sector(
-            sector_code     = code,
-            sector_name     = sector_name,
-            sector_score    = sector_score,
-            tickers         = tickers,
-            cfg             = cfg,
-            market          = "JP",
-            sector_tier     = sector_tier_map.get(code, "TOP"),  # ★ GAP-6追加
-            edinet_accruals = edinet_accruals,
-            all_scores_ref  = all_comp_scores,
-            surprise_cache = surprise_cache,
-            credit_cache   = credit_cache,
-            tech_cache     = tech_cache,
-            insider_cache  = insider_cache,   # ← この行を追加
-            dividend_cache = dividend_cache,  # ← この行を追加
-            sr_cache       = sr_cache,
-            vp_cache       = vp_cache,
-            edinet_quality_cache = edinet_quality_cache,
-            comps_cache    = comps_cache,
-            dcf_cache      = dcf_cache,
-        )
+        # 2026-10-05: 1業種の例外でスクリーナー全体が止まっていた（10/5 卸売業で
+        # 「NoneType - int」→ 日本株の候補0件・スナップショット0件）。業種単位で分離し、
+        # 発生箇所（ファイル:行）をログに残して次の業種へ進む
+        try:
+            candidates = _screen_sector(
+                sector_code     = code,
+                sector_name     = sector_name,
+                sector_score    = sector_score,
+                tickers         = tickers,
+                cfg             = cfg,
+                market          = "JP",
+                sector_tier     = sector_tier_map.get(code, "TOP"),  # ★ GAP-6追加
+                edinet_accruals = edinet_accruals,
+                all_scores_ref  = all_comp_scores,
+                surprise_cache = surprise_cache,
+                credit_cache   = credit_cache,
+                tech_cache     = tech_cache,
+                insider_cache  = insider_cache,   # ← この行を追加
+                dividend_cache = dividend_cache,  # ← この行を追加
+                sr_cache       = sr_cache,
+                vp_cache       = vp_cache,
+                edinet_quality_cache = edinet_quality_cache,
+                comps_cache    = comps_cache,
+                dcf_cache      = dcf_cache,
+            )
+        except Exception as _sec_err:
+            import traceback as _tb
+            _frames = _tb.extract_tb(_sec_err.__traceback__)[-3:]
+            _where = " ← ".join(f"{Path(f.filename).name}:{f.lineno} {f.name}" for f in reversed(_frames))
+            print(f"    ❌ [{code}] {sector_name}: {type(_sec_err).__name__}: {str(_sec_err)[:120]}"
+                  f" @ {_where} → この業種を飛ばして続行")
+            screen_errors.append({"sector": code, "error": f"{type(_sec_err).__name__}: {_sec_err}",
+                                  "where": _where})
+            continue
         # ── [問題D] 動的追加銘柄は discovery_score を付与 ────────
         _dyn_meta = getattr(cfg, "DYNAMIC_SCREENER_META", {})
         for candidate in candidates:
@@ -2354,6 +2369,7 @@ def run_stock_screener(cfg, sector_results: dict,
 
     result = {
         "candidates":              all_candidates,
+        "sector_errors":           screen_errors,   # 2026-10-05: 例外で飛ばした業種
         "screened_count":          len(all_candidates),
         "pass_count":              len(passed),
         "top_sectors":             top_sector_names,

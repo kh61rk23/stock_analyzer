@@ -1900,7 +1900,20 @@ def extract_alerts(cfg, results: dict) -> list:
     if getattr(cfg, "ALERT_ON_EDINETDB_INGEST", True):
         ing = results.get("edinetdb_ingest") or {}
         if isinstance(ing, dict) and not ing.get("skipped") and "success" in ing:
-            alerts.append(build_edinetdb_ingest_alert(ing))
+            from pathlib import Path
+            import json
+            _dd = Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
+            _today = datetime.now().strftime("%Y-%m-%d")
+            def _jl(p):
+                try:
+                    return json.loads(Path(p).read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    return {}
+            _web = _jl(_dd / "edinetdb_web_last.json")
+            if str(_web.get("date", "")) != _today:
+                _web = {}
+            alerts.append(build_edinetdb_ingest_alert(
+                ing, _web, _jl(_dd / "edinetdb_cache" / f"daily_{_today}.json"), 100))
 
     return alerts
 
@@ -1971,35 +1984,53 @@ def build_high_dividend_alert(cfg, results: dict, sector_results: dict | None = 
     }
 
 
-def build_edinetdb_ingest_alert(ing: dict) -> dict:
-    """EdinetDB 取り込み結果をメール用アラート1件にまとめる（純関数）。"""
-    def _name(c: dict) -> str:
-        code = c.get("sec_code") or c.get("edinet_code") or "?"
-        return f"{code} {c.get('name') or ''}".strip()
+def build_edinetdb_ingest_alert(ing: dict, web: dict | None = None, ledger: dict | None = None,
+                                daily_limit: int = 100) -> dict:
+    """EdinetDB の日次結果をメール用アラート1件にまとめる（純関数）。
 
-    done = ing.get("ingested") or []
-    miss = ing.get("missing_companies") or []
+    2026-10-05: 年次財務は会社ページ（Web）、API は有報本文・セグメント・四半期財務に
+    役割分担を変えたのに、API取込の「財務の期数」を出し続けて「財務0期」と表示していた。
+    ① 年次財務（Web）② 有報本文・セグメント（API）③ 四半期財務（API）④ API使用回数 を分けて出す。
+    """
+    def _row(c: dict) -> str:
+        code = c.get("sec_code") or c.get("edinet_code") or "?"
+        return f"{code} | {c.get('name') or '—'}"
+
     lines = []
-    for c in done:
-        fy = c.get("fiscal_year")
-        lines.append(f"  ✅ {_name(c)}" + (f"（{fy}年度まで・財務{c.get('financial_rows', 0)}期）" if fy else ""))
-    if not done:
-        lines.append("  （本日取り込めた会社はありません）")
-    if miss:
-        lines.append(f"  ― EdinetDBにまだデータが無い会社 {len(miss)}社: "
-                     + "、".join(_name(c) for c in miss[:10])
-                     + ("…" if len(miss) > 10 else ""))
-    web = ing.get("web_skipped") or []
+    web = web or {}
     if web:
-        lines.append(f"  ― Webで財務なしのため取り込み対象外 {len(web)}社: "
-                     + "、".join(_name(c) for c in web[:10]) + ("…" if len(web) > 10 else ""))
+        lines.append(f"  【年次財務（会社ページ）】更新 {web.get('ok', 0)}社 / 財務なし {web.get('no_data', 0)}社"
+                     f" / 失敗 {web.get('error', 0)}件（財務 {web.get('financials', 0)}行・細目 {web.get('items', 0):,}行）")
+        for c in (web.get("companies") or [])[:15]:
+            lines.append(f"    ✅ {_row(c)}" + (f" — {c['fiscal_year']}年度まで" if c.get("fiscal_year") else ""))
+    done = ing.get("ingested") or []
+    lines.append(f"  【有報本文・セグメント（API）】{len(done)}社")
+    for c in done[:15]:
+        lines.append(f"    ✅ {_row(c)}" + (f" — {c['fiscal_year']}年度・本文{c.get('text_rows', 0)}件"
+                                            if c.get("fiscal_year") else ""))
+    if not done:
+        lines.append("    （本日はありません）")
+    miss = ing.get("missing_companies") or []
+    if miss:
+        lines.append(f"    ― EdinetDBにまだデータが無い {len(miss)}社: "
+                     + "、".join(_row(c) for c in miss[:8]) + ("…" if len(miss) > 8 else ""))
+    wsk = ing.get("web_skipped") or []
+    if wsk:
+        lines.append(f"    ― Webで財務なしのため対象外 {len(wsk)}社: "
+                     + "、".join(_row(c) for c in wsk[:8]) + ("…" if len(wsk) > 8 else ""))
+    if ing.get("quarterly_companies") is not None:
+        lines.append(f"  【四半期財務（API）】{ing.get('quarterly_companies', 0)}社 / {ing.get('quarterly_rows', 0):,}行")
     if ing.get("failure"):
         lines.append(f"  ⚠️ 失敗 {ing['failure']}社（内訳: {ing.get('reasons', {})}）")
-    lines.append(f"  書類一覧 {ing.get('doc_index_rows', 0)}件 / API {ing.get('api_calls', 0)}回")
-    n = len(done)
+    used = (ledger or {}).get("calls_used", ing.get("api_calls", 0))
+    rem = (ledger or {}).get("remote_daily_remaining")
+    lines.append(f"  【API使用】{used}/{daily_limit}回" + (f"（EdinetDB側の残り {rem}回）" if rem is not None else "")
+                 + f" / 書類一覧 {ing.get('doc_index_rows', 0)}件")
+    n = len(done) + int(web.get("ok", 0) or 0)
     return {
         "trigger":  "edinetdb_ingest",
-        "title":    f"🗂 EDINET DB 取り込み {n}社" + ("（0社・要確認）" if n == 0 and ing.get("targets") else ""),
+        "title":    f"🗂 EDINET DB 本日 年次{web.get('ok', 0)}社・本文{len(done)}社・四半期{ing.get('quarterly_companies', 0)}社"
+                    + ("（0社・要確認）" if n == 0 and ing.get("targets") else ""),
         "body":     "\n".join(lines),
         "severity": "medium" if (n == 0 and ing.get("targets")) or ing.get("failure") else "info",
         "channel":  "gmail",

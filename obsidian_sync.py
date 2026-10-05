@@ -229,6 +229,26 @@ def cmd_mirror(cfg) -> bool:
     return False
 
 
+def cmd_holdings(cfg) -> bool:
+    """保有銘柄.csv（投資部・健太が更新）→ data/portfolio_holdings.csv / portfolio_summary.json を
+    同期用clone（SYNC_CACHE）で作り、変わっていればその2ファイルだけ commit & push する。
+
+    2026-10-05: リポジトリの保有銘柄CSVが 2026-03 のまま更新されず、週次の総評価額・
+    ポジションサイジング・ストレステストが古い保有で計算されていた。
+    """
+    if not (SYNC_CACHE / ".git").exists():
+        print("⏩ holdings: 同期用cloneが無い（先に pull が必要）")
+        return False
+    script = SYNC_CACHE / "sync_holdings.py"
+    if not script.exists():
+        print("⏩ holdings: sync_holdings.py が clone に無い（pull 後に再実行）")
+        return True
+    r = subprocess.run([sys.executable, str(script), "--commit"], cwd=SYNC_CACHE,
+                       capture_output=True, text=True, timeout=300)
+    print((r.stdout or "").strip() or (r.stderr or "").strip()[:300])
+    return r.returncode == 0
+
+
 # ==============================================================
 # queue: 審議キュー自動生成 [DEPT-2①]
 # ==============================================================
@@ -416,7 +436,7 @@ def cmd_feedback(cfg) -> None:
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Obsidian 同期ブリッジ（DEPT-2）")
-    ap.add_argument("command", choices=["pull", "mirror", "queue", "journal",
+    ap.add_argument("command", choices=["pull", "mirror", "holdings", "queue", "journal",
                                         "feedback", "all"])
     ap.add_argument("--repo", default="", help="GitHub リポジトリURL")
     args = ap.parse_args()
@@ -426,6 +446,8 @@ if __name__ == "__main__":
         ok = (cmd_pull(cfg, args.repo) is not False) and ok
     if args.command in ("mirror", "all"):
         ok = cmd_mirror(cfg) and ok
+    if args.command in ("holdings", "all"):
+        ok = cmd_holdings(cfg) and ok
     if args.command in ("queue", "all"):
         cmd_queue(cfg)
     if args.command in ("journal", "all"):

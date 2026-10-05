@@ -1345,7 +1345,7 @@ EDINETDB_LOOKBACK_DAYS: int = 7
 # （31日月で約3,100回）」で、月1,450回という前提が誤っていた（edinetdb.jp/pricing）。
 # 実測でも1日の残量は毎日56〜77回残っていた。5回は手動確認用に残す。
 # 2026-10-02: 95→100、2950→3100（上限まで使う。月の実残量は /usage の monthly_remaining で抑える）
-EDINETDB_DAILY_BUDGET: int = 100
+EDINETDB_DAILY_BUDGET: int = 97     # 2026-10-05: 100回の手前で止める（手動確認用に3回残す）
 EDINETDB_MONTHLY_GUARD: int = 3100
 EDINETDB_COMPANY_CACHE_DAYS: int = 7   # 会社マスタ（社名・上場区分）の取り直し間隔
 # 2026-10-03: 財務三表の細目（edinet.financial_items）。取得済みの会社は残り枠で
@@ -1561,6 +1561,8 @@ SCREEN_TOP_N_SECTORS: int   = 7      # スクリーニング対象業種数（�
 # 2026-09-29: 対象を BQ に財務がある全社（約410社）×全業種へ広げる（健太の判断）。
 #   下位業種（BOT_TIER）は従来どおり評価しない。取得は5並列（SCREEN_FETCH_WORKERS）
 SCREEN_EXPAND_UNIVERSE: bool = True
+# 2026-10-05: 全社Web補完でBQの財務が約3,800社に増えたため、業種ごとに直近売上の上位N社に絞る
+SCREEN_EXPAND_PER_SECTOR: int = 25
 SCREEN_FETCH_WORKERS: int    = 5
 SCREEN_PER_MAX:       float = 30.0   # PER 上限
 SCREEN_PBR_MAX:       float = 5.0    # PBR 上限

@@ -1070,19 +1070,30 @@ class EDINETBQClient:
             return {}
         return out
 
-    def get_tickers_with_financials_by_industry(self) -> dict:
+    def get_tickers_with_financials_by_industry(self, per_industry: int = 25) -> dict:
         """BQ に財務がある会社を {東証33業種名: [ticker, ...]} で返す（1クエリ・2026-09-29）。
 
         スクリーナーの対象を「業種代表の数銘柄」から「財務がBQにある全社（約410社）」へ
         広げるために使う（健太の判断）。
         """
+        # 2026-10-05: 全社のWeb補完で「財務がある会社」が約420社→約3,800社に増え、
+        # スクリーナー対象が膨らんで実行時間が延び、例外も出た。業種ごとに直近売上の
+        # 大きい順で per_industry 社に絞る（当初想定の規模に戻す）
+        lim = max(1, int(per_industry))
         sql = f"""
-        SELECT DISTINCT c.industry, f.company_code
-        FROM `{self.dataset}.financials` f
-        JOIN `{self.dataset}.company` c USING (edinet_code)
-        WHERE f.company_code IS NOT NULL AND c.industry IS NOT NULL
-          AND NOT IFNULL(c.is_delisted, FALSE)
-        ORDER BY c.industry, f.company_code
+        WITH latest AS (
+          SELECT f.edinet_code, f.company_code, f.net_sales,
+                 ROW_NUMBER() OVER (PARTITION BY f.edinet_code ORDER BY f.fiscal_year DESC) AS rn
+          FROM `{self.dataset}.financials` f
+          WHERE f.company_code IS NOT NULL
+        ), ranked AS (
+          SELECT c.industry, l.company_code,
+                 ROW_NUMBER() OVER (PARTITION BY c.industry ORDER BY l.net_sales DESC NULLS LAST) AS r
+          FROM latest l JOIN `{self.dataset}.company` c USING (edinet_code)
+          WHERE l.rn = 1 AND c.industry IS NOT NULL AND NOT IFNULL(c.is_delisted, FALSE)
+        )
+        SELECT industry, company_code FROM ranked WHERE r <= {lim}
+        ORDER BY industry, r
         """
         out: dict = {}
         for row in self.client.query(sql).result():

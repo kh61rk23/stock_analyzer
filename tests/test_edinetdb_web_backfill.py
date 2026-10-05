@@ -91,3 +91,10 @@ def test_accel_from_edinetdb_quarters():
     assert (r["q_yoy"], r["annual_yoy"], r["accel"], r["quarter"]) == (0.5, 0.1, 0.4, "FY2026Q1")
     assert es.calc_accel_from_quarters([(2026, "Q1", 150.0)], a) is None          # 前年同期なし
     assert es.calc_accel_from_quarters(q, [(2026, 1100.0), (2024, 900.0)]) is None  # 年次が連続しない
+
+
+def test_due_targets_skip_recent_no_records():
+    from datetime import date
+    meta = {"E1": {"web_no_records": "2026-10-01"}, "E2": {"web_no_records": "2026-08-01"}}
+    companies = [{"edinet_code": "E1"}, {"edinet_code": "E2"}, {"edinet_code": "E3"}]
+    assert w.due_targets(meta, companies, date(2026, 10, 5)) == ["E2", "E3"]
