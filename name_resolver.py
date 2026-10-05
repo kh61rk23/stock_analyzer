@@ -90,17 +90,38 @@ def _maps() -> tuple[dict, dict]:
     return jp, us
 
 
-def name_of(ticker, default: str = "") -> str:
-    """銘柄名（日本株＝日本語名・米国株＝米国株名）。分からなければ default。"""
+_NET_CACHE: dict[str, str] = {}
+
+
+def _net_name(t: str) -> str:
+    """ローカルに無い銘柄だけ yfinance の社名で補う（週次レポートの表用・1銘柄1回）。"""
+    if t in _NET_CACHE:
+        return _NET_CACHE[t]
+    n = ""
+    try:
+        import yf_cache as yf
+        info = yf.Ticker(t).info or {}
+        n = str(info.get("longName") or info.get("shortName") or "")
+    except Exception:
+        n = ""
+    _NET_CACHE[t] = n
+    return n
+
+
+def name_of(ticker, default: str = "", network: bool = False) -> str:
+    """銘柄名（日本株＝日本語名・米国株＝米国株名）。分からなければ default。
+
+    network=True のときだけ、ローカルに無い銘柄を yfinance の社名で補う。
+    """
     t = str(ticker or "").strip().upper()
     if not t:
         return default
     jp, us = _maps()
     if t.endswith(".T"):
-        return jp.get(t[:-2], default)
+        return jp.get(t[:-2]) or (_net_name(t) if network else "") or default
     if re.fullmatch(r"[0-9][0-9A-Z]{3}", t):        # 証券コードだけ（'8058' / '285A'）
         return jp.get(t, default)
-    return us.get(t, default)
+    return us.get(t) or (_net_name(t) if network else "") or default
 
 
 def label(ticker, fallback_name: str = "") -> str:
@@ -185,3 +206,109 @@ def edinet_cols(edinet_code: str) -> tuple[str, str]:
     """EDINETコード → (証券コード, 社名)。分からなければ (EDINETコード, '—')。"""
     sec, nm = _edinet_map().get(str(edinet_code or ""), ("", ""))
     return (sec or str(edinet_code), nm or "—")
+
+
+_TICKER_CELL_RE = re.compile(r"^[\*`\[]*((?:[0-9][0-9A-Z]{3}\.T)|(?:[A-Z][A-Z0-9]{0,5}(?:[.-][A-Z0-9]{1,3})?))[\*`\]]*$")
+_NAME_TICKER_CELL_RE = re.compile(r"^(?P<name>.+?)\s*[（(]`?(?P<t>[0-9][0-9A-Z]{3}\.T|[A-Z][A-Z0-9.\-]{0,8})`?[）)]\s*(?P<rest>.*)$")
+_TICKER_HEADERS = {"銘柄", "ticker", "Ticker", "銘柄コード", "コード", "ティッカー"}
+
+
+def _cells(row: str) -> list[str]:
+    return [c.strip() for c in row.strip().strip("|").split("|")]
+
+
+def _parse_ticker_cell(cell: str):
+    m1 = _TICKER_CELL_RE.match(cell)
+    if m1:
+        return m1.group(1), ""
+    m2 = _NAME_TICKER_CELL_RE.match(cell)
+    if m2:
+        return m2.group("t"), (m2.group("rest") or "")
+    return None, ""
+
+
+def split_ticker_columns(md: str) -> str:
+    """Markdown の表で、銘柄列を「ティッカー | 銘柄名」の2列に分ける（2026-10-05）。
+
+    見出しが「銘柄」「Ticker」「コード」等の列のうち、値の過半がティッカー（7203.T / NVDA / **DG**）か
+    「名前(ティッカー)」の列を選ぶ。右隣が既に「銘柄名」なら列は増やさず名前だけ日本語名に直す。
+    ティッカー列とは別に英語名の「銘柄」列がある表（審議キュー等）は、その列を銘柄名に置き換える。
+    """
+    lines = md.split("\n")
+    out, i = [], 0
+    while i < len(lines):
+        ln = lines[i]
+        if not (ln.strip().startswith("|") and i + 1 < len(lines)
+                and re.match(r"^\s*\|?\s*:?-{2,}", lines[i + 1])):
+            out.append(ln)
+            i += 1
+            continue
+        head = _cells(ln)
+        j = i + 2
+        body = []
+        while j < len(lines) and lines[j].strip().startswith("|"):
+            body.append(_cells(lines[j]))
+            j += 1
+        best, best_ok = None, 0
+        for k, h in enumerate(head):
+            if h not in _TICKER_HEADERS:
+                continue
+            ok = sum(1 for r in body if k < len(r) and _parse_ticker_cell(r[k])[0])
+            if ok > best_ok:
+                best, best_ok = k, ok
+        if best is None or best_ok < max(1, len(body) // 2):
+            out.extend(lines[i:j])
+            i = j
+            continue
+        col = best
+        name_col = col + 1 if col + 1 < len(head) and head[col + 1] in ("銘柄名", "名称", "社名") else None
+        # ティッカー列の左に英語名の「銘柄」列がある形（審議キュー）
+        if name_col is None and col - 1 >= 0 and head[col - 1] == "銘柄":
+            name_col = col - 1
+        rows2 = []
+        for r in body:
+            r = r + [""] * (len(head) - len(r))
+            t, rest = _parse_ticker_cell(r[col])
+            nm = name_of(t, network=True) if t else ""
+            if name_col is not None:
+                if nm:
+                    r[name_col] = nm if name_col > col else f"{nm}"
+                if t and rest:
+                    r[col] = f"{t} {rest}"
+                rows2.append(r)
+            else:
+                rows2.append(r[:col] + [(f"{t} {rest}".strip() if t else r[col]), nm or (r[col] if not t else "—")]
+                             + r[col + 1:])
+        if name_col is None:
+            head2 = head[:col] + ["ティッカー", "銘柄名"] + head[col + 1:]
+        else:
+            head2 = list(head)
+            head2[col] = "ティッカー"
+            head2[name_col] = "銘柄名"
+            if name_col < col:   # 「銘柄名 | ティッカー」→「ティッカー | 銘柄名」の順にそろえる
+                order = list(range(len(head2)))
+                order[name_col], order[col] = order[col], order[name_col]
+                head2 = [head2[k] for k in order]
+                rows2 = [[r[k] for k in order] for r in rows2]
+        out.append("| " + " | ".join(head2) + " |")
+        out.append("|" + "|".join(["---"] * len(head2)) + "|")
+        for r in rows2:
+            out.append("| " + " | ".join(r) + " |")
+        i = j
+    return "\n".join(out)
+
+
+def enrich_report(md: str) -> str:
+    """週次レポート全体：表は銘柄列を2列に分け、表以外の文中はコードに名前を補う。"""
+    md = split_ticker_columns(md)
+    out = []
+    for ln in md.split("\n"):
+        if ln.strip().startswith("|"):
+            # 表の中の業種コード（| [1005] | など）にも業種名を付ける
+            ln = _SECTOR_BRACKET_RE.sub(
+                lambda m: f"{sector_name(m.group(1))}（{m.group(1)}）"
+                if sector_name(m.group(1)) != m.group(1) else m.group(0), ln)
+            out.append(ln)
+        else:
+            out.append(enrich_text(ln))
+    return "\n".join(out)

@@ -100,7 +100,11 @@ def _section_jp_sectors(results: dict) -> list:
         top_cos = r.get("top_companies", [])
         for c in top_cos[:2]:
             if not c.get("fetch_ok"): continue
-            cname = c.get("name", "")[:14]
+            try:
+                from name_resolver import name_of as _nm
+                cname = (_nm(c.get("ticker", "")) or c.get("name", ""))[:20]
+            except Exception:
+                cname = c.get("name", "")[:14]
             per_s = f"PER:{c['per']:.1f}x" if c.get("per") else ""
             dy_s  = f"配当:{c['dividend_yield']*100:.1f}%" if c.get("dividend_yield") else ""
             up_s  = f"目標乖離:{c['analyst_upside']*100:+.0f}%" if c.get("analyst_upside") is not None else ""
@@ -547,8 +551,9 @@ def _section_geo_signal_detail(results: dict, cfg=None) -> list:
     for code, d in sector_signals.items():
         if not isinstance(d, dict):
             continue
-        geo_comp = d.get("components", {}).get("geo_signal", {})
-        geo_score = geo_comp.get("score")
+        geo_comp = (d.get("components") or {}).get("geo_signal", {})
+        # 2026-10-05: 内訳が数値だけで入っている業種があり 'float' に .get して毎週エラーだった
+        geo_score = geo_comp.get("score") if isinstance(geo_comp, dict) else geo_comp
         if geo_score is None:
             continue
         geo_entries.append((code, float(geo_score)))
@@ -1019,7 +1024,11 @@ def _section_biz_summaries(results: dict) -> list:
         return lines
 
     for ticker, d in list(summaries.items())[:6]:
-        name = d.get("name", ticker)
+        try:
+            from name_resolver import name_of as _nm
+            name = _nm(ticker) or d.get("name", ticker)
+        except Exception:
+            name = d.get("name", ticker)
         core = d.get("core_summary", "")
         if core:
             # 2026-07-28 バグ修正: ここは「原文が英語か翻訳済みか」を表す記号だったが、
@@ -1446,7 +1455,9 @@ def _section_rule_optimizer_alert(results: dict, cfg=None) -> list:
 
             for key, (cond_name, threshold_str) in condition_labels.items():
                 val = detail.get(key)
-                val_str = f"{val:.2f}" if isinstance(val, float) else (str(val) if val is not None else "N/A")
+                val_str = f"{val:.2f}" if isinstance(val, (int, float)) else (str(val) if val is not None else "N/A")
+                if key == "geo_risk_score" and detail.get("geo_risk_country"):
+                    val_str += f"（最高: {detail['geo_risk_country']}）"
                 # 発動しているかどうかは triggered_flags の文字列前方一致で判定
                 fired = any(
                     key.split("_")[0].lower() in f.lower() or
@@ -1468,8 +1479,35 @@ def _section_rule_optimizer_alert(results: dict, cfg=None) -> list:
         if tss_score is not None:
             lines.append("### 📊 統合スコア（total_signal_score）")
             lines.append("")
-            lines.append(f"- **現在値**: {tss_score:.1f}点")
+            lines.append(f"- **現在値**: {tss_score:.1f}点 — {total_sig_res.get('signal_label', '')}"
+                         f"（推奨: {total_sig_res.get('recommended_action', '—')}）")
             lines.append(f"- **縮退係数適用後**: 係数={tss_coeff:.2f}")
+            # 2026-10-05: 根拠（要素ごとの点数×重み＝寄与）を出す
+            _comp = total_sig_res.get("components") or {}
+            _labels = {
+                "macro_phase_score": f"景気局面（象限{total_sig_res.get('d1_phase', '?')}・債務サイクル補正込み）",
+                "sector_composite": "上位業種の平均スコア",
+                "momentum_score": "モメンタム",
+                "earnings_acceleration": "利益の加速（スクリーナー通過銘柄の加速点平均）",
+                "quality_score": "質（ROE・利益の質）",
+                "technical_score": "テクニカル",
+                "activist_potential": "アクティビスト余地",
+                "geo_signal": "地政学シグナル",
+            }
+            if _comp:
+                lines.append("")
+                lines.append("| 要素 | 点数 | 重み | 寄与 |")
+                lines.append("|---|---|---|---|")
+                for _k, _v in sorted(_comp.items(), key=lambda kv: -(float((kv[1] or {}).get("weight") or 0))):
+                    _sc, _w = (_v or {}).get("score"), float((_v or {}).get("weight") or 0)
+                    if _w <= 0:
+                        continue
+                    _scv = 50.0 if _sc is None else float(_sc)
+                    lines.append(f"| {_labels.get(_k, _k)} | {'—（中立50）' if _sc is None else f'{_scv:.1f}'}"
+                                 f" | {_w:.0%} | {_scv * _w:.1f} |")
+                lines.append("")
+                lines.append("> 統合スコア＝各要素の点数×重みの合計（0〜100）。70以上=強い買い / 58以上=買い検討 /"
+                             " 42以上=中立 / 30以上=軽減 / 30未満=回避。重みは rule_optimizer が月次で調整")
             lines.append("")
 
         # 業種別スコア上位/下位推移
@@ -1485,8 +1523,9 @@ def _section_rule_optimizer_alert(results: dict, cfg=None) -> list:
                 lines.append("")
                 lines.append("| 業種コード | 業種名 | シグナルスコア | 縮退モード | 防御セクター |")
                 lines.append("|---|---|---|---|---|")
+                from name_resolver import sector_name as _secn
                 for code, d in sorted_sigs[:5]:
-                    name      = d.get("sector_name_ja", code)
+                    name      = d.get("sector_name_ja") or _secn(code)
                     score     = d.get("signal_score", 50)
                     c_mode    = d.get("contraction_mode", "Normal")
                     is_def    = d.get("is_defensive", False)
@@ -1499,7 +1538,7 @@ def _section_rule_optimizer_alert(results: dict, cfg=None) -> list:
                 lines.append("| 業種コード | 業種名 | シグナルスコア | 縮退モード | 防御セクター |")
                 lines.append("|---|---|---|---|---|")
                 for code, d in sorted_sigs[-5:]:
-                    name      = d.get("sector_name_ja", code)
+                    name      = d.get("sector_name_ja") or _secn(code)
                     score     = d.get("signal_score", 50)
                     c_mode    = d.get("contraction_mode", "Normal")
                     is_def    = d.get("is_defensive", False)
@@ -1995,7 +2034,7 @@ def _section_pearl_ranking(results: dict, cfg=None) -> list:
     if not candidates:
         return []
 
-    lines = ["## 💎 光る原石ランキング（Pearl Ph1）", ""]
+    lines = ["## 💎 光る原石ランキング（Pearl）", ""]
 
     # ── Tier SS（≥80pt）: 特別強調 ────────────────────────────────
     ss_stocks = [c for c in candidates if c.get("pearl_tier") == "SS"]
@@ -2018,10 +2057,10 @@ def _section_pearl_ranking(results: dict, cfg=None) -> list:
         lines.append("### 💎 Tier S / A / B（注目候補）")
         lines.append("")
         lines.append(
-            "| # | Tier | 銘柄 | Pearl | D1 方向性 | D3 利益品質 | D4 発見Gap | bonus |"
+            "| # | Tier | 銘柄 | Pearl | D1 方向性 | D2 スマートマネー | D3 利益品質 | D4 発見Gap | D5 割安・逆張り | bonus |"
         )
         lines.append(
-            "|---|------|------|-------|----------|-----------|---------|-------|"
+            "|---|---|---|---|---|---|---|---|---|---|"
         )
         _tier_icon = {"S": "💎", "A": "🔷", "B": "🔹"}
         for i, c in enumerate(other_stocks[:15], 1):
@@ -2035,10 +2074,29 @@ def _section_pearl_ranking(results: dict, cfg=None) -> list:
                 f"| {ticker} "
                 f"| **{ps:.1f}pt** "
                 f"| {_fmt(c.get('d1_score'))} "
+                f"| {_fmt(c.get('d2_score'))} "
                 f"| {_fmt(c.get('d3_score'))} "
                 f"| {_fmt(c.get('d4_score'))} "
+                f"| {_fmt(c.get('d5_score'))} "
                 f"| +{bonus:.1f}pt |"
             )
+        lines.append("")
+
+    # ── 2026-10-05: 日本株（健太指示「光る原石ランキングに日本株も入れて」）──
+    # 日本株スクリーナーは売上上位の企業が対象で D4（発見Gap＝小型・未発見）が低く、
+    # Tier B（50点）に届かず上の表にほぼ出ない。Tier未満も含めて上位を別枠で出す。
+    _jp = [c for c in (results.get("screener") or {}).get("candidates", [])
+           if str(c.get("ticker", "")).endswith(".T") and c.get("pearl_score")]
+    if _jp:
+        _jp = sorted(_jp, key=lambda c: -float(c.get("pearl_score") or 0))[:10]
+        lines.append("### 🇯🇵 日本株 上位10（Tier未満も含む）")
+        lines.append("")
+        lines.append("| # | 銘柄 | Pearl | Tier | 総合点 | 業種 |")
+        lines.append("|---|---|---|---|---|---|")
+        for i, c in enumerate(_jp, 1):
+            lines.append(f"| {i} | {c.get('ticker')} | **{float(c.get('pearl_score') or 0):.1f}pt** "
+                         f"| {c.get('pearl_tier') or '—'} | {float(c.get('composite_score') or 0):.0f} "
+                         f"| {c.get('sector_name', '')} |")
         lines.append("")
 
     # ── フッター統計 ──────────────────────────────────────────────
@@ -2049,7 +2107,8 @@ def _section_pearl_ranking(results: dict, cfg=None) -> list:
     lines.append(
         f"*発見: SS={n_ss} / S={n_s} / A={n_a} / B={n_b}"
         f"（計{len(candidates)}銘柄）"
-        f" | D2 持続性・D5 バリュエーションは Ph2 以降実装予定*"
+        f" | D1 方向性 / D2 スマートマネー（アナリスト目標・機関） / D3 利益品質 / D4 発見Gap（小型・未発見）"
+        f" / D5 割安度（PER・PBR・FCF利回り）50%＋逆張り（市場比の割負け）50%*"
     )
     lines.append("")
     return lines
@@ -2791,6 +2850,37 @@ def _section_portfolio_concentration(results: dict, cfg=None) -> list:
     """
     try:
         lines = ["## 🔀 ポートフォリオ集中リスク（FE-6）", ""]
+
+        # 2026-10-05: 実際の保有（円評価額）の集中度を先に出す
+        try:
+            from portfolio_diversity_filter import load_holdings_concentration as _lhc
+            _hc = _lhc()
+        except Exception:
+            _hc = {}
+        if _hc.get("total_jpy"):
+            def _st(h, warn=0.25, crit=0.35):
+                return "🚨 危険" if h >= crit else ("⚠️ 警告" if h >= warn else "✅ 正常")
+            lines.append(f"### 💼 保有銘柄の集中度（株式評価額 {_hc['total_jpy']/1e4:,.0f}万円）")
+            lines.append("")
+            lines.append(f"- 業種HHI: **{_hc['hhi_sector']:.3f}** {_st(_hc['hhi_sector'])}"
+                         f" / 銘柄HHI: **{_hc['hhi_stock']:.3f}** {_st(_hc['hhi_stock'])}"
+                         f" / 上位3銘柄の比率: **{_hc['top3_share']:.0%}**")
+            _mw = _hc.get("market_weights") or {}
+            lines.append(f"- 日本株 {_mw.get('JP', 0):.0%} / 米国株 {_mw.get('US', 0):.0%}"
+                         "（HHI: 0.25未満=分散十分 / 0.25〜0.35=警告 / 0.35以上=危険）")
+            lines.append("")
+            lines.append("| 業種 | 比率 |")
+            lines.append("|---|---|")
+            for _k, _v in list((_hc.get("sector_weights") or {}).items())[:6]:
+                lines.append(f"| {_k} | {_v:.1%} |")
+            lines.append("")
+            lines.append("| ティッカー | 銘柄名 | 比率 | 評価額 |")
+            lines.append("|---|---|---|---|")
+            for _h in _hc.get("top_holdings") or []:
+                lines.append(f"| {_h['ticker']} | {_h.get('name') or ''} | {_h['weight']:.1%} | {_h['value_jpy']/1e4:,.0f}万円 |")
+            lines.append("")
+            lines.append("### 🔎 スクリーナー候補の業種の偏り")
+            lines.append("")
 
         div = results.get("diversity", {})
         if not div:
@@ -3605,9 +3695,8 @@ def generate_weekly_report(cfg, results: dict) -> dict:
     sections.append(_section_politician_highlight(results))   # Wave0 Policy Ph1
     sections.append(_section_finbert_sentiment(results))   # ★ RESEARCH-5追加
     sections.append(_section_technology_cluster(results, cfg))  # Wave 6 - B: 技術クラスター
-    sections.append(_section_hiring_signal(results, cfg))       # Wave 6 - I-1: 人材投資急増
-    sections.append(_section_executive_transition(results, cfg))# Wave 6 - I-3: 役員体制転換
-    sections.append(_section_facility_expansion(results, cfg))  # Wave 6 - I-4: 施設着工シグナル
+    # 2026-10-05: 人材投資（求人票）・役員体制転換・施設着工は 2026-09-29 に機能を廃止したため節を出さない
+    #   （毎週「データなし」が3節並んでいた）
     sections.append(_section_action_guide(results))
     sections.append(_section_stress_test(results))
     sections.append(_section_dividend_calendar(results))
@@ -3679,6 +3768,13 @@ def generate_weekly_report(cfg, results: dict) -> dict:
 
     # Markdown全文結合
     report_md = "\n".join(line for sec in sections for line in sec)
+    # 2026-10-05: 銘柄列を「ティッカー | 銘柄名」の2列に分け、文中のコードに名前を補う
+    # （健太指示「共通修正事項：ティッカーと銘柄名は列を分ける」）
+    try:
+        from name_resolver import enrich_report
+        report_md = enrich_report(report_md)
+    except Exception as _ne:
+        print(f"  ⚠️ 週次レポートの名前補完をスキップ: {str(_ne)[:80]}")
 
     # insights/weekly/ に保存
     report_path = ""

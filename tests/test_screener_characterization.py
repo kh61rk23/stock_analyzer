@@ -155,7 +155,7 @@ class TestJpCalcScores:
             "acc_bonus": 10.0,
             "earnings_acceleration": 0.7,
             "bq_bonus": 1.0,
-            "pearl_score": 22.9,
+            "pearl_score": 26.3,   # 2026-10-05: D5に割安度（PER・PBR）を追加
             "pearl_bonus": 0.0,
             "pearl_tier": None,
             "size_tier": "Large",
@@ -209,7 +209,7 @@ class TestJpCalcScores:
             "acc_bonus": 0.0,
             "earnings_acceleration": None,
             "bq_bonus": 0.0,
-            "pearl_score": 7.6,
+            "pearl_score": 7.2,    # 2026-10-05: D5に割安度を追加
             "pearl_bonus": 0.0,
             "pearl_tier": None,
             "size_tier": "Large",
@@ -263,7 +263,7 @@ class TestJpCalcScores:
             "acc_bonus": 0.0,
             "earnings_acceleration": None,
             "bq_bonus": 0.0,
-            "pearl_score": 13.5,
+            "pearl_score": 18.0,   # 2026-10-05: D5に割安度を追加
             "pearl_bonus": 0.0,
             "pearl_tier": None,
             "size_tier": "Nano",

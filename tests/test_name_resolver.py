@@ -24,3 +24,13 @@ def test_real_estate_alert():
         {"1032": {"real_estate_bonus": 2.6}, "1021": {"real_estate_bonus": -1.2}})
     assert "保有不動産 3,601件" in a["body"] and "不動産業（1032）: +2.60点" in a["body"]
     assert a["body"].count("陸運業") == 1
+
+
+def test_scenario_portfolio_value_does_not_apply_fx_to_yen_fallback():
+    import scenario_analyzer as sa
+    h = [{"ticker": "IONQ", "market": "US", "quantity": 216, "avg_cost_jpy": 5319, "current_price": 0},
+         {"ticker": "NVDA", "market": "US", "quantity": 1, "avg_cost_jpy": 19809, "current_price": 200.0},
+         {"ticker": "8058.T", "market": "JP", "quantity": 200, "avg_cost_jpy": 1983, "current_price": 4979}]
+    r = sa.calc_portfolio_impact(h, {}, usdjpy=150.0)
+    # IONQ は株価なし→取得額（円）のまま、NVDA は 200ドル×150円
+    assert r["total_value_jpy"] == round(216 * 5319 + 200 * 150 + 200 * 4979)

@@ -1109,6 +1109,16 @@ def evaluate_contraction_flag(results: dict, cfg) -> dict:
         us10y_now  = bond_res.get("us10y_yield")
         us10y_prev = bond_res.get("us10y_yield_prev")
         detail["us10y_rise"] = None
+        # 2026-10-05: bond_commodity に利回りが入っておらず毎週 N/A だった。
+        # rates_monitor（FRED DGS10）の前週比（%pt）を使う
+        if us10y_now is None or us10y_prev is None:
+            try:
+                from rates_monitor import get_rates
+                _u = (get_rates(cfg).get("us") or {}).get("10年") or {}
+                if _u.get("w1") is not None:
+                    us10y_now, us10y_prev = _u["value"], _u["value"] - _u["w1"]
+            except Exception:
+                pass
         if us10y_now is not None and us10y_prev is not None:
             rise = float(us10y_now) - float(us10y_prev)
             detail["us10y_rise"] = round(rise, 4)
@@ -1139,6 +1149,10 @@ def evaluate_contraction_flag(results: dict, cfg) -> dict:
             .get("pcr_data", {})
             .get("pcr_current")
         )
+        # 2026-10-05: 実際の格納先は option_data.spy.pcr_oi（建玉が0なら出来高ベース）
+        if pcr_val is None:
+            _spy = (results.get("options_monitor", {}).get("option_data") or {}).get("spy") or {}
+            pcr_val = _spy.get("pcr_oi") or _spy.get("pcr_volume")
         detail["pcr"] = pcr_val
         if pcr_val is not None and float(pcr_val) >= pcr_thresh:
             triggered_count += 1
@@ -1153,6 +1167,12 @@ def evaluate_contraction_flag(results: dict, cfg) -> dict:
         _geo_res = results.get("geo_risk", results.get("country_risk", {}))
         if isinstance(_geo_res, dict):
             geo_score = _geo_res.get("risk_score") or _geo_res.get("geo_risk_score")
+            # 2026-10-05: 実際の結果は国別の risk_scores。監視国のうち最も高い国のスコアを使う
+            _rs = _geo_res.get("risk_scores") or {}
+            if geo_score is None and isinstance(_rs, dict) and _rs:
+                _top = max(_rs.items(), key=lambda kv: float(kv[1] or 0))
+                geo_score = round(float(_top[1] or 0), 1)
+                detail["geo_risk_country"] = _top[0]
         detail["geo_risk_score"] = geo_score
         if geo_score is not None and float(geo_score) >= geo_thresh:
             triggered_count += 1
@@ -1172,7 +1192,19 @@ def evaluate_contraction_flag(results: dict, cfg) -> dict:
             if isinstance(v, dict)
         ]
         # score_history から前週の上位平均を取得（存在すれば）
+        # 2026-10-05: 前週の値を results（実行中のメモリ）にしか置いておらず、翌週には
+        # 消えていて毎週 N/A だった。ファイルに残して6日以上前の値と比べる
+        from pathlib import Path as _P
+        _sp = _P(getattr(cfg, "DATA_DIR", "stock_data/data")) / "contraction_state.json"
+        try:
+            _st = json.loads(_sp.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            _st = {}
         score_hist = results.get("_score_history_prev_avg")
+        if score_hist is None:
+            _old = [v for d, v in sorted((_st.get("top_avg") or {}).items())
+                    if (datetime.now() - datetime.strptime(d, "%Y-%m-%d")).days >= 6]
+            score_hist = _old[-1] if _old else None
         detail["score_drop"] = None
         if scores_now:
             avg_now = sum(sorted(scores_now, reverse=True)[:6]) / min(6, len(scores_now))
@@ -1186,6 +1218,14 @@ def evaluate_contraction_flag(results: dict, cfg) -> dict:
                     )
             # 前週平均を results に格納（次週参照用）
             results["_score_history_prev_avg"] = round(avg_now, 2)
+            try:
+                _hist = dict(_st.get("top_avg") or {})
+                _hist[datetime.now().strftime("%Y-%m-%d")] = round(avg_now, 2)
+                _st["top_avg"] = dict(sorted(_hist.items())[-60:])
+                _sp.parent.mkdir(parents=True, exist_ok=True)
+                _sp.write_text(json.dumps(_st, ensure_ascii=False, indent=1), encoding="utf-8")
+            except OSError:
+                pass
     except Exception:
         detail["score_drop"] = None
 

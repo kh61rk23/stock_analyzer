@@ -201,6 +201,49 @@ def _save_cache(cfg, data: dict) -> None:
 # BLOCK 2: 依存モジュールからのデータ取得
 # ==============================================================
 
+def _get_live_catalysts(ticker: str, cfg) -> tuple[float, list]:
+    """いま動いている材料からカタリスト点（0〜10）を数える（2026-10-05）。
+
+    カタリストの元だったテキストシグナル（text_signal）を 2026-09 に停止したため、
+    independence_scores の catalyst_score が全銘柄 0 になり、条件A（独立性×カタリスト）が
+    一度も成立していなかった。直近30日の TDnet（自社株買い・増配）、決算サプライズ高確率、
+    PEAD（決算後の上方ドリフト）を材料として数える。
+    """
+    from datetime import timedelta as _td
+    score, flags = 0.0, []
+    cache_dir = Path(getattr(cfg, "CACHE_DIR", "stock_data/cache"))
+    data_dir = Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
+    cutoff = (datetime.now() - _td(days=30)).strftime("%Y-%m-%d")
+    try:
+        notified = json.loads((data_dir / "tdnet_notified.json").read_text(encoding="utf-8")).get("notified") or []
+        for key in notified:
+            parts = str(key).split("_")
+            if len(parts) >= 3 and parts[0] == ticker and parts[1] >= cutoff:
+                if parts[2] in ("BUYBACK", "DIV_UP"):
+                    score += 3.0
+                    flags.append({"BUYBACK": "自社株買い", "DIV_UP": "増配"}[parts[2]] + f"({parts[1]})")
+    except (OSError, ValueError, AttributeError):
+        pass
+    try:
+        es = json.loads((data_dir / "earnings_surprise_cache.json").read_text(encoding="utf-8")).get("results") or {}
+        r = es.get(ticker) or {}
+        pa = (r.get("profit_accel") or {}).get("accel")
+        if (r.get("conservatism_score") or 0) >= 70 and pa is not None and pa >= 0.15:
+            score += 3.0
+            flags.append("決算サプライズ高確率")
+    except (OSError, ValueError, AttributeError):
+        pass
+    try:
+        pead = json.loads((cache_dir / "pead_candidates.json").read_text(encoding="utf-8"))
+        e = pead.get(ticker) or {}
+        if e.get("direction") == "positive" and str(e.get("last_updated", "")) >= cutoff:
+            score += 2.0
+            flags.append("PEAD上方ドリフト")
+    except (OSError, ValueError, AttributeError):
+        pass
+    return min(10.0, score), flags
+
+
 def _get_independence_data(ticker: str, cfg) -> tuple:
     """independence_score と catalyst_score を取得する。"""
     indep_score    = 0.0
@@ -451,10 +494,22 @@ def _check_promotion(
             pc_path   = cache_dir / "pearl_candidates.json"
             if pc_path.exists():
                 pc_data = json.loads(pc_path.read_text(encoding="utf-8"))
-                if ticker in pc_data:
+                # 2026-10-05: pearl_candidates.json は「行のリスト」。辞書として探していたため
+                # 一度も昇格フラグが書かれていなかった
+                rows = pc_data if isinstance(pc_data, list) else []
+                hit = False
+                for row in rows:
+                    if isinstance(row, dict) and row.get("ticker") == ticker:
+                        row["latent_pearl_promoted"] = True
+                        row["latent_pearl_score"] = latent_score
+                        row["promoted_at"] = today_str
+                        hit = True
+                if isinstance(pc_data, dict) and ticker in pc_data:
                     pc_data[ticker]["latent_pearl_promoted"] = True
-                    pc_data[ticker]["latent_pearl_score"]    = latent_score
-                    pc_data[ticker]["promoted_at"]           = today_str
+                    pc_data[ticker]["latent_pearl_score"] = latent_score
+                    pc_data[ticker]["promoted_at"] = today_str
+                    hit = True
+                if hit:
                     pc_path.write_text(
                         json.dumps(pc_data, ensure_ascii=False, indent=2),
                         encoding="utf-8",
@@ -692,6 +747,10 @@ def run_latent_pearl_manager(cfg=None, force_refresh: bool = False) -> dict:
         try:
             # ── データ収集 ────────────────────────────────────
             indep_score, catalyst_score, catalyst_flags = _get_independence_data(ticker, cfg)
+            _live_cat, _live_flags = _get_live_catalysts(ticker, cfg)
+            if _live_cat > catalyst_score:
+                catalyst_score = _live_cat
+                catalyst_flags = list(catalyst_flags or []) + _live_flags
             cross_strength, cross_signal_types          = _get_cross_signal_data(ticker, cfg)
             midterm_score, midterm_trajectory            = _get_midterm_data(ticker, cfg)
             nano_rank = _get_nano_queue_rank(ticker, cfg)

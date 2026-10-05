@@ -1913,7 +1913,7 @@ SECTOR_ANALYSIS_WORKERS: int = 4
 # BLOCK 22: ポジションサイズ設定 / ストレステスト / フェーズ4〜6 フラグ群
 # ==============================================================
 TOTAL_ASSETS_JPY:       float = 10_000_000.0  # 総資産額（円）← 実際の金額に変更
-POSITION_RISK_PCT:      float = 0.10          # 1トレードのリスク許容率（10%）
+POSITION_RISK_PCT:      float = 0.01          # 1トレードのリスク許容率（1%）。2026-10-05: 0.10→0.01（レポートの「1%ルール」と食い違い、全銘柄が上限で頭打ちだった）
 POSITION_ATR_MULT:      float = 2.0           # 逆指値 = 現在価格 - ATR × この倍率
 ENABLE_POSITION_SIZER:  bool  = True          # ポジションサイジング [3-3]
 ENABLE_STRESS_TEST:  bool  = True       # ストレステスト [3-6]
@@ -4295,7 +4295,7 @@ INDEPENDENCE_TIER_THRESHOLDS: dict = {
 # ── Wave7-G: 潜伏銘柄管理（latent_pearl_manager.py）────────────
 
 # latent_pearl_cache.json の TTL（日）
-LATENT_PEARL_TTL_DAYS: int = 30
+LATENT_PEARL_TTL_DAYS: int = 1   # 2026-10-05: 30→1（日次の処理なのに月1回しか再計算していなかった）
 
 # 潜伏Pearl → 通常Pearl への昇格閾値
 LATENT_PEARL_PROMOTION_THRESHOLD: float = 70.0

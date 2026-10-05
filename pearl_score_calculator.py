@@ -944,6 +944,42 @@ def _calc_d2_smart_money(
 #   $\epsilon \geq 0.20$ → 0〜10pt（大幅超過・反転リスク）
 # ==============================================================
 
+def _calc_d5_valuation(data: dict, market: str = "JP") -> tuple[float | None, list[str]]:
+    """割安度（バリュエーション）スコア（0〜100）。2026-10-05 新設（健太指示）。
+
+    PER（低いほど高得点: 8倍以下=100・30倍以上=0）、PBR（0.8倍以下=100・5倍以上=0）、
+    FCF利回り（8%以上=100・0%以下=0）のうち取れたものの平均。どれも無ければ None。
+    PER/PBR が負（赤字・債務超過）は対象外。
+    """
+    parts, flags = [], []
+    try:
+        per = data.get("per")
+        if per is not None and float(per) > 0:
+            v = max(0.0, min(100.0, (30.0 - float(per)) / 22.0 * 100))
+            parts.append(v)
+            flags.append(f"PER {float(per):.1f}倍→{v:.0f}点")
+        pbr = data.get("pbr")
+        if pbr is not None and float(pbr) > 0:
+            v = max(0.0, min(100.0, (5.0 - float(pbr)) / 4.2 * 100))
+            parts.append(v)
+            flags.append(f"PBR {float(pbr):.2f}倍→{v:.0f}点")
+        fy = data.get("fcf_yield")
+        if fy is None and data.get("free_cashflow") and data.get("market_cap"):
+            try:
+                fy = float(data["free_cashflow"]) / float(data["market_cap"])
+            except (TypeError, ValueError, ZeroDivisionError):
+                fy = None
+        if fy is not None:
+            v = max(0.0, min(100.0, float(fy) / 0.08 * 100))
+            parts.append(v)
+            flags.append(f"FCF利回り {float(fy) * 100:.1f}%→{v:.0f}点")
+    except (TypeError, ValueError):
+        pass
+    if not parts:
+        return None, ["割安度: PER/PBR/FCF利回り未取得"]
+    return round(sum(parts) / len(parts), 1), flags
+
+
 def _calc_d5_contrarian(
     data:   dict,
     market: str = "JP",
@@ -1142,6 +1178,8 @@ def save_pearl_candidate(
             "d1_score":    pearl_result.get("d1_score"),
             "d3_score":    pearl_result.get("d3_score"),
             "d4_score":    pearl_result.get("d4_score"),
+            "d2_score":    pearl_result.get("d2_score"),
+            "d5_score":    pearl_result.get("d5_score"),
         }
         # 同一銘柄・同日の重複を除去して追加
         existing = [e for e in existing
@@ -1347,6 +1385,11 @@ def calc_pearl_score(
         d3_score, d3_flags, m_score_3v = _calc_d3_earnings_quality(data, cfg)
         d4_score, d4_flags  = _calc_d4_discovery_gap(data, market)
         d5_score, d5_flags  = _calc_d5_contrarian(data, market)
+        # 2026-10-05: D5 ＝ 割安度（バリュエーション）50% ＋ 逆張り（市場比の割負け）50%
+        _val, _val_flags = _calc_d5_valuation(data, market)
+        if _val is not None:
+            d5_score = round(0.5 * _val + 0.5 * d5_score, 1)
+            d5_flags = [f"割安度{_val:.0f}点（{' / '.join(_val_flags)}）"] + d5_flags
 
         # ── Ph3 総合スコア計算（5次元・D2実装版）─────────────────
         # $pearl\_score = D1 \times w1 + D2 \times w2 + D3 \times w3$

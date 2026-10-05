@@ -760,3 +760,48 @@ if __name__ == "__main__":
     print(f"  ignition_overlap: {[s['sector_code'] for s in report['ignition_overlap']]}")
 
     print("\n✅ 単体テスト完了")
+
+
+# ==============================================================
+# 2026-10-05: 実際の保有銘柄の集中度（健太指示「ポートフォリオ集中リスクが動いてない」）
+#   旧来の HHI はスクリーナー通過銘柄の業種の偏りで、保有を見ていなかった（通過0件の日は HHI 0）。
+#   保有銘柄CSV（投資部の保有銘柄.csv から同期）の円評価額で、業種別・銘柄別の HHI を出す。
+# ==============================================================
+
+def holdings_concentration(holdings: list[dict]) -> dict:
+    """保有の円評価額から集中度を計算する（純関数）。
+
+    holdings: [{"ticker","name","sector_name","market","market_value_jpy"}...]
+    """
+    rows = [h for h in holdings if float(h.get("market_value_jpy") or 0) > 0]
+    total = sum(float(h["market_value_jpy"]) for h in rows)
+    if total <= 0:
+        return {"total_jpy": 0}
+    by_sec: dict[str, float] = {}
+    by_mkt: dict[str, float] = {}
+    for h in rows:
+        v = float(h["market_value_jpy"])
+        by_sec[h.get("sector_name") or "不明"] = by_sec.get(h.get("sector_name") or "不明", 0.0) + v
+        by_mkt[h.get("market") or "?"] = by_mkt.get(h.get("market") or "?", 0.0) + v
+    w_stock = sorted(((float(h["market_value_jpy"]) / total, h) for h in rows), key=lambda x: -x[0])
+    return {
+        "total_jpy": round(total),
+        "hhi_sector": round(sum((v / total) ** 2 for v in by_sec.values()), 4),
+        "hhi_stock": round(sum(w ** 2 for w, _ in w_stock), 4),
+        "top3_share": round(sum(w for w, _ in w_stock[:3]), 4),
+        "sector_weights": {k: round(v / total, 4) for k, v in sorted(by_sec.items(), key=lambda kv: -kv[1])},
+        "market_weights": {k: round(v / total, 4) for k, v in by_mkt.items()},
+        "top_holdings": [{"ticker": h.get("ticker"), "name": h.get("name"), "weight": round(w, 4),
+                          "value_jpy": round(float(h["market_value_jpy"]))} for w, h in w_stock[:5]],
+    }
+
+
+def load_holdings_concentration(base_dir=None) -> dict:
+    import csv as _csv
+    from pathlib import Path as _P
+    p = _P(base_dir or _P(__file__).parent) / "data" / "portfolio_holdings.csv"
+    try:
+        with open(p, encoding="utf-8-sig") as fh:
+            return holdings_concentration(list(_csv.DictReader(fh)))
+    except OSError:
+        return {"total_jpy": 0}

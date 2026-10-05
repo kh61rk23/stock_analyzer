@@ -701,8 +701,8 @@ def format_position_report(result: dict) -> str:
         f"**ATR期間**: {ATR_PERIOD}日  "
         f"**倍率**: {ATR_MULTIPLIER}×",
         "",
-        "| 銘柄 | 現在値 | 推奨株数 | 投資額 | 確信Lv | 推奨% |",
-        "|------|--------|---------|--------|-------|------|",
+        "| ティッカー | 銘柄名 | 現在値 | 保有株数 | 推奨株数 | 投資額 | 確信Lv | 推奨% |",
+        "|---|---|---|---|---|---|---|---|",
     ]
 
     for pos in positions:
@@ -716,9 +716,17 @@ def format_position_report(result: dict) -> str:
         cv_level = pos.get("conviction_level", "-")
         cv_pct   = pos.get("recommended_pct", 0) or 0
         cv_label_short = {5: "L5🌟", 4: "L4📈", 3: "L3➡️", 2: "L2⚠️", 1: "L1🔴"}.get(cv_level, "?")
+        try:
+            from name_resolver import name_of as _nm
+            _name = _nm(pos["ticker"]) or pos.get("name", "")
+        except Exception:
+            _name = pos.get("name", "")
+        _usd = f"（${pos['price_usd']:,.2f}）" if pos.get("price_usd") else ""
+        _held = pos.get("quantity") or 0
         lines.append(
-            f"| {pos['name'][:14]}({pos['ticker']}) "
-            f"| {price:,.0f}円 "
+            f"| {pos['ticker']} | {_name[:20]} "
+            f"| {price:,.0f}円{_usd} "
+            f"| {_held:,.0f}株 "
             f"| {shares:,}株{cap} "
             f"| {_fmt_yen(val)} "
             f"| {cv_label_short} "
@@ -727,8 +735,9 @@ def format_position_report(result: dict) -> str:
 
     lines.append("")
     lines.append(
-        "> 逆指値 = 現在価格 - ATR×2。推奨株数はリスク1%ルール基準。"
-        "⚠️ は15%上限/2%下限でクランプ済み。"
+        f"> 逆指値 = 現在価格 - ATR×{ATR_MULTIPLIER}。推奨株数は1トレードの損失を総資産の{risk*100:.0f}%に抑える基準。"
+        "米国株は株価・ATRを円換算（括弧内はドル）。⚠️ は15%上限/2%下限でクランプ済み。"
+        "総資産は投資部の保有銘柄CSV（現金・投信を含む）の実額"
     )
 
     return "\n".join(lines)
@@ -765,6 +774,23 @@ def run_position_sizer(
     sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     # config からの総資産上書き
     total_assets = getattr(cfg, "TOTAL_ASSETS_JPY", total_assets_jpy)
+    # 2026-10-05: 総資産は保有銘柄CSV（投資部）から作る portfolio_summary.json の実額を優先する
+    # （既定値 1,000万円のままだった）。米国株の株価・ATR は為替で円に直してから計算する
+    usd_jpy = 150.0
+    try:
+        import json as _json
+        _sm = _json.loads((Path(__file__).parent / "data" / "portfolio_summary.json").read_text(encoding="utf-8"))
+        if _sm.get("total_assets_jpy"):
+            total_assets = float(_sm["total_assets_jpy"])
+        usd_jpy = float(_sm.get("usd_jpy") or usd_jpy)
+    except (OSError, ValueError):
+        pass
+    try:
+        _mx = ((results or {}).get("macro") or {}).get("usdjpy") or ((results or {}).get("macro_snapshot") or {}).get("usdjpy")
+        if _mx:
+            usd_jpy = float(_mx)
+    except (TypeError, ValueError):
+        pass
 
     # ── [I-4] レジーム係数を取得 ─────────────────────────────
     regime_multiplier, regime_state = _get_regime_multiplier(results, cfg)
@@ -808,6 +834,12 @@ def run_position_sizer(
         print(f"      {ticker} ATR取得中...", end=" ")
 
         atr_data = calc_atr(ticker)
+        if atr_data and h.get("market") == "US":
+            atr_data = dict(atr_data)
+            atr_data["price_usd"] = atr_data.get("current_price")
+            for _k in ("atr14", "current_price", "price_52w_high", "price_52w_low"):
+                if atr_data.get(_k) is not None:
+                    atr_data[_k] = round(float(atr_data[_k]) * usd_jpy, 2)
         if not atr_data:
             print("取得失敗")
             positions.append({

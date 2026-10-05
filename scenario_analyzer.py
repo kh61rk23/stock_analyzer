@@ -268,6 +268,7 @@ def load_portfolio_holdings(cfg) -> list:
                             "quantity":     float(row.get("quantity", 0) or 0),
                             "avg_cost_jpy": float(row.get("avg_cost_jpy", 0) or 0),
                             "current_price": float(row.get("current_price", 0) or 0),
+                            "market_value_jpy": float(row.get("market_value_jpy", 0) or 0),
                             "memo":         row.get("memo", ""),
                         })
                 print(f"    📂 portfolio_holdings.csv 読み込み: {len(holdings)}銘柄（{p}）")
@@ -324,17 +325,21 @@ def calc_portfolio_impact(
 
     for h in holdings:
         qty   = h.get("quantity", 0)
-        price = h.get("current_price") or h.get("avg_cost_jpy", 0)
+        price = h.get("current_price")
         cost  = h.get("avg_cost_jpy", 0)
         mkt   = h.get("market", "JP")
 
         # 評価額（円）
-        if mkt == "US":
-            value_jpy = qty * price * usdjpy
-            cost_jpy  = qty * cost
+        # 2026-10-05: 株価が取れない米国株で「取得単価（円）」を代わりに使い、それにも
+        # 為替を掛けて約150倍になっていた（週次で総評価額 35,577万円）。
+        # 株価（現地通貨）があれば×為替、無ければ保有銘柄CSVの円評価額→取得額の順で使う
+        if price:
+            value_jpy = qty * price * (usdjpy if mkt == "US" else 1.0)
+        elif h.get("market_value_jpy"):
+            value_jpy = float(h["market_value_jpy"])
         else:
-            value_jpy = qty * price
-            cost_jpy  = qty * cost
+            value_jpy = qty * cost
+        cost_jpy = qty * cost
 
         unrealized = value_jpy - cost_jpy
         total_value += value_jpy
