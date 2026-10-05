@@ -178,3 +178,18 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def holding_value_jpy(h: dict, price_local, usdjpy: float) -> float:
+    """保有1銘柄の円評価額（純関数・2026-10-05）。
+
+    株価（現地通貨）があれば 数量×株価×（米国株なら為替）。無ければ保有銘柄CSVの
+    円評価額（market_value_jpy）、それも無ければ 数量×取得単価（円）。
+    円の取得単価に為替を掛けて約150倍になる事故（シナリオ分析・ストレステスト）を防ぐ。
+    """
+    qty = float(h.get("quantity") or 0)
+    if price_local:
+        return qty * float(price_local) * (usdjpy if h.get("market") == "US" else 1.0)
+    if h.get("market_value_jpy"):
+        return float(h["market_value_jpy"])
+    return qty * float(h.get("avg_cost_jpy") or 0)

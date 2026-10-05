@@ -378,6 +378,10 @@ jobs:
           EDINETDB_API_KEY:     ${{ secrets.EDINETDB_API_KEY }}
           FUDOSAN_API_KEY:      ${{ secrets.FUDOSAN_API_KEY }}
           POLICY_FRED_API_KEY:  ${{ secrets.POLICY_FRED_API_KEY }}
+          # 2026-10-05: 月次メール（monthly_mail.py）用
+          ALERT_GMAIL_FROM:     ${{ secrets.ALERT_GMAIL_FROM }}
+          ALERT_GMAIL_PASSWORD: ${{ secrets.ALERT_GMAIL_PASSWORD }}
+          ALERT_GMAIL_TO:       ${{ secrets.ALERT_GMAIL_TO }}
         run: python -u monthly_runner.py 2>&1
 
       # ── 5-B. 状態ファイル・キャッシュをリポジトリにコミット ───────

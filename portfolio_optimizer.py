@@ -104,7 +104,8 @@ def load_portfolio(cfg) -> list:
             holdings = []
             with open(p, encoding="utf-8-sig") as f:
                 for row in csv.DictReader(f):
-                    qty  = int(row.get("quantity", 0) or 0)
+                    # 2026-10-05: 持株会の株数は小数（740.955株）で、int() で例外→読み込み全体が失敗していた
+                    qty  = float(row.get("quantity", 0) or 0)
                     cost = float(row.get("avg_cost_jpy", 0) or 0)
                     if row.get("ticker") and qty > 0:
                         holdings.append({
@@ -114,6 +115,7 @@ def load_portfolio(cfg) -> list:
                             "avg_cost_jpy": cost,
                             "sector_code":  row.get("sector_code", ""),
                             "market":       row.get("market", "JP"),
+                            "market_value_jpy": float(row.get("market_value_jpy", 0) or 0),
                         })
             return holdings
         except Exception:
@@ -379,16 +381,24 @@ def evaluate_current_portfolio(
     positions = []
     total_value = 0.0
 
+    # 2026-10-05: 米国株のドル株価を円の取得単価と比べて評価損益が−99%になっていた。
+    # 株価は円に直してから比べる（為替は保有銘柄CSVの実勢値）
+    try:
+        import json as _json
+        _usd = float(_json.loads((Path(__file__).parent / "data" / "portfolio_summary.json")
+                                 .read_text(encoding="utf-8")).get("usd_jpy") or 150.0)
+    except (OSError, ValueError):
+        _usd = 150.0
+    from sync_holdings import holding_value_jpy
     for h in holdings:
         t     = h["ticker"]
-        price = price_data.get(t, {}).get("current_price", 0)
-        if price <= 0:
-            price = h.get("avg_cost_jpy", 0)   # フォールバック
+        price_local = price_data.get(t, {}).get("current_price", 0)
         qty   = h["quantity"]
         cost  = h["avg_cost_jpy"]
-        value = price * qty
+        value = holding_value_jpy(h, price_local if price_local and price_local > 0 else None, _usd)
+        price = value / qty if qty else 0.0          # 円換算の1株あたり
         total_value += value
-        pnl     = (price - cost) * qty
+        pnl     = value - cost * qty
         pnl_pct = round((price - cost) / cost * 100, 2) if cost > 0 else 0
 
         positions.append({

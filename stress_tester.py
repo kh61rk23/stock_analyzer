@@ -134,6 +134,7 @@ def _load_portfolio(cfg) -> list:
                         "market":       row.get("market", "JP"),
                         "quantity":     float(row.get("quantity", 0) or 0),
                         "avg_cost_jpy": float(row.get("avg_cost_jpy", 0) or 0),
+                        "market_value_jpy": float(row.get("market_value_jpy", 0) or 0),
                     })
             return holdings
         except Exception:
@@ -938,14 +939,9 @@ def run_stress_test(
         sd = _fetch_stock_data(ticker, usdjpy)
         time.sleep(FETCH_DELAY)
 
-        qty   = h.get("quantity", 0)
-        price = (sd["current_price"] if sd else h.get("avg_cost_jpy", 0))
-        mkt   = h.get("market", "JP")
-
-        if mkt == "US":
-            value_jpy = qty * price * usdjpy
-        else:
-            value_jpy = qty * price
+        # 2026-10-05: 株価が取れない米国株で円の取得単価に為替を掛けていた（評価額が膨張）
+        from sync_holdings import holding_value_jpy
+        value_jpy = holding_value_jpy(h, sd["current_price"] if sd else None, usdjpy)
 
         holdings_with_data.append({
             "holding":            h,

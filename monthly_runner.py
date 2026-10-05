@@ -124,6 +124,13 @@ def build_steps(cfg, yyyymm: str, today: date) -> list:
          flag("ENABLE_MONTHLY_STRATEGY_REVIEW"),
          [py, "monthly_strategy_review.py", yyyymm],
          "ENABLE_MONTHLY_STRATEGY_REVIEW=False"),
+
+        # 2026-10-05: 月次レポートをまとめてメール送信（健太指摘「monthly：メールがない」）。
+        # 必ず最後。成功済みのステップは翌日以降飛ばすので、同じ月に二重送信しない
+        ("monthly_mail",
+         flag("ENABLE_MONTHLY_MAIL"),
+         [py, "monthly_mail.py", yyyymm],
+         "ENABLE_MONTHLY_MAIL=False"),
     ]
 
 

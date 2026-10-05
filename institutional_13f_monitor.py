@@ -232,58 +232,125 @@ def _fetch_cik_filings(cik: str, cfg=None) -> Optional[dict]:
         return None
 
 
+def _find_infotable_url(cik: str, acc_clean: str, cfg=None) -> Optional[str]:
+    """提出書類の索引（index.json）から保有明細XMLのURLを探す。
+
+    2026-10-05: 旧実装は存在しない固定名 infotable.json を取りに行き、全機関が404だった
+    （2026-07 以降 us.institutional_positions は0行）。明細XMLの名前は提出ごとに違う
+    （例 53405.xml / form13fInfoTable.xml）ので、primary_doc.xml 以外の XML を明細とみなす。
+    """
+    base = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{acc_clean}/"
+    idx = sec_client.get_json(base + "index.json", cfg=cfg)
+    items = (((idx or {}).get("directory") or {}).get("item")) or []
+    xmls = [i.get("name", "") for i in items if str(i.get("name", "")).lower().endswith(".xml")]
+    named = [n for n in xmls if "infotable" in n.lower()]
+    rest = [n for n in xmls if n.lower() != "primary_doc.xml"]
+    pick = (named or rest or [None])[0]
+    return base + pick if pick else None
+
+
+def parse_infotable_xml(text: str, value_in_thousands: bool = False) -> list[dict]:
+    """13F 保有明細XML → [{name, cusip, value_usd, shares}]（純関数・名前空間を無視）。
+
+    2023年以降の提出は value がドル単位（それ以前は千ドル単位）。
+    """
+    import xml.etree.ElementTree as ET
+    out = []
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        return out
+
+    def _local(tag):
+        return tag.rsplit("}", 1)[-1]
+
+    for it in root.iter():
+        if _local(it.tag) != "infoTable":
+            continue
+        rec = {}
+        for ch in it.iter():
+            rec[_local(ch.tag)] = (ch.text or "").strip()
+        try:
+            value = int(float(rec.get("value", "0")))
+            shares = int(float(rec.get("sshPrnamt", "0")))
+        except ValueError:
+            continue
+        out.append({"name": rec.get("nameOfIssuer", ""), "cusip": rec.get("cusip", "").upper(),
+                    "value_usd": value * 1000 if value_in_thousands else value,
+                    "shares": shares, "ticker": ""})
+    # 同一CUSIPの複数行（議決権区分違い等）を合算
+    agg: dict = {}
+    for r in out:
+        a = agg.setdefault(r["cusip"], dict(r, value_usd=0, shares=0))
+        a["value_usd"] += r["value_usd"]
+        a["shares"] += r["shares"]
+    return list(agg.values())
+
+
 def _fetch_13f_holdings(
     accession_number: str,
     cik: str,
     cfg=None,
     timeout: int = 20,
 ) -> list[dict]:
-    """
-    13F ファイリングの保有銘柄一覧を取得する。
-    EDGAR Full-Text Search API を利用。
+    """13F ファイリングの保有銘柄一覧を取得する（保有明細XML）。
 
     Returns:
         [{"ticker": str, "value_usd": int, "shares": int,
           "name": str, "cusip": str}, ...]
     """
-    holdings = []
-    # accession_number: "0001067983-23-000001" → "0001067983230000001"
+    holdings: list = []
     acc_clean = accession_number.replace("-", "")
-    cik_padded = cik.lstrip("0").zfill(10)
-    url = (
-        f"https://www.sec.gov/Archives/edgar/data/"
-        f"{int(cik_padded)}/{acc_clean}/infotable.json"
-    )
     try:
-        data = sec_client.get_json(url, cfg=cfg, accept="application/json",
-                                    timeout=timeout)
-        if data is None:
-            raise ValueError("sec_client.get_json returned None")
-
-        for h in data.get("data", []):
-            # infotable.json のフォーマット:
-            # [name, cusip, value_x1000, shares, type, ...]
-            if not isinstance(h, list) or len(h) < 4:
-                continue
-            name  = str(h[0])
-            cusip = str(h[1])
-            try:
-                value_usd = int(h[2]) * 1000
-                shares    = int(h[3])
-            except (ValueError, TypeError):
-                continue
-            holdings.append({
-                "name":      name,
-                "cusip":     cusip,
-                "value_usd": value_usd,
-                "shares":    shares,
-                "ticker":    "",   # CUSIP→ticker 変換は別途
-            })
+        url = _find_infotable_url(cik.lstrip("0") or "0", acc_clean, cfg)
+        if not url:
+            raise ValueError("保有明細XMLが索引に無い")
+        r = sec_client.get(url, cfg=cfg, accept="application/xml", timeout=timeout)
+        if r is None or r.status_code != 200:
+            raise ValueError(f"HTTP {getattr(r, 'status_code', 'None')}")
+        yy = int(accession_number.split("-")[1]) if accession_number.count("-") == 2 else 99
+        holdings = parse_infotable_xml(r.text, value_in_thousands=(yy < 23))
+        _resolve_tickers(holdings, cfg)
     except Exception as e:
         print(f"    ⚠️  [13f] 保有リスト取得失敗 ({accession_number[:20]}): "
-              f"{str(e)[:50]}")
-
+              f"{str(e)[:60]}")
     return holdings
+
+
+def _resolve_tickers(holdings: list, cfg=None) -> None:
+    """CUSIP → ティッカー（OpenFIGI・キー不要・結果は cusip_ticker.json に保存して使い回す）。
+
+    2026-10-05: 旧実装は十数社の手書き対応表だけで、ほとんどの保有がティッカー無しになっていた。
+    """
+    import json as _json
+    import urllib.request as _ur
+    cache_p = Path(getattr(cfg, "CACHE_DIR", "stock_data/cache")) / "cusip_ticker.json"
+    try:
+        cache = _json.loads(cache_p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cache = {}
+    todo = sorted({h["cusip"] for h in holdings if h.get("cusip") and h["cusip"] not in cache})
+    for i in range(0, len(todo), 10):          # キー無しは1リクエスト10件・毎分25回まで
+        chunk = todo[i:i + 10]
+        try:
+            req = _ur.Request("https://api.openfigi.com/v3/mapping",
+                              data=_json.dumps([{"idType": "ID_CUSIP", "idValue": c} for c in chunk]).encode(),
+                              headers={"Content-Type": "application/json"})
+            res = _json.loads(_ur.urlopen(req, timeout=20).read())
+            for c, x in zip(chunk, res):
+                us = [d for d in (x.get("data") or []) if d.get("exchCode") == "US"]
+                cache[c] = (us or x.get("data") or [{}])[0].get("ticker", "") if x.get("data") else ""
+        except Exception as exc:
+            print(f"    ⚠️  [13f] CUSIP→ticker 変換失敗: {str(exc)[:60]}")
+            break
+        time.sleep(2.6)
+    try:
+        cache_p.parent.mkdir(parents=True, exist_ok=True)
+        cache_p.write_text(_json.dumps(cache, ensure_ascii=False, indent=0), encoding="utf-8")
+    except OSError:
+        pass
+    for h in holdings:
+        h["ticker"] = cache.get(h.get("cusip", ""), "") or h.get("ticker", "")
 
 
 def _get_latest_13f_accession(submissions: dict) -> Optional[str]:
