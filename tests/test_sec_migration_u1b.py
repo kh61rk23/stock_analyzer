@@ -185,15 +185,29 @@ def test_institutional_13f_fetch_cik_filings_uses_sec_client_submissions(monkeyp
 
 
 def test_institutional_13f_fetch_holdings_uses_sec_client_get_json(monkeypatch):
+    """2026-10-05: 旧仕様は存在しない infotable.json を読んでいた（全機関404）。
+    提出書類の索引（index.json）を sec_client.get_json で読み、保有明細XMLを sec_client.get で取る。"""
     called = {}
 
     def fake_get_json(url, cfg=None, **kw):
         called["url"] = url
         called["cfg"] = cfg
+        return {"directory": {"item": [{"name": "primary_doc.xml"}, {"name": "53405.xml"}]}}
+
+    class _Resp:
+        status_code = 200
+        text = ('<informationTable><infoTable><nameOfIssuer>BERKSHIRE HATHAWAY</nameOfIssuer>'
+                '<cusip>123456789</cusip><value>1000</value><shrsOrPrnAmt><sshPrnamt>500</sshPrnamt>'
+                '</shrsOrPrnAmt></infoTable></informationTable>')
+
+    def fake_get(url, cfg=None, **kw):
+        called["xml_url"] = url
         called["kw"] = kw
-        return {"data": [["BERKSHIRE HATHAWAY", "123456789", 1000, 500]]}
+        return _Resp()
 
     monkeypatch.setattr(sec_client, "get_json", fake_get_json)
+    monkeypatch.setattr(sec_client, "get", fake_get)
+    monkeypatch.setattr(institutional_13f_monitor, "_resolve_tickers", lambda h, cfg=None: None)
     cfg = SimpleNamespace(SEC_USER_AGENT="test-ua")
 
     result = institutional_13f_monitor._fetch_13f_holdings(
@@ -201,8 +215,9 @@ def test_institutional_13f_fetch_holdings_uses_sec_client_get_json(monkeypatch):
     )
 
     assert len(result) == 1
-    assert result[0]["cusip"] == "123456789"
-    assert "sec.gov" in called["url"]
+    assert result[0]["cusip"] == "123456789" and result[0]["value_usd"] == 1000
+    assert called["url"].endswith("/index.json") and "sec.gov" in called["url"]
+    assert called["xml_url"].endswith("/53405.xml")
     assert called["cfg"] is cfg
     assert called["kw"].get("timeout") == 20
 
