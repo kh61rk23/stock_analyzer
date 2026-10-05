@@ -130,3 +130,58 @@ def sector_name(code, default: str = "") -> str:
 def sector_label(code) -> str:
     n = sector_name(code)
     return f"{n}（{code}）" if n and n != str(code) else str(code)
+
+
+_JP_TICKER_RE = re.compile(r"(?<![\w.])([0-9][0-9A-Z]{3}\.T)(?![\w])")
+_SECTOR_BRACKET_RE = re.compile(r"\[(10[0-3][0-9])\]")
+_SECTOR_LIST_RE = re.compile(r"(対象業種|業種)[:：]\s*((?:10[0-3][0-9](?:\s*[,、/]\s*)?)+)")
+
+
+def enrich_text(text: str) -> str:
+    """メール等の文中で、コードだけの所に名前を補う（2026-10-05）。
+
+    - 日本株のティッカー（7203.T）: 同じ行にまだ名前が無ければ「7203.T トヨタ自動車」
+    - 角括弧の業種コード（[1028]）: 「[1028 銀行業]」
+    - 「対象業種: 1016, 1015」: 「対象業種: 電気機器(1016), 機械(1015)」
+    米国株のティッカーは一般の英単語と区別できないので、ここでは触らない（各節で付ける）。
+    """
+    if not text:
+        return text
+    out = []
+    for line in str(text).split("\n"):
+        # 機械読み取り用の行（例 DELIBERATION_QUEUE_V1: 7203.T,6674.T）は変えない
+        if re.match(r"^\s*[A-Z][A-Z0-9_]+:\s", line):
+            out.append(line)
+            continue
+        def _jp(m):
+            t = m.group(1)
+            n = name_of(t)
+            return f"{t} {n}" if n and n not in line else t
+        line = _JP_TICKER_RE.sub(_jp, line)
+        line = _SECTOR_BRACKET_RE.sub(
+            lambda m: f"[{m.group(1)} {sector_name(m.group(1))}]"
+            if sector_name(m.group(1)) != m.group(1) else m.group(0), line)
+        line = _SECTOR_LIST_RE.sub(
+            lambda m: m.group(1) + ": " + ", ".join(
+                f"{sector_name(c)}({c})" for c in re.findall(r"10[0-3][0-9]", m.group(2))), line)
+        out.append(line)
+    return "\n".join(out)
+
+
+@lru_cache(maxsize=1)
+def _edinet_map() -> dict:
+    out = {}
+    try:
+        cache = json.loads((_data_dir() / "edinetdb_company_cache.json").read_text(encoding="utf-8"))
+        for c in cache.get("companies", []):
+            if c.get("edinet_code"):
+                out[c["edinet_code"]] = (str(c.get("sec_code") or "")[:4], _clean_jp(c.get("name") or ""))
+    except (OSError, ValueError):
+        pass
+    return out
+
+
+def edinet_cols(edinet_code: str) -> tuple[str, str]:
+    """EDINETコード → (証券コード, 社名)。分からなければ (EDINETコード, '—')。"""
+    sec, nm = _edinet_map().get(str(edinet_code or ""), ("", ""))
+    return (sec or str(edinet_code), nm or "—")

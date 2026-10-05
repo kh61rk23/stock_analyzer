@@ -35,6 +35,27 @@ import smtplib
 import urllib.parse
 import urllib.request
 from datetime import datetime
+
+
+
+def _tk(t) -> str:
+    """「ティッカー 銘柄名」（名前が分からなければティッカーだけ）。2026-10-05"""
+    try:
+        from name_resolver import name_of
+        n = name_of(t)
+    except Exception:
+        n = ""
+    return f"{t} {n}" if n else str(t)
+
+
+def _jname(c: dict) -> str:
+    """銘柄名（日本株＝日本語名・米国株＝米国株名）。2026-10-05: yfinance の英語名を出していた"""
+    try:
+        from name_resolver import name_of
+        n = name_of((c or {}).get("ticker") or (c or {}).get("symbol") or "")
+    except Exception:
+        n = ""
+    return n or str((c or {}).get("name") or "")
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -301,7 +322,7 @@ def extract_alerts(cfg, results: dict) -> list:
                     _pp.append(f"ROE:{c['roe']:.0f}%")
                 if _dy:
                     _pp.append(f"配当:{_dy*100:.1f}%")
-                line += f"\n    📌 {str(c.get('name', ''))[:14]}（{c.get('ticker', '')}）: {' | '.join(_pp)}"
+                line += f"\n    📌 {_jname(c)[:16]}（{c.get('ticker', '')}）: {' | '.join(_pp)}"
             top_cos = [] if _scr else r.get("top_companies", [])
             for c in top_cos[:_top_n]:
                 if not c.get("fetch_ok"):
@@ -394,7 +415,7 @@ def extract_alerts(cfg, results: dict) -> list:
                     for c in _picks[:_pn]:
                         if not isinstance(c, dict):
                             continue
-                        _nm = str(c.get("name") or c.get("ticker", ""))[:18]
+                        _nm = str(_jname(c) or c.get("ticker", ""))[:20]
                         _pp = []
                         if c.get("per"):
                             _pp.append(f"PER:{c['per']:.1f}x")
@@ -452,7 +473,7 @@ def extract_alerts(cfg, results: dict) -> list:
                     _mark = "▶" if _i == 1 else " "
                     _sc = _c.get("composite_score")
                     _sc_s = f"{float(_sc):.0f}点" if _sc is not None else "—"
-                    _nm = str(_c.get("name") or _c.get("ticker", ""))[:16]
+                    _nm = str(_jname(_c) or _c.get("ticker", ""))[:20]
                     _extra = []
                     if _c.get("sector_name"):
                         _extra.append(str(_c["sector_name"]))
@@ -475,7 +496,7 @@ def extract_alerts(cfg, results: dict) -> list:
                     except Exception:
                         pass
                 for _d in (_chg.get("dropped") or []):
-                    _ql.append(f"  ↓ 外れた: {str(_d.get('name') or '')[:16]}（{_d['ticker']}）"
+                    _ql.append(f"  ↓ 外れた: {_jname(_d)[:20]}（{_d['ticker']}）"
                                f" — {_d['reason']}")
                 if _chg.get("prev_date") and not _chg.get("new") and not _chg.get("dropped"):
                     _ql.append(f"  ＝ 前回（{_chg['prev_date']}）から入れ替わりなし")
@@ -530,7 +551,7 @@ def extract_alerts(cfg, results: dict) -> list:
                 upside = c.get("analyst_upside")
                 if rec and rec <= 2.0 and upside and upside >= 0.15:
                     buy_lines.append(
-                        f"  {c.get('name','')[:14]}: 推奨{rec:.1f} / 目標株価乖離{upside*100:+.0f}%"
+                        f"  {_jname(c)[:16]}（{c.get('ticker','')}）: 推奨{rec:.1f} / 目標株価乖離{upside*100:+.0f}%"
                     )
         if buy_lines:
             alerts.append({
@@ -559,7 +580,7 @@ def extract_alerts(cfg, results: dict) -> list:
                 if cr and cr < 1.0:     flags.append(f"流動比率:{cr:.2f}(1未満)")
                 if flags:
                     risk_lines.append(
-                        f"  [{sec_name}] {c.get('name','')[:12]}: {' / '.join(flags)}"
+                        f"  [{sec_name}] {_jname(c)[:16]}（{c.get('ticker','')}）: {' / '.join(flags)}"
                     )
         if risk_lines:
             alerts.append({
@@ -658,7 +679,7 @@ def extract_alerts(cfg, results: dict) -> list:
                         sub.append(f"出来高{a['volume_ratio']:.1f}倍")
                     detail = f"({', '.join(sub)})" if sub else ""
                     lines.append(
-                        f"  {a.get('ticker','?')} ({a.get('label','')}) "
+                        f"  {_tk(a.get('ticker','?'))} ({a.get('label','')}) "
                         f"— {a.get('summary','')}{z_s} {detail}"
                     )
             if others:
@@ -903,14 +924,14 @@ def extract_alerts(cfg, results: dict) -> list:
     breakouts = sr_result.get("top_breakout", [])
     if breakouts:
         items = " / ".join(
-            f"{b.get('ticker','?')}(pos={b.get('position_pct',0):.0f}%)"
+            f"{_tk(b.get('ticker','?'))}(pos={b.get('position_pct',0):.0f}%)"
             for b in breakouts[:3]
         )
         alerts.append({
             "trigger":  "breakout_signal",
             "title":    f"🚀 ブレイクアウト候補: {len(breakouts)}銘柄 — {items}",
             "body":     "\n".join(
-                f"  {b.get('ticker','?')} {b.get('label','')} "
+                f"  {_tk(b.get('ticker','?'))} {b.get('label','')} "
                 f"位置{b.get('position_pct',0):.0f}% bonus={b.get('sr_bonus',0):+.1f}pt"
                 for b in breakouts[:5]
             ),
@@ -1054,7 +1075,7 @@ def extract_alerts(cfg, results: dict) -> list:
                 d = c.get("days_to_earnings")
                 when = (f"決算 {c['next_earnings']}（あと{d}日）" if c.get("next_earnings") and d is not None and d >= 0
                         else "次回決算日未取得")
-                out.append(f"  {icon} {str(c.get('name', ''))[:14]}（{c['ticker']}）| {when}")
+                out.append(f"  {icon} {_jname(c)[:16]}（{c['ticker']}）| {when}")
                 if c.get("surprise_reason"):
                     out.append(f"      {c['surprise_reason']}")
             return out
@@ -1176,7 +1197,7 @@ def extract_alerts(cfg, results: dict) -> list:
                 alert_type = pa.get("alert_type", "")
                 icon = "🌟" if alert_type == "high_reliability" else "⚠️"
                 lines.append(
-                    f"  {icon} {pa['ticker']}: {pa['event_title'][:35]}\n"
+                    f"  {icon} {_tk(pa['ticker'])}: {pa['event_title'][:35]}\n"
                     f"     {pa.get('note','')[:60]}"
                 )
             alerts.append({
@@ -1339,7 +1360,7 @@ def extract_alerts(cfg, results: dict) -> list:
                     _kap_str = f"{_kap:.0f}億" if _kap is not None else "不明"
                     lines.append(
                         f"  💎 [{_tier}] "
-                        f"{_s.get('ticker', _s.get('code',''))} "
+                        f"{_tk(_s.get('ticker', _s.get('code','')))} "
                         f"Pearl:{float(_s.get('pearl_score',0)):.1f}pt "
                         f"時価総額:{_kap_str}"
                     )
@@ -1661,7 +1682,7 @@ def extract_alerts(cfg, results: dict) -> list:
 
         if _pead_alerts:
             _pead_lines = [
-                f"  📈 [{a['ticker']}] "
+                f"  📈 [{_tk(a['ticker'])}] "
                 f"score={a.get('pead_score', 0):.1f}pt "
                 f"vol={a.get('volume_ratio', 0):.2f}x "
                 f"dir={a.get('direction', '')} "
@@ -1707,7 +1728,7 @@ def extract_alerts(cfg, results: dict) -> list:
             if _pairs:
                 _body_lines.append(
                     "  高相関代表: "
-                    + " / ".join(f"{p['ticker1']}×{p['ticker2']}"
+                    + " / ".join(f"{_tk(p['ticker1'])}×{_tk(p['ticker2'])}"
                                   f"(ρ={p['correlation']:.2f})"
                                   for p in _pairs)
                 )
@@ -1732,7 +1753,7 @@ def extract_alerts(cfg, results: dict) -> list:
 
         if _triple_tickers:
             _triple_lines = [
-                f"  ⭐ [{t['ticker']}] "
+                f"  ⭐ [{_tk(t['ticker'])}] "
                 f"カタリスト{t['catalyst_count']}種重複 "
                 f"最短{t['min_days']}日後 "
                 f"[{'+'.join(t['types'][:3])}]"
@@ -1765,7 +1786,7 @@ def extract_alerts(cfg, results: dict) -> list:
                 _val_b = _t1.get("value_usd", 0) / 1_000_000_000
                 _t1_lines.append(
                     f"  🏆 {_t1.get('institution', '')} "
-                    f"新規取得: {_t1.get('ticker', '')} "
+                    f"新規取得: {_tk(_t1.get('ticker', ''))} "
                     f"({_t1.get('name', '')[:20]})\n"
                     f"     取得額: ${_val_b:.1f}B "
                     f"株数: {_t1.get('shares', 0):,}"
@@ -1808,7 +1829,7 @@ def extract_alerts(cfg, results: dict) -> list:
                 )
                 _large_lines.append(
                     f"  🏦 [{_tier_label}] {_lg.get('institution', '')[:25]}\n"
-                    f"     新規取得: {_lg.get('ticker', '')} "
+                    f"     新規取得: {_tk(_lg.get('ticker', ''))} "
                     f"({_lg.get('name', '')[:20]})\n"
                     f"     取得額: ${_val_b:.1f}B "
                     f"(閾値: ${_min_usd/1e9:.0f}B超)"
@@ -1836,10 +1857,10 @@ def extract_alerts(cfg, results: dict) -> list:
             _nears = [a for a in _ex_alerts if a.get("level") != "fire"]
             _lines = []
             for a in _fires:
-                _lines.append(f"  🔔 [発火] {a.get('ticker','')} "
+                _lines.append(f"  🔔 [発火] {_tk(a.get('ticker',''))} "
                               f"{a.get('rule_id','')}: {a.get('detail','')[:90]}")
             for a in _nears[:10]:
-                _lines.append(f"  👀 [接近] {a.get('ticker','')} "
+                _lines.append(f"  👀 [接近] {_tk(a.get('ticker',''))} "
                               f"{a.get('rule_id','')}: {a.get('detail','')[:80]}")
             _tickets = _ex.get("tickets", [])
             if _tickets:
@@ -1915,6 +1936,34 @@ def extract_alerts(cfg, results: dict) -> list:
             alerts.append(build_edinetdb_ingest_alert(
                 ing, _web, _jl(_dd / "edinetdb_cache" / f"daily_{_today}.json"), 100))
 
+    # 2026-10-05: 国債利回り（日米 10/5/3年・前日比/前週比）と政策金利（米・欧・日）
+    if getattr(cfg, "ALERT_ON_RATES", True):
+        try:
+            from rates_monitor import get_rates, format_lines
+            _rl = format_lines(get_rates(cfg))
+            if _rl:
+                alerts.append({"trigger": "rates", "title": "📈 金利（日米国債 10/5/3年・政策金利）",
+                               "body": "\n".join(_rl), "severity": "info"})
+        except Exception as _rte:
+            print(f"    ⚠️ 金利節の生成失敗: {str(_rte)[:80]}")
+
+    # 2026-10-05: 不動産DB（取り込みと業種スコアへの反映）
+    if getattr(cfg, "ALERT_ON_REAL_ESTATE", True):
+        try:
+            _re = build_real_estate_alert(results.get("fudosan_ingest") or {}, sector_results)
+            if _re:
+                alerts.append(_re)
+        except Exception as _ree:
+            print(f"    ⚠️ 不動産DB節の生成失敗: {str(_ree)[:80]}")
+
+    # 2026-10-05: コードだけで出ている所に名前を補う（日本株ティッカー・業種コード）
+    try:
+        from name_resolver import enrich_text
+        for a in alerts:
+            a["title"] = enrich_text(a.get("title", ""))
+            a["body"] = enrich_text(a.get("body", ""))
+    except Exception as _ne:
+        print(f"    ⚠️ 名前補完をスキップ: {str(_ne)[:80]}")
     return alerts
 
 
@@ -1942,16 +1991,16 @@ def collect_high_dividend(cfg, results: dict, sector_results: dict | None = None
                        "sector": sector or "", "market": market}
 
     for c in ((results.get("screener") or {}).get("candidates") or []):
-        _add(c.get("ticker"), c.get("name"), c.get("dividend_yield"), c.get("payout_ratio"),
+        _add(c.get("ticker"), _jname(c), c.get("dividend_yield"), c.get("payout_ratio"),
              c.get("sector_name"), "JP")
     for c in ((results.get("us_screener") or {}).get("candidates") or []):
-        _add(c.get("ticker"), c.get("name"), c.get("div_yield"), c.get("payout_ratio"),
+        _add(c.get("ticker"), _jname(c), c.get("div_yield"), c.get("payout_ratio"),
              c.get("sector"), "US")
     for code, r in (sector_results or {}).items():
         if isinstance(r, dict):
             for c in r.get("top_companies", []) or []:
                 if c.get("fetch_ok"):
-                    _add(c.get("ticker"), c.get("name"), c.get("dividend_yield"),
+                    _add(c.get("ticker"), _jname(c), c.get("dividend_yield"),
                          c.get("payout_ratio"), r.get("sector_name_ja", code), "JP")
     out = {"JP": [], "US": []}
     for v in sorted(seen.values(), key=lambda x: -x["dy"]):
@@ -1982,6 +2031,42 @@ def build_high_dividend_alert(cfg, results: dict, sector_results: dict | None = 
         "body":     "\n".join(lines),
         "severity": "info",
     }
+
+
+def build_real_estate_alert(fudo: dict, sector_results: dict) -> dict | None:
+    """不動産DB（fudosandb.jp）の取り込み結果と、業種スコアへの反映をメール1件にまとめる（純関数）。
+
+    2026-10-05: 毎日45社前後・保有不動産3,000件超を取り込み、業種スコアに「不動産ボーナス」
+    （含み益・災害/人口リスクから −2〜+3点）として使っているのに、メールに一切出ていなかった。
+    """
+    from name_resolver import edinet_cols, sector_name
+    lines = []
+    if isinstance(fudo, dict) and not fudo.get("skipped"):
+        lines.append(f"  【取り込み】{fudo.get('success', 0)}社 / 保有不動産 {fudo.get('holdings', 0):,}件"
+                     f" / 地域プロファイル {fudo.get('area_profiles', 0)}件"
+                     + (f" / 失敗 {fudo['failure']}社" if fudo.get("failure") else "")
+                     + ("（API上限で打ち切り）" if fudo.get("budget_stop") else ""))
+        tg = [edinet_cols(c) for c in (fudo.get("targets") or [])][:12]
+        if tg:
+            lines.append("    対象: " + "、".join(f"{s} | {n}" for s, n in tg)
+                         + ("…" if len(fudo.get("targets") or []) > 12 else ""))
+    bon = []
+    for code, r in (sector_results or {}).items():
+        if isinstance(r, dict) and r.get("real_estate_bonus"):
+            bon.append((float(r["real_estate_bonus"]), code))
+    if bon:
+        bon.sort(reverse=True)
+        lines.append(f"  【業種スコアへの反映】不動産ボーナスが付いた業種 {len(bon)}")
+        for v, code in [b for b in bon if b[0] > 0][:5]:
+            lines.append(f"    ▲ {sector_name(code)}（{code}）: {v:+.2f}点")
+        neg = [b for b in bon if b[0] < 0][-3:]
+        for v, code in neg:
+            lines.append(f"    ▼ {sector_name(code)}（{code}）: {v:+.2f}点")
+        lines.append("    ※ 保有不動産の含み益（時価−簿価）と、浸水・土砂・人口減少リスクから算出（−2〜+3点）")
+    if not lines:
+        return None
+    return {"trigger": "real_estate", "title": f"🏢 不動産DB 取り込み{(fudo or {}).get('success', 0)}社・業種反映{len(bon)}",
+            "body": "\n".join(lines), "severity": "info", "channel": "gmail"}
 
 
 def build_edinetdb_ingest_alert(ing: dict, web: dict | None = None, ledger: dict | None = None,
