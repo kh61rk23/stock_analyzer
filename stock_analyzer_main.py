@@ -1,33 +1,10 @@
 # ==============================================================
-# stock_analyzer_main.py  v3.0
-# 自律型投資AIエージェント基盤 — メイン制御 + Streamlit UI
+# stock_analyzer_main.py — 自律型投資AIエージェント基盤 メイン制御 + Streamlit UI
 # ==============================================================
-# 【v2.0 からの変更点サマリー】
-#
-#   [ADD-1] config.py 参照に統一
-#     v2.0: DRIVE_BASE 等の定数を本ファイルに直書き
-#     v3.0: import config as cfg で全設定を参照
-#
-#   [ADD-2] マクロ指標取得・追い風/逆風判定
-#     v2.0: この機能が存在しなかった
-#     v3.0: fetch_macro_snapshot() / evaluate_macro_signals() / get_sector_macro_icon()
-#
-#   [ADD-3] 33業種エージェント 動的ロードインターフェース（雛形）
-#     v2.0: この機能が存在しなかった
-#     v3.0: run_sector_analysis() → sector_agents.base_agent.run_sector_analysis()
-#
-#   [ADD-4] Streamlit UI の骨組み
-#     v2.0: UI なし（Markdown ファイルのみ）
-#     v3.3: Tab1を3内部タブ化（マクロシグナル/長期トレンド/短期デイリー）
-#
-#   [ADD-5] マクロ分析レポートの Markdown 保存
-#     v2.0: なし
-#     v3.0: _save_macro_report() を追加
-#
-# 【依存関係】
-#   import: config.py / arxiv_monitor.py（動的ロード）
-#   ★ stock_analyzer_main.py 自身は sector_agents/*.py を import しない
-#     → 動的ロードで自動検出するため循環参照なし
+# 設定は import config as cfg で全て参照する。各分析モジュールは _load_local_module で動的ロードする
+# （stock_analyzer_main.py 自身は sector_agents/*.py を import しない＝循環参照なし）。
+# 主な機能: マクロ指標取得・追い風/逆風判定（fetch_macro_snapshot / evaluate_macro_signals）、
+#   33業種エージェント（run_sector_analysis）、Streamlit UI、各種レポートの Markdown 保存。
 # ==============================================================
 
 import subprocess, sys, json, time
@@ -136,8 +113,8 @@ class RunLogger:
         }
         self._logs.append(entry)
         self._logs = self._logs[-cfg.LOG_MAX_ENTRIES:]
-        # 2026-09-29: 各モジュールの記録ごとに、スクリーナー候補の総合点が
-        # 動いたかを検出して「点数の経路」に積む（score_trail.py）
+                # 各モジュールの記録ごとに、スクリーナー候補の総合点が動いたかを検出して
+                # 「点数の経路」に積む（score_trail.py）
         try:
             import score_trail as _st
             _st.checkpoint(module)
@@ -862,9 +839,8 @@ def _load_local_module(name: str, local_path: str, drive_path: Path):
     repo_root = Path(__file__).resolve().parent
     local = Path(local_path)
     candidates = [local]                         # /content/xxx.py（Colab）
-    # GitHub Actions では /content/paper/x.py の階層をリポジトリ
-    # 直下に写像する。従来は name.py だけを直下で探し、
-    # paper/ と ml/ 配下の実在ファイルを見落としていた。
+        # GitHub Actions では /content/paper/x.py の階層をリポジトリ直下に写像する
+        # （paper/ と ml/ 配下のファイルも見つけるため）。
     try:
         candidates.append(repo_root / local.relative_to("/content"))
     except ValueError:
@@ -1115,9 +1091,7 @@ def _apply_capped_adjustment(
     """
     cap = float(getattr(cfg, cap_config_key, 30.0))
     global_cap = float(getattr(cfg, "SCORE_MAX_TOTAL_ADJ", 30.0))
-    # 2026-07-25 バッチ4: composite_score の上下限を config から読む。
-    # 従来 max(0.0, min(100.0, ...)) の直書きで、BLOCK SCORE-CAP の
-    # SCORE_MIN_COMPOSITE / SCORE_MAX_COMPOSITE は未参照だった。
+        # composite_score の上下限は config（SCORE_MIN_COMPOSITE / SCORE_MAX_COMPOSITE）から読む。
     score_min = float(getattr(cfg, "SCORE_MIN_COMPOSITE", 0.0))
     score_max = float(getattr(cfg, "SCORE_MAX_COMPOSITE", 100.0))
 
@@ -1168,7 +1142,7 @@ def run_gov_pipeline():
         msg = "gov_data_pipeline.py が見つかりません"
         print(f"  ❌ {msg}")
         logger.add("gov_pipeline", "error", msg)
-        return {}   # ★ False→{} : 下流（B-2 等）が results["gov"].get() するため
+        return {}   # 常に dict（下流の B-2 等が results["gov"].get() する）
 
     try:
         result = mod.main(cfg=cfg)
@@ -1180,7 +1154,7 @@ def run_gov_pipeline():
         msg = str(e)[:120]
         print(f"  ❌ 実行エラー: {msg}")
         logger.add("gov_pipeline", "error", msg)
-        return {}   # ★ False→{} : arxiv と同じ契約に統一（results["gov"] は常に dict）
+        return {}   # 常に dict（arxiv と同じ契約）
 
 
 def run_arxiv_monitor():
@@ -1198,7 +1172,7 @@ def run_arxiv_monitor():
         msg = "arxiv_monitor.py が見つかりません"
         print(f"  ❌ {msg}")
         logger.add("arxiv_monitor", "skipped", msg)
-        return {}   # ★ False → {} に変更（etf_tracker が dict チェックするため）
+        return {}   # 常に dict（etf_tracker が dict チェックする）
 
     try:
         arxiv_result = mod.run_monitor()
@@ -1211,13 +1185,13 @@ def run_arxiv_monitor():
         n_papers = arxiv_result.get("new_papers", 0)
         logger.add("arxiv_monitor", "success",
                    f"新着{n_papers}件, 候補{n}件")
-        return arxiv_result   # ★ dict をそのまま返す
+        return arxiv_result
 
     except Exception as e:
         msg = str(e)[:120]
         print(f"  ❌ ArXiv 監視エラー: {msg}")
         logger.add("arxiv_monitor", "error", msg)
-        return {}   # ★ False → {} に変更
+        return {}   # 常に dict
 
 
 def _save_macro_report(snapshot: dict, signals: list):
@@ -1405,8 +1379,8 @@ def run_all_tasks(mode: str = "all") -> dict:
         _st_watch.watch(results)
     except Exception:
         pass
-    # ── [Wave 3 - Policy Ph2] EMERGENCY_OVERRIDE_FLAG チェック ──
-    # VIX > EMERGENCY_VIX_THRESHOLD(45.0) の場合、政策シグナルを全停止
+        # ── [Policy Ph2] EMERGENCY_OVERRIDE_FLAG チェック ──
+        # VIX > EMERGENCY_VIX_THRESHOLD(45.0) の場合、政策シグナルを全停止
     try:
         from policy_signal_applier import get_emergency_override_flag as _get_em
         _emergency_active = _get_em(results, cfg)
@@ -1445,12 +1419,8 @@ def run_all_tasks(mode: str = "all") -> dict:
                 results["edinetdb_ingest"] = _edi.run_edinetdb_ingest(cfg)
                 source_ingest_done["edinet"] = True
                 value = results["edinetdb_ingest"]
-                # 2026-09-12: value["failure"] には「EdinetDBにデータ無し」
-                # （404）が混ざっており、こちらの障害が0でも alert が鳴って
-                # いた。missing を分離したので、実問題だけで判定する。
-                # データ無しのみの場合は success（件数は note に残る）。
-                # 2026-09-29: 対象があるのに取り込み0社（9/22・9/24は11社すべて
-                # データ無し）でも success と記録していた。0社は warn にする。
+                                # value["failure"] には「EdinetDBにデータ無し」（404）が混ざるので、実問題だけで判定する。
+                                # データ無しのみの場合は success（件数は note に残る）。対象があるのに取り込み0社は warn。
                 if value.get("skipped"):
                     _st = "skipped"
                 elif value.get("failure"):
@@ -1542,8 +1512,7 @@ def run_all_tasks(mode: str = "all") -> dict:
             try:
                 _gov_rules   = getattr(cfg, "GOV_RULES", {})
                 _gov_signals = []
-                # ★ `or {}`: gov pipeline が失敗時に非dict（旧実装の False 等）を
-                #   返しても落ちないようにする（224/349 行と同じ防御に統一）。
+                                # `or {}`: gov pipeline が失敗時に非dict（False 等）を返しても落ちないようにする。
                 _gov_result  = results.get("gov", {}) or {}
                 # gov_data_pipeline は stats/{id} の形式で値を返す
                 _gov_stats   = _gov_result.get("stats", {}) if isinstance(_gov_result, dict) else {}
@@ -1619,12 +1588,10 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ ArXiv 監視: スキップ（config.ENABLE_ARXIV=False）")
 
-# ── [Wave 6 - G-N] 国別リスク日次更新 ──────────────────────────
-    # country_risk_updater を定期実行ループに接続する。
-    # GDELT×外務省RSS×国務省RSS を集約して
+# ── [G-N] 国別リスク日次更新 ──────────────────────────
+    # country_risk_updater: GDELT×外務省RSS×国務省RSS を集約して
     # geopolitics.country_risk_daily を日次 MERGE する。
-    # ★ try/except 厳重保護: ネットワーク障害・BQ接続失敗時も
-    #   システム全停止を防ぎ 0.0 スコアで後続処理を継続する
+    # ネットワーク障害・BQ接続失敗時も全停止させず 0.0 スコアで後続処理を継続する
     if getattr(cfg, "ENABLE_COUNTRY_RISK_UPDATE", False) and _in_mode("macro"):
         try:
             _cru = _load_local_module(
@@ -1690,9 +1657,7 @@ def run_all_tasks(mode: str = "all") -> dict:
         results["macro_delta_alerts"] = [
             s for s in signals if s.get("delta_alert")
         ]
-        # ★ 実行台帳へ記録（旧コードは macro 分析を実行するのに logger.add を
-        #   一切呼ばず、module_ledger 上「記録なし（配線漏れ疑い）」になっていた）。
-        #   DAILY_MODULES の mode-key "macro" と一致させる。
+                # 実行台帳へ記録する（DAILY_MODULES の mode-key "macro" と一致させる）。
         logger.add(
             "macro", "success",
             f"マクロ{len(signals)}シグナル / 急変{len(results['macro_delta_alerts'])}件"
@@ -1955,16 +1920,14 @@ def run_all_tasks(mode: str = "all") -> dict:
         print(f"\n  🏭 セクター分析を実行中（{len(cfg.IMPLEMENTED_AGENTS)} 業種）...")
         macro_snapshot_for_sector = results.get("macro_snapshot", {})
         _macro_weights = results.get("_macro_weights") or {}
-    sector_results = {}   # ★ if _macro_weights の外に移動（常に初期化）
+    sector_results = {}   # 常に初期化（_macro_weights の有無に関係なく使う）
     if _macro_weights:
         # 重みを snapshot に埋め込んで sector_agents に伝達
         macro_snapshot_for_sector["_weights"] = _macro_weights
-    # ── 業種分析の取得部分だけを並列化（2026-09-09）──────────────
-    # 1業種あたり約20〜24秒（BQ・yfinance・EDINET待ちが大半）で、33業種の
-    # 逐次実行に12.3分かかっていた。待ち時間が支配的でCPUは遊ぶため
-    # 並列化がそのまま効く。後続の補正（債務サイクル/経済サイクル/横断
-    # シグナル等）は results への参照順に依存するので逐次のまま残す。
-    # SECTOR_ANALYSIS_WORKERS=1 で従来どおりの逐次実行に戻せる。
+        # ── 業種分析の取得部分だけを並列化 ──────────────
+        # 1業種あたり約20〜24秒の大半が BQ・yfinance・EDINET の待ち時間なので並列化が効く。
+        # 後続の補正（債務サイクル/経済サイクル/横断シグナル等）は results への参照順に依存するので逐次。
+        # SECTOR_ANALYSIS_WORKERS=1 で逐次実行。
     _sec_workers = max(1, int(getattr(cfg, "SECTOR_ANALYSIS_WORKERS", 4)))
     _sec_raw: dict = {}
     if _sec_workers > 1 and len(cfg.IMPLEMENTED_AGENTS) > 1:
@@ -2024,14 +1987,8 @@ def run_all_tasks(mode: str = "all") -> dict:
 
                     # ── [R-1] 横断産業シグナル補正 ─────────────────
                     _cs_signals = results.get("cross_sector_signals", [])
-                    # ★ 旧コードは for ループ本体が _tw/_hw/_cross_cap の代入だけで、
-                    #   _cross_total 集計と if code in _tw / elif code in _hw が
-                    #   ループ外にデデントしていた。このため
-                    #   (1) cross_sector_signals が空だとループが回らず _tw が未定義 →
-                    #       "cannot access local variable '_tw'"（全業種でセクター補正失敗）
-                    #   (2) 値があっても最後の1シグナルしか評価されない
-                    #   の二重バグだった。直下の R-2 ブロックと同じく、集計と判定を
-                    #   ループ内に入れて1シグナルずつ評価する。
+                                        # 集計と判定はループ内で1シグナルずつ行う（ループ外に出すと、シグナルが空のとき
+                                        #   _tw が未定義になり、値があっても最後の1件しか評価されない）。
                     for _cs in _cs_signals:
                         _tw = _cs.get("signal", {}).get("tailwind", [])
                         _hw = _cs.get("signal", {}).get("headwind", [])
@@ -2193,11 +2150,11 @@ def run_all_tasks(mode: str = "all") -> dict:
 
             results["sectors"] = sector_results  # tier 付与後で上書き
 
-            # ── [Wave 4 - S3-2] 動的アロケーション切り替え ──────────
-            # sector_tier（TOP/MID/BOT）に基づき、
-            # 各業種の取得予算（edinet_rotation のバジェット）を動的に調整する。
-            # TOP業種: 取得予算を 1.5倍 / BOT業種: 0.5倍 / MID: 1.0倍（変更なし）
-            # ENABLE_S3_DYNAMIC_ALLOC=True かつ sector_tier が存在する場合のみ実行。
+                        # ── [S3-2] 動的アロケーション切り替え ──────────
+                        # sector_tier（TOP/MID/BOT）に基づき、
+                        # 各業種の取得予算（edinet_rotation のバジェット）を動的に調整する。
+                        # TOP業種: 取得予算を 1.5倍 / BOT業種: 0.5倍 / MID: 1.0倍（変更なし）
+                        # ENABLE_S3_DYNAMIC_ALLOC=True かつ sector_tier が存在する場合のみ実行。
             if getattr(cfg, "ENABLE_S3_DYNAMIC_ALLOC", False):
                 try:
                     _alloc_map: dict = {}
@@ -2233,20 +2190,19 @@ def run_all_tasks(mode: str = "all") -> dict:
         except Exception as _tier_e:
             print(f"  ⚠️  sector_tier 計算エラー: {_tier_e}")
         
-        # ── [Wave 4 - S3-3] confidence_prior 重み付き更新 ───────────
-        # sector_tier（TOP/MID/BOT）に基づき、
-        # composite_score の confidence_prior を EMA で更新する。
-        # $new\_prior = old\_prior \times (1 - \alpha) + score \times \alpha$
-        # $\alpha = CONFIDENCE\_PRIOR\_ALPHA (0.15)$
-        # TOP業種はαを1.5倍（より積極的に更新）、BOT業種は0.5倍（保守的）。
-        # ENABLE_S3_CONFIDENCE_PRIOR=True の場合のみ実行。
+                # ── [S3-3] confidence_prior 重み付き更新 ───────────
+                # sector_tier（TOP/MID/BOT）に基づき、
+                # composite_score の confidence_prior を EMA で更新する。
+                # $new\_prior = old\_prior \times (1 - \alpha) + score \times \alpha$
+                # $\alpha = CONFIDENCE\_PRIOR\_ALPHA (0.15)$
+                # TOP業種はαを1.5倍（より積極的に更新）、BOT業種は0.5倍（保守的）。
+                # ENABLE_S3_CONFIDENCE_PRIOR=True の場合のみ実行。
         if getattr(cfg, "ENABLE_S3_CONFIDENCE_PRIOR", False):
             try:
                 _alpha_base = float(getattr(cfg, "CONFIDENCE_PRIOR_ALPHA", 0.15))
                 _tier_map   = results.get("sector_tier", {})
                 _conf_prior = results.get("confidence_prior", {})
-                # 2026-10-06: results は毎回空から始まるため、前回の prior を score_history から読む
-                #   （以前は old_prior=当日スコアになり、EMA が常に当日値＝更新の意味が無かった）
+                                # results は毎回空から始まるため、前回の prior は score_history から読む
                 if not _conf_prior:
                     try:
                         import json as _json_p
@@ -2390,10 +2346,10 @@ def run_all_tasks(mode: str = "all") -> dict:
                 logger.add("bayesian_update", "success",
                            f"更新{len(_updated)}業種 / ドリフト{len(_drifts)}件")
                 
-                # ── [Wave 4 - S4/F] Phase 0: 鮮度係数による score_prior 重み付け ──
-                # score_prior_manager.apply_freshness_weight_batch() を使い、
-                # 過去スコア履歴の信頼度（prior_weight）で composite_score を補正する。
-                # prior_weight=0.0（データ不足）の業種はそのまま通過する。
+                                # ── [S4/F] 鮮度係数による score_prior 重み付け ──
+                                # score_prior_manager.apply_freshness_weight_batch() を使い、
+                                # 過去スコア履歴の信頼度（prior_weight）で composite_score を補正する。
+                                # prior_weight=0.0（データ不足）の業種はそのまま通過する。
                 if getattr(cfg, "ENABLE_SCORE_PRIOR", True):
                     try:
                         _spm_mod = _load_local_module(
@@ -2435,9 +2391,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                             f"{str(_spm_e)[:60]}"
                         )
 
-                # ── [GAP-3] 乖離ログを永続記録 ──────────────
-                # 2026-07-25: ENABLE_PERFORMANCE_TRACKER を配線。
-                # 定義だけあって誰も読まず、False にしても止まらなかった。
+                                # ── [GAP-3] 乖離ログを永続記録（ENABLE_PERFORMANCE_TRACKER）──────────────
                 try:
                     if getattr(cfg, "ENABLE_PERFORMANCE_TRACKER", True):
                         _pt = _load_local_module(
@@ -2459,15 +2413,9 @@ def run_all_tasks(mode: str = "all") -> dict:
 
         print(f"  ✅ セクター分析完了: {len(sector_results)} 業種")
 
-        # ── [Wave0 Size Ph1] 規模分類マスター生成 ────────────────────
-        # ★ 2026-07-27 X-1: 本ブロックはここ（sector直後）にあったが、
-        #   入力である results["screener"] / results["us_screener"] は
-        #   それぞれ後段の stock_screener / us_stock_screener が生成するため、
-        #   毎回 0 銘柄で早期 return し、台帳に success + 全0 を記録し続けていた
-        #   （2026-07-06 / 07-13 の2回連続で確認、キャッシュ実体も未生成）。
-        #   us_stock_screener の直後へ移設済み。ここには戻さないこと。
+                # 規模分類マスターは両スクリーナーの結果が要るので、us_stock_screener の直後で生成する（ここではない）。
 
-        # ── [Wave 7 - DAILY] 規模別減衰管理 ──────────────────────────
+                # ── [DAILY] 規模別減衰管理 ──────────────────────────
     if getattr(cfg, "ENABLE_SIZE_DECAY_MANAGER", False) and _in_mode("size_tier"):
         try:
             _sdm = _load_local_module(
@@ -2488,7 +2436,7 @@ def run_all_tasks(mode: str = "all") -> dict:
             logger.add("size_decay_manager", "error", str(e)[:100])
             print(f"  ⚠️  規模別減衰管理エラー: {str(e)[:80]}")
 
-    # ── [Wave 7 - DAILY] 規模帯横断シグナル ─────────────────────
+        # ── [DAILY] 規模帯横断シグナル ─────────────────────
     if getattr(cfg, "ENABLE_CROSS_SIZE_SIGNAL", False) and _in_mode("size_tier"):
         try:
             _css = _load_local_module(
@@ -2509,7 +2457,7 @@ def run_all_tasks(mode: str = "all") -> dict:
             logger.add("cross_size_signal", "error", str(e)[:100])
             print(f"  ⚠️  規模帯横断シグナルエラー: {str(e)[:80]}")
 
-    # ── [Wave 7 - DAILY] 市場独立性スコア ───────────────────────
+        # ── [DAILY] 市場独立性スコア ───────────────────────
     if getattr(cfg, "ENABLE_INDEPENDENCE_SCORE", False) and _in_mode("screener"):
         try:
             _isc = _load_local_module(
@@ -2533,7 +2481,7 @@ def run_all_tasks(mode: str = "all") -> dict:
             logger.add("independence_score", "error", str(e)[:100])
             print(f"  ⚠️  独立性スコアエラー: {str(e)[:80]}")
 
-    # ── [Wave 7 - DAILY] 潜伏銘柄管理 ──────────────────────────
+        # ── [DAILY] 潜伏銘柄管理 ──────────────────────────
     if getattr(cfg, "ENABLE_LATENT_PEARL_MANAGER", False) and _in_mode("screener"):
         try:
             _lpm = _load_local_module(
@@ -2567,7 +2515,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                 bridge_result = _bridge.run_jp_us_bridge(cfg, sector_results)
                 results["jp_us_bridge"] = bridge_result
 
-                # ── Wave 7: bridge 経由の独立性・減衰スコアを results に昇格 ──
+                                # ── bridge 経由の独立性・減衰スコアを results に昇格 ──
                 if bridge_result.get("independence_bridge"):
                     results.setdefault("wave7_trackers", {})
                     results["wave7_trackers"]["independence_bridge"] = (
@@ -2617,9 +2565,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                     results["cross_sector_signals"] = (
                         existing + usbe_result["cross_signals"]
                     )
-                # 2026-07-25 B-2: logger.add が cross_signals ありの分岐内にあり、
-                # クロスシグナル0件の日は成功しても台帳が「記録なし」になっていた。
-                # 実行できた事実は件数に関わらず必ず記録する。
+                                # 実行できた事実は件数に関わらず必ず台帳に記録する（0件の日も「記録なし」にしない）。
                 logger.add(
                     "us_sector_bridge", "success",
                     f"JP影響業種{len(usbe_result.get('jp_affected',[]))}業種 / "
@@ -2697,11 +2643,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                 as_result = _as_mod.run_anomaly_season(cfg, sector_results)
                 results["anomaly_season"] = as_result
 
-                # composite_score に季節補正を適用
-                # ★ 旧コードは市場幅の mb_adj を流用していた（コピペ誤り）。
-                #   market_breadth スキップ時は mb_adj 未定義で UnboundLocalError、
-                #   実行時は市場幅補正を season_adjustment として二重適用していた。
-                #   正しくは anomaly_season 自身の adjustments を使う。
+                                # composite_score に季節補正を適用（anomaly_season 自身の adjustments を使う）
                 _season_adj = as_result.get("adjustments", {})
                 _apply_capped_adjustment(
                     sector_results,
@@ -2738,10 +2680,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                 )
                 results["options_monitor"] = om_result
 
-                # composite_score にオプション補正を適用
-                # ★ 旧コードは市場幅の mb_adj を流用（コピペ誤り）。正しくは
-                #   options_monitor 自身の adjustments を使う（mb_adj 未定義時の
-                #   UnboundLocalError と市場幅補正の二重適用を解消）。
+                                # composite_score にオプション補正を適用（options_monitor 自身の adjustments を使う）
                 _options_adj = om_result.get("adjustments", {})
                 _apply_capped_adjustment(
                     sector_results,
@@ -2808,8 +2747,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                 logger.add("policy_tracker", "success",
                            f"新規イベント:{n_new}件 / 累積:{n_all}件")
                 if n_new:
-                    # 2026-10-01: 市場イベントの検知は正常動作なので warn にしない
-                    # （台帳が毎回「要確認」になり、本当の不具合が埋もれていた）
+                                        # 市場イベントの検知は正常動作なので warn にしない（台帳の「要確認」に本当の不具合が埋もれる）
                     for ev in pt_result["new_events"]:
                         logger.add("policy_event", "success",
                                    f"検知 [{ev['bank']}] {ev['label']} "
@@ -2837,9 +2775,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                 n_adj = len(mc_result.get("macro_adjustment", {}))
                 logger.add("multi_currency", "success",
                            f"{n_sig}シグナル / {n_adj}業種補正")
-                # 多通貨補正を sector_results に反映
-                # ★ 旧コードは市場幅の mb_adj を流用（コピペ誤り）。直下で既に
-                #   mc_adj（多通貨自身の補正）を算出済みなのでそれを使う。
+                                # 多通貨補正を sector_results に反映（mc_adj＝多通貨自身の補正）
                 mc_adj = mc_result.get("macro_adjustment", {})
                 _sr    = results.get("sectors", {})
                 _apply_capped_adjustment(
@@ -3005,11 +2941,8 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ 政策レーダー: スキップ")
 
-    # ── [Wave 1 - I-2] NEDO採択情報 → edinet.policy_support（週次）────
-    # base_agent.get_policy_support_bonus() が読む側として既に配線済みだが、
-    # 書く側の run_nedo_selection_scraper() がどこからも呼ばれておらず、
-    # BQ edinet.policy_support が0行のままでボーナスが常時0だった
-    # （2026-09-09 配線。producer/consumer 不整合＝CLAUDE.mdパターン③）。
+        # ── [I-2] NEDO採択情報 → edinet.policy_support（週次）────
+        # 書き手。読む側は base_agent.get_policy_support_bonus()。
     if getattr(cfg, "ENABLE_NEDO_SCRAPER", True) and _in_mode("nedo"):
         try:
             _nedo = _load_local_module(
@@ -3043,7 +2976,7 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ NEDO採択情報: スキップ（週次以外）")
 
-        # ── [Wave 3 - FE-7] Catalyst Calendar（WEEKLY）────────────────
+                # ── [FE-7] Catalyst Calendar（WEEKLY）────────────────
     if _in_mode("catalyst_calendar"):
         try:
             _cat = _load_local_module(
@@ -3067,12 +3000,9 @@ def run_all_tasks(mode: str = "all") -> dict:
             logger.add("catalyst_calendar", "error", str(_cate)[:100])
             print(f"  ⚠️  Catalyst Calendarエラー（スキップ）: {str(_cate)[:60]}")
 
-    # ── [Step B] ニュースRSSパイプライン ─────────────────────────
-    # ★ 2026-06-10 バグ修正: DAILY_MODULES に "news" が登録され実行順16
-    #   として設計されているにもかかわらず実行ブロックが欠落していた
-    #   （results["news"] を FinBERT / alert_notifier /
-    #     emerging_technology_detector が参照するためここで復元。
-    #     FinBERT より前に実行する必要がある）。
+        # ── [Step B] ニュースRSSパイプライン ─────────────────────────
+        # results["news"] を FinBERT / alert_notifier / emerging_technology_detector が読むので、
+        # FinBERT より前に実行する。
     if getattr(cfg, "ENABLE_NEWS", True) and _in_mode("news"):
         try:
             _np = _load_local_module(
@@ -3160,17 +3090,12 @@ def run_all_tasks(mode: str = "all") -> dict:
 
                 score = um_result.get("composite_us_macro_score", 50)
 
-                # ── [US-2] composite_us_macro_score を業種スコアへ反映 ──
-                # 2026-07-25 バッチ6で新設。config.US_MACRO_MAX_SECTOR_ADJ は
-                # 「sector スコアへの反映上限（pt）」と定義されていたのに、
-                # 反映処理そのものが存在せず（週次レポートに表示するだけ）、
-                # 定数は誰にも読まれていなかった。
-                #
-                # 反映式: 50点を中立とし、乖離を上限内に線形マップする。
-                #   adj = (score - 50) / 50 * US_MACRO_MAX_SECTOR_ADJ
-                #   例) score=100 → +5.0pt / score=0 → -5.0pt / score=50 → 0
-                # 米国マクロは全業種に一様に効くため、業種別の差は付けない。
-                # 上限適用・全補正累積の管理は既存の _apply_capped_adjustment に委ねる。
+                                # ── [US-2] composite_us_macro_score を業種スコアへ反映 ──
+                                # 反映式: 50点を中立とし、乖離を上限内に線形マップする。
+                                #   adj = (score - 50) / 50 * US_MACRO_MAX_SECTOR_ADJ
+                                #   例) score=100 → +5.0pt / score=0 → -5.0pt / score=50 → 0
+                                # 米国マクロは全業種に一様に効くため、業種別の差は付けない。
+                                # 上限適用・全補正累積の管理は既存の _apply_capped_adjustment に委ねる。
                 try:
                     _um_cap = float(getattr(cfg, "US_MACRO_MAX_SECTOR_ADJ", 5.0))
                     _um_adj = round((float(score) - 50.0) / 50.0 * _um_cap, 2)
@@ -3252,8 +3177,8 @@ def run_all_tasks(mode: str = "all") -> dict:
             )
             if _sc:
                 sector_res = results.get("sectors", {})
-                # 2026-09-17: GAP-2 の格付けは補正途中のスコアで計算されている。
-                # スクリーナー対象を決める直前に、その時点のスコア順位で付け直す。
+                                # GAP-2 の格付けは補正途中のスコアで計算されている。
+                                # スクリーナー対象を決める直前に、その時点のスコア順位で付け直す。
                 sector_tier = results.get("sector_tier", {})
                 if sector_res:
                     try:
@@ -3285,7 +3210,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                     _st_base.checkpoint("stock_screener")
                 except Exception:
                     pass
-                # 2026-09-29: 候補に審議KPI 9項目を付ける（表示専用・点数には使わない）
+                                # 候補に審議KPI 9項目を付ける（表示専用・点数には使わない）
                 try:
                     import candidate_kpi as _ckpi
                     results["candidate_kpi"] = _ckpi.attach_kpis(cfg, results)
@@ -3402,7 +3327,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                     c["ticker"] for c in screen_result.get("candidates", [])
                     if c.get("pass_filters")
                 ]
-                # ── [Wave 3 - FE-5] PEAD Monitor 日次実行 ────────────────
+                                # ── [FE-5] PEAD Monitor 日次実行 ────────────────
                 if _in_mode("pead_monitor"):
                     try:
                         _pead = _load_local_module(
@@ -3563,9 +3488,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                         "/content/earnings_surprise.py",
                         cfg.DRIVE_BASE / "earnings_surprise.py",
                     )
-                    # 2026-09-29: 通過銘柄だけ（約25社）→ スクリーナーが取得した全候補へ。
-                    # 分析直後に当日の結果で高確率/ネガティブ判定をやり直す
-                    #（以前はスクリーナー時点＝前日の分析結果で判定していた）
+                                        # 対象はスクリーナーが取得した全候補。分析直後に当日の結果で高確率/ネガティブ判定をやり直す
                     _es_tickers = [c.get("ticker") for c in screen_result.get("candidates", [])
                                    if c.get("ticker")] or passed_tickers
                     if _es and getattr(cfg, "ENABLE_EARNINGS_SURPRISE", True) and _es_tickers:
@@ -3614,9 +3537,8 @@ def run_all_tasks(mode: str = "all") -> dict:
         if not getattr(cfg, "ENABLE_SCREENER", False):
             print("  ⏩ 個別株スクリーニング: スキップ（ENABLE_SCREENER=False）")
 
-    # ── [Wave 3 - FE-6] Portfolio Diversity Filter（WEEKLY）────────
-    # 2026-09-21: screener の**前**に置かれており results["screener"] が常に空で、
-    # 毎週「screenerデータなし → スキップ」だった。スクリーニング直後へ移動する。
+        # ── [FE-6] Portfolio Diversity Filter（WEEKLY）────────
+        # results["screener"] を読むのでスクリーニングの後に置く。
     if _in_mode("portfolio_diversity_filter"):
         try:
             _pdf = _load_local_module(
@@ -3637,14 +3559,11 @@ def run_all_tasks(mode: str = "all") -> dict:
             logger.add("portfolio_diversity_filter", "error", str(_pdfe)[:100])
             print(f"  ⚠️  Portfolio Diversityエラー（スキップ）: {str(_pdfe)[:60]}")
 
-# ── [Wave0 Policy Ph1] 議員取引監視（週2回: 火・金）──────────
+# ── [Policy Ph1] 議員取引監視（週2回: 火・金）──────────
     if getattr(cfg, "ENABLE_POLITICIAN_MONITOR", True):
        _run_days = getattr(cfg, "POLITICIAN_RUN_WEEKDAYS", (1, 4))
-       # ★ ここで _dt を使うと、関数内の別ブロック（L1547 付近）で
-       #   `from datetime import date as _dt` に束縛された date 型を参照し、
-       #   date には .now() が無いため AttributeError → run_all_tasks 末尾で
-       #   exit 1（28分走った後にジョブ全体が赤）になっていた。
-       #   モジュールレベルの datetime（L35 import 済み）を使う。
+              # ここでは _dt を使わない（関数内の別ブロックで `from datetime import date as _dt` に
+              #   束縛されており、date には .now() が無い）。モジュールレベルの datetime を使う。
        if datetime.now().weekday() in _run_days:
         try:
             _today_dow = datetime.now().weekday()   # 0=月 1=火 ... 4=金
@@ -3683,12 +3602,9 @@ def run_all_tasks(mode: str = "all") -> dict:
             logger.add("politician_monitor", "error", str(_pme)[:100])
             print(f"  ⚠️  議員取引監視エラー（スキップ）: {str(_pme)[:80]}")
         
-    # ── [17.7] institutional_13f_monitor（Wave 4 - Policy Ph3）───────
-    # 四半期フラグ: 1月/4月/7月/10月の15日〜末日のみフル取得。
-    # それ以外はキャッシュを利用（SEC EDGAR 負荷軽減）。
-    # 2026-10-03: 旧条件 _in_mode("all") は日次モードで常に偽（mode名をキーに使う落とし穴）。
-    # 導入以来一度も実行されず us.institutional_positions は0行だった。DAILY_MODULES に登録し、
-    # 取得頻度は _is_quarter_filing_period()（1/4/7/10月15日〜末日）が絞る。
+        # ── [17.7] institutional_13f_monitor（Policy Ph3）───────
+        # DAILY_MODULES のキーで判定し、取得頻度は _is_quarter_filing_period()（1/4/7/10月15日〜末日）が絞る。
+        # それ以外の日はキャッシュを利用（SEC EDGAR 負荷軽減）。
     if getattr(cfg, "ENABLE_INSTITUTIONAL_13F", True) and _in_mode("institutional_13f"):
         try:
             _i13f = _load_local_module(
@@ -3745,12 +3661,9 @@ def run_all_tasks(mode: str = "all") -> dict:
             print(f"  ⚠️  institutional_13f エラー（スキップ）: "
                   f"{str(_i13fe)[:80]}")
 
-    # ── [17.7] congress_monitor 実行（Wave 4 - Policy Ph4）──────────
-    # ★ 2026-06-10 バグ修正: congress_monitor.py [Ph4] が実装済みで
-    #   policy_signal_applier.py が results["congress_monitor"] を参照
-    #   するにもかかわらず、実行ブロックが欠落していた。
-    #   policy_signal_applier より前に実行する必要がある。
-    #   法案進行は低頻度のため WEEKLY_MODULES 登録（L4キャッシュ減衰で日次適用）。
+        # ── [17.7] congress_monitor 実行（Policy Ph4）──────────
+        # policy_signal_applier が results["congress_monitor"] を読むので、その前に実行する。
+        # 法案進行は低頻度のため WEEKLY_MODULES 登録（L4キャッシュ減衰で日次適用）。
     if (getattr(cfg, "ENABLE_CONGRESS_MONITOR", True)
             and _in_mode("congress_monitor")
             and not results.get("emergency_override")):
@@ -3774,9 +3687,9 @@ def run_all_tasks(mode: str = "all") -> dict:
             logger.add("congress_monitor", "error", str(_cme)[:100])
             print(f"  ⚠️  congress_monitor エラー（スキップ）: {str(_cme)[:60]}")
 
-    # ── [17.8] policy_signal_applier 日次実行（Wave 3 - Policy Ph2） ──
-    # politician_monitor / screener の直後に実行。
-    # EMERGENCY_OVERRIDE_FLAG が True の場合はスキップ。
+        # ── [17.8] policy_signal_applier 日次実行（Policy Ph2） ──
+        # politician_monitor / screener の直後に実行。
+        # EMERGENCY_OVERRIDE_FLAG が True の場合はスキップ。
     if _in_mode("policy_signal_applier") and not results.get("emergency_override"):
         try:
             _psa = _load_local_module(
@@ -3813,9 +3726,8 @@ def run_all_tasks(mode: str = "all") -> dict:
             print(f"  ⚠️  policy_signal_applierエラー（スキップ）: {str(_psae)[:80]}")
     elif results.get("emergency_override"):
         print("  ⏩ policy_signal_applier: EMERGENCY停止中のためスキップ")
-        # ── [S3-1] sector_tier 分類ログ（Wave 4 - S3）─────────────────
-    # _calc_sector_tier() は GAP-2（1945行）で既に計算済み。
-    # ここでは deep_dive_trigger への接続と詳細ログ出力を行う。
+                # ── [S3-1] sector_tier 分類ログ ─────────────────
+            # _calc_sector_tier() は GAP-2 で計算済み。ここでは deep_dive_trigger への接続と詳細ログ出力を行う。
     if getattr(cfg, "ENABLE_S3_SECTOR_TIER_LOG", True):
         try:
             _tier_map = results.get("sector_tier", {})
@@ -3835,13 +3747,9 @@ def run_all_tasks(mode: str = "all") -> dict:
             print(f"  ⚠️  [S3-1] sector_tier ログエラー（スキップ）: "
                   f"{str(_s3e)[:60]}")
 
-    # ── [S3-4] deep_dive_trigger（Wave 4）────────────────────────
-    # confidence 低下・screener 順位急変を検出し、
-    # EDINET 深掘り対象を cfg.EDINET_DEEP_DIVE_TICKERS に注入する。
-    # edinet_rotation_manager は後続の [18] で priority=0 として処理する。
-    # 2026-10-03: _in_mode("all") は日次で常に偽のため導入以来未実行。受け手の
-    # edinet_rotation_manager（EDINETローテ）は 2026-09 に廃止済みで、有効化しても効果が無い。
-    # 配線は残し、モジュールキーで判定する形にだけ直す（DAILY_MODULES には未登録＝停止のまま）。
+        # ── [S3-4] deep_dive_trigger ────────────────────────
+        # confidence 低下・screener 順位急変を検出し、EDINET 深掘り対象を cfg.EDINET_DEEP_DIVE_TICKERS に注入する。
+        # 受け手の edinet_rotation_manager（EDINETローテ）は廃止済みのため、DAILY_MODULES に未登録＝停止中。
     if getattr(cfg, "ENABLE_DEEP_DIVE_TRIGGER", True) and _in_mode("deep_dive_trigger"):
         try:
             _ddt = _load_local_module(
@@ -3893,10 +3801,7 @@ def run_all_tasks(mode: str = "all") -> dict:
             # ── [B-1] 決算短信開示銘柄をEDINETの最優先に追加 ────
             if getattr(cfg, "ENABLE_B1_TDNET_EDINET", True):
                 _kessan_tickers = []
-                # 2026-07-25 バッチ6: 決算短信カテゴリを config から読む。
-                # 従来はタプル直書きで、config.B1_KESSAN_CATEGORIES は
-                # 誰にも読まれていなかった（config 側には "1"/"q_report" も
-                # 含まれており、直書き側と内容がズレていた）。
+                                # 決算短信カテゴリは config（B1_KESSAN_CATEGORIES）から読む。
                 _kessan_cats = set(getattr(
                     cfg, "B1_KESSAN_CATEGORIES",
                     ["kessan", "financial_results", "決算短信", "earnings"]))
@@ -3933,8 +3838,7 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ TDnetモニター: スキップ（ENABLE_TDNET_MONITOR=False）")
     
-    # [P-4] 株主構成分析は 2026-09-29 に削除（旧EDINET API廃止で株主データ源なし・2026-09-17から停止していた）
-    # ── [I-3] 経営者スコア算出 ──────────────────────────────────
+        # ── [I-3] 経営者スコア算出 ──────────────────────────────────
     if getattr(cfg, "ENABLE_CEO_EVALUATOR", True) and _in_mode("screener"):
         try:
             _ce  = _load_local_module(
@@ -3989,7 +3893,7 @@ def run_all_tasks(mode: str = "all") -> dict:
         except Exception as e:
             logger.add("ceo_evaluator", "error", str(e)[:100])
             print(f"  ⚠️  経営者スコアエラー: {str(e)[:80]}")
-    # ── [I-5 / Wave 7] 中期経営計画達成率トラッカー ─────────────
+        # ── [I-5] 中期経営計画達成率トラッカー ─────────────
     if getattr(cfg, "ENABLE_MIDTERM_PLAN_TRACKER", True) and _in_mode("screener"):
         try:
             _mt = _load_local_module(
@@ -3998,7 +3902,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                 cfg.DRIVE_BASE / "midterm_plan_tracker.py",
             )
             if _mt:
-                # Wave 7版: 引数は cfg のみ（キャッシュ駆動）
+                                # 引数は cfg のみ（キャッシュ駆動）
                 mt_result = _mt.run_midterm_plan_tracker(
                     cfg          = cfg,
                     force_refresh = False,
@@ -4130,10 +4034,10 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ 異常検知: スキップ（ENABLE_ANOMALY_DETECTOR=False）")
         
-    # ── 出口戦略エンジン（Wave R0-6 / E1）──────────────────────
-    # 投資哲学の売却ルールを日次評価 → 接近/発火アラート＋注文票生成。
-    # 発注は健太が手動（D-01）。アラート通知より前に実行し
-    # results["exit_alerts"] を alert_notifier のブリーフに載せる。
+        # ── 出口戦略エンジン ──────────────────────
+        # 投資哲学の売却ルールを日次評価 → 接近/発火アラート＋注文票生成。
+        # 発注は健太が手動（D-01）。アラート通知より前に実行し
+        # results["exit_alerts"] を alert_notifier のブリーフに載せる。
     if getattr(cfg, "ENABLE_EXIT_ENGINE", False):
         try:
             _ex = _load_local_module(
@@ -4159,7 +4063,7 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ 出口戦略エンジン: スキップ（ENABLE_EXIT_ENGINE=False）")
 
-    # ── データ鮮度SLA検査（Wave R0-1 / E7'）────────────────────
+        # ── データ鮮度SLA検査 ────────────────────
     if getattr(cfg, "ENABLE_DATA_SLA", False):
         try:
             _dr = _load_local_module(
@@ -4183,9 +4087,9 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ 鮮度SLA検査: スキップ（ENABLE_DATA_SLA=False）")
 
-    # ── ドローダウン制御（Wave R3-3 / E9）──────────────────────
-    # ポートフォリオ投資部分のDDでNORMAL/CAUTION/DEFENSEを遷移。
-    # 売却強制なし（推奨のみ=D-01）。results["dd_state"]をブリーフ⑤へ。
+        # ── ドローダウン制御 ──────────────────────
+        # ポートフォリオ投資部分のDDでNORMAL/CAUTION/DEFENSEを遷移。
+        # 売却強制なし（推奨のみ=D-01）。results["dd_state"]をブリーフ⑤へ。
     if getattr(cfg, "ENABLE_DD_CONTROL", False):
         try:
             _dd = _load_local_module(
@@ -4210,10 +4114,10 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ DD制御: スキップ（ENABLE_DD_CONTROL=False）")
 
-    # ── ペーパートレード仮想口座（Wave R1-2 / S2）───────────────
-    # 前日注文を当日始値で仮想約定 → equity更新 → 翌日注文生成。
-    # 実発注は存在しない（D-01）。results["paper_summary"] を
-    # alert_notifier のブリーフ⑥に載せるため通知より前に実行。
+        # ── ペーパートレード仮想口座 ───────────────
+        # 前日注文を当日始値で仮想約定 → equity更新 → 翌日注文生成。
+        # 実発注は存在しない（D-01）。results["paper_summary"] を
+        # alert_notifier のブリーフ⑥に載せるため通知より前に実行。
     if getattr(cfg, "ENABLE_PAPER_TRADING", False):
         try:
             _pb = _load_local_module(
@@ -4308,9 +4212,7 @@ def run_all_tasks(mode: str = "all") -> dict:
         if not getattr(cfg, "ENABLE_US_SCREENER", False):
             print("  ⏩ 米国株スクリーニング: スキップ（ENABLE_US_SCREENER=False）")
 
-    # 2026-09-29: メール送信は米国株スクリーナーの後に移動した。以前は送信後に
-    #   us_screener が走っており、メールの米国株サマリーが常にセクター4行だけだった
-    # ── アラート通知（5-B 追加）────────────────────────────────
+        # ── アラート通知（米国株スクリーナーの後。メールの米国株サマリーがその結果を読む）────────────────
     if getattr(cfg, "ENABLE_ALERT", False):
         try:
             _an = _load_local_module(
@@ -4338,12 +4240,9 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ アラート通知: スキップ（config.ENABLE_ALERT=False）")
 
-    # ── [DB移管 Ph1] 銘柄スナップショットをBQへ日次蓄積（両スクリーナー直後）──
-    # 銘柄mdに出ている指標の約半分（technical系・FCFマージン・D/E・
-    # 自己資本比率・配当利回り・sector_score・technical_score）は
-    # screener_history.json の14項目に含まれず、その日のmdを開く以外に
-    # 参照する方法がなかった（2026-09-09 調査）。ここを正本にする。
-    # md生成（上位30銘柄・JPのみ）には依存せず、通過銘柄の全件を残す。
+        # ── 銘柄スナップショットをBQへ日次蓄積（両スクリーナー直後）──
+        # 銘柄mdにしか出ない指標（technical系・FCFマージン・D/E・自己資本比率・配当利回り・
+        # sector_score・technical_score）の正本。md生成（上位30銘柄・JPのみ）には依存せず、通過銘柄の全件を残す。
     if getattr(cfg, "ENABLE_STOCK_SNAPSHOT", True) and _in_mode("screener"):
         try:
             _ssw = _load_local_module(
@@ -4373,10 +4272,9 @@ def run_all_tasks(mode: str = "all") -> dict:
             logger.add("stock_snapshot", "error", str(_sswe)[:100])
             print(f"  ⚠️  スナップショット格納エラー（スキップ）: {str(_sswe)[:60]}")
 
-    # ── [Wave0 Size Ph1] 規模分類マスター生成（両スクリーナーの直後）────
-    # ★ 2026-07-27 X-1: sector 直後から本位置へ移設。
-    #   results["screener"]（stock_screener）と results["us_screener"]
-    #   （us_stock_screener）の両方が確定してから実行する必要がある。
+        # ── [Size Ph1] 規模分類マスター生成（両スクリーナーの直後）────
+        #   results["screener"]（stock_screener）と results["us_screener"]
+        #   （us_stock_screener）の両方が確定してから実行する必要がある。
     if _in_mode("size_tier_classifier"):
         try:
             _stc = _load_local_module(
@@ -4416,8 +4314,7 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ 規模分類マスター: スキップ（週次以外）")
 
-    # legacy EdinetDBローテーション（D-①で退役）は 2026-09-29 に削除
-    # ── [Phase US-1] US財務DBローテーター ────────────────────────
+        # ── [US-1] US財務DBローテーター ────────────────────────
     if getattr(cfg, "ENABLE_US_FUNDAMENTALS", True) and _in_mode("us_fundamentals") and not source_ingest_done["us"]:
         try:
             _ufr = _load_local_module(
@@ -4887,8 +4784,8 @@ def run_all_tasks(mode: str = "all") -> dict:
                     risk_pct       = getattr(cfg, "POSITION_RISK_PCT", 0.01),
                     atr_multiplier = getattr(cfg, "POSITION_ATR_MULT", 2.0),
                     sector_results = results.get("sectors", {}),
-                    screener_result  = results.get("screener", {}),   # ★ I-4追加
-                    results          = results,                        # ★ I-4追加
+                    screener_result  = results.get("screener", {}),
+                    results          = results,
                 )
                 results["position_sizer"] = ps_result
                 valid = [p for p in ps_result.get("positions", []) if not p.get("error")]
@@ -4902,18 +4799,16 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ ポジションサイジング: スキップ（週次/無効）")
 
-    # Excel ダッシュボード CSV エクスポート（2026-07-12 BUG-03で廃止）は 2026-09-29 に削除
 
     # ── スコア履歴・スクリーナー履歴の蓄積（Excel出力の有無に関わらず毎回実行）──
     try:
         if results.get("sectors"):
             _append_score_history(cfg, results["sectors"])
         if results.get("screener"):
-            # performance_tracker 版に一本化（_append_screener_history は C-1 で削除）
-            # 2026-07-25: ENABLE_PERFORMANCE_TRACKER を配線。
-            # ⚠️ False にすると screener_history.json の蓄積が止まり、
-            #    審議キュー・審議パケット①・self_evaluator・backtester・
-            #    投資ジャーナルの入力が全て枯れる。切る前に影響範囲を確認すること。
+                        # performance_tracker（ENABLE_PERFORMANCE_TRACKER）。
+                        # ⚠️ False にすると screener_history.json の蓄積が止まり、
+                        #    審議キュー・審議パケット①・self_evaluator・backtester・
+                        #    投資ジャーナルの入力が全て枯れる。切る前に影響範囲を確認すること。
             if getattr(cfg, "ENABLE_PERFORMANCE_TRACKER", True):
                 _pt_hist = _load_local_module(
                     "performance_tracker",
@@ -4922,7 +4817,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                 )
                 if _pt_hist:
                     _pt_hist.append_screener_history(cfg, results["screener"])
-            # 2026-09-29: 選別の経路（点数の内訳・9指標・落ちた理由）を残す
+                        # 選別の経路（点数の内訳・9指標・落ちた理由）を残す
             try:
                 import screener_trace as _strace
                 results["screener_trace"] = _strace.run(cfg, results)
@@ -4933,7 +4828,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                       "（ENABLE_PERFORMANCE_TRACKER=False）")
     except Exception as e:
         print(f"  ⚠️  履歴蓄積エラー（スキップ）: {str(e)[:60]}")
-        # ── [Wave0 Idea2-B] 業種ローテーション検出（signal_aggregatorの前に必須）──
+                # ── [Idea2-B] 業種ローテーション検出（signal_aggregatorの前に必須）──
     if _in_mode("sector_rotation_detector"):
         try:
             _srd = _load_local_module(
@@ -4957,11 +4852,11 @@ def run_all_tasks(mode: str = "all") -> dict:
             logger.add("sector_rotation_detector", "error", str(_srde)[:100])
             print(f"  ⚠️  ローテーション検出エラー（スキップ）: {str(_srde)[:80]}")
 
-    # ── [Wave 2 - FE-4] Ignition Detector ────────────────────────
-    # sector_rotation_detector の直後に配置。
-    # results["sector_rotation"] を参照するため、実行順序が前提条件。
-    # run_ignition_detector(cfg, results=results) で results 辞書を渡し、
-    # screener / signal_aggregator / sectors / arxiv の各結果を活用する。
+        # ── [FE-4] Ignition Detector ────────────────────────
+        # sector_rotation_detector の直後に配置。
+        # results["sector_rotation"] を参照するため、実行順序が前提条件。
+        # run_ignition_detector(cfg, results=results) で results 辞書を渡し、
+        # screener / signal_aggregator / sectors / arxiv の各結果を活用する。
     if _in_mode("ignition_detector"):
         try:
             _ign = _load_local_module(
@@ -4982,12 +4877,11 @@ def run_all_tasks(mode: str = "all") -> dict:
             logger.add("ignition_detector", "error", str(_igne)[:100])
             print(f"  ⚠️  Ignition Detectorエラー（スキップ）: {str(_igne)[:80]}")
 
-# ── [Wave 6 - B] T系: 技術クラスター生成パイプライン ──────────
+# ── [T系] 技術クラスター生成パイプライン ──────────
     # 実行順序: technology_mapper → cluster_engine
     #           → emerging_detector → cluster_graph_exporter
     # sector_rotation_detector / ignition_detector の直後に配置。
-    # _in_mode("technology_mapper") は WEEKLY_MODULES 登録後に有効になる。
-    # 暫定的に _in_mode("sector_rotation_detector") と同じタイミングで実行。
+    # _in_mode("sector_rotation_detector") と同じタイミングで実行する。
     if getattr(cfg, "ENABLE_TECHNOLOGY_MAPPER", True) and _in_mode("technology_mapper"):
         # ── Step T-1: technology_mapper ─────────────────────────
         try:
@@ -5094,7 +4988,7 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ cluster_graph_exporter: スキップ")
 
-    # ── [Wave0 Idea2-A] JP×US 60日相関分析 ───────────────────────
+        # ── [Idea2-A] JP×US 60日相関分析 ───────────────────────
     if _in_mode("jp_us_sector_correlation"):
         try:
             _juc = _load_local_module(
@@ -5115,13 +5009,13 @@ def run_all_tasks(mode: str = "all") -> dict:
         except Exception as _juce:
             logger.add("jp_us_sector_correlation", "error", str(_juce)[:100])
             print(f"  ⚠️  JP×US相関エラー（スキップ）: {str(_juce)[:80]}")
-            # ── [Wave 6 - 第4セッション] rule_optimizer 縮退フラグ判定 ───
-    # signal_aggregator 呼び出しの直前に実行することが必須。
-    # evaluate_contraction_flag(results, cfg) は最新の results（VIX・市場幅等）を
-    # 参照するため、options_monitor / market_breadth / geo_risk / bond_commodity が
-    # 格納済みであるこのタイミングが最適。
-    # 結果は results["rule_optimizer"]["contraction_flag"] に格納され、
-    # signal_aggregator.calc_signal_score() / calc_total_signal_score() が参照する。
+                        # ── rule_optimizer 縮退フラグ判定 ───
+                # signal_aggregator 呼び出しの直前に実行することが必須。
+                # evaluate_contraction_flag(results, cfg) は最新の results（VIX・市場幅等）を
+                # 参照するため、options_monitor / market_breadth / geo_risk / bond_commodity が
+                # 格納済みであるこのタイミングが最適。
+                # 結果は results["rule_optimizer"]["contraction_flag"] に格納され、
+                # signal_aggregator.calc_signal_score() / calc_total_signal_score() が参照する。
     if getattr(cfg, "ENABLE_SIGNAL_AGGREGATOR", True) and _in_mode("signal_aggregator"):
         try:
             _ro_cf = _load_local_module(
@@ -5131,8 +5025,7 @@ def run_all_tasks(mode: str = "all") -> dict:
             )
             if _ro_cf and hasattr(_ro_cf, "evaluate_contraction_flag"):
                 _contraction = _ro_cf.evaluate_contraction_flag(results, cfg)
-                # 2026-07-25 バッチ6: 格納先キーを config.CONTRACTION_RESULT_KEY
-                # から読む（従来 "rule_optimizer" 直書きで config 側は未参照）。
+                                # 格納先キーは config.CONTRACTION_RESULT_KEY から読む。
                 _ck = str(getattr(cfg, "CONTRACTION_RESULT_KEY", "rule_optimizer"))
                 # results[_ck] が既にある場合（月末更新済み）は
                 # contraction_flag だけ上書きし、他のキー（weights等）は保持する
@@ -5193,7 +5086,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             })
             results["rule_optimizer"].setdefault("contraction_mode", "Normal")
-            # ── [Wave 7 - WEEKLY] 学術カンファレンス追跡 ────────────────
+                        # ── [WEEKLY] 学術カンファレンス追跡 ────────────────
     if getattr(cfg, "ENABLE_ACADEMIC_CONF_TRACKER", False) and _in_mode("signal_aggregator"):
         try:
             _act = _load_local_module(
@@ -5214,7 +5107,7 @@ def run_all_tasks(mode: str = "all") -> dict:
             logger.add("academic_conf_tracker", "error", str(e)[:100])
             print(f"  ⚠️  学術追跡エラー: {str(e)[:80]}")
 
-    # ── [Wave 7 - WEEKLY] 標準化動向追跡 ────────────────────────
+        # ── [WEEKLY] 標準化動向追跡 ────────────────────────
     if getattr(cfg, "ENABLE_STANDARDIZATION_TRACKER", False) and _in_mode("signal_aggregator"):
         try:
             _ist = _load_local_module(
@@ -5235,16 +5128,16 @@ def run_all_tasks(mode: str = "all") -> dict:
             logger.add("industry_standard_tracker", "error", str(e)[:100])
             print(f"  ⚠️  標準化追跡エラー: {str(e)[:80]}")
 
-    # ── [Wave 7] signal_aggregator へ wave7_trackers を渡す ─────
-    # signal_aggregator.py の抽出関数が results["wave7_trackers"] と
-    # results["_cfg"] を参照するため、ここで results に注入する。
+        # ── signal_aggregator へ wave7_trackers を渡す ─────
+        # signal_aggregator.py の抽出関数が results["wave7_trackers"] と
+        # results["_cfg"] を参照するため、ここで results に注入する。
     results.setdefault("wave7_trackers", {})
     results["_cfg"] = cfg  # Wave 7 抽出関数内での cfg 参照用
 
-    # ── taxonomy node_hotness（Wave R2-5 / T-4）──────────────────
-    # arxiv=先行 / news+policy=準先行を分離合成した技術テーマ加熱度。
-    # signal_aggregator のカテゴリV（T-5）が sector_scores を消費するため
-    # アグリゲーターの直前で実行する。
+        # ── taxonomy node_hotness ──────────────────
+        # arxiv=先行 / news+policy=準先行を分離合成した技術テーマ加熱度。
+        # signal_aggregator のカテゴリVが sector_scores を消費するため
+        # アグリゲーターの直前で実行する。
     if getattr(cfg, "ENABLE_TAXONOMY_SIGNAL", False):
         try:
             _th = _load_local_module(
@@ -5298,10 +5191,6 @@ def run_all_tasks(mode: str = "all") -> dict:
     # ── [5人統合エンジン] total_signal_score 算出 ───────────
     if _in_mode("signal_aggregator"):
         try:
-            # ★ 旧コードは docstring の例をそのままコピペし
-            #   _load_local_module("signal_aggregator", ...) と第2引数に
-            #   リテラル ... を渡していたため、drive_path 欠落の TypeError で
-            #   total_signal_score（統合シグナルスコア）が毎回未算出だった。
             _sagg = _load_local_module(
                 "signal_aggregator",
                 "/content/signal_aggregator.py",
@@ -5316,9 +5205,9 @@ def run_all_tasks(mode: str = "all") -> dict:
                       f"| 推奨: {tss['recommended_action']}")
         except Exception as e:
             print(f"  ⚠️  統合スコア算出エラー: {e}")
-    # ── [Wave R5-2 Phase A / E10] JP/US共通composite（unified_scores） ──
-    # 保有銘柄＋us_screener上位50へ共通形式のスコアを付与（SPEC_core §8-2）。
-    # 既存スコアの adapter 写像のみ（再計算しない・Phase B/Cで本体移植）。
+        # ── JP/US共通composite（unified_scores） ──
+        # 保有銘柄＋us_screener上位50へ共通形式のスコアを付与（SPEC_core §8-2）。
+        # 既存スコアの adapter 写像のみ（再計算しない）。
     if getattr(cfg, "ENABLE_SCORE_CALCULATOR", True) and _in_mode("score_calculator"):
         try:
             _scu = _load_local_module(
@@ -5340,9 +5229,9 @@ def run_all_tasks(mode: str = "all") -> dict:
         except Exception as e:
             logger.add("score_calculator", "error", str(e)[:100])
             print(f"  ⚠️  共通スコア計算エラー: {str(e)[:80]}")
-    # ── [Wave R5-1 / S7] MLメタモデル: 特徴量スナップショット蓄積 ──
-    # signal_aggregator の23カテゴリ components を日次で features.jsonl へ追記。
-    # 学習は Colab（ml/train_meta.ipynb・週次手動）。ここは蓄積のみで軽量。
+        # ── MLメタモデル: 特徴量スナップショット蓄積 ──
+        # signal_aggregator の23カテゴリ components を日次で features.jsonl へ追記。
+        # 学習は Colab（ml/train_meta.ipynb・週次手動）。ここは蓄積のみで軽量。
     if getattr(cfg, "ENABLE_ML_META_DATASET", True) and _in_mode("ml_meta"):
         try:
             _mlds = _load_local_module(
@@ -5363,16 +5252,15 @@ def run_all_tasks(mode: str = "all") -> dict:
                         f"{_snap.get('reason', '理由不明')}"[:100])
             else:
                 print("  ⚠️  ml/dataset_builder.py が見つかりません")
-                # 2026-07-25 B-2: ロード失敗が print だけで台帳に残らず、
-                # 2026-07-22 の「ml_meta 記録なし」の実体はこれだった。
+                                # ロード失敗も台帳に残す（print だけだと「記録なし」に見える）。
                 logger.add("ml_meta_dataset", "warn",
                            "ml/dataset_builder.py not found")
         except Exception as e:
             logger.add("ml_meta_dataset", "error", str(e)[:100])
             print(f"  ⚠️  ML特徴量スナップショットエラー: {str(e)[:80]}")
-    # ── [Wave R5-1 / S7] MLメタモデル: 補正テーブル適用 ──────────
-    # ML_META_ENABLED=True（昇格基準クリア＋健太承認）の場合のみ。
-    # 昇格基準（IC>=0.02・t>=2.0）はテーブル読込時にも再検証される。
+        # ── MLメタモデル: 補正テーブル適用 ──────────
+        # ML_META_ENABLED=True（昇格基準クリア＋健太承認）の場合のみ。
+        # 昇格基準（IC>=0.02・t>=2.0）はテーブル読込時にも再検証される。
     if getattr(cfg, "ML_META_ENABLED", False) and _in_mode("ml_meta"):
         try:
             _mlca = _load_local_module(
@@ -5438,9 +5326,8 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ Notion/Obsidian: スキップ（ENABLE_NOTION_OBSIDIAN=False）")
     
-# ── [Wave 6 - I-1] 求人票モニター（週次バッチ）──────────────
+# ── [I-1] 求人票モニター（週次・廃止済み）──────────────
     # 実行条件: ENABLE_JOB_POSTING_MONITOR=True かつ weeklyモードで月曜実行
-    # TTL 30日以内はキャッシュ返却 → 外部HTTPアクセスなし
     if getattr(cfg, "ENABLE_JOB_POSTING_MONITOR", True) and _in_mode("job_posting"):
         try:
             _jpm = _load_local_module(
@@ -5472,9 +5359,8 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ 求人票モニター: スキップ（週次モード外 or フラグOFF）")
 
-    # ── [Wave 6 - I-3] 役員転職トラッカー（週次バッチ）──────────
-    # 実行条件: ENABLE_EXECUTIVE_TRANSITION=True かつ weeklyモードで月曜実行
-    # TTL 90日以内はキャッシュ返却 → EDINET APIアクセスなし
+        # ── [I-3] 役員転職トラッカー（週次・停止中）──────────
+        # 実行条件: ENABLE_EXECUTIVE_TRANSITION=True かつ weeklyモードで月曜実行
     if getattr(cfg, "ENABLE_EXECUTIVE_TRANSITION", True) and _in_mode("executive_transition"):
         try:
             _ett = _load_local_module(
@@ -5508,9 +5394,8 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ 役員転職トラッカー: スキップ（週次モード外 or フラグOFF）")
 
-    # ── [Wave 6 - I-4] 施設着工モニター（週次バッチ）────────────
-    # 実行条件: ENABLE_FACILITY_EXPANSION=True かつ weeklyモードで月曜実行
-    # TTL 180日以内はキャッシュ返却 → 外部HTTPアクセスなし
+        # ── [I-4] 施設着工モニター（週次・廃止済み）────────────
+        # 実行条件: ENABLE_FACILITY_EXPANSION=True かつ weeklyモードで月曜実行
     if getattr(cfg, "ENABLE_FACILITY_EXPANSION", True) and _in_mode("facility_expansion"):
         try:
             _fem = _load_local_module(
@@ -5592,9 +5477,9 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ オプションアドバイザー: スキップ")
 
-    # ── [ONT-1] オントロジー層エクスポート（週次・2026-06-12配線）──
-    # エンティティグラフ（企業・シグナル・テーマ・意思決定）を BQ へ追記。
-    # BQ認証なし環境では JSONL ローカル出力に自動フォールバックする。
+        # ── [ONT-1] オントロジー層エクスポート（週次）──
+        # エンティティグラフ（企業・シグナル・テーマ・意思決定）を BQ へ追記。
+        # BQ認証なし環境では JSONL ローカル出力に自動フォールバックする。
     if (getattr(cfg, "ENABLE_ONTOLOGY_EXPORT", True)
             and _in_mode("ontology_export")):
         try:
@@ -5621,15 +5506,9 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ オントロジー出力: スキップ（週次モード外 or フラグOFF）")
 
-    # ── [Step F] 週次投資判断レポート（週次の全モジュール完了後に生成）──
-    # 2026-09-14: 本ブロックは signal_aggregator / inference / job_posting /
-    # facility_expansion / ontology_export / position_sizer より前に置かれており、
-    # それらの結果を読むセクションが毎週「データなし」になっていた
-    # （9/14 実測: 週次レポート 14:19:41 に対し signal_aggregator 14:20:16、
-    #  job_posting 14:20:59。メール本文の「業種別 地政学シグナルスコア:
-    #  signal_aggregator データなし」「人材投資シグナル: データなし」の実体）。
-    # results["weekly_report"] を後続が読むことは無いので、末尾へ移す。
-    # ── Step F: 週次投資判断レポート ─────────────────────────────
+        # ── [Step F] 週次投資判断レポート（週次の全モジュール完了後に生成）──
+        # signal_aggregator / inference / ontology_export / position_sizer 等の結果を読むので末尾に置く
+        # （前に置くとそれらのセクションが「データなし」になる）。
     if getattr(cfg, "ENABLE_WEEKLY_REPORT", True) and _in_mode("weekly_report"):
         print("\n  📊 週次投資判断レポート生成 (Step F)...")
         try:
@@ -5654,11 +5533,8 @@ def run_all_tasks(mode: str = "all") -> dict:
             print("  ⏩ 週次レポート: スキップ（ENABLE_WEEKLY_REPORT=False）")
     
 
-    # ── [PRICE-1] 株価日足をBQへ永続化（全モジュールの取得完了後）────
-    # yf_cache が実行中に集めた日足をまとめて書き出す。ここでの追加取得は
-    # 行わない。株価はどこにも保存されておらず（BQに時系列テーブルが無く、
-    # 50モジュールが個別にyfinanceを叩いては捨てていた）、事後検証が
-    # できなかったため（2026-09-09）。必ず取得側より後に置くこと。
+        # ── [PRICE-1] 株価日足をBQへ永続化（全モジュールの取得完了後）────
+        # yf_cache が実行中に集めた日足をまとめて書き出す（追加取得はしない）。必ず取得側より後に置くこと。
     if getattr(cfg, "ENABLE_PRICE_HISTORY_WRITER", True) and _in_mode("screener"):
         try:
             _phw = _load_local_module(
