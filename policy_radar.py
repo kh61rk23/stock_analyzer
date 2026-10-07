@@ -239,50 +239,40 @@ _DEFAULT_KEYWORD_MAP: dict = {
     },
 }
 
-# デフォルト官庁RSSフィード
+# デフォルト官庁RSSフィード（URLは2026-10-07に実取得で確認。外務省はアクセス拒否・AMEDはRSS廃止のため外した）
 _DEFAULT_RSS_FEEDS: list[dict] = [
     {
         "name":     "経産省プレスリリース",
-        "url":      "https://www.meti.go.jp/press/atom.xml",
+        "url":      "https://www.meti.go.jp/ml_index_release_atom.xml",
         "priority": "high",
         "has_pdf":  True,
     },
     {
         "name":     "金融庁",
-        "url":      "https://www.fsa.go.jp/news/rss/news.rdf",
+        "url":      "https://www.fsa.go.jp/fsaNewsListAll_rss2.xml",
         "priority": "high",
         "has_pdf":  False,
     },
     {
         "name":     "デジタル庁",
-        "url":      "https://www.digital.go.jp/feed",
+        "url":      "https://www.digital.go.jp/rss/news.xml",
         "priority": "medium",
         "has_pdf":  False,
     },
     {
         "name":     "首相官邸",
-        "url":      "https://www.kantei.go.jp/jp/headline/rss/index.xml",
+        "url":      "https://www.kantei.go.jp/index-jnews.rdf",
         "priority": "high",
         "has_pdf":  False,
     },
-    {
-        "name":     "外務省プレスリリース",
-        "url":      "https://www.mofa.go.jp/press/release/rss.xml",
-        "priority": "medium",
-        "has_pdf":  False,
-    },
+
     {
         "name":     "内閣府",
-        "url":      "https://www.cao.go.jp/rss/news_all.xml",
+        "url":      "https://www.cao.go.jp/rss/news.rdf",
         "priority": "medium",
         "has_pdf":  True,
     },
-    {
-        "name":     "AMED医療研究開発機構",
-        "url":      "https://www.amed.go.jp/rss/news.xml",
-        "priority": "low",
-        "has_pdf":  False,
-    },
+
     {
         "name":     "e-Gov パブコメ",
         "url":      "https://search.e-gov.go.jp/servlet/Public?CLASSNAME=PCMMSTRECENTLY&id=0&Mode=0",
