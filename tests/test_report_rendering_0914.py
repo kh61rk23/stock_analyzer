@@ -153,7 +153,7 @@ class TestWeeklyLayoutAndOrder:
     def test_footer_comes_after_geo_section(self):
         src = _src("weekly_report_generator.py")
         assert src.index("*自動生成: stock_analyzer_main.py") > \
-            src.index("Wave 6 - G-X: 資源権益・地政学影響セクション")
+            src.index("G-X: 資源権益・地政学影響セクション")
 
     def test_fx_rate_has_no_percent_sign(self):
         src = _src("weekly_report_generator.py")
