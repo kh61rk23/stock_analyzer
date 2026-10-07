@@ -2245,6 +2245,22 @@ def run_all_tasks(mode: str = "all") -> dict:
                 _alpha_base = float(getattr(cfg, "CONFIDENCE_PRIOR_ALPHA", 0.15))
                 _tier_map   = results.get("sector_tier", {})
                 _conf_prior = results.get("confidence_prior", {})
+                # 2026-10-06: results は毎回空から始まるため、前回の prior を score_history から読む
+                #   （以前は old_prior=当日スコアになり、EMA が常に当日値＝更新の意味が無かった）
+                if not _conf_prior:
+                    try:
+                        import json as _json_p
+                        _shp = Path(cfg.DATA_DIR) / "score_history.json"
+                        _shd = _json_p.loads(_shp.read_text(encoding="utf-8")) if _shp.exists() else {}
+                        _today_p = datetime.now().strftime("%Y-%m-%d")
+                        for _d in sorted((k for k in _shd if k < _today_p), reverse=True):
+                            _cp = {c: v["confidence_prior"] for c, v in (_shd.get(_d) or {}).items()
+                                   if isinstance(v, dict) and v.get("confidence_prior") is not None}
+                            if _cp:
+                                _conf_prior = _cp
+                                break
+                    except Exception as _cpe:
+                        print(f"    ⚠️  [S3-3] 前回 prior の読み込み失敗: {str(_cpe)[:60]}")
 
                 _updated_prior: dict = {}
                 for _code, _sres in sector_results.items():

@@ -2147,12 +2147,27 @@ def build_message(alerts: list, mode: str = "line") -> str:
     else:  # email HTML
         severity_color = {"high": "#ef4444", "medium": "#f59e0b", "info": "#3b82f6"}
         severity_label = {"high": "🔴 重要", "medium": "🟡 注意", "info": "ℹ️  情報"}
+        # 2026-10-06: 本文中の保存ファイル名をGitHubへのリンクにし、末尾に本日の保存ファイル一覧
+        #   （GitHub・Drive検索リンク）を付ける（健太指示「メールから保存しているファイルのURLに飛ぶように」）
+        _files, _fidx, _files_html = [], {}, ""
+        try:
+            import os as _os
+            from pathlib import Path as _P
+            import file_links as _fl
+            _base = _P(_os.environ.get("STOCK_ANALYZER_BASE") or _P(__file__).resolve().parent / "stock_data")
+            _files = _fl.todays_files(_base / "insights")
+            _fidx = _fl.index_files(_files)
+            _files_html = _fl.files_section_html(_files)
+        except Exception as _e:
+            print(f"    ⚠️ 保存ファイルのリンク作成失敗: {_e}")
         rows = ""
         for al in alerts:
             color = severity_color.get(al["severity"], "#6b7280")
             label = severity_label.get(al["severity"], "")
             # body の改行を <br> に変換（pre タグより視認性が高い）
             body_html = al["body"].replace("\n", "<br>").replace("    ", "&nbsp;&nbsp;&nbsp;&nbsp;")
+            if _fidx:
+                body_html = _fl.linkify(body_html, _fidx)
             rows += f"""
 <tr>
   <td style="padding:12px 8px;border-bottom:1px solid #e5e7eb;vertical-align:top;">
@@ -2209,6 +2224,8 @@ def build_message(alerts: list, mode: str = "line") -> str:
   <table style="border-collapse:collapse;width:100%;padding:0 16px;">
     {rows}
   </table>
+
+  {_files_html}
 
   <!-- フッター -->
   <div style="padding:16px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;">

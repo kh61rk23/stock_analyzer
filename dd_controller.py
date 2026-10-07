@@ -130,6 +130,8 @@ def compute_portfolio_equity(cfg) -> tuple[float, int]:
     except Exception:
         fetch_price_safe = None
 
+    from sync_holdings import usd_jpy, price_in_jpy
+    fx = usd_jpy(cfg)
     equity, n = 0.0, 0
     for h in holdings:
         ticker = (h.get("ticker") or "").strip()
@@ -146,6 +148,7 @@ def compute_portfolio_equity(cfg) -> tuple[float, int]:
         if price is None:
             price = avg          # 取得不能は簿価で代替（保守的）
         else:
+            price = price_in_jpy(h, price, fx)   # 2026-10-06: 米国株はドル→円
             n += 1
         equity += float(price) * qty
     return equity, n

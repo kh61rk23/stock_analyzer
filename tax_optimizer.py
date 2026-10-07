@@ -185,6 +185,8 @@ def _load_positions(cfg) -> list:
         from data_reliability import fetch_price_safe
     except Exception:
         fetch_price_safe = None
+    from sync_holdings import usd_jpy, price_in_jpy
+    fx = usd_jpy(cfg)
     out = []
     for h in _read_csv(path):
         ticker = (h.get("ticker") or "").strip()
@@ -198,6 +200,7 @@ def _load_positions(cfg) -> list:
                 price = fetch_price_safe(cfg, ticker).get("close")
             except Exception:
                 price = None
+        price = price_in_jpy(h, price, fx)   # 2026-10-06: 米国株はドル→円（取得単価は円）
         unrealized = (float(price) - avg) * qty if price is not None else 0.0
         out.append({"ticker": ticker, "unrealized_pnl": unrealized,
                     "account_type": (h.get("account_type") or "特定").strip(),

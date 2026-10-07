@@ -196,9 +196,12 @@ def _fetch_8k_filings(target_date: str) -> list[dict]:
             cik_raw  = src.get("file_num", "") or ""
             # file_num は "0000320193-24-000001" 形式から CIK を抽出
             entity   = src.get("entity_name", "")
-            accession = hit.get("_id", "")
-            # EDGAR の _id は "0000320193-24-000001" 形式
-            cik_str  = accession.split("-")[0].lstrip("0") if accession else ""
+            # 2026-10-06: EFTS の _id は "受付番号:ファイル名"（例 0001832483-26-000040:serv-20261005.htm）。
+            #   旧実装は _id をそのまま受付番号として索引URLを作り 403 になっていた。受付番号は adsh、
+            #   会社の CIK は ciks[0]（受付番号の先頭は提出代行者の CIK のことがある）を使う。
+            accession = src.get("adsh") or hit.get("_id", "").split(":")[0]
+            ciks = src.get("ciks") or []
+            cik_str  = (ciks[0] if ciks else accession.split("-")[0]).lstrip("0")
             try:
                 cik = int(cik_str)
             except ValueError:
@@ -218,6 +221,7 @@ def _fetch_8k_filings(target_date: str) -> list[dict]:
                 "accession_number": accession,
                 "filing_date":      target_date,
                 "doc_url":          doc_url,
+                "items":            list(src.get("items") or []),
             })
 
         return results
@@ -468,9 +472,11 @@ def run_us_8k_monitor(cfg, results: dict = None) -> dict:
             continue   # ticker が不明な場合はスキップ
 
         # Item 検知（対象銘柄のみ実行・上限あり）
-        items = []
+        # 2026-10-06: EFTS の検索結果に Item 番号（例 "2.02"）が入っているのでそれを使う。
+        #   無いときだけ従来どおり対象銘柄の索引ページを読む。
+        items = list(filing.get("items") or [])
         is_target = (ticker in target_set)
-        if is_target and item_fetched < max_item_fetch:
+        if not items and is_target and item_fetched < max_item_fetch:
             items = _fetch_8k_items(cik, filing["accession_number"])
             item_fetched += 1
             time.sleep(FETCH_DELAY)

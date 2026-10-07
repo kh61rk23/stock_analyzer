@@ -3239,6 +3239,9 @@ SCORE_MAX_INSTITUTION_ADJ         = 15.0
 INSTITUTION_HISTORY_TTL_DAYS      = 180
 POLICY_MEDIUM_CACHE_TTL_DAYS      = 90
 INSTITUTION_MIN_NEW_POSITION_USD  = 1_000_000_000   # 10億ドル
+# 2026-10-06: Tier1/2（Buffett・アクティビスト）の新規取得の通知・L3発動の下限。
+#   Berkshire の13Fには子会社運用分の数十万ドルの保有も載る（例 D.R.Horton 3,564株=$58万）ため足切りする。
+INSTITUTION_MIN_NEW_POSITION_USD_ACTIVE = 100_000_000   # 1億ドル
 
 # ── Policy Ph3 追加設定（Wave 6 - U-4）────────────────────────
 # 既存の INSTITUTION_TIER_MAP / SCORE_MAX_INSTITUTION_ADJ を流用し、
@@ -3365,6 +3368,9 @@ DEEP_DIVE_CONFIDENCE_DROP = 15.0   # confidence の1週間低下量（pt）
 DEEP_DIVE_RANK_JUMP       = 10     # screener順位の急変幅（位）
 DEEP_DIVE_HISTORY_TTL     = 30     # deep_dive_history.json TTL（日）
 CONFIDENCE_PRIOR_ALPHA    = 0.15   # EMA 更新率（S3-3 confidence_prior）
+# 2026-10-06 健太判断「動かす」: 業種スコアの confidence_prior（EMA）更新を有効化。
+#   前回値は score_history.json から読み、結果は sector_results と score_history に残す（スコア自体は変えない）。
+ENABLE_S3_CONFIDENCE_PRIOR: bool = True
 
 # ── S4/FE-F: スコア事前確率・ファクターモメンタム定数 ─────────────
 # SCORE_PRIOR_TTL_DAYS     : score_prior_manager のキャッシュ TTL（日）

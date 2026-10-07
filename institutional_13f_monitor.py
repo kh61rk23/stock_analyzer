@@ -97,13 +97,15 @@ _CHANGE_MULTIPLIER: dict = {
 _KNOWN_CIKS: dict = {
     "0001067983": {"name": "Berkshire Hathaway Inc", "tier": 1},
     "0001336528": {"name": "Pershing Square Capital Management", "tier": 2},
-    "0001418819": {"name": "Elliott Investment Management", "tier": 2},
-    "0001011006": {"name": "Third Point LLC", "tier": 2},
-    "0001364742": {"name": "BlackRock Inc", "tier": 3},
+    # 2026-10-06: 旧CIK（1418819＝Iridium / 1011006＝Altaba / 1113169＝T. Rowe Price Group）は
+    #   13F を出していない別法人で「13F ファイリングなし」になっていた。13F 提出主体の CIK に訂正。
+    "0001791786": {"name": "Elliott Investment Management", "tier": 2},
+    "0001040273": {"name": "Third Point LLC", "tier": 2},
+    "0002012383": {"name": "BlackRock Inc", "tier": 3},   # 2026-10-06: 旧1364742は2024-06で提出終了（再編）
     "0000102909": {"name": "Vanguard Group", "tier": 3},
     "0000093751": {"name": "State Street", "tier": 3},
     "0000315066": {"name": "Fidelity", "tier": 3},
-    "0001113169": {"name": "T. Rowe Price", "tier": 3},
+    "0000080255": {"name": "T. Rowe Price", "tier": 3},
 }
 
 def _current_quarter() -> str:
@@ -152,7 +154,8 @@ def _load_history(cfg) -> dict:
 
     Returns:
         {
-          "quarters": {"2026Q1": {cik: {ticker: {...}}}},
+          "version": 2, "quarter": "2026Q2",
+          "by_cik":  {cik: {"acc", "period", "prev_period", "n_holdings", "changes"}},
           "changes":  [...],
           "last_updated": str,
         }
@@ -278,6 +281,13 @@ def parse_infotable_xml(text: str, value_in_thousands: bool = False) -> list[dic
         out.append({"name": rec.get("nameOfIssuer", ""), "cusip": rec.get("cusip", "").upper(),
                     "value_usd": value * 1000 if value_in_thousands else value,
                     "shares": shares, "ticker": ""})
+    # 2023年以降でも千ドル単位で出す提出者がある（T. Rowe Price 等）。1株あたり評価額の中央値が
+    # $1 未満なら千ドル単位とみなす（2026-10-06）。
+    if not value_in_thousands:
+        px = sorted(r["value_usd"] / r["shares"] for r in out if r["shares"] > 0)
+        if px and px[len(px) // 2] < 1.0:
+            for r in out:
+                r["value_usd"] *= 1000
     # 同一CUSIPの複数行（議決権区分違い等）を合算
     agg: dict = {}
     for r in out:
@@ -292,6 +302,7 @@ def _fetch_13f_holdings(
     cik: str,
     cfg=None,
     timeout: int = 20,
+    resolve: bool = True,
 ) -> list[dict]:
     """13F ファイリングの保有銘柄一覧を取得する（保有明細XML）。
 
@@ -310,7 +321,8 @@ def _fetch_13f_holdings(
             raise ValueError(f"HTTP {getattr(r, 'status_code', 'None')}")
         yy = int(accession_number.split("-")[1]) if accession_number.count("-") == 2 else 99
         holdings = parse_infotable_xml(r.text, value_in_thousands=(yy < 23))
-        _resolve_tickers(holdings, cfg)
+        if resolve:
+            _resolve_tickers(holdings, cfg)
     except Exception as e:
         print(f"    ⚠️  [13f] 保有リスト取得失敗 ({accession_number[:20]}): "
               f"{str(e)[:60]}")
@@ -368,6 +380,72 @@ def _get_latest_13f_accession(submissions: dict) -> Optional[str]:
     except Exception:
         pass
     return None
+
+
+HISTORY_VERSION = 2   # 2026-10-06: 前回提出との差分方式（version 1 の履歴は使わずに取り直す）
+
+
+def _get_13f_filings(submissions: dict, n: int = 2) -> list[tuple[str, str]]:
+    """submissions JSON → 13F-HR の [(accession, 報告基準日)] を新しい順に n 件（基準日が重複しない）（純関数）。
+
+    訂正報告（13F-HR/A）は保有の一部だけのことが多いので差分には使わない。
+    """
+    out, seen = [], set()
+    try:
+        r = submissions.get("filings", {}).get("recent", {})
+        for f, a, p in zip(r.get("form", []), r.get("accessionNumber", []), r.get("reportDate", [])):
+            if f == "13F-HR" and p not in seen:
+                out.append((a, p))
+                seen.add(p)
+                if len(out) >= n:
+                    break
+    except Exception:
+        pass
+    return out
+
+
+def _period_to_quarter(report_date: str) -> str:
+    """'2026-06-30' → '2026Q2'（純関数）。"""
+    try:
+        return f"{report_date[:4]}Q{(int(report_date[5:7]) - 1) // 3 + 1}"
+    except (ValueError, IndexError):
+        return ""
+
+
+def diff_holdings(curr: list[dict], prev: list[dict], cik_info: dict) -> list[dict]:
+    """同じ機関の今回と前回の13F保有明細（CUSIP単位）を比べて変化を返す（純関数）。
+
+    2026-10-06: 旧実装は「前四半期の保存データ」と比べていたが、保存が空だと全保有が
+    new_position（BlackRock等で1,900件超の『新規取得』）になっていた。前回提出そのものと比べる。
+    増減は株数で判定（評価額は株価で動くため）。株数が無いときだけ評価額で見る。
+    """
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cm = {h["cusip"]: h for h in curr if h.get("cusip")}
+    pm = {h["cusip"]: h for h in prev if h.get("cusip")}
+    out = []
+    for cu in set(cm) | set(pm):
+        c, p = cm.get(cu), pm.get(cu)
+        if c and not p:
+            ct = "new_position"
+        elif p and not c:
+            ct = "sold"
+        else:
+            a, b = (c["shares"], p["shares"]) if (c.get("shares") and p.get("shares")) \
+                else (c.get("value_usd", 0), p.get("value_usd", 0))
+            ct = "increased" if a > b * 1.10 else "decreased" if a < b * 0.90 else ""
+        if not ct:
+            continue
+        base = c or p
+        out.append({
+            "ticker": base.get("ticker", ""), "cusip": cu,
+            "institution": cik_info.get("name", ""), "tier": cik_info.get("tier", 3),
+            "change_type": ct,
+            "value_usd": (c or {}).get("value_usd", 0), "prev_value_usd": (p or {}).get("value_usd", 0),
+            "value_change_usd": (c or {}).get("value_usd", 0) - (p or {}).get("value_usd", 0),
+            "shares": (c or {}).get("shares", 0), "prev_shares": (p or {}).get("shares", 0),
+            "name": base.get("name", ""), "detected_at": now_str,
+        })
+    return out
 
 
 def _cusip_to_ticker(cusip: str) -> str:
@@ -569,9 +647,13 @@ def run_institutional_13f_monitor(
 
     # ── キャッシュ確認（四半期フラグ False の場合） ───────────
     history = _load_history(cfg)
+    if history.get("version") != HISTORY_VERSION:
+        # 旧形式（前四半期の保存データとの比較）は全保有を「新規」と誤検出していたので捨てる
+        history = {"version": HISTORY_VERSION, "by_cik": {}, "changes": [], "last_updated": ""}
     if not is_quarter_end:
         cached_changes = history.get("changes", [])
-        if cached_changes:
+        if history.get("by_cik"):
+            quarter = history.get("quarter") or quarter
             print(f"    📦 [13f] キャッシュ利用 (quarter={quarter}): "
                   f"{len(cached_changes)}件の変化")
             # キャッシュからも scored / boosts を再構築
@@ -579,9 +661,9 @@ def run_institutional_13f_monitor(
             _boosts = _build_sector_boosts(_scored, results, cfg)
             return _build_result(
                 quarter, cached_changes, _scored, _boosts,
-                history.get("positions", {}), cached=True,
+                {}, cached=True,
             )
-        print(f"    📋 [13f] キャッシュなし → 軽量スキャン実行")
+        print("    📋 [13f] キャッシュなし → 軽量スキャン実行")
 
     # ── 取得対象 CIK の確定 ───────────────────────────────────
     tier_map = getattr(cfg, "INSTITUTION_TIER_MAP", {})
@@ -599,81 +681,87 @@ def run_institutional_13f_monitor(
 
     print(f"    🎯 [13f] 監視対象: {len(target_ciks)}機関")
 
-    # ── 前四半期のポジションを取得 ────────────────────────────
-    quarters_data = history.get("quarters", {})
-    prev_quarter  = _prev_quarter(quarter)
-    prev_positions_all = quarters_data.get(prev_quarter, {})
-
-    # ── 各機関の最新 13F を取得 ──────────────────────────────
-    curr_positions_all: dict = {}
-    all_changes:        list = []
-
+    # ── 各機関: 最新の13F と その前の13F を比べる ───────────────
+    # 2026-10-06: 提出が前回から変わっていない機関は取り直さない（提出期間中の毎日39分を回避）。
+    #   ティッカー変換（OpenFIGI）は変化のあった銘柄だけ。大手機関（Tier3）は評価額が
+    #   INSTITUTION_MIN_NEW_POSITION_USD 以上の変化だけ残す（数千件の小口変化はノイズ）。
+    min_large = float(getattr(cfg, "INSTITUTION_MIN_NEW_POSITION_USD", 1_000_000_000))
+    min_active = float(getattr(cfg, "INSTITUTION_MIN_NEW_POSITION_USD_ACTIVE", 100_000_000))
+    all_changes: list = []
+    fresh_changes: list = []   # 今回取り直した機関の変化だけ（BQ に二重に入れない）
+    periods: list = []
+    by_cik = history.setdefault("by_cik", {})
     for cik, cik_info in target_ciks.items():
         name = cik_info["name"]
-        print(f"    📄 [13f] {name} ({cik}) を取得中...")
-
         try:
             submissions = _fetch_cik_filings(cik, cfg)
             if not submissions:
                 continue
-
-            acc = _get_latest_13f_accession(submissions)
-            if not acc:
+            filings = _get_13f_filings(submissions, 2)
+            if not filings:
                 print(f"    ⚠️  [13f] {name}: 13F ファイリングなし")
                 continue
-
-            holdings = _fetch_13f_holdings(acc, cik, cfg)
-            if not holdings:
-                print(f"    ⚠️  [13f] {name}: 保有リスト取得失敗")
+            acc, period = filings[0]
+            if period < (datetime.now() - timedelta(days=200)).strftime("%Y-%m-%d"):
+                print(f"    ⚠️  [13f] {name}: 最新の13Fが{period}と古い（提出主体の変更の可能性）→ 対象外")
                 continue
-
-            # CUSIP → ticker 変換
-            curr_pos: dict = {}
-            for h in holdings:
-                ticker = h.get("ticker") or _cusip_to_ticker(h.get("cusip", ""))
-                if ticker:
-                    curr_pos[ticker] = {
-                        "value_usd": h["value_usd"],
-                        "shares":    h["shares"],
-                        "name":      h["name"],
-                    }
-
-            curr_positions_all[cik] = curr_pos
-            prev_pos = prev_positions_all.get(cik, {})
-
-            changes = _detect_changes(curr_pos, prev_pos, cik_info)
-            all_changes.extend(changes)
-
-            print(f"    ✅ [13f] {name}: "
-                  f"{len(curr_pos)}銘柄保有 / "
-                  f"{len(changes)}件の変化")
-            time.sleep(0.5)   # SEC サーバへの負荷軽減
-
+            rec = by_cik.get(cik)
+            if rec and rec.get("acc") == acc:
+                print(f"    📦 [13f] {name}: 新しい提出なし（{period}）→ 前回の差分を使う")
+            else:
+                print(f"    📄 [13f] {name} ({cik}) {period} を取得中...")
+                curr = _fetch_13f_holdings(acc, cik, cfg, resolve=False)
+                if not curr:
+                    print(f"    ⚠️  [13f] {name}: 保有リスト取得失敗")
+                    continue
+                prev = _fetch_13f_holdings(filings[1][0], cik, cfg, resolve=False) if len(filings) > 1 else []
+                if not prev:
+                    print(f"    ⚠️  [13f] {name}: 前回の提出が無い → 差分なし（新規判定しない）")
+                    changes = []
+                else:
+                    changes = diff_holdings(curr, prev, cik_info)
+                    if cik_info.get("tier", 3) >= 3:
+                        changes = [c for c in changes
+                                   if max(c["value_usd"], c["prev_value_usd"]) >= min_large]
+                    _resolve_tickers(changes, cfg)
+                    changes = [c for c in changes if c.get("ticker")]
+                rec = {"acc": acc, "period": period, "prev_period": filings[1][1] if len(filings) > 1 else "",
+                       "n_holdings": len(curr), "changes": changes}
+                by_cik[cik] = rec
+                fresh_changes.extend(changes)
+                n_new = sum(1 for c in changes if c["change_type"] == "new_position")
+                print(f"    ✅ [13f] {name}: {len(curr)}銘柄保有 / 前回({rec['prev_period']})比 "
+                      f"変化{len(changes)}件（新規{n_new}）")
+                time.sleep(0.5)   # SEC サーバへの負荷軽減
+            all_changes.extend(rec.get("changes", []))
+            periods.append(rec.get("period", ""))
         except Exception as e:
             print(f"    ⚠️  [13f] {name} 処理エラー（スキップ）: "
                   f"{str(e)[:60]}")
+    if periods:
+        quarter = _period_to_quarter(max(periods))   # 報告基準日の四半期（例 2026-06-30 → 2026Q2）
+    curr_positions_all: dict = {}
 
     # ── スコアリング ──────────────────────────────────────────
     scored  = _score_changes(all_changes, cfg)
     boosts  = _build_sector_boosts(scored, results, cfg)
 
     # ── Tier1 新規取得 / 10億ドル超検出（アラート用）─────────
-    min_large = float(getattr(cfg, "INSTITUTION_MIN_NEW_POSITION_USD",
-                               1_000_000_000))
+    # 通知は今回取り直した（＝新しい提出があった）機関の分だけ。提出期間中に毎日同じ通知を出さない。
     new_tier1 = [
-        c for c in all_changes
+        c for c in fresh_changes
         if c.get("tier") == 1 and c.get("change_type") == "new_position"
+        and c.get("value_usd", 0) >= min_active
     ]
     new_large = [
-        c for c in all_changes
+        c for c in fresh_changes
         if c.get("change_type") == "new_position"
         and c.get("value_usd", 0) >= min_large
     ]
 
     # ── history 更新 ──────────────────────────────────────────
-    history["quarters"][quarter] = curr_positions_all
-    history["changes"]           = all_changes
-    history["positions"]         = curr_positions_all
+    history["changes"] = all_changes
+    history["quarter"] = quarter
     _save_history(cfg, history)
 
     # ── BQ 格納（us.institutional_positions）────────────────
@@ -690,7 +778,7 @@ def run_institutional_13f_monitor(
                            "us.institutional_positions")
         _now_str = datetime.now().isoformat()
         _rows: list[dict] = []
-        for _chg in all_changes:
+        for _chg in fresh_changes:
             _rows.append({
                 "quarter":          quarter,
                 "cik":              next(

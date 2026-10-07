@@ -249,6 +249,8 @@ def run_exit_rule_engine(cfg, results: dict) -> dict:
 
     all_alerts, tickets, seq = [], [], 1
     from data_reliability import fetch_price_safe   # 同リポジトリ内
+    from sync_holdings import usd_jpy, price_in_jpy
+    fx = usd_jpy(cfg)   # 2026-10-06: 米国株はドル株価×為替で円の取得単価と比べる（以前はドル÷円で-99%）
 
     for h in holdings:
         ticker = (h.get("ticker") or "").strip()
@@ -270,7 +272,7 @@ def run_exit_rule_engine(cfg, results: dict) -> dict:
             "ticker": ticker,
             "qty": float(h.get("quantity", 0) or 0),
             "avg_cost": float(h.get("avg_cost_jpy", 0) or 0),
-            "price": price,
+            "price": price_in_jpy(h, price, fx),
             "domain": domains.get(ticker, ""),
             "purchase_date": h.get("purchase_date", ""),
             "today": today,

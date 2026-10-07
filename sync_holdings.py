@@ -8,6 +8,12 @@
 # 【入力】Vault2/CEO室/departments/B-investment/data/保有銘柄.csv（健太が更新する正本・SBI等の明細）
 # 【出力】data/portfolio_holdings.csv … 日本株・米国株のみ（口座違いは合算）。既存の列互換＋market_value_jpy
 #         data/portfolio_summary.json … 総資産（現金・投信・DC含む）と資産クラス別の内訳・USDJPY
+# 【取得単価】日本株は 取引履歴.csv から口座別の移動平均で計算し直す（2026-10-06）。
+#   保有銘柄.csv（Excel由来）の取得原価は、同じ銘柄の売却益を差し引いた「実質原価」になっている銘柄がある
+#   （例: 三菱UFJ 実際の買付 1,289.5円・1,550.5円＝平均1,420円 → CSVは特定口座の売却益74,700円を引いた1,046.5円）。
+#   出口戦略（恩株化の+100%判定）が実際より高い含み益（+251%）で発火していたため。
+#   履歴で数量が一致しない銘柄（持株会・新規上場など）は保有銘柄.csvの値のまま。
+#   Excel側の値は excel_avg_cost_jpy 列に残す。
 # 【実行】python3 sync_holdings.py [--src <csv>] [--commit]
 #   --commit: 変化があれば2ファイルだけ git commit & push（obsidian_sync の Mac 側定期実行から呼ぶ）
 # ==============================================================
@@ -25,10 +31,12 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent
 SRC_DEFAULT = (Path.home() / "Documents" / "Obsidian_Local" / "Vault2_ClaudeCode_Local" / "CEO室"
                / "departments" / "B-investment" / "data" / "保有銘柄.csv")
+TX_NAME = "取引履歴.csv"   # 保有銘柄.csv と同じフォルダ
 OUT_CSV = REPO / "data" / "portfolio_holdings.csv"
 OUT_SUMMARY = REPO / "data" / "portfolio_summary.json"
 FIELDS = ["ticker", "name", "sector_code", "sector_name", "market", "quantity", "avg_cost_jpy",
-          "current_price", "purchase_date", "memo", "market_value_jpy"]
+          "current_price", "purchase_date", "memo", "market_value_jpy", "excel_avg_cost_jpy",
+          "account_type"]
 
 
 def _num(v):
@@ -65,9 +73,41 @@ def _sector_code(industry_name: str) -> str:
     return ""
 
 
-def convert(rows: list[dict], old: dict | None = None) -> tuple[list[dict], dict]:
-    """保有銘柄.csv の行 → (portfolio_holdings 行, 資産サマリ)。純関数（old＝既存CSVの ticker→行）。"""
+def cost_from_trades(tx: list[dict]) -> dict:
+    """取引履歴 → {(銘柄名, 口座): (数量, 取得原価円)}（口座別の移動平均・純関数）。
+
+    売却は平均単価で原価を減らす（売却益は原価に混ぜない）。信用取引は対象外。
+    金額が入っていない行（米国株のドル建て・持株会など）は数量だけ動かし、原価は不明（None）にする。
+    """
+    pos: dict = {}
+    for r in sorted(tx, key=lambda r: r.get("Date") or ""):
+        if r.get("Asset_Class") not in ("日本株", "米国株"):
+            continue
+        act = r.get("Action") or ""
+        if "信用" in act:
+            continue
+        q, tot = _num(r.get("Quantity")), _num(r.get("Total_JPY"))
+        if q is None:
+            continue
+        k = ((r.get("Name") or "").strip(), (r.get("Account") or "").strip())
+        qty, cost = pos.get(k, (0.0, 0.0))
+        if "買" in act:
+            qty, cost = qty + q, (cost + tot) if (cost is not None and tot) else None
+        elif "売" in act and qty > 0:
+            take = min(q, qty)
+            cost = cost * (qty - take) / qty if cost is not None else None
+            qty -= take
+        pos[k] = (qty, cost)
+    return pos
+
+
+def convert(rows: list[dict], old: dict | None = None, trades: dict | None = None) -> tuple[list[dict], dict]:
+    """保有銘柄.csv の行 → (portfolio_holdings 行, 資産サマリ)。純関数（old＝既存CSVの ticker→行）。
+
+    trades: cost_from_trades() の結果。日本株で数量が一致すれば取得原価をこちらで置き換える。
+    """
     old = old or {}
+    trades = trades or {}
     by_name, industry = _jp_index()
     stocks: "OrderedDict[str, dict]" = OrderedDict()
     classes: dict[str, float] = {}
@@ -97,14 +137,21 @@ def convert(rows: list[dict], old: dict | None = None) -> tuple[list[dict], dict
             if not ticker or ticker == "-":
                 continue
         qty = _num(r.get("Quantity")) or 0.0
-        cost = _num(r.get("Total_Cost_JPY")) or 0.0
+        cost = excel_cost = _num(r.get("Total_Cost_JPY")) or 0.0
+        if market == "JP":
+            tq, tc = trades.get(((r.get("Name") or "").strip(), (r.get("Account") or "").strip()), (None, None))
+            if tq is not None and tc and abs(tq - qty) < 1e-6:
+                cost = tc
         price = _num(r.get("Current_Price"))
         if market == "US" and price and mv and qty:
             usd_jpy = usd_jpy or (mv / (price * qty))
         s = stocks.setdefault(ticker, {"ticker": ticker, "name": name, "market": market, "quantity": 0.0,
-                                       "cost": 0.0, "current_price": price, "market_value_jpy": 0.0})
+                                       "cost": 0.0, "excel_cost": 0.0, "current_price": price,
+                                       "market_value_jpy": 0.0})
         s["quantity"] += qty
         s["cost"] += cost
+        s["excel_cost"] += excel_cost
+        s.setdefault("accounts", set()).add((r.get("Account") or "").strip())
         s["market_value_jpy"] += mv or 0.0
     out = []
     for t, s in stocks.items():
@@ -122,6 +169,9 @@ def convert(rows: list[dict], old: dict | None = None) -> tuple[list[dict], dict
             "current_price": s["current_price"] or 0,
             "purchase_date": o.get("purchase_date", ""), "memo": o.get("memo", ""),
             "market_value_jpy": round(s["market_value_jpy"]),
+            "excel_avg_cost_jpy": round(s["excel_cost"] / q, 2) if q else 0,
+            # 口座（NISA・特定・持株会）。複数口座なら「/」区切り（tax_optimizer の損出し判定用）
+            "account_type": "/".join(sorted(a for a in s.get("accounts", ()) if a)),
         })
     summary = {
         "as_of": as_of, "generated": date.today().isoformat(),
@@ -150,7 +200,14 @@ def main(argv=None) -> int:
     old = {}
     if OUT_CSV.exists():
         old = {r["ticker"]: r for r in _read(OUT_CSV)}
-    rows, summary = convert(_read(src), old)
+    trades = {}
+    if (src.parent / TX_NAME).exists():
+        trades = cost_from_trades(_read(src.parent / TX_NAME))
+    rows, summary = convert(_read(src), old, trades)
+    for r in rows:
+        if r["excel_avg_cost_jpy"] and abs(r["avg_cost_jpy"] - r["excel_avg_cost_jpy"]) > 0.5:
+            print(f"  ℹ️ 取得単価を取引履歴で補正: {r['ticker']} {r['name']} "
+                  f"{r['excel_avg_cost_jpy']:,} → {r['avg_cost_jpy']:,}円")
     with open(OUT_CSV, "w", encoding="utf-8", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=FIELDS)
         w.writeheader()
@@ -193,3 +250,29 @@ def holding_value_jpy(h: dict, price_local, usdjpy: float) -> float:
     if h.get("market_value_jpy"):
         return float(h["market_value_jpy"])
     return qty * float(h.get("avg_cost_jpy") or 0)
+
+
+def usd_jpy(cfg=None) -> float:
+    """ドル円（portfolio_summary.json → 為替レート取得 → 150 の順）。2026-10-06。"""
+    try:
+        v = json.loads(OUT_SUMMARY.read_text(encoding="utf-8")).get("usd_jpy")
+        if v:
+            return float(v)
+    except (OSError, ValueError, TypeError):
+        pass
+    try:
+        from data_reliability import fetch_price_safe
+        v = fetch_price_safe(cfg, "JPY=X").get("close")
+        if v:
+            return float(v)
+    except Exception:
+        pass
+    return 150.0
+
+
+def price_in_jpy(h: dict, price_local, fx: float):
+    """株価（現地通貨）→ 円。米国株だけ為替を掛ける（純関数）。None はそのまま。"""
+    if price_local is None:
+        return None
+    is_us = (h.get("market") == "US") or not str(h.get("ticker") or "").endswith(".T")
+    return float(price_local) * (fx if is_us else 1.0)

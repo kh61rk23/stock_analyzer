@@ -91,7 +91,14 @@ def build(ym: str, insights: Path) -> tuple[str, str, int]:
             body = p.read_text(encoding="utf-8")
         except OSError:
             continue
-        parts.append(f'<hr><h2>{html.escape(title)}</h2><div style="font-size:12px;color:#888">{p.name}</div>')
+        try:   # 2026-10-06: 元ファイルへのリンク（GitHub・Drive検索）
+            import file_links as fl
+            link = (f' — <a href="{html.escape(fl.github_url(p))}">GitHub</a>'
+                    f' / <a href="{html.escape(fl.drive_search_url(p.name))}">Drive</a>')
+        except Exception:
+            link = ""
+        parts.append(f'<hr><h2>{html.escape(title)}</h2>'
+                     f'<div style="font-size:12px;color:#888">{p.name}{link}</div>')
         parts.append(md_to_html(body))
     if not files:
         parts.append("<div>⚠️ 対象月のレポートが見つかりませんでした。</div>")

@@ -5,16 +5,19 @@
 #
 # データ元（すべて無料・APIキー不要）
 #   日本国債: 財務省「国債金利情報」CSV（当月 jgbcm.csv・月初は過去分 jgbcm_all.csv も読む）
-#   米国債  : FRED DGS3 / DGS5 / DGS10（日次）
+#   米国債  : 米財務省「Daily Treasury Par Yield Curve」CSV（主）→ FRED DGS3/5/10（予備）
 #   政策金利: 米 FRED DFEDTARU（FF金利誘導目標の上限）/ 欧 FRED ECBDFR（ECB預金ファシリティ金利）
 #             日 FRED IRSTCI01JPM156N（無担保コール翌日物・月次＝日銀政策金利の実効値）
-# 結果は stock_data/cache/rates_<日付>.json に1日1回キャッシュする。
+# FRED は POLICY_FRED_API_KEY があれば API（api.stlouisfed.org）、無ければ fredgraph CSV。
+#   2026-10-06: GitHub Actions から fredgraph CSV が全系列タイムアウトしたため API を主にした。
+# 結果は stock_data/cache/rates_<日付>.json に1日1回キャッシュする（取得失敗があれば再取得を許す）。
 # ==============================================================
 from __future__ import annotations
 
 import csv
 import io
 import json
+import os
 import re
 import urllib.request
 from datetime import date, datetime, timedelta
@@ -23,6 +26,11 @@ from pathlib import Path
 MOF_CUR = "https://www.mof.go.jp/jgbs/reference/interest_rate/jgbcm.csv"
 MOF_ALL = "https://www.mof.go.jp/jgbs/reference/interest_rate/data/jgbcm_all.csv"
 FRED = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}&cosd={start}"
+FRED_API = ("https://api.stlouisfed.org/fred/series/observations?series_id={sid}"
+            "&observation_start={start}&api_key={key}&file_type=json")
+UST = ("https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/"
+       "{y}/all?type=daily_treasury_yield_curve&field_tdr_date_value={y}&page&_format=csv")
+UST_COL = {"3年": "3 Yr", "5年": "5 Yr", "10年": "10 Yr"}
 TENORS = ("3年", "5年", "10年")
 POLICY = {   # (FRED系列, 表示名, 変更とみなす最小幅)
     "us": ("DFEDTARU", "米国 FF金利誘導目標（上限）", 0.01),
@@ -79,6 +87,46 @@ def parse_fred_csv(text: str) -> list[tuple[date, float]]:
     return out
 
 
+def parse_fred_json(text: str) -> list[tuple[date, float]]:
+    out = []
+    for o in json.loads(text).get("observations", []):
+        try:
+            out.append((date.fromisoformat(o["date"]), float(o["value"])))
+        except (ValueError, KeyError, TypeError):
+            continue
+    return out
+
+
+def parse_ust_csv(text: str) -> dict[str, list[tuple[date, float]]]:
+    """米財務省イールドカーブCSV → {'3年': [(日付, 値)], ...}（純関数・日付昇順）。"""
+    out: dict[str, list] = {t: [] for t in UST_COL}
+    for r in csv.DictReader(io.StringIO(text)):
+        try:
+            d = datetime.strptime(r.get("Date", ""), "%m/%d/%Y").date()
+        except ValueError:
+            continue
+        for t, col in UST_COL.items():
+            try:
+                out[t].append((d, float(r[col])))
+            except (KeyError, TypeError, ValueError):
+                pass
+    return {t: sorted(v) for t, v in out.items()}
+
+
+def fred_series(sid: str, start: str, key: str = "") -> list[tuple[date, float]]:
+    """FRED 系列。キーがあれば API、失敗・キー無しなら fredgraph CSV。"""
+    errs = []
+    if key:
+        try:
+            return parse_fred_json(_get(FRED_API.format(sid=sid, start=start, key=key), 20).decode())
+        except Exception as exc:
+            errs.append(exc)
+    try:
+        return parse_fred_csv(_get(FRED.format(sid=sid, start=start), 20).decode())
+    except Exception as exc:
+        raise (errs[0] if errs else exc)
+
+
 def change_summary(series: list[tuple[date, float]]) -> dict | None:
     """最新値・前日比・前週比（7日前以前で最も近い日）（純関数）。差はポイント（%pt）。"""
     if not series:
@@ -119,11 +167,25 @@ def fetch(today: date | None = None) -> dict:
                 out["jp"][t] = s
     except Exception as exc:
         out["errors"].append(f"日本国債: {type(exc).__name__}: {str(exc)[:80]}")
-    # 米国債
+    # 米国債（財務省CSV → 予備で FRED）
+    key = os.environ.get("POLICY_FRED_API_KEY", "")
     start = (today - timedelta(days=40)).isoformat()
+    try:
+        ust = parse_ust_csv(_get(UST.format(y=today.year)).decode("utf-8", "replace"))
+        if today.month == 1 or len(ust.get("10年", [])) < 8:
+            prev = parse_ust_csv(_get(UST.format(y=today.year - 1)).decode("utf-8", "replace"))
+            ust = {t: sorted(dict(prev.get(t, []) + ust.get(t, [])).items()) for t in UST_COL}
+        for t in UST_COL:
+            s = change_summary(ust.get(t, []))
+            if s:
+                out["us"][t] = s
+    except Exception as exc:
+        out["errors"].append(f"米国債(財務省): {type(exc).__name__}")
     for t, sid in (("3年", "DGS3"), ("5年", "DGS5"), ("10年", "DGS10")):
+        if t in out["us"]:
+            continue
         try:
-            s = change_summary(parse_fred_csv(_get(FRED.format(sid=sid, start=start)).decode()))
+            s = change_summary(fred_series(sid, start, key))
             if s:
                 out["us"][t] = s
         except Exception as exc:
@@ -132,7 +194,7 @@ def fetch(today: date | None = None) -> dict:
     pstart = (today - timedelta(days=800)).isoformat()
     for k, (sid, label, step) in POLICY.items():
         try:
-            ser = parse_fred_csv(_get(FRED.format(sid=sid, start=pstart)).decode())
+            ser = fred_series(sid, pstart, key)
             if ser:
                 out["policy"][k] = {"label": label, "date": ser[-1][0].isoformat(), "value": ser[-1][1],
                                     "last_change": last_change(ser, step)}
@@ -147,7 +209,9 @@ def get_rates(cfg=None, today: date | None = None) -> dict:
     base = Path(getattr(cfg, "CACHE_DIR", "stock_data/cache")) if cfg else Path("stock_data/cache")
     p = base / f"rates_{today.isoformat()}.json"
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        cached = json.loads(p.read_text(encoding="utf-8"))
+        if not cached.get("errors"):
+            return cached
     except (OSError, ValueError):
         pass
     r = fetch(today)
