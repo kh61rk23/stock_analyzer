@@ -381,9 +381,8 @@ def _fetch_batch(entries: list, max_workers: int = 5,
                       f"速度:{rate:.1f}社/秒 "
                       f"残り:{eta_min:.0f}分")
 
-    # 2026-10-03: 一括取得の途中で Yahoo の一時的な制限に当たると空応答が続き、
-    # 失敗した銘柄はそのまま捨てていた（10/3 実測 1,106社中253社失敗、700〜900社目は
-    # 200社中14社しか取れず）。手元で失敗分を間隔を空けて取り直すと6割が回復した。
+        # 一括取得の途中で Yahoo の一時的な制限に当たると空応答が続くので、
+        # 失敗した銘柄は間隔を空けて取り直す（6割程度は回復する）。
     got = {r.get("ticker") for r in results}
     retry = [e for e in entries if e.get("ticker") not in got]
     if retry:
@@ -476,7 +475,7 @@ def _apply_filter(c: dict) -> tuple:
     return len(fails) == 0, fails
 
 # ==============================================================
-# BLOCK 4.5: Wave 2 FE関数（FE-1 / FE-2 US版）
+# BLOCK 4.5: FE関数（FE-1 / FE-2 US版）
 # ==============================================================
 
 def _calc_risk_adjusted_score_us(
@@ -611,7 +610,7 @@ def _calc_score(c: dict) -> float:
     return round(min(max(score, 0), 100), 1)
 
 # ==============================================================
-# BLOCK 5.5: GICSマクロ感応度補正（Wave 1 - U-1）
+# BLOCK 5.5: GICSマクロ感応度補正（U-1）
 # ==============================================================
 
 # yfinance sector 文字列 → US セクターETFシンボル変換マップ
@@ -777,7 +776,7 @@ def _build_report(passed: list, screened: int, cfg) -> str:
         if v is None: return "N/A"
         return f"{v:.{digits}f}"
 
-    # [Wave 3 - FE-7] カタリストカレンダーをループ外で一括読み込み
+        # [FE-7] カタリストカレンダーをループ外で一括読み込み
     _cat_data_us: dict = {}
     try:
         from catalyst_calendar import load_catalyst_calendar as _load_cat_us
@@ -925,7 +924,7 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
     if _active_mac:
         print(f"    📡 [U-1] GICSマクロ補正: {_active_mac}")
     passed = []
-    # ── [Wave 3 - FE-7] カタリストカレンダーをループ外で一括読み込み ──
+        # ── [FE-7] カタリストカレンダーをループ外で一括読み込み ──
     _cat_data_us: dict = {}
     try:
         from catalyst_calendar import load_catalyst_calendar as _load_cat_us
@@ -933,12 +932,10 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
     except Exception:
         pass
 
-    # ── [U-3] インサイダー照会をループ外へ出す ────────────────────
-    # calc_insider_bonus() は SEC EDGAR への逐次アクセス
-    # （_FETCH_DELAY=0.5秒/回）。ループ内で通過銘柄ごとに呼ぶと
-    # 371社で805秒かかっていた（2026-08-27 実測）。
-    # _apply_filter / _calc_score はどちらも純粋計算なので先に流し、
-    # 素点上位の銘柄に限ってまとめて取得する。
+        # ── [U-3] インサイダー照会をループ外へ出す ────────────────────
+        # calc_insider_bonus() は SEC EDGAR への逐次アクセス（0.5秒/回）で、通過銘柄ごとに呼ぶと
+        # 数百社で十数分かかる。_apply_filter / _calc_score はどちらも純粋計算なので先に流し、
+        # 素点上位の銘柄に限ってまとめて取得する。
     _filter_cache: dict = {}
     _pass_ranked:  list = []
     for c in all_candidates:
@@ -982,9 +979,8 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
                     c["composite_score"], c, cfg, _active_mac
                 )
 
-            # ── [Wave 3 - U-3] Form 4 インサイダーボーナス ───────
-            # 値はループ外の一括取得（_insider_map）から引くだけ。
-            # 対象外の銘柄は 0.0 = 補正なしで従来どおり。
+                        # ── [U-3] Form 4 インサイダーボーナス ───────
+                        # 値はループ外の一括取得（_insider_map）から引くだけ。対象外の銘柄は 0.0。
             try:
                 _ins_bonus = float(
                     _insider_map.get(str(c.get("ticker", "")), 0.0)
@@ -998,7 +994,7 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
             except Exception:
                 c.setdefault("insider_bonus", 0.0)
 
-            # ── [Wave 3 - BM Ph3] BM-06 SaaS 正規化 ─────────────
+                        # ── [BM Ph3] BM-06 SaaS 正規化 ─────────────
             try:
                 from business_model_normalizer import (
                     detect_bm_norm_type    as _det_bm_us,
@@ -1023,7 +1019,7 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
             except Exception:
                 c.setdefault("bm_bonus_us", 0.0)
 
-            # ── [Wave 3 - FE-7] Catalyst Bonus ───────────────────
+                        # ── [FE-7] Catalyst Bonus ───────────────────
             try:
                 _gics_for_cat = str(c.get("gics_sector", ""))
                 _cat_b_us = _calc_catalyst_bonus_us(
@@ -1036,7 +1032,7 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
                     )
             except Exception:
                 c.setdefault("catalyst_bonus", 0.0)
-            # ── [Wave 2 - Size Ph2] size_tier取得 + composite調整 ─
+                        # ── [Size Ph2] size_tier取得 + composite調整 ─
             try:
                 from size_decay_manager import (
                     resolve_size_tier as _res_tier_us,
@@ -1083,13 +1079,11 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
                 c.setdefault("pearl_score", 0.0)
                 c.setdefault("pearl_bonus", 0.0)
                 c.setdefault("pearl_tier",  None)
-            # ── [Wave 6 - U-4] institutional_bonus（13F機関投資家）──
-            # institutional_signal_scorer の scored リストから
-            # 当該ティッカーの adj_pt を取得し composite_score に加算する。
-            # results["institutional_scorer"] 未格納時・モジュール未実行時は
-            # 0.0 のままスキップし、composite_score に一切影響を与えない。
-            # ★ try/except 厳重保護: 外部依存なし・dict参照のみだが
-            #   KeyError/TypeError を完全に封じてシステム全停止を防ぐ
+                        # ── [U-4] institutional_bonus（13F機関投資家）──
+                        # institutional_signal_scorer の scored リストから
+                        # 当該ティッカーの adj_pt を取得し composite_score に加算する。
+                        # results["institutional_scorer"] 未格納時・モジュール未実行時は
+                        # 0.0 のままスキップし、composite_score に一切影響を与えない。
             try:
                 if getattr(cfg, "ENABLE_INSTITUTIONAL_13F", True):
                     _inst_scorer = (results or {}).get(
@@ -1146,11 +1140,11 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
                     c.setdefault("institutional_bonus", 0.0)
             except Exception:
                 c.setdefault("institutional_bonus", 0.0)
-            # ── [Wave 7] cross_size_signal US固有ロジック ─────────
-            # cross_size_signal.py の "jp_us_cross" シグナルのうち
-            # 当該ティッカーが target_tickers に含まれる場合、
-            # composite_score にシグナル強度に応じたボーナスを加算する。
-            # Feature Flag: ENABLE_CROSS_SIZE_SIGNAL
+                        # ── cross_size_signal US固有ロジック ─────────
+                        # cross_size_signal.py の "jp_us_cross" シグナルのうち
+                        # 当該ティッカーが target_tickers に含まれる場合、
+                        # composite_score にシグナル強度に応じたボーナスを加算する。
+                        # Feature Flag: ENABLE_CROSS_SIZE_SIGNAL
             try:
                 if getattr(cfg, "ENABLE_CROSS_SIZE_SIGNAL", False):
                     from cross_size_signal import get_signals_for_ticker as _get_sigs_us
@@ -1197,10 +1191,10 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
             except Exception:
                 c.setdefault("cross_size_bonus", 0.0)
 
-            # ── [Wave 7] independence_score + latent_pearl ────────
-            # independence_scores.json のキャッシュを参照し、
-            # 市場独立性スコアを付与する。latent_pearl_score が
-            # 閾値以上の銘柄は composite_score にボーナスを加算する。
+                        # ── independence_score + latent_pearl ────────
+                        # independence_scores.json のキャッシュを参照し、
+                        # 市場独立性スコアを付与する。latent_pearl_score が
+                        # 閾値以上の銘柄は composite_score にボーナスを加算する。
             try:
                 if getattr(cfg, "ENABLE_INDEPENDENCE_SCORE", False):
                     from independence_score_calculator import (
@@ -1251,10 +1245,10 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
                 c.setdefault("is_latent_pearl",     False)
                 c.setdefault("latent_pearl_bonus",  0.0)
 
-            # ── [Wave 7] taxonomy×size 交差評価ボーナス（US版）───
-            # size_tier_master.json の taxonomy_size_correction を参照し、
-            # US銘柄の composite_score に交差評価補正を直接加算する。
-            # $tax\\_boost = \\min(3.0, (correction - 1.0) \\times 10)$
+                        # ── taxonomy×size 交差評価ボーナス（US版）───
+                        # size_tier_master.json の taxonomy_size_correction を参照し、
+                        # US銘柄の composite_score に交差評価補正を直接加算する。
+                        # $tax\\_boost = \\min(3.0, (correction - 1.0) \\times 10)$
             try:
                 if getattr(cfg, "ENABLE_SIZE_DECAY_MANAGER", False):
                     from size_tier_classifier import get_taxonomy_size_correction as _get_tsc
@@ -1277,11 +1271,11 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
             except Exception:
                 c.setdefault("taxonomy_size_correction", 1.0)
                 c.setdefault("taxonomy_size_bonus",      0.0)
-            # ── [Wave 6 - 第4セッション] 縮退補正（US株） ────────
-            # rule_optimizer.evaluate_contraction_flag() の判定結果を参照し、
-            # 非防御セクターは composite_score を縮退係数で補正する。
-            # 防御セクター（Consumer Staples / Health Care 等）は相対ボーナスを加算。
-            # ★ try/except 厳重保護: 縮退ロジック未実行時も composite_score に影響なし
+                        # ── 縮退補正（US株） ────────
+                        # rule_optimizer.evaluate_contraction_flag() の判定結果を参照し、
+                        # 非防御セクターは composite_score を縮退係数で補正する。
+                        # 防御セクター（Consumer Staples / Health Care 等）は相対ボーナスを加算。
+                        # 縮退ロジック未実行時も composite_score に影響しないよう try/except で守る
             try:
                 _contraction_us = (results or {}).get(
                     "rule_optimizer", {}
@@ -1328,12 +1322,11 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
                     c["contraction_mode"] = _mode_us
             except Exception:
                 c.setdefault("contraction_mode", "Normal")
-            # ── [Wave 6 - G-C] SEC Geographic Extractor 接続 ──────
-            # sec_geographic_extractor.get_us_geo_exposure() で
-            # geopolitics.company_country_exposure から権益エクスポージャーを取得し
-            # geo_impact_bonus の事前データとして c に格納する。
-            # ★ try/except 厳重保護: BQ接続失敗・モジュール未配置時も
-            #   composite_score に影響を与えずシステム全停止を防ぐ
+                        # ── [G-C] SEC Geographic Extractor 接続 ──────
+                        # sec_geographic_extractor.get_us_geo_exposure() で
+                        # geopolitics.company_country_exposure から権益エクスポージャーを取得し
+                        # geo_impact_bonus の事前データとして c に格納する。
+                        # BQ接続失敗・モジュール未配置時も composite_score に影響しないよう try/except で守る
             try:
                 if getattr(cfg, "ENABLE_GEO_SIGNAL", False):
                     import sys as _sys_geo, importlib as _imp_geo
@@ -1361,7 +1354,7 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
                 c.setdefault("geo_exposures", [])
             except Exception:
                 c.setdefault("geo_exposures", [])
-            # ── [Wave 2 - FE-1] risk_adjusted_score ─────────────
+                        # ── [FE-1] risk_adjusted_score ─────────────
             try:
                 c["risk_adjusted_score"] = _calc_risk_adjusted_score_us(
                     ticker=c.get("ticker", ""),
@@ -1372,7 +1365,7 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
             except Exception:
                 c["risk_adjusted_score"] = c.get("composite_score", 0.0)
 
-            # ── [Wave 2 - FE-2] revision_score + PEAD判定 ────────
+                        # ── [FE-2] revision_score + PEAD判定 ────────
             try:
                 _rev = _calc_revision_score_us(c.get("ticker", ""), c, cfg)
                 c["revision_score"] = _rev
@@ -1386,12 +1379,12 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
             except Exception:
                 c.setdefault("revision_score", 0.0)
                 c.setdefault("pead_trigger",   False)
-            # ──────────────────────────────────────────────────────
-            # ★ passed.append(c) は全スコア加算完了後に実行する
-            # （Wave 7ボーナス・縮退補正・FE-1・FE-2適用済みスコアを反映）
+                        # ──────────────────────────────────────────────────────
+                        # passed.append(c) は全スコア加算完了後に実行する
+                        # （各ボーナス・縮退補正・FE-1・FE-2適用済みスコアを反映）
             passed.append(c)
-    # ── Wave 7 デフォルトフィールド補完 ────────────────────────── 
-    # 上記 try ブロックが全てスキップされた銘柄にデフォルト値を設定する
+        # ── デフォルトフィールド補完 ──────────────────────────
+        # 上記 try ブロックが全てスキップされた銘柄にデフォルト値を設定する
     for _c_def in passed:
         _c_def.setdefault("cross_size_bonus",         0.0)
         _c_def.setdefault("independence_score",        0.0)
@@ -1472,7 +1465,7 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
         "elapsed_min":               round(elapsed / 60, 1),
         "timestamp":                 datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "skipped":                   False,
-        # Wave 6 - 第4セッション: 縮退情報
+                # 縮退情報
         "contraction_mode":          _contraction_mode_summary,
         "contraction_defensive_count": _contraction_defensive_count,
         "contraction_adjusted_count":  _contraction_adjusted_count,

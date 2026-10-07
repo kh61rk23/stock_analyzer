@@ -257,25 +257,9 @@ def enrich_candidates_with_sector(
                     # cfg は参照できないので JP_SECTOR_TICKERS のコードのみ
                     c["sector_name"] = f"JP_{sc}"
         else:
-            # US株（yf_info は持っていない場合は None）
-            # ── [F-5 / U-5 調査結果 2026-07-28] ────────────────────────
-            # `_yf_info` を格納しているコードはリポジトリ内に存在しない。
-            # U-5 で market_data.fetch_quote() が生 info（`_raw_info`）を
-            # 返せるようになったが、**JP 側の _fetch_ticker_data には
-            # 格納しない**方針とした。理由:
-            #   1. 本関数の唯一の呼び出し元（stock_analyzer_main.py:3163）が
-            #      渡すのは JP スクリーナーの candidates のみで、その ticker は
-            #      すべて ".T" である。したがって `_yf_info` を読む本 else 節に
-            #      JP 銘柄が到達することはなく、格納しても効果がない。
-            #   2. candidate 辞書は L1650 付近でキーを明示列挙して組み立てて
-            #      おり、_fetch_ticker_data の返り値をそのまま使っていない。
-            #   3. それでも technical_scorer.integrate_technical_score() が
-            #      `{**data, **scores}` を丸ごと返すため、data に `_yf_info` を
-            #      足すと **テクニカルキャッシュにヒットした銘柄だけ** 生 info
-            #      （約150キー）が candidate に混入し、results["screener"]
-            #      ["candidates"] の JSON に載ってしまう（不揃いかつ肥大化）。
-            # 以上より F-5 の正しい是正は「本関数側の作り直し」であり、
-            # U-5 のスコープ外。ここでは現状維持（常に None）とする。
+                        # US株（yf_info は持っていない場合は None）。本関数は JP 候補（.T）からしか呼ばれないので
+                        # この節に JP 銘柄は来ない。data に生 info を足すと technical_scorer がそれを候補に
+                        # 丸ごと混ぜ、results["screener"] の JSON が肥大化するので入れない（常に None）。
             yf_info = c.get("_yf_info")   # 現状は常に None（上記参照）
             sc, label = get_us_sector_code(ticker, yf_info)
             if sc:
@@ -366,14 +350,14 @@ def _fetch_ticker_data(ticker: str) -> Optional[dict]:
             # [I-1] EPS成長率（加速度計算用）
             "earnings_growth":  q["earnings_growth"],    # 直近年率成長率
             "earnings_qgrowth": q["earnings_qgrowth"],   # 直近四半期成長率
-            # 2026-10-01: 利益の加速度（四半期の前年同期比 − 通期の前年比）
+                        # 利益の加速度（四半期の前年同期比 − 通期の前年比）
             "profit_accel":     _profit_accel(ticker),
-            "analyst_count":  q["analyst_count"],   # v3.0追加
+            "analyst_count":  q["analyst_count"],
             "rec_mean":       q["rec_mean"],        # [F-1/U-4] アナリスト推奨平均
             "rec_key":        q["rec_key"],         # [F-1/U-4] 推奨キー（文字列）
             "target_price":   q["target_price"],    # [F-1/U-4] アナリスト目標株価平均
             "analyst_upside": q["analyst_upside"],  # [F-1/U-4] 目標株価乖離率
-            "dividend_yield": q["div_yield"],       # 比率（0.04 = 4%）2026-09-29
+            "dividend_yield": q["div_yield"],       # 比率（0.04 = 4%）
             # [M-3] ネットキャッシュ計算用
             "total_cash":     q["total_cash"],
             "total_debt":     q["total_debt"],
@@ -450,8 +434,7 @@ def _load_edinet_accruals(cfg) -> dict:
                     except (TypeError, ValueError):
                         pass
 
-    # 2026-09-26: 上のローカルDB（edinet_rotation）は ENABLE_EDINET_ROTATION=False で
-    # 更新が止まっており、毎日「データなし」＝補正0点だった。正本の BQ financials から読む。
+        # 財務は正本の BQ financials から読む（ローカルの edinet_rotation DB は更新されない）。
     if not accruals:
         try:
             from edinet_bq_client import EDINETBQClient
@@ -833,7 +816,7 @@ def _apply_filters(data: dict, cfg) -> tuple:
     return (len(fails) == 0), detail
 
 # ==============================================================
-# BLOCK 2.3: Wave 2 FE関数（FE-1 / FE-2）
+# BLOCK 2.3: FE関数（FE-1 / FE-2）
 # ==============================================================
 
 def _calc_risk_adjusted_score(
@@ -867,7 +850,7 @@ def _check_pead_trigger(
     return check_pead_trigger(ticker, revision_score, cfg)
 
 # ==============================================================
-# BLOCK 2.8: Wave 3 FE-7 カタリストボーナス算出
+# BLOCK 2.8: FE-7 カタリストボーナス算出
 # ==============================================================
 
 def _calc_catalyst_bonus(
@@ -886,9 +869,9 @@ def _calc_scores(
     edinet_accrual:      Optional[float] = None,
     sector_accrual_mean: Optional[float] = None,
     surprise_bonus:      float = 0.0,
-    bq_bonus:            float = 0.0,   # ★ P-2追加（事業モデル質ボーナス）
-    ceo_bonus:           float = 0.0,   # ★ I-3追加（経営者スコアボーナス）
-    cfg = None,                         # ★ 2026-07-25追加（I-1 閾値の正本参照）
+    bq_bonus:            float = 0.0,   # （事業モデル質ボーナス）
+    ceo_bonus:           float = 0.0,   # （経営者スコアボーナス）
+    cfg = None,                         # I-1 閾値の正本（config）を読むため
 ) -> dict:
     """
     バリュースコア / クォリティスコア / 総合スコアを算出する。
@@ -924,7 +907,7 @@ def _calc_scores(
         pbr_score = 50
 
     value_score = round((per_score * 0.6 + pbr_score * 0.4), 1)
-    # ── [Wave 2 - BM Ph2] 業態別 value_score 正規化 ──────────────
+        # ── [BM Ph2] 業態別 value_score 正規化 ──────────────
     try:
         from business_model_normalizer import (
             detect_bm_norm_type as _det_bm,
@@ -936,11 +919,9 @@ def _calc_scores(
     except Exception:
         _bm_norm_type = "NORM_STANDARD"
     inv_bonus = 0.0   # if roe ブロック外で初期化（ROEなし銘柄でも参照できるよう）
-    # [I-1] 利益の加速度スコア
-    # 2026-10-01: 旧式は earnings_qgrowth×4 − earnings_growth だったが、yfinance の
-    # 2つはどちらも前年同期比でほぼ同値（7203.T 0.756/0.869）で、結果は「増益率×約3」。
-    # 増益ならほぼ一律に +7〜+10 になっていた。四半期の前年同期比 − 通期の前年比
-    # （earnings_surprise.calc_profit_acceleration）で測る。取れない銘柄は 0（中立）。
+        # [I-1] 利益の加速度スコア。四半期の前年同期比 − 通期の前年比
+        # （earnings_surprise.calc_profit_acceleration）で測る。取れない銘柄は 0（中立）。
+        # yfinance の earnings_qgrowth と earnings_growth はどちらも前年同期比でほぼ同値なので差に使えない。
     acc_bonus = 0.0
     _a_su = float(getattr(cfg, "ACCEL_STRONG_UP",    0.30))
     _a_mu = float(getattr(cfg, "ACCEL_MID_UP",       0.15))
@@ -980,7 +961,7 @@ def _calc_scores(
         # 業種平均より2pt以上低い = 相対的に利益品質が高い
         relative_bonus = 5.0
 
-    # ── [Wave 2 - BM Ph2] bm_bonus 算出 ─────────────────────────
+        # ── [BM Ph2] bm_bonus 算出 ─────────────────────────
     _bm_bonus = 0.0
     try:
         from business_model_normalizer import calc_bm_bonus as _calc_bm_bonus
@@ -993,7 +974,7 @@ def _calc_scores(
     except Exception:
         _bm_bonus = 0.0
 
-    # ── [Wave 2 - FE-2] revision_score 算出 ──────────────────────
+        # ── [FE-2] revision_score 算出 ──────────────────────
     _revision_score = 0.0
     try:
         _revision_score = _calc_revision_score(
@@ -1008,8 +989,8 @@ def _calc_scores(
         max(0, min(100,
             quality_base + acr_bonus + relative_bonus
             + surprise_bonus + inv_bonus + acc_bonus
-            + bq_bonus  + ceo_bonus          # ★ P-2追加
-            + _bm_bonus + _revision_score    # ★ Wave 2追加
+            + bq_bonus  + ceo_bonus
+            + _bm_bonus + _revision_score
         )),
         1,
     )
@@ -1023,11 +1004,9 @@ def _calc_scores(
         import config as _cfg_pearl
         if getattr(_cfg_pearl, "ENABLE_PEARL_SCORE", True):
             _ticker = data.get("symbol", data.get("ticker", ""))
-            # EPS加速度を data に補完（pearl D1 計算用）
-            # ── Wave 7: D3統合用フィールドを data に補完 ────────
-            # pearl_score_calculator.py の _calc_d3_earnings_quality() が
-            # edinet_segment_text / catalyst_score / midterm_overall_score /
-            # midterm_trajectory を参照する。
+                        # EPS加速度を data に補完（pearl D1 計算用）
+                        # D3統合用フィールドも補完する: pearl_score_calculator._calc_d3_earnings_quality() が
+                        # edinet_segment_text / catalyst_score / midterm_overall_score / midterm_trajectory を参照する。
             try:
                 import json as _j7
                 from pathlib import Path as _p7
@@ -1087,7 +1066,7 @@ def _calc_scores(
     except Exception:
         pass
 
-    # ── [Wave 2 - Size Ph2] size_tier取得 + tier別composite算出 ──
+        # ── [Size Ph2] size_tier取得 + tier別composite算出 ──
     _size_tier = "Mid"   # デフォルト
     _size_weights = {"sector_score": 0.40, "value_score": 0.30, "quality_score": 0.30}
     try:
@@ -1114,7 +1093,7 @@ def _calc_scores(
             1,
         )
 
-    # ── [Wave 2 - FE-1] risk_adjusted_score 算出 ─────────────────
+        # ── [FE-1] risk_adjusted_score 算出 ─────────────────
     _risk_adj_score = composite   # デフォルト: composite と同値
     try:
         _risk_adj_score = _calc_risk_adjusted_score(
@@ -1142,9 +1121,9 @@ def _calc_scores(
         "pearl_score":        round(pearl_score, 1),
         "pearl_bonus":        round(pearl_bonus, 1),
         "pearl_tier":         pearl_tier,
-        # ── Wave 2 追加フィールド ──────────────────────────────
+                # ── FE・規模の追加フィールド ──────────────────────────────
         "size_tier":          _size_tier,              # Wave 2 - Size Ph2
-        # ── Wave 7 追加フィールド ──────────────────────────────
+                # ── 独立性・D3 の追加フィールド ──────────────────────────────
         "edinet_segment_text":  data.get("edinet_segment_text", ""),
         "catalyst_score":       float(data.get("catalyst_score", 0.0)),
         "midterm_overall_score": float(data.get("midterm_overall_score", 0.0)),
@@ -1393,7 +1372,7 @@ def _discovery_composite_threshold(
 def _screen_sector(sector_code: str, sector_name: str,
                    sector_score: float, tickers: list,
                    cfg, market: str = "JP",
-                   sector_tier: str = "TOP",   # ★ GAP-6追加 "TOP"/"MID"/"BOT"
+                   sector_tier: str = "TOP",   # "TOP"/"MID"/"BOT"
                    surprise_cache: dict | None = None,
                    edinet_accruals: dict | None = None,
                    all_scores_ref: list | None = None,
@@ -1431,8 +1410,7 @@ def _screen_sector(sector_code: str, sector_name: str,
     raw_data_list = []
     print(f"    [{sector_code}] {sector_name}: {len(tickers)}銘柄チェック中...")
 
-    # 2026-09-29: 対象を約460銘柄へ広げたため、1銘柄ずつ（0.5秒/銘柄）から
-    # 5並列に（米国株スクリーナーと同じ）。並び順は入力順を保つ。
+        # 5並列で取得する（米国株スクリーナーと同じ）。並び順は入力順を保つ。
     workers = max(1, int(getattr(cfg, "SCREEN_FETCH_WORKERS", 5)))
     if workers > 1 and len(tickers) > 1:
         from concurrent.futures import ThreadPoolExecutor
@@ -1455,7 +1433,7 @@ def _screen_sector(sector_code: str, sector_name: str,
     bq_bonus  = 0.0
     bq_detail = {}
     ceo_bonus = 0.0
-    # [Wave 3 - FE-7] カタリストカレンダーをループ外で一括読み込み
+        # [FE-7] カタリストカレンダーをループ外で一括読み込み
     _cat_data_jp: dict = {}
     try:
         from catalyst_calendar import load_catalyst_calendar as _load_cat
@@ -1540,9 +1518,9 @@ def _screen_sector(sector_code: str, sector_name: str,
             edinet_accrual      = edinet_acr,
             sector_accrual_mean = sector_accrual_mean,
             surprise_bonus      = total_bonus,
-            bq_bonus            = bq_bonus,    # ★ P-2追加  # type: ignore
-            ceo_bonus           = ceo_bonus,     # ★ I-3追加  # type: ignore
-            cfg                 = cfg,           # ★ 2026-07-25 I-1閾値の正本
+            bq_bonus            = bq_bonus,    # # type: ignore
+            ceo_bonus           = ceo_bonus,     # # type: ignore
+            cfg                 = cfg,           # I-1閾値の正本
         )
         # [5-2/6-3] comps・DCFを一元統合。base_value_scoreから毎回再計算する。
         if not _mid_light:
@@ -1629,7 +1607,7 @@ def _screen_sector(sector_code: str, sector_name: str,
             except Exception:
                 pass
 
-        # ── [Wave 3 - FE-7] Catalyst Bonus 計算 ─────────────────
+                # ── [FE-7] Catalyst Bonus 計算 ─────────────────
         _catalyst_bonus = 0.0
         try:
             _catalyst_bonus = _calc_catalyst_bonus(
@@ -1655,7 +1633,7 @@ def _screen_sector(sector_code: str, sector_name: str,
             "market_cap_b":   data.get("market_cap_b"),
             "avg_volume":     data.get("avg_volume"),
             "analyst_count":  data.get("analyst_count"),
-            # 2026-09-29: 9指標（candidate_kpi）の EV・ネットキャッシュ計算用
+                        # 9指標（candidate_kpi）の EV・ネットキャッシュ計算用
             "market_cap_raw": data.get("market_cap"),
             "dividend_yield": data.get("dividend_yield"),
             "payout_ratio":   data.get("payout_ratio"),
@@ -1667,7 +1645,7 @@ def _screen_sector(sector_code: str, sector_name: str,
             "surprise_bonus": es_bonus,
             "discovery_score": 0.0,
             "discovery_flags": [],
-            # ── Wave 2 追加フィールド ─────────────────────────
+                        # ── FE・規模の追加フィールド ─────────────────────────
             "size_tier":          scores.get("size_tier", "Mid"),
             "risk_adjusted_score": scores.get("risk_adjusted_score",
                                               scores.get("composite_score", 0.0)),
@@ -1683,12 +1661,12 @@ def _screen_sector(sector_code: str, sector_name: str,
             "current_price": data.get("current_price"),
             "comps_bonus": scores.get("comps_bonus", 0.0),
             "dcf_bonus": scores.get("dcf_bonus", 0.0),
-            # ── Wave 3 追加フィールド ──────────────────────────────
+                        # ── PEAD・カタリストの追加フィールド ──────────────────────────────
             "catalyst_bonus":     _catalyst_bonus,    # Wave 3 - FE-7
             "independence_score": 0.0,                # Wave 3 - Independence Ph1（後段で更新）
             "is_latent_pearl":    False,              # Wave 3 - Independence Ph1（後段で更新）
-            "acc_bonus": scores.get("acc_bonus", 0.0),   # ★ I-1追加
-            "earnings_acceleration": scores.get("earnings_acceleration"),  # ★ I-1追加
+            "acc_bonus": scores.get("acc_bonus", 0.0),
+            "earnings_acceleration": scores.get("earnings_acceleration"),
             # [I-2] 保守度スコアと複合フラグ
             "conservatism_score": (
                 surprise_cache.get(ticker, {}).get("conservatism_score", 50.0)
@@ -1699,16 +1677,16 @@ def _screen_sector(sector_code: str, sector_name: str,
                 and (surprise_cache.get(ticker, {}).get("conservatism_score", 0) or 0) >= 70.0
             ) if surprise_cache else False,
             "is_negative_risk": (
-                # 2026-10-01: 未分析の銘柄を保守度0点扱いにしてネガ判定していた（メールで43社）
+                                # 未分析の銘柄は保守度0点扱いにしない（ネガ判定しない）
                 scores.get("acc_bonus", 0) <= -7.0
                 and surprise_cache.get(ticker, {}).get("conservatism_score") is not None
                 and surprise_cache[ticker]["conservatism_score"] <= 30.0
             ) if surprise_cache else False,
-            "bq_bonus":             scores.get("bq_bonus", 0.0),   # ★ P-2
+            "bq_bonus":             scores.get("bq_bonus", 0.0),   # P-2
             # [I-3] 経営者スコア
             "ceo_score":            ceo_score_cached,
             "ceo_bonus":            ceo_bonus,
-            "ml_correction":        0.0,   # ★ RESEARCH-4追加（main.py で後から書き込む）
+            "ml_correction":        0.0,   # （main.py で後から書き込む）
             # [GAP-4] 戦略ラベル（後段で付与・ここでは空文字）
             "strategy_label":     "",
             "hold_weeks":       0,
@@ -1746,10 +1724,10 @@ def _screen_sector(sector_code: str, sector_name: str,
         if all_scores_ref is not None:
             all_scores_ref.append(scores["composite_score"])
 
-    # ── [Wave 3 - Independence Ph1] Independence Score バッチ計算 ──
+        # ── [Independence Ph1] Independence Score バッチ計算 ──
     try:
-        # Wave 7: independence_scores.json のキャッシュを優先参照し、
-        # キャッシュ未存在の銘柄のみ calc_independence_score_for_ticker() で計算
+                # independence_scores.json のキャッシュを優先参照し、
+                # キャッシュ未存在の銘柄のみ calc_independence_score_for_ticker() で計算
         from independence_score_calculator import (
             calc_independence_score_for_ticker as _calc_ind,
             get_independence_score             as _get_ind_cached,
@@ -1785,14 +1763,11 @@ def _screen_sector(sector_code: str, sector_name: str,
                 )
                 _c["catalyst_flags"]  = _ind_result.get("catalyst_flags", [])
 
-            # ③ latent_pearl_cache から潜伏Pearlスコアを補完
-            # 2026-10-01: 旧版は _lp_score を一度もキャッシュから読まず常に0点で、
-            # しかも昇格銘柄が無い日は銘柄ごとに管理処理を呼び直していた（1日170回）。
-            # 管理処理は main が日次で1回回すので、ここはキャッシュを読むだけにする。
+                        # ③ latent_pearl_cache から潜伏Pearlスコアを補完（管理処理は main が日次で1回回すので、ここは読むだけ）
             _lp_score = float(_lp_scores.get(_c.get("ticker", ""), 0.0))
             _c["latent_pearl_score"] = _lp_score
 
-            # ④ is_latent_pearl 判定（Wave 7版: latent_pearl_cache 優先）
+                        # ④ is_latent_pearl 判定（latent_pearl_cache 優先）
             _c["is_latent_pearl"] = _lp_score >= 30.0
 
             # ⑤ composite_score への加算
@@ -1809,10 +1784,7 @@ def _screen_sector(sector_code: str, sector_name: str,
     except Exception as _inde:
         pass   # Independence Score 失敗でもスクリーニングを継続
 
-    # 2026-10-01: ここにあった「Latent Pearl Manager 更新」は
-    # run_latent_pearl_manager(候補リスト, cfg=cfg) と呼んでおり、引数の型が合わず
-    # 毎回 TypeError で空振りしていた。管理処理は候補を自前で集め、main が日次で
-    # 1回実行するため削除した。
+        # Latent Pearl の管理処理（更新・昇格）は main が日次で1回実行する（ここでは呼ばない）。
 
     # ログ出力
     passed_list = [c for c in candidates if c["pass_filters"]]
@@ -1820,9 +1792,9 @@ def _screen_sector(sector_code: str, sector_name: str,
           + (f" | EDINET accrual: {sum(1 for t,_ in raw_data_list if t in accruals)}銘柄"
              if accruals else ""))
 
-    # ── [Wave 3 - Independence Ph1] Promoted Ticker を先頭挿入 ──
+        # ── [Independence Ph1] Promoted Ticker を先頭挿入 ──
     try:
-        # Wave 7: get_latent_pearls_list() から昇格対象を取得して先頭に挿入
+                # get_latent_pearls_list() から昇格対象を取得して先頭に挿入
         from latent_pearl_manager import (
             get_latent_pearls_list as _get_lpl,
             get_promoted_tickers   as _get_prom,
@@ -2072,8 +2044,7 @@ def run_stock_screener(cfg, sector_results: dict,
             pass
 
     top_n_sectors = getattr(cfg, "SCREEN_TOP_N_SECTORS", 5)
-    # 2026-09-29: 対象を「業種代表の数銘柄×上位7業種」から「BQに財務がある全社×全業種」へ
-    # 広げる（健太の判断・Actionsの空き時間の活用）。下位業種（BOT_TIER）は従来どおり評価しない
+        # 対象は「BQに財務がある全社×全業種」。下位業種（BOT_TIER）は評価しない
     bq_sector_tickers: dict = {}
     if getattr(cfg, "SCREEN_EXPAND_UNIVERSE", False):
         try:
@@ -2130,11 +2101,7 @@ def run_stock_screener(cfg, sector_results: dict,
         edinet_accruals = _load_edinet_accruals(cfg)
     except Exception as e:
         print(f"  ⚠️  EDINET accrual ロード失敗（スキップ）: {e}")
-    # [問題D] 全銘柄リストを業種代表銘柄から構築
-    # ★ 旧コードは存在しない sector_tickers モジュールを import しており
-    #   （幻のモジュール / CLAUDE.md パターン②）、ModuleNotFoundError で
-    #   スクリーニングが常時全滅していた。業種代表銘柄の正本は
-    #   config.SECTOR_REPRESENTATIVE_TICKERS（{sector_code: [tickers]}）。
+        # [問題D] 全銘柄リストを業種代表銘柄から構築（正本は config.SECTOR_REPRESENTATIVE_TICKERS）。
     _jst_d = getattr(cfg, "SECTOR_REPRESENTATIVE_TICKERS", {}) or {}
     all_tickers: list = [t for tlist in _jst_d.values() for t in tlist]
     dynamic_ticker_meta: dict = {}
@@ -2182,9 +2149,8 @@ def run_stock_screener(cfg, sector_results: dict,
             print(f"    [{code}] {sector_name}: 銘柄マスタなし → スキップ")
             continue
 
-        # 2026-10-05: 1業種の例外でスクリーナー全体が止まっていた（10/5 卸売業で
-        # 「NoneType - int」→ 日本株の候補0件・スナップショット0件）。業種単位で分離し、
-        # 発生箇所（ファイル:行）をログに残して次の業種へ進む
+                # 1業種の例外でスクリーナー全体が止まらないよう業種単位で分離し、
+                # 発生箇所（ファイル:行）をログに残して次の業種へ進む
         try:
             candidates = _screen_sector(
                 sector_code     = code,
@@ -2193,14 +2159,14 @@ def run_stock_screener(cfg, sector_results: dict,
                 tickers         = tickers,
                 cfg             = cfg,
                 market          = "JP",
-                sector_tier     = sector_tier_map.get(code, "TOP"),  # ★ GAP-6追加
+                sector_tier     = sector_tier_map.get(code, "TOP"),
                 edinet_accruals = edinet_accruals,
                 all_scores_ref  = all_comp_scores,
                 surprise_cache = surprise_cache,
                 credit_cache   = credit_cache,
                 tech_cache     = tech_cache,
-                insider_cache  = insider_cache,   # ← この行を追加
-                dividend_cache = dividend_cache,  # ← この行を追加
+                insider_cache  = insider_cache,
+                dividend_cache = dividend_cache,
                 sr_cache       = sr_cache,
                 vp_cache       = vp_cache,
                 edinet_quality_cache = edinet_quality_cache,
@@ -2261,8 +2227,8 @@ def run_stock_screener(cfg, sector_results: dict,
                 if t in _dyn_meta:
                     c["discovery_score"] = _dyn_meta[t].get("discovery_score", 100)
                     c["dynamic_source"]  = _dyn_meta[t].get("source", "")
-                    c["edinet_freshness"] = None  # ★ ④追加（鮮度スコア / None=未計算）
-                    c["xbrl_freshness"] = None # ★ ④追加（US財務鮮度）
+                    c["edinet_freshness"] = None  # （鮮度スコア / None=未計算）
+                    c["xbrl_freshness"] = None # （US財務鮮度）
             all_candidates.extend(_dyn_candidates)
             print(f"    ✅ 動的銘柄 {len(_dyn_candidates)}社 追加完了")
     # [S-3] discovery_score を全銘柄に付与
@@ -2310,9 +2276,7 @@ def run_stock_screener(cfg, sector_results: dict,
         key=lambda x: x.get("discovery_score", 0),
         reverse=True,
     )[:10]
-    # [M-3] アクティビスト候補トップN
-    # 2026-07-25 バッチ4: 件数を config.ACTIVIST_TOP_N から読む
-    # （従来は [:10] 直書きで config 側の定数が未参照だった）
+        # [M-3] アクティビスト候補トップN（config.ACTIVIST_TOP_N）
     _activist_n = int(getattr(cfg, "ACTIVIST_TOP_N", 10))
     activist_top = sorted(
         [c for c in all_candidates
@@ -2369,7 +2333,7 @@ def run_stock_screener(cfg, sector_results: dict,
 
     result = {
         "candidates":              all_candidates,
-        "sector_errors":           screen_errors,   # 2026-10-05: 例外で飛ばした業種
+        "sector_errors":           screen_errors,   # 例外で飛ばした業種
         "screened_count":          len(all_candidates),
         "pass_count":              len(passed),
         "top_sectors":             top_sector_names,

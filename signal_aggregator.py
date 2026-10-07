@@ -175,13 +175,9 @@ def _extract_technical_score(results: dict, code: str) -> Optional[float]:
     return round(sum(scores)/len(scores), 1) if scores else None
 
 
-# 週次モジュールの成果を日次から読むための共通フォールバック
-# 2026-09-12: signal_aggregator は日次だが、23カテゴリのうち複数は
-# **週次モジュール**の産出に依存している。results からしか読んでいない
-# 抽出器は、月曜以外は必ず None を返し、その分だけ weight_used が減って
-# スコアの土台が痩せていた（cluster_phase だけは以前からキャッシュを
-# 読んでおり、扱いが不統一だった）。
-# 各モジュールはキャッシュを永続化しているので、それを読みにいく。
+# 週次モジュールの成果を日次から読むための共通フォールバック。
+# 23カテゴリのうち複数は週次モジュールの産出に依存しており、results だけを読むと
+# 月曜以外は None になって weight_used が減る。各モジュールが永続化したキャッシュを読みにいく。
 _WEEKLY_CACHE_MAX_AGE_DAYS = 14   # 週次が1回飛んでも耐える。それ以上は使わない
 
 
@@ -216,8 +212,7 @@ def _load_weekly_cache(results: dict, filename: str) -> dict:
 
 def _extract_breadth_score(results: dict, code: str) -> Optional[float]:
     """D: market_breadth の JP スコアを業種共通で使う（+/- 補正あり）。"""
-    # market_breadth は週次モジュール。日次実行では results に載らないので
-    # 前回のキャッシュへ落とす（従来はここで必ず None を返していた）。
+        # market_breadth は週次モジュール。日次実行では results に載らないので前回のキャッシュへ落とす。
     mb = results.get("market_breadth") or _load_weekly_cache(
         results, "market_breadth_cache.json")
     if not mb:
@@ -273,7 +268,7 @@ def _extract_us_lead_score(results: dict, code: str) -> Optional[float]:
     }.get(phase, 0)
     bridge_score = round(max(0, min(100, 50 + adj * 5 + phase_bonus)), 1)
 
-    # ── Wave 3 - Size Ph3: cross_size_signal を合算 ────────────
+        # ── Size Ph3: cross_size_signal を合算 ────────────
     try:
         from cross_size_signal import aggregate_cross_size_score as _css_score
         cross_score = _css_score(code, results)
@@ -310,8 +305,8 @@ def _extract_yield_curve_score(results: dict) -> Optional[float]:
     bc = results.get("bond_commodity", {})
     if not bc or not isinstance(bc, dict):
         return None
-    # ★修正: run_bond_commodity_pipeline() はトップレベルに recession_score を返す
-    # "yield_curve" というキーは存在しない（正しくは "curve_analysis"）
+        # run_bond_commodity_pipeline() はトップレベルに recession_score を返す
+        # （"yield_curve" というキーは無い。曲線の詳細は "curve_analysis"）
     rec_score = bc.get("recession_score")
     if rec_score is None:
         # フォールバック: curve_analysis 内も探す
@@ -407,8 +402,8 @@ def _extract_politician_score(results: dict, code: str) -> Optional[float]:
             if total_adj != 0.0:
                 return round(max(0, min(100, 50 + total_adj * 2.0)), 1)
 
-        # ── フォールバック: politician_monitor の jp_sector_signals ─
-        # ★ 2026-06-10 バグ修正: main の書き込みキーは "politician_monitor"
+                # ── フォールバック: politician_monitor の jp_sector_signals ─
+                # main の書き込みキーは "politician_monitor"
         pol_mon = results.get("politician_monitor", results.get("politician", {}))
         if pol_mon:
             raw_signals = pol_mon.get("jp_sector_signals", {})
@@ -615,7 +610,7 @@ def _extract_geo_score(results: dict, code: str) -> float | None:
         return None
 
 # ==============================================================
-# BLOCK 1-B: Wave 7 シグナル抽出関数
+# BLOCK 1-B: データ収集・高度アルファ層のシグナル抽出関数
 # ==============================================================
 
 def _extract_standardization_signal(results: dict, code: str) -> float | None:
@@ -821,7 +816,7 @@ def _get_tickers_for_sector(results: dict, sector_code: str) -> list:
         return []
 
 # ==============================================================
-# BLOCK 1.5: ローテーションブースト（Wave 0 - Idea2-B）
+# BLOCK 1.5: ローテーションブースト（Idea2-B）
 # ==============================================================
 
 def _apply_rotation_boost(
@@ -863,7 +858,7 @@ def _apply_rotation_boost(
         return signal_score
 
 # ==============================================================
-# BLOCK 1.7: Wave 2 - Size Ph2: Micro/Nano sector_score ウェイト低減
+# BLOCK 1.7: Size Ph2: Micro/Nano sector_score ウェイト低減
 # ==============================================================
 
 def _get_sector_size_weight_multiplier(
@@ -1024,8 +1019,8 @@ def calc_signal_score(
     top_reasons   = []
     risk_flags    = []
 
-    # ── [Wave 2 - Size Ph2] Micro/Nano比率 → sector_score ウェイト乗数取得 ──
-    # ★ try/except は _get_sector_size_weight_multiplier() 内で吸収済み
+        # ── [Size Ph2] Micro/Nano比率 → sector_score ウェイト乗数取得 ──
+        # try/except は _get_sector_size_weight_multiplier() 内で吸収済み
     _sector_score_mul = _get_sector_size_weight_multiplier(code, results)
 
     for cat, extractor in extractors.items():
@@ -1036,9 +1031,8 @@ def calc_signal_score(
 
         w = weights.get(cat, DEFAULT_WEIGHTS.get(cat, 0.05))
 
-        # Wave 2 - Size Ph2: Micro/Nano 比率が高いセクターの
-        # sector_score ウェイトを自動低減する。
-        # weight_used による再正規化で他カテゴリのウェイト比率が自動上昇する。
+                # Micro/Nano 比率が高いセクターの sector_score ウェイトを自動低減する。
+                # weight_used による再正規化で他カテゴリのウェイト比率が自動上昇する。
         if cat == "sector_score" and _sector_score_mul < 1.0:
             w = round(w * _sector_score_mul, 4)
 
@@ -1100,16 +1094,10 @@ def calc_signal_score(
                 }
                 risk_flags.append(label_map.get(cat, f"{cat}={score:.0f}"))
         else:
-            # 2026-09-10: ここは else 節が無く indent=12 のまま
-            # `if score is not None:` の本体末尾に置かれていたため、
-            # 直前の components[cat] = round(score, 1) を毎回 None で
-            # 上書きしていた（2026-03-30 の初版以来）。
-            # signal_score は weighted_sum から算出済みなので表向きは
-            # 正常に見える一方、components を読む側だけが全滅していた:
-            #   ml/dataset_builder  → 「特徴量あり業種=0」で1行も蓄積されず
-            #   _pick_geo_alert     → components["geo_signal"] が float に
-            #                          ならず地政学アラートが一度も発火せず
-            #   週次レポートの内訳   → 全カテゴリ N/A 表示
+                        # 注意: この行を if 節の本体に入れると、直前の components[cat] を毎回 None で上書きする。
+                        #   signal_score は weighted_sum から出るので表向き正常に見えるが、components を読む側
+                        #   （ml/dataset_builder・_pick_geo_alert・週次レポートの内訳）が全滅する
+                        #   （tests/test_signal_components_survive.py が検査）。
             components[cat] = None   # データなし
 
     if weight_used < 1e-6:
@@ -1120,11 +1108,11 @@ def calc_signal_score(
         }
 
     signal_score   = round(weighted_sum / weight_used, 1)
-    # ── Wave 6 - 第4セッション: 緊急縮退補正（カテゴリ単位） ─────
-    # rule_optimizer.evaluate_contraction_flag() の判定結果が
-    # results["rule_optimizer"]["contraction_flag"] に格納されている場合のみ適用。
-    # 防御セクターには補正を適用せずボーナスを加算する（G-2/G-3/G-4）。
-    # ★ try/except 厳重保護: 縮退ロジック未実行・cfg未配置時も動作に影響しない
+        # ── 緊急縮退補正（カテゴリ単位） ─────
+        # rule_optimizer.evaluate_contraction_flag() の判定結果が
+        # results["rule_optimizer"]["contraction_flag"] に格納されている場合のみ適用。
+        # 防御セクターには補正を適用せずボーナスを加算する（G-2/G-3/G-4）。
+        # 縮退ロジック未実行・cfg未配置時も動作に影響しないよう try/except で守る
     try:
         import sys as _sys_ca, importlib as _imp_ca
         from pathlib import Path as _pl_ca
@@ -1164,13 +1152,13 @@ def calc_signal_score(
                 signal_score = round(_new_wsum / _new_wused, 1)
     except Exception:
         pass   # 縮退補正失敗時は元の signal_score を維持
-    # Wave 0 Idea2-B: ローテーションブーストを適用（try/except は関数内で保護済み）
+        # Idea2-B: ローテーションブーストを適用（try/except は関数内で保護済み）
     signal_score = _apply_rotation_boost(signal_score, code, results)
-    # ── Wave 7: taxonomy×size 交差評価ボーナスの直接補正 ─────────
-    # _extract_taxonomy_size_bonus() は extractors 経由で weighted_sum に
-    # 組み込まれているが、Feature Flag が OFF の場合でも
-    # size_tier_master.json が存在すれば補正を直接適用する。
-    # final\\_score = signal\\_score + \\min(3.0, (avg\\_corr - 1.0) \\times 10)
+        # ── taxonomy×size 交差評価ボーナスの直接補正 ─────────
+        # _extract_taxonomy_size_bonus() は extractors 経由で weighted_sum に
+        # 組み込まれているが、Feature Flag が OFF の場合でも
+        # size_tier_master.json が存在すれば補正を直接適用する。
+        # final\\_score = signal\\_score + \\min(3.0, (avg\\_corr - 1.0) \\times 10)
     try:
         _cfg_w7 = results.get("_cfg")
         if not getattr(_cfg_w7, "ENABLE_SIZE_DECAY_MANAGER", True):
@@ -1204,9 +1192,9 @@ def calc_signal_score(
         pass  # taxonomy×size 補正失敗時は元の signal_score を維持
     data_coverage  = round(weight_used / sum(DEFAULT_WEIGHTS.values()), 3)
 
-    # ── Wave 6 - 第4セッション: 防御セクター最終保護 ─────────────
-    # apply_contraction_to_scores() で補正済みだが、
-    # 最終スコアとして apply_defensive_protection() で下限保護を掛ける。
+        # ── 防御セクター最終保護 ─────────────
+        # apply_contraction_to_scores() で補正済みだが、
+        # 最終スコアとして apply_defensive_protection() で下限保護を掛ける。
     _is_defensive_flag = False
     try:
         _contraction_for_dp = (
@@ -1277,7 +1265,7 @@ def detect_market_regime(results: dict) -> str:
     # ── [US-4] VIX term structure スコアを追加 ───────────────
     ts_score = results.get("options_monitor", {}).get("term_score")
     if ts_score is not None:
-        scores.append(float(ts_score))   # ★ e_scores → scores に統一
+        scores.append(float(ts_score))   # e_scores → scores に統一
     # 市場幅スコア
     mb_score = results.get("market_breadth", {}).get("breadth_score_jp")
     if mb_score is not None:
@@ -1350,7 +1338,7 @@ def format_aggregator_report(result: dict, sector_names: dict) -> str:
             lines.append(f"  🔴 {name}({code}): {sc:.0f}点 — {flags}")
         lines.append("")
 
-# ── Wave 6 - G-X: 地政学シグナルサマリー行 ──────────────────
+# ── G-X: 地政学シグナルサマリー行 ──────────────────
     try:
         _geo_top = [
             (code, d)
@@ -1431,10 +1419,8 @@ def calc_total_signal_score(results: dict, cfg) -> dict:
     else:
         momentum_score = 50.0
 
-    # earnings_acceleration: screener通過銘柄のacc_bonus平均
-    # 2026-07-25: BLOCK I-1 の ENABLE_EARNINGS_ACCELERATION を配線。
-    # 有効フラグが誰にも読まれておらず、False にしても EPS加速度が
-    # シグナルに乗り続ける状態だった。無効時は中立50（＝寄与なし）。
+        # earnings_acceleration: screener通過銘柄のacc_bonus平均。
+        # ENABLE_EARNINGS_ACCELERATION=False のときは中立50（＝寄与なし）。
     screener = results.get("screener", {})
     cands    = [c for c in screener.get("candidates", []) if c.get("pass_filters")]
     # cfg は本関数の引数（None でも getattr の既定値 True で通る）
@@ -1468,13 +1454,13 @@ def calc_total_signal_score(results: dict, cfg) -> dict:
     else:
         activist_potential = 0.0
 
-    # ── geo_signal スコア取得（Wave 6 - G-X）────────────────────
-    # signal_aggregator の sector_signals から geo_signal スコアを集約する。
-    # ENABLE_GEO_SIGNAL=False または BQデータ未蓄積時は None → 重み計算から除外。
-    # ★ try/except 保護: geo_signal 未接続時も total_signal_score に影響しない
+        # ── geo_signal スコア取得（G-X）────────────────────
+        # signal_aggregator の sector_signals から geo_signal スコアを集約する。
+        # ENABLE_GEO_SIGNAL=False または BQデータ未蓄積時は None → 重み計算から除外。
+        # geo_signal 未接続時も total_signal_score に影響しないよう try/except で守る
     geo_signal_score: float | None = None
-    # config は下の try 内で import する。失敗しても重み既定値を引けるよう
-    # ここで None に初期化しておく（2026-07-25）。
+        # config は下の try 内で import する。失敗しても重み既定値を引けるよう
+        # ここで None に初期化しておく。
     _cfg_tss = None
     try:
         import importlib as _imp_tss, sys as _sys_tss
@@ -1518,10 +1504,7 @@ def calc_total_signal_score(results: dict, cfg) -> dict:
     w_quality  = ro_weights.get("quality_weight",          0.10)
     w_tech     = ro_weights.get("technical_weight",        0.10)
     w_activist = ro_weights.get("activist_weight",         0.10)
-    # Wave 6 - G-X: geo_signal ウェイト（ENABLE_GEO_SIGNAL=False 時は 0.0）
-    # 2026-07-25: 既定値を config.GEO_SIGNAL_WEIGHT から読むように是正。
-    # 従来は 0.04 をここに直書きしており、config 側の定数が誰にも
-    # 読まれず「変えても効かない」状態だった（SSOT違反）。
+        # G-X: geo_signal ウェイト（ENABLE_GEO_SIGNAL=False 時は 0.0）。既定値は config.GEO_SIGNAL_WEIGHT。
     _w_geo_default = float(getattr(_cfg_tss, "GEO_SIGNAL_WEIGHT", 0.04) or 0.04)
     w_geo      = (
         ro_weights.get("geo_signal_weight", _w_geo_default)
@@ -1529,8 +1512,8 @@ def calc_total_signal_score(results: dict, cfg) -> dict:
         else 0.0
     )
 
-    # 重みの合計が1.0になるよう正規化
-    # ★ geo_signal_score が None の場合 w_geo=0.0 なので既存7変数で正規化される
+        # 重みの合計が1.0になるよう正規化
+        # geo_signal_score が None の場合 w_geo=0.0 なので既存7変数で正規化される
     total_w = (
         w_macro + w_sector + w_mom + w_accel
         + w_quality + w_tech + w_activist + w_geo
@@ -1559,10 +1542,10 @@ def calc_total_signal_score(results: dict, cfg) -> dict:
         1,
     )
 
-    # ── Wave 6 - 第4セッション: total_signal_score への縮退補正 ──
-    # sector_signals の縮退とは独立したポートフォリオ全体レベルの補正。
-    # contraction_flag が Emergency の場合、total_signal_score 全体を
-    # 縮退係数で抑制する（防御セクター比率が高い場合は補正を緩和）。
+        # ── total_signal_score への縮退補正 ──
+        # sector_signals の縮退とは独立したポートフォリオ全体レベルの補正。
+        # contraction_flag が Emergency の場合、total_signal_score 全体を
+        # 縮退係数で抑制する（防御セクター比率が高い場合は補正を緩和）。
     try:
         _cont_tss = (
             results.get("rule_optimizer", {})
@@ -1638,7 +1621,7 @@ def calc_total_signal_score(results: dict, cfg) -> dict:
         "recommended_action": action,
         "d1_phase":           ec.get("phase", "?"),
         "d2_cycle_score":     dc.get("debt_cycle_score", 50),
-        # Wave 6 - 第4セッション: 縮退情報
+                # 縮退情報
         "contraction_mode":   (
             results.get("rule_optimizer", {})
             .get("contraction_flag", {})
@@ -1678,10 +1661,8 @@ def run_signal_aggregator(cfg, results: dict) -> dict:
     """
     print("\n  🎯 シグナルアグリゲーター実行中...")
 
-    # 2026-07-25 バッチ6: 初期重みを config.SIGNAL_WEIGHTS から取り込む。
-    # 従来 config 側は9カテゴリの古い版で誰にも読まれず、実装の23カテゴリ版
-    # だけが効いていた（SSOT違反）。合計が1.00から外れる等の異常時は
-    # 取り込まず既定値を保つ（重みはスコアの根幹のため）。
+        # 初期重みを config.SIGNAL_WEIGHTS から取り込む（正本は config）。
+        # 合計が1.00から外れる等の異常時は取り込まず既定値を保つ（重みはスコアの根幹のため）。
     sync_default_weights_from_config(cfg)
 
     # rule_optimizerの重みがあれば使用
@@ -1695,7 +1676,7 @@ def run_signal_aggregator(cfg, results: dict) -> dict:
                 "interest_rate_rise":    "macro_signals",
                 "yen_depreciation":      "macro_signals",
                 "ai_semiconductor_boom": "etf_heat",
-                # Wave 6 - G-X: 地政学リスク上昇 → geo_signal ウェイト連動
+                                # G-X: 地政学リスク上昇 → geo_signal ウェイト連動
                 "geopolitical_risk":     "geo_signal",
                 "oil_price_rise":        "geo_signal",
             }
@@ -1748,7 +1729,7 @@ def run_signal_aggregator(cfg, results: dict) -> dict:
         "top_avoid":       top_avoid,
         "weights_used":    weights,
         "timestamp":       datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        # Wave 6 - 第4セッション: 縮退サマリー
+                # 縮退サマリー
         "contraction_mode":  results.get("rule_optimizer", {})
                              .get("contraction_flag", {})
                              .get("mode", "Normal"),
