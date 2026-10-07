@@ -1,19 +1,11 @@
 # ==============================================================
-# config.py
-# 自律型投資AIエージェント基盤 — 設定ファイル v2.0
-# 【v2.0 変更点】
+# config.py — 自律型投資AIエージェント基盤の設定（SSOT）
 # ==============================================================
-# 【役割】
-#   全モジュールがこのファイルだけを参照することで
-#   「設定の一元管理」を実現する。
+# 【役割】全モジュールがこのファイルだけを参照する（設定の一元管理）。
 #
-# 【重要ルール】
-#   ★ このファイル自身は他のモジュールを一切 import しない
-#     → 循環参照ゼロを構造的に保証
+# 【重要ルール】このファイル自身は他のモジュールを一切 import しない（循環参照を構造的に防ぐ）。
 #
-# 【変更方法】
-#   業種ルール・API URL・閾値の変更は「このファイルのみ」編集する。
-#   arxiv_monitor.py / stock_analyzer_main.py は変更不要。
+# 【変更方法】業種ルール・API URL・閾値の変更は「このファイルのみ」編集する。
 #
 # 【参照方法（各モジュールで）】
 #   import config as cfg
@@ -29,13 +21,7 @@ from pathlib import Path
 # ==============================================================
 # 本システムの「今日」は一貫して日本時間で判定する（週次実行の曜日判定・
 # 日付スタンプ・営業日判定がすべて JST 前提）。
-#
-# 2026-09-10 まで、この定数はどこにも存在せず、全モジュールが
-# `datetime.now()`（tz-naive）に依存し、正しさは workflow の
-# `TZ: Asia/Tokyo` という env 1行だけが担保していた。
-# ml/dataset_builder.py には `from config import JST` を試みる
-# try/except があったが JST が未定義のため常に except 側へ落ちており、
-# 「JST を使っているつもりのコード」が実際には走っていなかった。
+# datetime.now()（tz-naive）は workflow の TZ: Asia/Tokyo に依存するので、
 # 曜日・日付に依存する箇所はこの定数を明示的に渡すこと。
 JST = timezone(timedelta(hours=9))
 
@@ -46,13 +32,11 @@ JST = timezone(timedelta(hours=9))
 # ベースパス（SSOT）。
 #   GitHub Actions / ローカル実行では環境変数 STOCK_ANALYZER_BASE で上書きする
 #   （run_headless.py が ${{ github.workspace }}/stock_data を渡す）。
-#   未設定の場合は、Google Driveが実在するColabだけ従来パスへフォールバックし、
+#   未設定の場合は、Google Driveが実在するColabだけDriveのパスへフォールバックし、
 #   GitHub Actions・ローカルCLIではリポジトリ直下 stock_data を使用する。
-#   ★ ここで DRIVE_BASE を確定させることで CACHE_DIR / SUBTHEME_JSON_PATH 等の
-#     DRIVE_BASE 由来パスがすべて一括で正しい場所を指す。
-#     （旧構成では run_headless 側の個別上書きが CACHE_DIR を取りこぼし、
-#       score_prior 等が Colab パス /content に書こうとして
-#       「Permission denied: '/content'」で全業種スコアが無効化していた。）
+#   ここで DRIVE_BASE を確定させるので、CACHE_DIR / SUBTHEME_JSON_PATH 等の
+#   DRIVE_BASE 由来パスはすべて同じ場所を指す（個別に上書きすると取りこぼして
+#   Colab の /content に書こうとし、Permission denied になる）。
 _BASE_ENV    = os.getenv("STOCK_ANALYZER_BASE", "").strip()
 _COLAB_DRIVE = Path("/content/drive/MyDrive")
 if _BASE_ENV:
@@ -87,7 +71,7 @@ ALL_DIRS = [
 ]
 
 # ==============================================================
-# BLOCK 0.5: サブテーマ JSON パス（Wave 2 - R-1）
+# BLOCK 0.5: サブテーマ JSON パス
 # ==============================================================
 
 SUBTHEME_JSON_PATH_JP = DRIVE_BASE / "data" / "jp_sector_subtheme.json"
@@ -116,17 +100,10 @@ LOG_FILENAME    = "run_history.json"
 # ==============================================================
 # BLOCK 2: ArXiv 設定
 # ==============================================================
-# 【v1.0 との差分】
-#   ・rss.arxiv.org → export.arxiv.org を primary に変更
-#     （export.arxiv.org は ArXiv 公式ミラーで rss より安定）
-#   ・primary / fallback の 2 URL 構成に変更
-#   ・requests で生 XML を取得 → feedparser に渡す方式を採用
-#     （feedparser 直接呼び出しは SSL/UA 問題で 0 件になる場合がある）
-# 2026-07-13是正: export.arxiv.org/rss と rss.arxiv.org はどちらも「当日分のみの
-#   日次ダイジェスト」で、q-fin.PM 等の低頻度カテゴリでは entries=0 が正常応答
-#   になり得ることを curl で実証（両URL同一・bozo=False・0件）。日付に依存せず
-#   最新N件を確実に返す arXiv API (export.arxiv.org/api/query) を primary に変更。
-#   旧 RSS(export) は fallback として存置。
+# primary は arXiv API（export.arxiv.org/api/query）。日付に依存せず最新N件を返す。
+#   RSS（export.arxiv.org/rss・rss.arxiv.org）は「当日分のみの日次ダイジェスト」で、
+#   q-fin.PM 等の低頻度カテゴリでは0件が正常応答になるため fallback に置く。
+# 取得は requests で生XMLを取り feedparser に渡す（feedparser 直接呼び出しは SSL/UA 問題で0件になることがある）。
 
 ARXIV_FEEDS = {
     "q-fin.PM": {
@@ -1205,7 +1182,7 @@ SECTOR_REPRESENTATIVE_TICKERS = {
     "1022": ["9101.T", "9104.T", "9107.T"],   # 海運業: 日本郵船・商船三井・川崎汽船
     "1009": ["5019.T", "5020.T"],             # 石油・石炭製品: 出光興産・ENEOS
     "1004": ["2802.T", "2914.T", "2501.T"],   # 食料品: 味の素・JT・サッポロHD
-    # ── 2026-06-30 追加（残り25業種 / TSE33業種を網羅）────────
+    # ── TSE33業種の残り（33業種を網羅）────────
     "1001": ["1332.T", "1333.T"],             # 水産・農林業: ニッスイ・マルハニチロ
     "1002": ["1605.T", "1662.T"],             # 鉱業: INPEX・石油資源開発
     "1003": ["1801.T", "1802.T", "1812.T"],   # 建設業: 大成建設・大林組・鹿島
@@ -1240,55 +1217,31 @@ SECTOR_REPRESENTATIVE_TICKERS = {
 GOV_VEGPRICE_API = "https://api.cultivationdata.net/yasai_kakaku?div=all&type=csv"
 
 # ==============================================================
-# BLOCK 8: EDINET API 設定（2-B 追加）
+# BLOCK 8: EDINET 設定
 # ==============================================================
-# 【APIキーの取得手順】
-#   1. https://disclosure.edinet-api.go.jp/ にアクセス
-#   2. 「API 利用登録」から無料登録（メールアドレスのみ）
-#   3. 発行されたキーをここに設定
-#
-# ★ 空文字のままにしておくと EDINET 取得をスキップして
-#   他の分析には影響を与えない（エラーにならない）
 
-# ★ 2026-06-10 セキュリティ修正: APIキーのハードコードを廃止し環境変数化。
-#   GitHub Actions は Secrets→run_headless.py の ENV_MAP 経由で注入（従来から登録済み）。
-#   Colab / ローカル手動実行時は os.environ に設定してから起動すること。
-#   旧キーはコードに露出していたため失効・再発行を推奨。
-# 2026-09-12: 金融庁 EDINET API（EDINET_API_KEY）を撤去した。
-#   直取得の経路は ENABLE_EDINET_ROTATION / ENABLE_EDINET_DIRECT_FETCH /
-#   ENABLE_EXECUTIVE_TRANSITION がいずれも False で既に停止しており、
-#   有報の構造化データは EdinetDB（下の EDINETDB_API_KEY）で賄えている。
-#   キーが未設定のまま api_key_health に「⬜ 未設定」として毎回出続けて
-#   いたため、欄ごと削除して一本化する。
+# APIキーはコードに書かず環境変数から読む（GitHub Actions は Secrets→run_headless.py の ENV_MAP 経由）。
+# 金融庁 EDINET API のキーは使っていない。有報の構造化データは EdinetDB（下の EDINETDB_API_KEY）、
+# 有報PDFは EDINET の公開ダウンロード（キー不要・officer_extractor.py）。
 EDINETDB_API_KEY: str = os.getenv("EDINETDB_API_KEY", "")  # 民間 EdinetDB
 FUDOSAN_API_KEY: str = os.getenv("FUDOSAN_API_KEY", "")
 ESTAT_API_KEY: str = os.getenv("ESTAT_API_KEY", "")
 
-# 深掘り分析対象ティッカー（S3-4）
-# ★ 2026-06-10 SSOT修正: deep_dive_trigger.py が実行時に cfg.__dict__ へ
-#   注入する動的属性だったため、契約の明示としてデフォルト値をここに定義。
+# 深掘り分析対象ティッカー。deep_dive_trigger.py が実行時に上書きする（ここは既定値）。
 #   edinet_rotation_manager.py が priority=0（最優先）で処理する。
 EDINET_DEEP_DIVE_TICKERS: list = []
 
-# BigQuery 接続設定
-# ★ 2026-06-10 SSOT修正: edinet_bq_client.py は「config優先→環境変数
-#   フォールバック」設計だが、config 側に定義が無く ImportError 経由の
-#   フォールバックが常態化していた。SSOT としてここに定義する
-#   （値は従来どおり環境変数由来のため挙動変更なし）。
+# BigQuery 接続設定（値は環境変数由来。edinet_bq_client.py は config を優先して読む）
 BQ_PROJECT_ID: str       = os.getenv("BQ_PROJECT_ID", "")
 BQ_CREDENTIALS_PATH: str = os.getenv("BQ_CREDENTIALS_PATH", "")
 BQ_DATASET: str          = os.getenv("BQ_DATASET", "edinet")
 
-# ── BigQuery 費用ガード（2026-07-28 / 課金有効化に伴い追加）──────────
+# ── BigQuery 費用ガード ──────────
 # 1クエリでスキャンできるバイト数の上限。超えるクエリは実行前に失敗し、
 # 課金は 0 になる（BigQuery の maximum_bytes_billed 仕様）。
 # edinet_bq_client が default_query_job_config に設定するため、
 # 各所の QueryJobConfig を書き換えなくても全クエリに効く。
-#
-# 【水準の根拠】無料枠は月1TB。本システムの最大テーブルは
-# edinet.text_analysis の 17MB、全テーブル合計でも約20MB（2026-07-28実測）。
-# 既定10GB は通常運用の数百倍だが、無料枠の約1%でしかないため
-# 「事故だけを止め、正常な運用は絶対に妨げない」水準として設定。
+# 無料枠は月1TBで全テーブル合計は数十MB。既定10GBは「事故だけを止め、正常な運用は妨げない」水準。
 BQ_MAX_BYTES_BILLED: int = int(
     os.getenv("BQ_MAX_BYTES_BILLED", str(10 * 1024 ** 3))
 )
@@ -1319,10 +1272,8 @@ EDINET_SCREENER_CANDIDATES: list = [] # 前日screener通過銘柄（自動注�
 # 日次分析は既存の BigQuery edinet.* を正本とし、EdinetDB RESTを呼ばない。
 ENABLE_EDINET: bool = False                 # legacy 業種別REST取得
 ENABLE_EDINET_BQ_ANALYSIS: bool = True      # BQ既存データのread-only分析
-# 通常ロード時はFalse。09:00 JSTのdaily_run同期ステップだけ環境変数で有効化する。
-# 2026-07-30: 既定を "0"→"1" に変更（健太決定）。日次分析でも EdinetDB を叩き、
-# 月次コール枠（EDINETDB_MONTHLY_GUARD）を使い切ったらスキップする運用にする。
-# 取得ローテを回す前に BQ の取得済みを台帳へ反映するため（EDINETDB_RECONCILE_WITH_BQ）、
+# 日次分析でも EdinetDB を叩き、月次コール枠（EDINETDB_MONTHLY_GUARD）を使い切ったらスキップする。
+# 取得ローテを回す前に BQ の取得済みを台帳へ反映するので（EDINETDB_RECONCILE_WITH_BQ）、
 # 既に BQ にあるものへは API を使わない。
 ENABLE_EDINETDB_INGEST: bool = os.getenv(
     "ENABLE_EDINETDB_INGEST", "1"
@@ -1331,27 +1282,20 @@ ENABLE_EDINETDB_INGEST: bool = os.getenv(
 EDINETDB_RECONCILE_WITH_BQ: bool = True
 ENABLE_EDINET_DIRECT_FETCH: bool = False
 EDINETDB_BASE_URL: str = os.getenv("EDINETDB_BASE_URL", "https://edinetdb.jp/v1")
-# 2026-09-29: 取り込み前に EdinetDB の公開Webページで財務の有無を確認し、無ければ次の候補へ
+# 取り込み前に EdinetDB の公開Webページで財務の有無を確認し、無ければ次の候補へ
 EDINETDB_WEB_PRECHECK: bool = True
 EDINETDB_WEB_BASE: str = "https://edinetdb.jp/company/"
 EDINETDB_WEB_RECHECK_DAYS: int = 7     # 財務なしの会社を再確認するまでの日数
-EDINETDB_WEB_MAX_CHECKS: int = 80      # 1日のWeb確認の上限（1秒に1回・2026-10-01）
+EDINETDB_WEB_MAX_CHECKS: int = 80  # 1日のWeb確認の上限（1秒に1回）
 EDINETDB_LOOKBACK_DAYS: int = 7
-# 2026-07-30: 90→46 に変更。日次で EdinetDB を叩く方針にしたため、
-# 日次予算が月次枠と整合していないと月半ばで枠切れし、残り2週間まるごと
-# 取得が止まる（doc_index も道連れになる）。1450÷31≈46 で月末まで均等に回す。
-# 旧値90のままだと 90×16日=1440 で16日目に枯渇していた。
-# 2026-10-01: 46→95、1450→2950。EdinetDB の上限は「1日100回・月は100×在籍日数
-# （31日月で約3,100回）」で、月1,450回という前提が誤っていた（edinetdb.jp/pricing）。
-# 実測でも1日の残量は毎日56〜77回残っていた。5回は手動確認用に残す。
-# 2026-10-02: 95→100、2950→3100（上限まで使う。月の実残量は /usage の monthly_remaining で抑える）
-EDINETDB_DAILY_BUDGET: int = 97     # 2026-10-05: 100回の手前で止める（手動確認用に3回残す）
+# EdinetDB の上限は「1日100回・月は100×在籍日数」（edinetdb.jp/pricing）。
+# 日次予算は手動確認用に少し残して使い切る。月の実残量は /usage の monthly_remaining で抑える。
+EDINETDB_DAILY_BUDGET: int = 97  # 100回の手前で止める（手動確認用に3回残す）
 EDINETDB_MONTHLY_GUARD: int = 3100
 EDINETDB_COMPANY_CACHE_DAYS: int = 7   # 会社マスタ（社名・上場区分）の取り直し間隔
-# 2026-10-03: 財務三表の細目（edinet.financial_items）。取得済みの会社は残り枠で
-# /financials だけ取り直して細目を埋める（1社1回）
-EDINETDB_ITEMS_BACKFILL: bool = False   # 2026-10-03: 年次はWeb補完へ移管したため API での細目補完は止める
-# 2026-10-03（健太決定）: 年次財務は会社ページ（edinetdb_web_backfill・日次 --scope due）から取り、
+# 財務三表の細目（edinet.financial_items）。取得済みの会社は残り枠で /financials だけ取り直して細目を埋める（1社1回）
+EDINETDB_ITEMS_BACKFILL: bool = False  # 年次はWeb補完で取るので API での細目補完はしない
+# 年次財務は会社ページ（edinetdb_web_backfill・日次 --scope due）から取り、
 # API の1日100回は ①有報本文・セグメント（新しい年度が出た会社だけ・1社2回）と
 # ②四半期財務（保有・スクリーナー候補・30日に1回・1社1回）に使う
 EDINETDB_ANNUAL_FROM_WEB: bool = True
@@ -1367,8 +1311,7 @@ EDINETDB_DOC_INDEX_LIMIT: int = 10
 # 構造的にほぼ常に0件になっていた（実測 inserted 0）。年次サイクルを跨ぐ。
 EDINETDB_DOC_INDEX_LOOKBACK_DAYS: int = 400
 EDINETDB_DOC_INDEX_RESERVE: int = 11  # /usage 1 + 開示10社
-# 連続GETが速すぎると429を誘発し、その再試行が日次予算を空にして
-# 全件失敗する（2026-08-27: 46コール消費で成功0/11）。送信間隔の下限。
+# 送信間隔の下限。連続GETが速すぎると429を誘発し、その再試行が日次予算を空にして全件失敗する。
 EDINETDB_MIN_INTERVAL_SEC: float = 0.5
 
 # D-②: P1 corporate real-estate enrichment; all missing data is neutral.
@@ -1386,16 +1329,12 @@ FUDOSAN_REFRESH_DAYS: int = 365
 FUDOSAN_ROTATION_META: str = "fudosan_rotation_meta.json"
 FUDOSAN_HOLDINGS_TABLE: str = "corporate_holdings_p1"
 FUDOSAN_AREA_TABLE: str = "area_profile_p1"
-# 2026-08-27 は初回GETから429が返り、その再試行だけで予算90を空にして
-# 成功0/45だった。EdinetDBと同じく送信間隔の下限を設ける。
+# 送信間隔の下限（EdinetDBと同じく、429の再試行で予算を空にしないため）。
 FUDOSAN_MIN_INTERVAL_SEC: float = 0.5
 RE_BONUS_MIN: float = -2.0
 RE_BONUS_MAX: float = 3.0
 FUDOSANDB_BASE_URL: str = FUDOSAN_BASE_URL  # 後方互換
 FUDOSANDB_DAILY_BUDGET: int = FUDOSAN_DAILY_BUDGET  # 後方互換
-# FUDOSANDB_P1_TICKERS は廃止（2026-07-25 バッチ6）。
-# 空リストのまま実装からも一度も参照されておらず、後方互換エイリアス群
-# （FUDOSANDB_BASE_URL / FUDOSANDB_DAILY_BUDGET）に紛れて残っていた旧名の残骸。
 # 対象銘柄の選定は fudosan_ingestor が保有銘柄・screener候補から動的に行う。
 
 # ==============================================================
@@ -1448,7 +1387,7 @@ ENABLE_US_SECTOR: bool = True
 # 設定すると FFレート(FEDFUNDS)・IOER 実績値も取得できる。
 # APIキー取得: https://fred.stlouisfed.org/docs/api/api_key.html
 # 未設定（空文字）の場合は yfinance 市場プロキシのみ使用する。
-POLICY_FRED_API_KEY: str = os.getenv("POLICY_FRED_API_KEY", "")  # ★ 2026-06-10 環境変数化（GitHub Secrets 登録済み）
+POLICY_FRED_API_KEY: str = os.getenv("POLICY_FRED_API_KEY", "")  # GitHub Secrets
 
 # 変化として検知する閾値（単位: %pt）
 # 0.05 = 0.05%ポイント以上の変動を変化として記録
@@ -1508,8 +1447,8 @@ ENABLE_MARKET_BREADTH: bool = True   # 市場幅指標 [3-7]
 ENABLE_CREDIT_DATA:      bool  = True    # 信用残高データ取得 [3-5]
 CREDIT_SQUEEZE_THRESH:   float = 1.0     # 踏み上げ候補の倍率閾値
 CREDIT_OVERHEAT_THRESH:  float = 10.0   # 過熱（崩落リスク）の倍率閾値
-# 2026-09-21: 市場全体データでは絶対値の閾値だと7割が「過熱」になるため、
-# その週の分位で判定する（健太の判断）。絶対値は銘柄数が少ないときの予備。
+# 市場全体データでは絶対値の閾値だと7割が「過熱」になるため、その週の分位で判定する。
+# 絶対値は銘柄数が少ないときの予備。
 CREDIT_SQUEEZE_PCTL:  float = 10.0   # 倍率が下位この%以下 → 踏み上げ候補
 CREDIT_OVERHEAT_PCTL: float = 90.0   # 倍率が上位この%以上 → 過熱
 CREDIT_CAUTION_PCTL:  float = 75.0   # 倍率が上位この%以上 → 注意（加減点なし）
@@ -1534,10 +1473,8 @@ SUMMARY_MAX_TICKERS: int = 10         # 要約する最大銘柄数（コスト�
 
 # Step C': テーマETFトラッキング設定
 ENABLE_ETF_TRACKER: bool = True     # テーマETFトラッキングの有効化
-# Step D: Excel ダッシュボード CSV エクスポート
-# 2026-07-12 BUG-03（.iqy数値列が文字列化）対応: 健太決定「Excel出力機能は使わない」
-# → ダッシュボードCSV/.iqy の生成を停止。git永続化はdaily_run.ymlでCSV非依存に是正済み。
-ENABLE_EXCEL_EXPORT: bool = False  # Excel/CSVダッシュボード出力（廃止・2026-07-12）
+# Step D: Excel ダッシュボード CSV エクスポート（使わない方針のため停止中）
+ENABLE_EXCEL_EXPORT: bool = False  # Excel/CSVダッシュボード出力（使わない）
 ETF_TOP_N: int = 3                  # アラートに表示するトップテーマ数
 ETF_THEME_IDS = None                # None=全テーマ / 例: ["quantum","ai_infra"]
 
@@ -1546,22 +1483,17 @@ ETF_THEME_IDS = None                # None=全テーマ / 例: ["quantum","ai_in
 # ==============================================================
 ENABLE_NEWS: bool = True          # ニュースRSS取得の有効化
 # Google Custom Search API（有料メディア記事検索）
-GOOGLE_CSE_API_KEY: str = os.getenv("GOOGLE_CSE_API_KEY", "")   # ★ 2026-06-10 環境変数化（GitHub Secrets 登録済み）
+GOOGLE_CSE_API_KEY: str = os.getenv("GOOGLE_CSE_API_KEY", "")  # GitHub Secrets
 GOOGLE_CSE_ID:      str = "033b43821c3a5442b"   # cse.google.com で取得
-# 2026-09-11: True → False。Google CSE API が 403 を返し続けており
-# （2026-07-14 以降の全実行で毎回きっかり3回失敗 → _CSE_DEAD_LIMIT で打ち切り）、
-# 有料メディア検索は一度も結果を返していなかった。403の原因は
-# quota超過・キー無効・請求設定のいずれかだが、キーは GitHub Secret のため
-# 手元で検証できない。無駄な失敗呼び出しを止めるため既定を False にする。
-# キーを点検・復旧したら True に戻すこと。
+# Google CSE API が 403 を返し続けているため停止中（quota・キー・請求設定のいずれか。キーは GitHub Secret）。
+# キーを点検・復旧したら True に戻す。
 ENABLE_PAID_MEDIA_SEARCH: bool = False
 
 # Step C: 個別株スクリーニング設定
 SCREEN_TOP_N_SECTORS: int   = 7      # スクリーニング対象業種数（スコア上位N）
-# 2026-09-29: 対象を BQ に財務がある全社（約410社）×全業種へ広げる（健太の判断）。
-#   下位業種（BOT_TIER）は従来どおり評価しない。取得は5並列（SCREEN_FETCH_WORKERS）
+# 対象は BQ に財務がある全社×全業種。下位業種（BOT_TIER）は評価しない。取得は並列（SCREEN_FETCH_WORKERS）
 SCREEN_EXPAND_UNIVERSE: bool = True
-# 2026-10-05: 全社Web補完でBQの財務が約3,800社に増えたため、業種ごとに直近売上の上位N社に絞る
+# BQの財務は約3,800社あるため、業種ごとに直近売上の上位N社に絞る（全社だと実行時間・例外が増える）
 SCREEN_EXPAND_PER_SECTOR: int = 25
 SCREEN_FETCH_WORKERS: int    = 5
 SCREEN_PER_MAX:       float = 30.0   # PER 上限
@@ -1583,15 +1515,11 @@ NEWS_ALERT_MAX_ARTICLES: int = 5  # Gmailアラートに含める記事数
 # 実行対象モジュールキー（ENABLE_* フラグが True の場合のみ実際に動く）
 DAILY_MODULES = [
     "key_health",    # APIキー生存判定（Issue J-2・最序盤で実行）
-    # 2026-10-03: 13F（機関投資家の保有）。旧条件 _in_mode("all") で一度も動いていなかった。
-    # 取得は四半期の提出期間（1/4/7/10月15日〜末日）だけで、それ以外はキャッシュ参照
+        # 13F（機関投資家の保有）。取得は四半期の提出期間（1/4/7/10月15日〜末日）だけで、それ以外はキャッシュ参照
     "institutional_13f",
-    # 2026-07-30（健太決定）: 日次でも EdinetDB を叩く。
-    # 旧方針（D-①「日次経路はBQ読み取り専用」）からの変更。
-    # 月次コール枠（EDINETDB_MONTHLY_GUARD=3100）を使い切ったら
-    # edinetdb_ingestor 側が自動でスキップする。
-    # 取得ローテの前に BQ の取得済みを台帳へ反映するため
-    # （EDINETDB_RECONCILE_WITH_BQ）、既にBQにある企業へAPIは使わない。
+        # 日次でも EdinetDB を叩く。月次コール枠（EDINETDB_MONTHLY_GUARD）を使い切ったら
+        # edinetdb_ingestor 側が自動でスキップする。取得ローテの前に BQ の取得済みを台帳へ反映するため
+        # （EDINETDB_RECONCILE_WITH_BQ）、既にBQにある企業へAPIは使わない。
     "edinetdb_ingest",  # DB統合W3: EdinetDB→BQ（company/financials/segments/text）
     "edinet_doc_index", # DB統合W3: 開示書類インデックス（有報は年1回=窓400日）
     "fudosan_ingest",   # DB統合W5: 企業保有不動産→BQ
@@ -1604,52 +1532,47 @@ DAILY_MODULES = [
     "policy",        # 政策金利トラッカー
     "us_sector",     # 米国S&P500 11セクター分析
     "bond_commodity",  # 債券イールドカーブ + 全コモディティ分析
-    "us_macro",        # ★ US マクロ拡張（Phase US-2）
+    "us_macro",  # US マクロ拡張
     "anomaly",         # 統計的異常値検出（価格・出来高・スコア）
     "imf",           # IMF グローバルマクロパイプライン
     "etf_tracker",   # テーマETFトラッキング（Step C'）
     "news",          # ニュースRSSパイプライン（Step B）
     "screener",      # スキャナーの追加
     "excel_export",  # Excel ダッシュボード CSV エクスポート（Step D）
-    "event_horizon",   # ★ 2026-06-13 EVT-1: イベント事前アラート（日次）
-    "options_advisor", # ★ 2026-06-13 OPT-1: オプション戦略提案（日次）
+    "event_horizon",  # イベント事前アラート（日次）
+    "options_advisor",  # オプション戦略提案（日次）
     "signal_aggregator",  # 統合シグナル [4-9]
     "inference",          # 推論エンジン [4-10]
-    # "edinet_rotation",  ← 2026-09-29 廃止（健太の判断・機能していなかった）
-    "us_fundamentals", # ★ US財務DBローテーター（Phase US-1）← screenerより先に実行
+        # "edinet_rotation",  ← 廃止（機能していなかった）
+    "us_fundamentals",  # US財務DBローテーター ← screenerより先に実行
     "us_screener",   # 米国株スクリーニング（US財務DB補完後に実行）
-    "us_8k",           # ★ US 8-K リアルタイム監視（Phase US-3）
-    "us_sector_bridge",  # ★ US-5 SIC/JP業種連携
+    "us_8k",  # US 8-K 監視
+    "us_sector_bridge",  # SIC/JP業種連携
     "multi_currency", # 多通貨モニタリング [A-6]
     "options_monitor", # オプション市場センチメント [4-5]
     "support_resistance",   # サポート・レジスタンス検出 [4-6]
     "volume_profile",   # 出来高プロファイル分析 [4-7]
     "notion_obsidian",   # Notion/Obsidian書き込み [6-4]（毎日実行）
-    "policy_radar",     # ★ 政策レーダー追加
+    "policy_radar",  # 政策レーダー
     "policy_signal_applier",       # Wave 3 - Policy Ph2（17.8番・日次）
     "pead_monitor",                # Wave 3 - FE-5（screener直後・日次）
     "ml_meta",                     # Wave R5-1 - S7 ML特徴量スナップショット（日次蓄積）
     "score_calculator",            # Wave R5-2 Phase A - E10 JP/US共通スコア
-    # ★ 2026-07-25 バッチ5: size_decay_manager / cross_size_signal は
-    #   stock_analyzer_main が _in_mode("size_tier") でゲートしているのに、
-    #   "size_tier" が DAILY にも WEEKLY にも無く（実在するのは
-    #   "size_tier_classifier"）、ENABLE を True にしても daily/weekly では
-    #   永久に実行されない状態だった（all モードでのみ動く）。
-    #   コード側コメント「[Wave 7 - DAILY]」と WAVE7_DAILY_MODULE_ORDER の
-    #   宣言どおり日次で回すため、mode-key を登録する。
+        # size_decay_manager / cross_size_signal は stock_analyzer_main が _in_mode("size_tier") でゲートする。
+        #   ここに "size_tier" が無いと日次・週次では永久に実行されない。
     "size_tier",                   # Wave 7: 規模別減衰管理 + 規模帯横断シグナル
 ]
 
 # ── ウィークリーサイクル（月曜朝に追加実行）───────────────────
 WEEKLY_MODULES = [
     "arxiv",         # ArXiv 論文取得
-    "semantic_scholar", # ★ 論文追加分析
-    "congress_monitor",  # ★ 2026-06-10 配線復元: US法案議会進行追跡 [Ph4]（L4キャッシュ減衰で日次適用）
-    "ontology_export",   # ★ 2026-06-12 ONT-1: エンティティグラフBQ追記（週次）
+    "semantic_scholar",  # 論文追加分析
+    "congress_monitor",  # US法案議会進行追跡 [Ph4]（L4キャッシュ減衰で日次適用）
+    "ontology_export",  # エンティティグラフBQ追記（週次）
     "correlation",   # 米国債×業種 相関監査
     "size_tier_classifier",      # Wave0 Size Ph1（sector実行直後・週次）
     "business_model_classifier", # Wave0 BM Ph1（size_tier_classifierの直後・週次）
-    # "jp_us_sector_correlation",  ← 2026-09-29 廃止（健太の判断・機能していなかった）
+        # "jp_us_sector_correlation",  ← 廃止（機能していなかった）
     "sector_rotation_detector",    # Wave0 Idea2-B（signal_aggregatorの直前・必須）
     "portfolio_diversity_filter",  # Wave 3 - FE-6（screener直後・Ignitionの前）
     "ignition_detector",           # Wave 2 - FE-4（sector_rotation_detectorの直後）
@@ -1674,23 +1597,17 @@ WEEKLY_MODULES = [
     "portfolio_optimizer",   # ポートフォリオ最適化 [6-1]
     "dcf",               # DCF理論株価 [6-3]（週次のみ / 7日キャッシュ）
     "longterm_scenario",   # 10年単位のシナリオ R-5追加
-    "google_trends",    # ★ RESEARCH-3追加
-    "finbert",          # ★ RESEARCH-5追加
+    "google_trends",  # Google Trends
+    "finbert",  # FinBERT
     "technology_mapper",        # Wave 6 - B: 企業×技術マッピング
     "cluster_engine",           # Wave 6 - B: 技術クラスター生成
     "emerging_detector",        # Wave 6 - B: 萌芽テーマ検知
     "cluster_graph_exporter",   # Wave 6 - B: クラスター結果出力
-    "factor_crowding",  # ★ RESEARCH-2追加
-    # 2026-09-09: 下記3件は stock_analyzer_main が _in_mode("weekly") で
-    # ゲートしていたが、"weekly" はモジュールキーではなくモード名のため
-    # 判定が常に False となり、週次実行でも一度も動いていなかった
-    # （BQ us.job_signal_cache / us.executive_transitions /
-    #   us.facility_signals が作成以来ずっと0行だった原因）。
-    # "job_posting",  ← 2026-09-29 廃止（健太の判断・機能していなかった）
+    "factor_crowding",  # ファクター混雑度
+        # "job_posting",  ← 廃止（機能していなかった）
     "executive_transition",  # Wave 6 - I-3: 役員転職トラッカー
-    # "facility_expansion",  ← 2026-09-29 廃止（健太の判断・機能していなかった）
-    # 2026-09-09: 読む側（base_agent.get_policy_support_bonus）は配線済みなのに
-    # 書く側が未配線で、BQ edinet.policy_support が0行のままだった。
+        # "facility_expansion",  ← 廃止（機能していなかった）
+        # 政策支援（BQ edinet.policy_support）の書き手。読む側は base_agent.get_policy_support_bonus。
     "nedo",                  # Wave 1 - I-2: NEDO採択情報 → policy_support
 ]
 
@@ -1698,9 +1615,7 @@ WEEKLY_MODULES = [
 WEEKLY_RUN_WEEKDAY: int = 0
 
 # ==============================================================
-# BLOCK 14b: アラート通知設定（5-B 追加）
-# ★ 2026-06-10 SSOT修正: 旧表記「BLOCK 14」はニュースRSS設定と
-#   番号衝突していたため 14b に改番（MODULE_INDEX の表記と一致）。
+# BLOCK 14b: アラート通知設定
 # ==============================================================
 
 # アラート通知を有効化するマスタフラグ
@@ -1742,16 +1657,8 @@ ALERT_ANOMALY_MIN_SEVERITY:  str   = "high"  # "medium" | "high" | "critical"
 
 # このファイルは GitHub リポジトリ直下に置けば自動検出される
 # （GitHub Actions = ③ / Colab直接実行 = ① or ② の順で探す）
-# ── BOND_COMMODITY_CACHE_DAYS / BOND_COMMODITY_DELTA_CAP は廃止（2026-07-25 バッチ2）
-#   BOND_COMMODITY_CACHE_DAYS: bond_commodity_pipeline.py にキャッシュ処理が
-#     そもそも実装されていない（モジュール側の COMMODITY_CACHE_DAYS も定義だけで
-#     未使用）。日次1回の実行では保持1日のキャッシュに節約効果が無いため、
-#     実装せず削除した。
-#   BOND_COMMODITY_DELTA_CAP: 「コモディティ→composite_score 補正の上限」だが、
-#     現行は signal_aggregator のカテゴリI（"yield_curve" 重み0.01）として
-#     recession_score を重み付き集計する方式に置き換わっている。
-#     composite_score を別途直接補正すると同じ情報の二重計上になり、
-#     signal_dedup の重複排除原則に反するため実装せず削除した。
+# コモディティ→composite_score の補正は signal_aggregator のカテゴリI（"yield_curve"）が担う。
+#   別途直接補正すると同じ情報の二重計上になる（signal_dedup の原則に反する）。
 
 # ==============================================================
 # BLOCK 15: Step E代替 - 事業概要フェッチャー設定
@@ -1762,7 +1669,7 @@ ENABLE_BIZ_SUMMARY: bool = True
 
 # DeepL API 無料キー（末尾が :fx のもの）
 # 取得: https://www.deepl.com/pro-api （無料枠: 50万字/月）
-DEEPL_API_KEY: str = os.getenv("DEEPL_API_KEY", "")  # ★ 2026-06-10 環境変数化（GitHub Secrets 登録済み / 末尾 :fx の無料キー）
+DEEPL_API_KEY: str = os.getenv("DEEPL_API_KEY", "")  # GitHub Secrets（末尾 :fx の無料キー）
 
 # 業種あたり取得社数（2社 × 33業種 = 66社/日 → DeepL約20,000字/月）
 BIZ_SUMMARY_MAX_COMPANIES: int = 2
@@ -1785,18 +1692,16 @@ ENABLE_WEEKLY_REPORT: bool = True
 ALERT_ON_HIGH_DIVIDEND: bool = True
 ALERT_MIN_DIVIDEND_YIELD: float = 0.04   # 4%以上
 
-# ── 日次メール表示件数・米国株サマリー（2026-07-28 追加）──────
+# ── 日次メール表示件数・米国株サマリー ──────
 # 注目業種トップ3で業種ごとに出す代表銘柄の件数。
-# 従来 alert_notifier.py に 2 がハードコードされており「代表2銘柄しか
-# 出ない」状態だったため設定化した（既定値は従来と同じ 2 ＝挙動不変）。
-ALERT_SECTOR_TOP_COMPANIES: int = 3   # 2026-09-29: 業種のスクリーナー上位を出す（従来はBQ一覧の先頭2社で固定化）
+ALERT_SECTOR_TOP_COMPANIES: int = 3  # 業種のスクリーナー上位を出す
 
 # 米国株サマリーを日次メールに載せるか。
 # us_screener は毎日900〜1000社を処理し300社超が通過しているのに、
 # alert_notifier.py に us_screener / us_sectors への参照が1つも無く、
 # 日次メールに米国株が一切載っていなかったため新設した。
 ALERT_ON_US_SUMMARY: bool = True
-ALERT_US_TOP_PICKS:    int = 10   # USスクリーナー通過銘柄の表示件数（2026-09-29: 5→10）
+ALERT_US_TOP_PICKS:    int = 10  # USスクリーナー通過銘柄の表示件数
 
 # アナリスト強気推奨アラート
 ALERT_ON_STRONG_BUY: bool = True
@@ -1808,7 +1713,7 @@ ALERT_ON_MACRO_DELTA:    bool = True   # マクロ急変アラート [GAP-7]
 ALERT_ON_BUYBACK:        bool = True   # 自己株式取得アラート [M-4]
 ALERT_ON_DIV_UP:         bool = True   # 増配・特別配当アラート [M-4]
 ALERT_ON_FOREIGN_SPIKE:  bool = True   # 外国人持株急増アラート [P-4]
-ALERT_ON_EDINETDB_INGEST: bool = True  # その日EdinetDBから取り込んだ銘柄をメールに載せる（2026-09-29）
+ALERT_ON_EDINETDB_INGEST: bool = True  # その日EdinetDBから取り込んだ銘柄をメールに載せる
 
 # ── LINE Messaging API ─────────────────────────────────────────
 # LINE Notify は 2025年3月終了。Messaging API を使用する。
@@ -1855,23 +1760,9 @@ EDINET_SKIP_SECTORS: list = [
      "1024",  # 倉庫・運輸関連
 ]
 
-# ==============================================================
-# BLOCK 18: stock_viewer Googleスプレッドシート連携 —— 廃止（2026-07-25）
-# ==============================================================
-# VIEWER_SPREADSHEET_ID / VIEWER_SERVICE_ACCOUNT_PATH / VIEWER_WATCHLIST_SHEET
-# を削除した。理由:
-#   - 3定数とも実装から一度も参照されていなかった（config_audit 検査E）
-#   - viewer は Streamlit 版（viewer/risk_dashboard.py）へ移行済みで、
-#     そちらは config とローカルファイルだけを読み、スプレッドシートを使わない
-#   - gspread を使うのは viewer/data_bridge.py だけだが、そちらは自前の
-#     DEFAULT_SPREADSHEET_ID を持っており、ここの定数とは無関係
-#   - 健太に確認済み: スプレッドシートは使っていない
-# 復活させる場合は viewer 側の実装とセットで再定義すること。
 
 # ==============================================================
 # BLOCK 17: 米国株スクリーニング設定
-# ★ 2026-06-10 SSOT修正: 旧表記「BLOCK 19」は EdinetDB ローテーション
-#   （BLOCK 19）と番号衝突していたため BLOCK 17 に改番（MODULE_INDEX と一致）。
 # ==============================================================
 ENABLE_US_SCREENER: bool = True
 US_SCREENER_MAX_WORKERS: int = 5
@@ -1891,29 +1782,24 @@ US_SCREENER_TOP_N: int = 25
 # 0 で照会を完全に止める（insider_bonus は全社 0.0 = 補正なし）。
 US_INSIDER_MAX_TICKERS: int = 40
 
-# ── DB移管 Phase 1（2026-09-09）─────────────────────────────
-# スクリーナー通過銘柄の日次スナップショットを BQ analytics.stock_snapshot
-# へ蓄積する。銘柄mdにしか存在しなかった指標（RSI/MACD/MA200/VWAP/
-# 52週位置/FCFマージン/D-E比率/自己資本比率/配当利回り/sector_score/
-# technical_score）を時系列で追えるようにするのが目的。
-# md生成は現状維持で、本フラグはBQ書き込みのみを制御する。
+# ── 銘柄スナップショット ─────────────────────────────
+# スクリーナー通過銘柄の日次スナップショットを BQ analytics.stock_snapshot へ蓄積する
+# （RSI/MACD/MA200/VWAP/52週位置/FCFマージン/D-E比率/自己資本比率/配当利回り/
+#  sector_score/technical_score を時系列で追うため）。md生成とは独立で、本フラグはBQ書き込みのみ。
 ENABLE_STOCK_SNAPSHOT: bool = True
 
-# yf_cache が実行中に集めた日足を BQ analytics.price_daily へ書き出す。
-# 株価はどこにも保存されておらず、50モジュールが個別にyfinanceを叩いては
-# 捨てていたため事後検証ができなかった（2026-09-09）。追加取得はしない。
+# yf_cache が実行中に集めた日足を BQ analytics.price_daily へ書き出す（事後検証用・追加取得はしない）。
 ENABLE_PRICE_HISTORY_WRITER: bool = True
 
-# 業種分析の並列度（2026-09-09）。1業種20〜24秒で33業種の逐次実行に
-# 12.3分かかっていた。待ち時間（BQ/yfinance/EDINET）が支配的なので
-# 並列化が効く。後続の補正処理は逐次のまま。1で従来の逐次実行に戻る。
+# 業種分析の並列度。待ち時間（BQ/yfinance/EDINET）が支配的なので並列化が効く（逐次だと33業種で約12分）。
+# 後続の補正処理は逐次のまま。1で逐次実行。
 SECTOR_ANALYSIS_WORKERS: int = 4
 
 # ==============================================================
 # BLOCK 22: ポジションサイズ設定 / ストレステスト / フェーズ4〜6 フラグ群
 # ==============================================================
 TOTAL_ASSETS_JPY:       float = 10_000_000.0  # 総資産額（円）← 実際の金額に変更
-POSITION_RISK_PCT:      float = 0.01          # 1トレードのリスク許容率（1%）。2026-10-05: 0.10→0.01（レポートの「1%ルール」と食い違い、全銘柄が上限で頭打ちだった）
+POSITION_RISK_PCT:      float = 0.01  # 1トレードのリスク許容率（1%ルール。レポートの注記と一致させる）
 POSITION_ATR_MULT:      float = 2.0           # 逆指値 = 現在価格 - ATR × この倍率
 ENABLE_POSITION_SIZER:  bool  = True          # ポジションサイジング [3-3]
 ENABLE_STRESS_TEST:  bool  = True       # ストレステスト [3-6]
@@ -1936,32 +1822,15 @@ ENABLE_PORTFOLIO_OPTIMIZER: bool = True   # ポートフォリオ最適化 [6-1]
 ENABLE_DCF_VALUATION:      bool = True    # DCF理論株価 [6-3]
 ENABLE_NOTION_OBSIDIAN:    bool = True    # Notion/Obsidian連携 [6-4]
 
-# Notion API設定（未設定でもObsidianのみ動作）
-# ★ 2026-06-10 セキュリティ修正: APIキーのハードコードを廃止し環境変数化。
-#   GitHub Actions では Secrets に NOTION_API_KEY を登録すること。
-#   旧キー（ntn_4870...）はコードに露出していたため失効・再発行を推奨。
+# Notion API設定（未設定でもObsidianのみ動作）。キーは環境変数（GitHub Secrets の NOTION_API_KEY）。
 NOTION_API_KEY:            str  = os.getenv("NOTION_API_KEY", "")  # Notion Integration Secret
 NOTION_DATABASE_ID:        str  = "331b571e4f7e8092b27dded753e5c3fe"     # スクリーナー銘柄DB の ID
 
-# Obsidian Vault パス（Google Drive上）
-# ★ 2026-06-10 SSOT修正: 「空文字定義→直後に無条件上書き」の二重定義を単一化。
-#   実効値は従来どおり DRIVE_BASE/obsidian_vault（挙動変更なし）。
+# Obsidian Vault パス（DRIVE_BASE/obsidian_vault）
 OBSIDIAN_VAULT_DIR: str = str(DRIVE_BASE / "obsidian_vault")
 
-# signal_aggregator のデフォルト重み（rule_optimizer が月次で調整）
-#
-# ★ 2026-07-25 バッチ6: 全面刷新。
-#   従来ここは **9カテゴリの古い版**（sector_score=0.30 / macro_signals=0.18 等）で、
-#   実装 signal_aggregator.DEFAULT_WEIGHTS の **23カテゴリの現行版**
-#   （sector_score=0.21 / macro_signals=0.13 等）と完全に乖離していた。
-#   Wave 6/7 で追加された14カテゴリ（geo_signal / independence_signal /
-#   taxonomy_signal 等）が config 側に1つも無く、実装だけが更新されていた。
-#   誰も読んでいなかったため、この乖離に気づく手段が無かった。
-#
-#   健太の方針「実装時の値を正」に従い、実装の現行値をここへ写した。
-#   以降は本定数が正本で、signal_aggregator が起動時に読み込む
-#   （sync_default_weights_from_config）。両者の一致は
-#   tests/test_signal_weights_ssot.py が強制する。
+# signal_aggregator のデフォルト重み（正本はここ）。signal_aggregator が起動時に読み込み
+# （sync_default_weights_from_config）、両者の一致は tests/test_signal_weights_ssot.py が強制する。
 #
 #   【重みの位置づけ】これは「初期値」。実運用では rule_optimizer が
 #   月次で調整した rule_weights.json の値が優先される。
@@ -2035,34 +1904,24 @@ NET_CASH_RICH_THRESHOLD: float = 0.30  # ネットキャッシュ/時価総額 >
 # stock_screener._calc_longterm_hold_flag()（片山晃モデル「10年持てる銘柄」）
 # が参照する。is_longterm_hold は investment_journal / longterm_scenario /
 # screener の long_term_candidates が消費する。
-#
-# ★ 2026-07-25 バッチ1: ここの値は実装から一度も読まれておらず、
-#   stock_screener 側が 0.60 / 10.0 / 3 を直書きしていた。
-#   config を編集しても判定が変わらない状態だったため配線した。
-#   その際、健太の方針「実装時の値を正とする」に従い、
-#   0.45 → 0.60 / 0.08 → 0.10 へ書き換えた（＝判定結果は従来どおり）。
-#   ROE は比率で持つ（実装側で ×100 してパーセント比較する）。
+# ROE は比率で持つ（実装側で ×100 してパーセント比較する）。
 LONGTERM_HOLD_EQUITY_RATIO_MIN: float = 0.60  # 自己資本比率60%以上
 LONGTERM_HOLD_ROE_MIN:          float = 0.10  # ROE 10%以上（比率）
 LONGTERM_HOLD_MIN_CONDITIONS:   int   =  3    # 有効条件の最低充足数
 
 # [P-3 × R-5] 長期保有候補がいる業種で、長期スタンス判定の
-# long_high 閾値（既定65.0pt）をこのpt数だけ緩める（2026-07-25 追加）。
+# long_high 閾値（既定65.0pt）をこのpt数だけ緩める。
 # longterm_score は業種の10年シナリオ＝マクロの見立てだが、P-3 は
 # 「自己資本60%以上×増益基調×ROE10%以上」を満たす企業が実在するという
 # 銘柄レベルの実証。見立てに実物の裏付けが付く分だけ長期側の確信を上げる。
-# 0.0 にすれば P-3 はスタンス判定に影響しなくなる（従来挙動）。
+# 0.0 にすれば P-3 はスタンス判定に影響しない。
 LONGTERM_HOLD_STANCE_RELAX_PT: float = 5.0
 
 # ==============================================================
 # BLOCK I-2: 会社予想保守度スコア設定
 # ==============================================================
 ENABLE_CONSERVATISM_SCORE: bool     = True
-# ★ 2026-07-25 バッチ3: 4 → 8 に是正。
-#   実装（earnings_surprise.CONSERVATISM_QUARTERS）は 8 で動いており、
-#   ここの 4 は誰にも読まれていなかった（名前も値も食い違う二重定義）。
-#   健太の指示により実装値 8 を正として揃え、実装が本定数を読むよう配線した。
-#   ＝この是正で保守度スコアの計算結果は変わらない。
+# 保守度スコアに使う四半期数（earnings_surprise が読む）
 CONSERVATISM_MIN_QUARTERS: int      = 8     # 保守度計算に使う四半期数
 ALERT_ON_HIGH_PROB_SURPRISE: bool   = True  # 決算サプライズ高確率候補アラート
 ALERT_ON_NEGATIVE_RISK: bool        = True  # ネガティブリスクアラート
@@ -2074,13 +1933,8 @@ ENABLE_CEO_EVALUATOR: bool    = True
 CEO_MIN_TENURE_YEARS: int     = 2      # 何年以上で暫定スコアを出すか
 CEO_QUALITY_BONUS_HIGH: float = 10.0   # ceo_score >= 80 → quality_score +10pt
 CEO_QUALITY_BONUS_MID:  float =  5.0   # ceo_score >= 65 → quality_score +5pt
-# M_A_ROIC_THRESHOLD は廃止（2026-07-25 バッチ3）。
-#   「M&A のROIC基準（8%以上を成功とみなす）」だったが、実装（軸③
-#   ceo_evaluator._axis3_capital_allocation）は ROIC ではなく
-#   **のれん減損比率**（goodwill_impairment / total_assets）を
-#   M&A成否の代理変数として採用しており、この定数を読むコードは存在しなかった。
-#   ROIC 自体は stock_detail_report.py が別途「ROIC推定」として算出・表示するが、
-#   M&A の成否判定には使っていない。設計変更の取り残しのため削除する。
+# M&A の成否は ROIC ではなく、のれん減損比率（goodwill_impairment / total_assets）で見る
+#   （ceo_evaluator._axis3_capital_allocation）。
 
 # ==============================================================
 # BLOCK I-4: 確信度別ポジションサイジング設定
@@ -2114,9 +1968,7 @@ ENABLE_MISS_FACTOR_ALERT: bool     = True
 # ==============================================================
 ENABLE_BAYESIAN_UPDATE: bool    = True
 CONFIDENCE_PRIOR_MAX_DAYS: int  = 30    # 信頼度1.0になる基準日数
-# ★ 2026-06-10 SSOT修正: DRIFT_ALERT_THRESHOLD はここ（15.0）と BLOCK 35
-#   （20.0）で二重定義され後勝ちで 20.0 が有効だった。実効値を維持するため
-#   本ブロックの定義を削除し BLOCK 35 を正とする（drift_detector.py 参照）。
+# DRIFT_ALERT_THRESHOLD は BLOCK 35 で定義（二重定義すると後勝ちで黙って上書きされる）。
 CONFIDENCE_PRIOR_MIN_HIST: int  =  3    # 最低何日分あれば更新するか
 
 # ==============================================================
@@ -2130,20 +1982,14 @@ ATTRIBUTION_LOOKBACK_W:   int  = 26      # 分析対象週数（半年）
 # ==============================================================
 # BLOCK I-5: 中期経営計画達成率トラッカー設定
 # ==============================================================
-# ★ 2026-07-25 B-4: 有効フラグはここではなく BLOCK Wave7 の
-#   ENABLE_MIDTERM_PLAN_TRACKER が正本（midterm_plan_tracker.py /
-#   signal_aggregator.py / stock_analyzer_main.py が読むのはそちら）。
-#   ここに旧名 ENABLE_MIDTERM_TRACKER=True が残っており、正本側が False の
-#   ため「True にしたつもりで動かない」二重フラグの罠になっていた。
-#   実装から一度も読まれていなかったため旧名を削除する（挙動は不変）。
-#   フラグを切り替える場合は ENABLE_MIDTERM_PLAN_TRACKER を編集すること。
+# 有効フラグは BLOCK Wave7 の ENABLE_MIDTERM_PLAN_TRACKER が正本。
 MIDTERM_ACHIEVEMENT_HIGH:  float = 0.90   # 90%以上 → 高達成
 MIDTERM_ACHIEVEMENT_RISK:  float = 0.70   # 70%未満（最終2年前時点）→ 未達リスク
 
 # ==============================================================
 # BLOCK P-4: 株主構成分析設定
 # ==============================================================
-# 2026-09-17: 読み先の旧EDINET API蓄積DBが廃止され毎日0銘柄だったため停止（健太の判断）。
+# 停止中（読み先の旧EDINET API蓄積DBが廃止され対象が0銘柄）。
 # 再開するには EdinetDB 等から大株主データを取り込む経路が必要。
 ENABLE_SHAREHOLDER_ANALYZER: bool   = False
 FOREIGN_INVESTOR_SPIKE_PCT:  float  = 3.0   # 外国人持株前年比+3%以上でアラート
@@ -2167,8 +2013,8 @@ TDNET_MONITOR_CATEGORIES: list = [
 # ==============================================================
 # BLOCK GAP-2: sector_tier 動的切り替え設定
 # ==============================================================
-# 2026-09-17: 固定閾値（65/45点）では33業種中27〜30業種がBOTになりスクリーナー対象が
-# 3〜6業種に偏ったため、スコア順位の割合で分ける方式に変更（健太の判断）。
+# スコア順位の割合で TOP/MID/BOT に分ける（固定閾値だと大半の業種がBOTに偏り、
+# スクリーナー対象が数業種に絞られてしまう）。
 SECTOR_TIER_TOP_SHARE:      float = 1 / 3  # 上位この割合を TOP_TIER
 SECTOR_TIER_BOT_SHARE:      float = 1 / 3  # 下位この割合を BOT_TIER（screener対象外）。残りが MID
 
@@ -2186,7 +2032,7 @@ SECTOR_TIER_CRISIS_MAX_TOP:  int   =  3    # 危機時はTOP業種を3つに絞�
 # これを超えた補正は比例縮小して適用する。
 SCORE_MAX_MACRO_ADJ:   float = 20.0   # MACRO_RULES 全シグナル合計の上限
 # composite_score の下限（0未満にしない / 元の設計は -30 だったが 0 に修正）
-SCORE_MIN_COMPOSITE:   float =  0.0   # ★ -30 → 0 に変更（スケール統一）
+SCORE_MIN_COMPOSITE:   float =  0.0  # スケール統一（0〜100）
 SCORE_MAX_COMPOSITE:   float = 100.0
 SCORE_MAX_CROSS_ADJ:   float = 10.0   # CROSS_SECTOR_RULES 合計の上限
 SCORE_MAX_CYCLE_ADJ:   float = 10.0   # D-1 経済サイクル補正の上限
@@ -2241,10 +2087,6 @@ DEBT_CYCLE_EXPAND_THRESH:  int = 30  # スコア30以下 → レバレッジ拡�
 # ==============================================================
 # alpha_attributer.update_ic_tracker() が参照。直近12週の週次IC系列から
 # シグナルの安定性を判定する。learning_audit_log がその結果を読む。
-#
-# ★ 2026-07-25 バッチ4: 実装（alpha_attributer）が 0.80 / 3 を直書きしており、
-#   ここの2定数は誰にも読まれていなかったため配線した。値は実装と一致しており
-#   判定結果は変わらない。
 ENABLE_IC_TRACKER:         bool  = True
 # 「直近12週のうち IC >= 0 だった週の比率」がこの値以上なら安定シグナル。
 # 例: 0.80 = 12週中10週以上でICが非負なら「安定して効いている」とみなす。
@@ -2343,8 +2185,7 @@ ENABLE_POLICY_RADAR:         bool = True
 # NEDO採択情報スクレイパー（週次）。BQ edinet.policy_support への唯一の
 # 書き込み経路で、base_agent の政策支援ボーナスの前提データになる。
 ENABLE_NEDO_SCRAPER:         bool = True
-# 2026-09-15: 公募一覧（状況＝決定）から1回にたどる決定ページの上限。
-# 固定URL方式を廃止し一覧から自動発見するため、巡回数の上限だけを持つ。
+# 公募一覧（状況＝決定）から1回にたどる決定ページの上限（決定ページは一覧から自動発見する）。
 NEDO_DECISION_MAX_PAGES:     int  = 20
 POLICY_RADAR_MAX_FEEDS:      int  = 10         # 取得する官庁RSS源の上限
 KOKKAI_SEARCH_KEYWORDS: list = [               # 国会議事録API検索語（上限5件）
@@ -2357,7 +2198,7 @@ GOV_RSS_FEEDS:      list = []   # 空の場合は policy_radar.py のデフォ�
 # BLOCK US-1: 米国株財務DBローテーター設定
 # ==============================================================
 ENABLE_US_FUNDAMENTALS:    bool  = True
-US_DAILY_FETCH_LIMIT:      int   = 100   # 1日あたり最大取得社数（2026-09-29: 20→100。885社を約9日で一巡）
+US_DAILY_FETCH_LIMIT:      int   = 100  # 1日あたり最大取得社数（約900社を約9日で一巡）
 US_FUNDAMENTALS_CACHE_DAYS: int  = 30   # 財務データの再取得間隔（日）
 US_WATCHLIST_TICKERS:      list  = [    # 優先取得銘柄（watchlist）
     "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL",
@@ -2367,14 +2208,11 @@ US_WATCHLIST_TICKERS:      list  = [    # 優先取得銘柄（watchlist）
 # S&P500 ティッカー一覧（us_fundamental_rotator.py のローテーション対象）
 # US_SCREENER_CATEGORIES の "sp500" カテゴリ JSON から動的に読み込む
 # → ここには直接列挙せず、rotator 起動時に custom_universe/sp500.json を参照する
-SP500_TICKERS: list = []   # ★ 実値は run_us_fundamental_rotator() 内で補完する
+SP500_TICKERS: list = []  # 実値は run_us_fundamental_rotator() 内で補完する
 
 # ==============================================================
-# BLOCK US-2: 米国マクロ拡張パイプライン設定
+# BLOCK US-2: 米国マクロ拡張パイプライン設定（us_macro_pipeline.py）
 # ==============================================================
-# ★ 2026-06-10 バグ修正: us_macro_pipeline.py がリポジトリに存在しない
-#   （未実装）にもかかわらずフラグが True で、毎日サイレントスキップ
-#   されていた。→ 2026-07-10（Wave US-2）us_macro_pipeline.py を実装し有効化。
 ENABLE_US_MACRO: bool = True
 
 # FRED APIキーは既存の POLICY_FRED_API_KEY を共用（再設定不要）
@@ -2400,12 +2238,8 @@ US_MACRO_T10Y2Y_INVERT: float = 0.0      # 10Y-2Y<0 → 逆イールド（景気
 US_MACRO_ICSA_SPIKE_PCT: float = 15.0    # ICSA前月比+15%超 → 雇用悪化先行
 
 # Treasury API から国債残高を取得するか（APIキー不要）
-# ★ 2026-07-25 未実装の確認: Treasury API を叩いて treasury_debt を作る処理は
-#   どのモジュールにも存在しない。weekly_report_generator.py が
-#   us_macro["treasury_debt"] を「読む」側だけ実装済みで、書き手が無い状態。
-#   したがってこのフラグは現状どちらに倒しても効果がない。
-#   実装する場合は us_macro_pipeline.py に取得処理を追加し、その入口で
-#   このフラグを読むこと。
+# 注意: treasury_debt を作る処理は未実装（weekly_report_generator が読む側だけある）。
+#   このフラグは現状どちらに倒しても効果がない。実装するなら us_macro_pipeline.py に追加する。
 ENABLE_TREASURY_DATA: bool = True
 
 # ==============================================================
@@ -2436,19 +2270,6 @@ IV_SPIKE_THRESHOLD:        int  = 70    # IV Rank 70%ile超でiv_spike
 ENABLE_US_SECTOR_BRIDGE: bool = True
 US_SECTOR_MAPPING_CACHE_DAYS: int = 30   # SICマッピングの再取得間隔
 
-# ==============================================================
-# BLOCK 問題C: EDINET × sector_tier 連携設定 —— 廃止（2026-07-25）
-# ==============================================================
-# EDINET_TIER_TOP_BOOST / EDINET_TIER_BOT_PENALTY を削除した。理由:
-#   - 業種tierでEDINET取得の優先度を加減点する設計だったが、
-#     edinet_rotation_manager.py は sector_tier を一度も参照しておらず、
-#     この2定数を読む実装はどこにも存在しなかった（設計だけで未実装）
-#   - legacy の業種別ローテーション自体が D-① で退役
-#     （ENABLE_EDINET_ROTATION=False）
-#   - 現行はEdinetDBを回してBQへ格納してから分析する方式に変更済みで、
-#     取得優先度は edinetdb_ingestor._priority_tickers() が
-#     「保有銘柄 → screener通過 → 業種代表」で決めており、業種tierを使わない
-#   - 健太に確認済み: 現行workflowへの影響なし
 
 # ==============================================================
 # BLOCK 問題D: 動的スクリーニング候補ビルダー設定
@@ -2479,16 +2300,12 @@ B1_KESSAN_CATEGORIES: list = [
 ]
 
 # ==============================================================
-# BLOCK B-2b: 政府統計先行指標ルール 有効化フラグ
-# ★ 2026-06-10 SSOT修正: ルール本体（BLOCK B-2）と番号衝突していたため
-#   B-2b に改番。GOV_RULES 本体は BLOCK B-2 を参照。
+# BLOCK B-2b: 政府統計先行指標ルール 有効化フラグ（ルール本体は BLOCK B-2）
 # ==============================================================
 ENABLE_GOV_RULES: bool = True
 
 # ==============================================================
 # BLOCK D-1b: 投資判断カード設定
-# ★ 2026-06-10 SSOT修正: 旧表記「BLOCK D-1」は経済サイクルフェーズ判定
-#   （BLOCK D-1）と番号衝突していたため D-1b に改番。
 # ==============================================================
 ENABLE_INVESTMENT_CARD: bool = True
 
@@ -2516,11 +2333,11 @@ ENABLE_SEMANTIC_SCHOLAR: bool = True  # True で重み付き論文スコア有�
 # 上位候補のみに限定するため WEEKLY_MODULES での実行を推奨
 
 # ============================================================
-# XBRL タグマッピング（E2追加 / 2026-04-11）
+# XBRL タグマッピング
 # ============================================================
 # キー: BigQuery financials テーブルのカラム名
 # 値 : EDINET XBRL のローカルタグ名（名前空間プレフィックスなし）
-# 日本基準（J-GAAP）のみ対応。IFRS は E5 フェーズで追加予定。
+# 日本基準（J-GAAP）のみ対応。
 XBRL_TAG_MAP = {
     # ---- 損益計算書（PL）----
     "net_sales":                   "NetSales",
@@ -2561,7 +2378,7 @@ EDINET_REQUEST_INTERVAL = 1.5   # レート制限対策（秒）
 EDINET_REQUEST_TIMEOUT  = 30    # タイムアウト（秒）
 
 # ==============================================================
-# BLOCK 24: Pearl Score 設定（Wave 0 - Pearl Ph1）
+# BLOCK 24: Pearl Score 設定
 # ==============================================================
 
 ENABLE_PEARL_SCORE:           bool  = True
@@ -2587,11 +2404,7 @@ PEARL_TIER_BONUS: dict = {
     "B":   2.0,
 }
 
-# PEARL_ENABLED_DIMENSIONS は廃止（2026-07-25 バッチ6）。
-# Ph1 で D1/D3/D4 のみ有効だった時代の名残。現行 Ph3 は D1〜D5 の5次元を
-# すべて使い（下の PEARL_DIMENSION_WEIGHTS が実際の重み）、
-# 実装 pearl_score_calculator は本定数を一度も参照していなかった。
-# 次元の有効/無効は重みを 0.0 にすることで表現する。
+# 次元の有効/無効は PEARL_DIMENSION_WEIGHTS の重みを 0.0 にすることで表現する。
 
 # 各ディメンションの重み（合計 = 1.0）
 # D1: 方向性 / D3: 利益品質・M-Score proxy / D4: 発見ギャップ
@@ -2609,7 +2422,7 @@ SEMANTIC_SCHOLAR_API_URL:        str   = (
 )
 
 # ==============================================================
-# BLOCK 25: 規模分類 / 業態判定設定（Wave 0 - Size Ph1 / BM Ph1）
+# BLOCK 25: 規模分類 / 業態判定設定
 # ==============================================================
 
 # ── Size Tier（JP 時価総額基準、単位: 億円）──────────────────
@@ -2718,11 +2531,11 @@ BM_DETECTION_THRESHOLDS: dict = {
 }
 
 # ==============================================================
-# BLOCK 26: 議員取引監視設定（Wave 0 - Policy Ph1）
+# BLOCK 26: 議員取引監視設定
 # ==============================================================
 ENABLE_POLITICIAN_MONITOR:   bool  = True
 ALERT_POLITICIAN_MIN_SCORE:  int   = 60      # この点数以上でLINE即時通知
-# 2026-09-15: 高スコア議員取引アラート／JP波及補正に使う取引の鮮度（日）。
+# 高スコア議員取引アラート／JP波及補正に使う取引の鮮度（日）。
 # 「新規」は履歴に無いという意味でしかなく、初回は年初以降の全取引が新規になる。
 # STOCK Act の開示期限は取引から最大45日のため、余裕を見て60日。
 POLITICIAN_ALERT_MAX_AGE_DAYS: int = 60
@@ -2745,9 +2558,7 @@ def is_politician_run_day(now=None) -> bool:
     return dt.weekday() in POLITICIAN_RUN_WEEKDAYS
 
 # ==============================================================
-# BLOCK 23: US GICSセクター設定（Wave 1 - U-1 / U-2）
-# ★ 2026-06-10 SSOT修正: 旧表記「BLOCK 27」は Wave 6 縮退モード設定
-#   （BLOCK 27）と番号衝突していたため BLOCK 23 に改番。
+# BLOCK 23: US GICSセクター設定
 # ==============================================================
 
 # ── GICSセクター別マクロ感応度ルール（U-1）─────────────────────────
@@ -3033,11 +2844,9 @@ US_RATE_SENSITIVITY_RULES: dict = {
     },
 }
 
-# ==============================================================
-# BLOCK 28: 先行指標ルール（A-1 貿易品目・A-2 職種別求人倍率）は 2026-09-29 に廃止
 
 # ==============================================================
-# BLOCK 29: Wave 2 Feature Engineering 定数（FE-1 / FE-2 / FE-3）
+# BLOCK 29: Feature Engineering 定数（FE-1 / FE-2 / FE-3）
 # ==============================================================
 
 # ── FE-1: リスク調整スコア（ATR基準） ────────────────────────────
@@ -3048,11 +2857,8 @@ US_RATE_SENSITIVITY_RULES: dict = {
 ATR_WINDOW                 = 14
 RISK_ADJ_PENALTY_LOW_VOL   = 0.85   # $risk\_adj = composite \times 0.85$ (低ボラ優遇)
 RISK_ADJ_PENALTY_HIGH_VOL  = 1.20   # $risk\_adj = composite \div 1.20$ (高ボラ割引)
-# GARCH_ENABLED: True にすると ARCH ライブラリが必要
-# ★ 2026-07-25 未実装の確認: GARCH によるボラティリティ推定処理は
-#   どのモジュールにも存在しない（ARCH ライブラリも未導入・requirements 外）。
-#   現行のボラ調整は ATR_WINDOW ベースの RISK_ADJ_PENALTY_* が担う。
-#   実装する場合は arch を requirements に追加し、その入口で本フラグを読むこと。
+# GARCH_ENABLED: 未実装（GARCH推定の処理も arch ライブラリも無い）。現行のボラ調整は
+#   ATR_WINDOW ベースの RISK_ADJ_PENALTY_* が担う。
 GARCH_ENABLED              = False
 
 # ── FE-2: アナリスト修正トラッカー ───────────────────────────────
@@ -3073,7 +2879,7 @@ M_SCORE_STRONG_MULTIPLIER  = 0.50    # 強ペナルティ乗数（D3 を半減�
 M_SCORE_MEDIUM_MULTIPLIER  = 0.75    # 中ペナルティ乗数（D3 を0.75倍）
 
 # ==============================================================
-# BLOCK 30: Ignition Detector 定数（Wave 2 - FE-4）
+# BLOCK 30: Ignition Detector 定数（FE-4）
 # ==============================================================
 # ignition_detector.py が参照する。
 # カテゴリA（資金フロー）・B（ナラティブ）・C（価格）のシグナルが
@@ -3090,11 +2896,7 @@ IGNITION_MAX_SCORE_LINE_CRITICAL   = 3.5   # ≥ 3.5 かつ反復検出 → 最�
 # 最高警戒判定: IGNITION_CRITICAL_REPEAT_DAYS 以内に2回以上検出で発動
 IGNITION_CRITICAL_REPEAT_DAYS     = 14
 
-# カテゴリD（将来拡張用）
-# ★ 2026-07-25 未実装の確認: ignition_detector が持つのは
-#   _extract_category_a / _b / _c の3系統のみで、カテゴリD の抽出関数は
-#   存在しない。実装する場合は _extract_category_d を追加し、
-#   その入口で本フラグを読むこと。
+# カテゴリD（将来拡張用・未実装。ignition_detector は A/B/C の3系統のみ）
 IGNITION_CATEGORY_D_ENABLED       = False
 
 # キャッシュ TTL
@@ -3102,7 +2904,7 @@ IGNITION_ALERT_TTL_DAYS           = 14    # ignition_alerts.json
 IGNITION_HISTORY_TTL_DAYS         = 180   # ignition_history.json
 
 # ==============================================================
-# BLOCK 31: Wave 3 - Policy Ph2 定数
+# BLOCK 31: Policy Ph2 定数
 # ==============================================================
 # policy_signal_applier.py / politician_signal_scorer.py が参照する。
 # POLITICIAN_CACHE_LAYERS : 4層減衰キャッシュの層数
@@ -3112,15 +2914,14 @@ IGNITION_HISTORY_TTL_DAYS         = 180   # ignition_history.json
 POLITICIAN_CACHE_LAYERS    = 4
 EMERGENCY_VIX_THRESHOLD    = 45.0   # VIX > 45 → 緊急介入フラグ
 SCORE_MAX_POLICY_L4_ADJ    = 25.0   # $composite\_score + min(bonus, 25.0)$
-# 2026-09-29（健太の判断）: 個別銘柄の総合点へ乗せる政策系加点（政策・L4・議会L4）の
-# 合計上限。業種単位の上限 25 のまま銘柄に乗せると、電気機器は元75点以上が全部
-# 100点に張り付き（9/29 上位5銘柄がすべて100.0）、順位が付かなくなっていた。
+# 個別銘柄の総合点へ乗せる政策系加点（政策・L4・議会L4）の合計上限。業種単位の上限25のまま
+# 銘柄に乗せると、元の点が高い業種の上位銘柄が全部100点に張り付き順位が付かなくなる。
 SCORE_MAX_POLICY_STOCK_ADJ = 10.0
-# 2026-09-29: スクリーナー候補に審議KPI 9項目（PBR〜投資資本IRR）を付ける（表示専用）
+# スクリーナー候補に審議KPI 9項目（PBR〜投資資本IRR）を付ける（表示専用）
 ENABLE_CANDIDATE_KPI: bool = True
 
 # ==============================================================
-# BLOCK 32: Wave 3 - FE-5 PEAD監視定数
+# BLOCK 32: FE-5 PEAD監視定数
 # ==============================================================
 # pead_monitor.py が参照する。
 # PEAD_SCORE_ALERT_THRESHOLD: この値以上かつ出来高条件で LINE通知（トリガー㉒）
@@ -3134,7 +2935,7 @@ PEAD_VOLUME_MIN_RATIO      = 1.5
 PEAD_MAX_HOLDING_DAYS_JP   = 60
 
 # ==============================================================
-# BLOCK 33: Wave 3 - FE-6 ポートフォリオ相関管理定数
+# BLOCK 33: FE-6 ポートフォリオ相関管理定数
 # ==============================================================
 # portfolio_diversity_filter.py が参照する。
 # DIVERSITY_CORRELATION_THRESHOLD: この値超のペアを「高相関」と判定
@@ -3151,7 +2952,7 @@ DIVERSITY_OPTION_B_ENABLED      = False
 DIVERSITY_CORR_WINDOW_DAYS      = 60
 
 # ==============================================================
-# BLOCK 34: Wave 3 - FE-7 カタリストカレンダー定数
+# BLOCK 34: FE-7 カタリストカレンダー定数
 # ==============================================================
 # catalyst_calendar.py が参照する。
 # CATALYST_BONUS_MAX         : _calc_catalyst_bonus() の上限加算量（+5pt）
@@ -3173,7 +2974,7 @@ IGNITION_WEIGHT_CATEGORY_B        = 0.35   # ナラティブ
 IGNITION_WEIGHT_CATEGORY_C        = 0.25   # 価格シグナル
 
 # ==============================================================
-# BLOCK 35: Wave 4 全定数（E3 / Policy Ph3-Ph4 / S3-S4 / FE-F）
+# BLOCK 35: E3 / Policy Ph3-Ph4 / S3-S4 / FE-F 定数
 # ==============================================================
 # 参照モジュール:
 #   E3      → segment_mapper.py / segment_signal.py / base_agent.py
@@ -3239,13 +3040,11 @@ SCORE_MAX_INSTITUTION_ADJ         = 15.0
 INSTITUTION_HISTORY_TTL_DAYS      = 180
 POLICY_MEDIUM_CACHE_TTL_DAYS      = 90
 INSTITUTION_MIN_NEW_POSITION_USD  = 1_000_000_000   # 10億ドル
-# 2026-10-06: Tier1/2（Buffett・アクティビスト）の新規取得の通知・L3発動の下限。
-#   Berkshire の13Fには子会社運用分の数十万ドルの保有も載る（例 D.R.Horton 3,564株=$58万）ため足切りする。
+# Tier1/2（Buffett・アクティビスト）の新規取得の通知・L3発動の下限。
+#   Berkshire の13Fには子会社運用分の数十万ドルの保有も載るため足切りする。
 INSTITUTION_MIN_NEW_POSITION_USD_ACTIVE = 100_000_000   # 1億ドル
 
-# ── Policy Ph3 追加設定（Wave 6 - U-4）────────────────────────
-# 既存の INSTITUTION_TIER_MAP / SCORE_MAX_INSTITUTION_ADJ を流用し、
-# 以下の追加定数のみ Wave 6 で新規追加する。
+# ── Policy Ph3 追加設定（INSTITUTION_TIER_MAP / SCORE_MAX_INSTITUTION_ADJ と併用）────
 
 # 13F取得の有効フラグ（False でモジュール全体をスキップ）
 ENABLE_INSTITUTIONAL_13F: bool = True
@@ -3282,8 +3081,7 @@ POLICY_STRUCTURAL_CACHE_TTL_MONTHS   = 12
 PDF_URL_CACHE_TTL_DAYS               = 30
 ENABLE_PDF_EXTRACTION                = True   # pdfplumber 有効フラグ
 
-# ★ 2026-06-10 配線復元に伴い追加: congress_monitor 実行フラグ・APIキー
-#   CONGRESS_API_KEY 未設定時はキャッシュのみで動作（API取得スキップ）。
+# congress_monitor 実行フラグ・APIキー（未設定時はキャッシュのみで動作）。
 #   キー取得: https://api.congress.gov/sign-up/
 ENABLE_CONGRESS_MONITOR: bool = True
 CONGRESS_API_KEY: str = os.getenv("CONGRESS_API_KEY", "")
@@ -3368,8 +3166,8 @@ DEEP_DIVE_CONFIDENCE_DROP = 15.0   # confidence の1週間低下量（pt）
 DEEP_DIVE_RANK_JUMP       = 10     # screener順位の急変幅（位）
 DEEP_DIVE_HISTORY_TTL     = 30     # deep_dive_history.json TTL（日）
 CONFIDENCE_PRIOR_ALPHA    = 0.15   # EMA 更新率（S3-3 confidence_prior）
-# 2026-10-06 健太判断「動かす」: 業種スコアの confidence_prior（EMA）更新を有効化。
-#   前回値は score_history.json から読み、結果は sector_results と score_history に残す（スコア自体は変えない）。
+# 業種スコアの confidence_prior（EMA）更新。前回値は score_history.json から読み、
+#   結果は sector_results と score_history に残す（スコア自体は変えない）。
 ENABLE_S3_CONFIDENCE_PRIOR: bool = True
 
 # 経営者スコア（ceo_evaluator）の経営トップ・就任日の取得元。有報PDFの「役員の状況」を読む（officer_extractor.py）。
@@ -3466,15 +3264,12 @@ FACTOR_REGIME_SHRINK: dict = {
     "crisis": 0.40,   # crisis では momentum を 40% に縮退（低ボラに移行）
 }
 
-# ── モジュール鮮度特性定義（S4/Phase 0用）──────────────────────
+# ── モジュール鮮度特性定義 ──────────────────────
 # 各指標の遅行特性と先行性を定義し、鮮度係数計算の半減期パラメータを設定。
 # $freshness\_weight = exp(-\ln(2) \times days / half\_life)$
-# ★ 2026-06-10 SSOT修正: 旧名 LEADING_INDICATOR_RULES は BLOCK R-2 の
-#   先行指標ライブラリを後勝ち上書きで無効化していたため
-#   MODULE_FRESHNESS_RULES に改名。
-# ★ 注意: 現時点で本定数を参照するモジュールは存在しない
-#   （score_prior_manager.py は SCORE_PRIOR_FRESHNESS_HALF_LIFE を使用）。
-#   Phase 0 の鮮度係数をモジュール別に細分化する際の定義として保持する。
+# 注意: 現時点で本定数を参照するモジュールは無い（score_prior_manager.py は
+#   SCORE_PRIOR_FRESHNESS_HALF_LIFE を使用）。鮮度係数をモジュール別に細分化する際の定義。
+#   LEADING_INDICATOR_RULES（BLOCK R-2）と同名にすると後勝ちで上書きするので名前を変えないこと。
 
 MODULE_FRESHNESS_RULES: dict = {
     "gov_pipeline": {
@@ -3533,9 +3328,7 @@ MODULE_FRESHNESS_RULES: dict = {
     },
 }
 
-# ── ALL_DIRS への Wave 4 フォルダ追加 ────────────────────────────
-# 既存 ALL_DIRS リストに Wave 4 で使用するディレクトリを追加
-# （setup_dirs() が一括作成するため、ここで定義する）
+# ── ALL_DIRS への追加フォルダ（setup_dirs() が一括作成する）────────────────
 _WAVE4_DIRS = [
     CACHE_DIR / "institutional",   # institutional_history.json
     CACHE_DIR / "congress",        # congress_bill_cache.json
@@ -3548,10 +3341,10 @@ for _d in _WAVE4_DIRS:
         ALL_DIRS.append(_d)
 
 # ==============================================================
-# BLOCK Wave5: テキストシグナル定数（Wave 5 - E4 / Idea3-P3）
+# BLOCK Wave5: テキストシグナル定数
 # ==============================================================
 
-# ── Wave 5 - E4: テキストシグナルキャッシュ定数 ─────────────────
+# ── テキストシグナルキャッシュ定数 ─────────────────
 # TEXT_SIGNAL_CACHE_FILE : text_signal.py が生成するキャッシュ JSON ファイル名
 # TEXT_SIGNAL_TTL_DAYS   : キャッシュ有効期間（日）
 # TEXT_SIGNAL_FIRST_RUN_LIMIT : 初回実行時のテキスト抽出対象銘柄数の上限
@@ -3561,15 +3354,13 @@ TEXT_SIGNAL_CACHE_FILE       = "text_signal_cache.json"
 TEXT_SIGNAL_TTL_DAYS         = 30
 TEXT_SIGNAL_FIRST_RUN_LIMIT  = 50
 ENABLE_TEXT_SIGNAL           = True
-# 2026-09-26（健太の判断で当面無効）: 有報テキストのリスク減点（base_agent の
-# edinet_text_risk_bonus）だけを止める。ENABLE_TEXT_SIGNAL は text_extractor
-# （edinet_exposure_extractor の代替経路も使う）を兼ねているため別フラグにした。
-# 無効化の理由: ①前期比成分が仮実装で常に0 ②英語FinBERTに日本語を入力
-# ③「事業等のリスク」欄のキーワード数で減点＝リスクを丁寧に書く会社ほど減点され、
-#   全33業種が −1.5〜−9点になっていた（9/26実測）。作り直すなら設計から。
+# 有報テキストのリスク減点（base_agent の edinet_text_risk_bonus）だけを止めるフラグ（当面無効）。
+# ENABLE_TEXT_SIGNAL は text_extractor（edinet_exposure_extractor の代替経路も使う）を兼ねるので別にしてある。
+# 無効の理由: ①前期比成分が仮実装で常に0 ②英語FinBERTに日本語を入力
+# ③「事業等のリスク」欄のキーワード数で減点＝リスクを丁寧に書く会社ほど減点される。作り直すなら設計から。
 ENABLE_TEXT_RISK_BONUS       = False
 
-# ── Wave 5 - E4: リスクカテゴリ定義 ─────────────────────────────
+# ── リスクカテゴリ定義 ─────────────────────────────
 # text_signal.py でリスクをカテゴリ別に分類するためのキーワードマップ。
 # 各カテゴリのキーワードにヒットしたセクションのネガティブスコアを
 # そのカテゴリに帰属させる。
@@ -3588,14 +3379,14 @@ TEXT_SIGNAL_RISK_CATEGORIES: dict = {
     ],
 }
 
-# ── Wave 5 - E4: テキストシグナルスコア範囲 ─────────────────────
+# ── テキストシグナルスコア範囲 ─────────────────────
 # YoY 差分スコアおよびリスクカテゴリスコアの上下限値（クランプ用）
 # $text\_risk\_bonus \in [TEXT\_SIGNAL\_SCORE\_MIN, 0]$
 
 TEXT_SIGNAL_SCORE_MIN  = -10.0   # ネガティブ方向上限（リスク検出）
 TEXT_SIGNAL_SCORE_MAX  =   0.0   # テキストリスクはネガティブ側のみ
 
-# ── Wave 5 - Idea3-P3: policy_radar 実現度判定定数 ────────────────
+# ── policy_radar 実現度判定定数 ────────────────
 # POLICY_RADAR_INTENT_CACHE_TTL_DAYS : policy_radar_cache の TTL（日）
 # POLICY_RADAR_ENABLE_FINBERT_INTENT : FinBERT 文意分類の有効フラグ
 
@@ -3626,10 +3417,10 @@ POLICY_INTENT_MULTIPLIERS: dict = {
 }
 
 # ==============================================================
-# BLOCK Wave6: 地政学・海外権益・リスク設定（Wave 6 - G-N / G-C / G-X）
+# BLOCK Wave6: 地政学・海外権益・リスク設定（G-N / G-C / G-X）
 # ==============================================================
 
-# ── Wave 6 - G-N: 国別リスク監視設定 ──────────────────────────
+# ── G-N: 国別リスク監視設定 ──────────────────────────
 
 # BigQuery プロジェクトID（geopolitics データセットの所在）
 GEO_BQ_PROJECT_ID = "stock-analyzer-edinet"
@@ -3694,7 +3485,7 @@ GEO_MONITORED_COMMODITIES: list = [
     "palm_oil",            # パーム油
 ]
 
-# ── Wave 6 - G-C: 企業×海外権益マッピング設定 ──────────────────
+# ── G-C: 企業×海外権益マッピング設定 ──────────────────
 
 # 日本株の権益マッピング優先ティッカーリスト
 # edinet_exposure_extractor / jogmec_scraper が優先的に処理する
@@ -3778,7 +3569,7 @@ GEO_SEC_TARGET_SECTIONS: list = [
     "Business Overview",
 ]
 
-# ── Wave 6 - G-C 追加: スクレイパー実行制御 ─────────────────────
+# ── G-C: スクレイパー実行制御 ─────────────────────
 
 # JOGMEC スクレイパーの有効フラグ
 # False にすると run_all_tasks() での jogmec_scraper 実行をスキップ
@@ -3803,7 +3594,7 @@ EDINET_EXPOSURE_INTERVAL_DAYS = 30
 # exposure_review_ui のポート番号（Streamlit 起動時）
 EXPOSURE_REVIEW_UI_PORT = 8502
 
-# ── Wave 6 - G-X: 地政学×権益統合シグナル設定 ──────────────────
+# ── G-X: 地政学×権益統合シグナル設定 ──────────────────
 
 # geo_impact_bonus の上限・下限（composite_score への加算点）
 # $geo\_impact\_bonus \in [GEO\_IMPACT\_MIN, GEO\_IMPACT\_MAX]$
@@ -3878,21 +3669,10 @@ GEO_TAXONOMY_PROPAGATION: dict = {
     "crude_oil":  ["petrochemical", "synthetic_fiber", "plastic"],
 }
 
-# geo_signal の有効フラグ
-# 初回運用時は False で起動し、BQ に country_risk_daily / company_country_exposure
-# のデータが蓄積されてから True に切り替える。
-# True にすると base_agent.py と us_stock_screener.py が geo_impact_bonus を計算する。
-#
-# ★ 2026-07-25: False → True。
-#   これは「意図した停止」ではなく、供給側の配線漏れの結果だった。
-#   リスク側（country_risk_updater → country_risk_daily）は日次で動いていたが、
-#   権益側（jogmec / sec_geo / edinet_exposure → company_country_exposure）に
-#   呼び出しが1つも無く、join 相手が空でボーナスが常に0だったため False のまま
-#   置かれていた。供給側を geo_exposure_runner.py として配線したので有効化する。
-#
-#   有効化の安全性: exposure がまだ空の間も、aggregate_geo_signal() は
-#   データ0件で None を返し、signal_aggregator は w_geo=0.0 として
-#   既存7シグナルで再正規化する。したがってデータが溜まるまでスコアは変わらない。
+# geo_signal の有効フラグ。True にすると base_agent.py と us_stock_screener.py が geo_impact_bonus を計算する。
+# 権益側（company_country_exposure）は geo_exposure_runner.py が供給する。
+# exposure が空の間も aggregate_geo_signal() は None を返し、signal_aggregator は w_geo=0.0 として
+# 他のシグナルで再正規化するので、データが溜まるまでスコアは変わらない。
 ENABLE_GEO_SIGNAL = True
 
 # geo_signal の signal_aggregator での重み（DEFAULT_WEIGHTS に追加）
@@ -3910,17 +3690,11 @@ GEO_SIGNAL_WEIGHT = 0.04   # 4%（pearl_signal の 5% から 1% 移譲相当）
 #   → 調整後合計 = 1.00
 # 上記の重みバランスは signal_aggregator.py の DEFAULT_WEIGHTS で実装する（Step 16）。
 
-# geo_signal の analytics.company_scores への書き込み有効フラグ
-# True にすると run_all_tasks() 後に geo_impact_bonus を BQ に書き込む
-#
-# ★ 2026-07-25 未実装の確認: このフラグが指す「analytics.company_scores への
-#   書き込み」処理は、どのモジュールにも実装が存在しない（フラグだけが先に
-#   置かれた状態）。したがって True にしても何も起きない。
-#   geo_impact_bonus 自体は results と週次レポートに載るため、日次分析には
-#   影響しない。BQ 永続化が必要になった時点で実装すること。
+# geo_signal の analytics.company_scores への書き込みフラグ。
+# 注意: 書き込み処理は未実装（True にしても何も起きない）。geo_impact_bonus 自体は results と週次レポートに載る。
 ENABLE_GEO_SCORE_PERSIST = False   # 初期は False（BQ 書き込みコスト削減）
 
-# ── Wave 6 - G-N: ALL_DIRS への Wave 6 フォルダ追加 ──────────────
+# ── G-N: ALL_DIRS への追加 ──────────────
 _WAVE6_DIRS = [
     CACHE_DIR / "geopolitics",        # country_risk_updater キャッシュ
     INSIGHT_DIR / "geopolitics",      # 地政学レポート保存先
@@ -3931,40 +3705,17 @@ for _d in _WAVE6_DIRS:
         ALL_DIRS.append(_d)
 
 # ==============================================================
-# BLOCK 36: Wave 6 - U-4: 機関投資家 13F 監視 追加設定
+# BLOCK 36: U-4 機関投資家 13F 監視 追加設定
 # ==============================================================
-# 【既存定数との関係】
-#   以下の定数は BLOCK 35 で定義済みのため、ここでは定義しない:
-#     INSTITUTION_TIER_MAP         (機関名→Tier辞書)
-#     SCORE_MAX_INSTITUTION_ADJ    (最大加算量 15pt)
-#     INSTITUTION_HISTORY_TTL_DAYS (キャッシュTTL 180日)
-#     INSTITUTION_MIN_NEW_POSITION_USD (大手アラート閾値)
-# ★ 2026-06-10 SSOT修正: 本ブロックにあった以下8定数の再定義を削除
-#   （BLOCK 35 と同値の完全重複だったため。BLOCK 35 が正）:
-#     ENABLE_INSTITUTIONAL_13F / EDGAR_SUBMISSIONS_URL / EDGAR_ARCHIVES_URL
-#     INSTITUTIONAL_BONUS_MAX / INSTITUTIONAL_BONUS_MIN
-#     INSTITUTIONAL_CACHE_PATH / INSTITUTIONAL_QUARTER_MONTHS
-#     INSTITUTIONAL_QUARTER_DAY_FROM
+# INSTITUTION_TIER_MAP / SCORE_MAX_INSTITUTION_ADJ / INSTITUTION_HISTORY_TTL_DAYS /
+# INSTITUTION_MIN_NEW_POSITION_USD と ENABLE_INSTITUTIONAL_13F 等は BLOCK 35 で定義（ここで再定義しない）。
 
 # ==============================================================
-# BLOCK 37: Wave 6 - I-1/I-3/I-4: オルタナティブデータ監視設定
-# ★ 2026-06-10 SSOT修正: 旧表記「BLOCK 26」は議員取引監視設定
-#   （BLOCK 26）と番号衝突していたため BLOCK 37 に改番。
+# BLOCK 37: I-1/I-3/I-4 オルタナティブデータ監視設定（求人票・役員転職・施設着工は廃止済み）
 # ==============================================================
-# 【I-1: 求人票モニター（job_posting_monitor.py）】
-#   求人サイトの技術キーワード変化から「人材投資シグナル」を生成する。
-#   $hiring\_score = base\_score + surge\_bonus$ (急増時)
-#
-# 【I-3: 役員転職トラッカー（executive_transition_tracker.py）】
-#   EDINET 有報の役員略歴YoY差分から「経営方針転換シグナル」を生成する。
-#   $exec\_score = new\_hire\_count \times EXECUTIVE\_NEW\_HIRE\_BONUS$
-#
-# 【I-4: 施設着工モニター（facility_expansion_monitor.py）】
-#   自治体・経産省の建設許可情報から「設備投資シグナル」を生成する。
-#   $facility\_score = project\_count \times FACILITY\_EXPANSION\_BONUS$
 
 # ── I-1: 求人票モニター設定 ─────────────────────────────────
-ENABLE_JOB_POSTING_MONITOR: bool = False  # 2026-09-29 廃止（Wantedly検索件数で業種加点・質が低い）
+ENABLE_JOB_POSTING_MONITOR: bool = False  # 廃止（Wantedly検索件数で業種加点・質が低い）
 JOB_POSTING_CACHE_TTL_DAYS: int  = 30     # hiring_signal_cache.json の TTL
 JOB_POSTING_CACHE_PATH: str      = "hiring_signal_cache.json"  # CACHE_DIR 配下
 
@@ -4042,7 +3793,7 @@ EXECUTIVE_NEW_HIRE_BONUS: float     = 4.0
 EXECUTIVE_TRANSITION_THRESHOLD: int = 2
 
 # ── I-4: 施設着工モニター設定 ───────────────────────────────
-ENABLE_FACILITY_EXPANSION: bool   = False  # 2026-09-29 廃止（取得元3つが301/404/403で取得0件）
+ENABLE_FACILITY_EXPANSION: bool   = False  # 廃止（取得元3つが301/404/403で取得0件）
 FACILITY_CACHE_TTL_DAYS: int      = 180    # facility_project_cache.json の TTL
 FACILITY_CACHE_PATH: str          = "facility_project_cache.json"  # CACHE_DIR 配下
 
@@ -4065,7 +3816,7 @@ FACILITY_EXPANSION_BONUS: float   = 6.0
 # 着工シグナルの有効期間（日）。この期間を超えたシグナルは自動失効
 FACILITY_EXPANSION_TTL_DAYS: int  = 90
 
-# ── Wave 6 - I系: ALL_DIRS への追加 ─────────────────────────
+# ── I系: ALL_DIRS への追加 ─────────────────────────
 _WAVE6_I_DIRS = [
     CACHE_DIR / "hiring",         # job_posting_monitor キャッシュ
     CACHE_DIR / "executive",      # executive_transition_tracker キャッシュ
@@ -4079,9 +3830,7 @@ for _d in _WAVE6_I_DIRS:
         ALL_DIRS.append(_d)
 
 # ==============================================================
-# BLOCK 27: Wave 6 - 第4セッション
-#           緊急縮退モード（Emergency Contraction）設定
-#           C / Policy Ph5 / E5 — rule_optimizer.py 連携
+# BLOCK 27: 緊急縮退モード（Emergency Contraction）設定
 # ==============================================================
 # 【設計方針】
 #   ・緊急縮退フラグが立つと「全カテゴリのシグナル感度を一律に減算」する。
@@ -4205,7 +3954,7 @@ CONTRACTION_RESULT_KEY: str = "rule_optimizer"
 # rule_optimizer.py が縮退状態の時系列をここに追記する（JSON Lines形式）。
 CONTRACTION_HISTORY_PATH: str = "contraction_history.jsonl"  # CACHE_DIR配下
 
-# ── Wave 6 - 第4セッション: ALL_DIRS への追加 ─────────────────
+# ── 縮退モード: ALL_DIRS への追加 ─────────────────
 _WAVE6_C_DIRS = [
     CACHE_DIR / "contraction",   # 縮退履歴・縮退フラグキャッシュ保存先
 ]
@@ -4214,11 +3963,10 @@ for _d in _WAVE6_C_DIRS:
         ALL_DIRS.append(_d)
 
 # ==============================================================
-# BLOCK Wave7: Wave 7 - 第1セッション 全定数
-# （データ収集・高度アルファ計算統合層）
+# BLOCK Wave7: データ収集・高度アルファ計算統合層
 # ==============================================================
 
-# ── Wave7-A: 標準化動向トラッカー（industry_standard_tracker.py）─
+# ── 標準化動向トラッカー（industry_standard_tracker.py）─
 
 # standardization_cache.json の TTL（日）
 STANDARDIZATION_CACHE_TTL_DAYS: int = 180
@@ -4235,7 +3983,7 @@ STANDARDIZATION_TREND_THRESHOLDS: dict = {
 # None の場合はモジュール側のデフォルト定数が使われる
 STANDARDS_TRACKING_CONFIG: dict | None = None  # 本番時は辞書を設定
 
-# ── Wave7-B: 学術カンファレンス追跡（academic_conf_tracker.py）──
+# ── 学術カンファレンス追跡（academic_conf_tracker.py）──
 
 # academic_conf_cache.json の TTL（日）
 ACADEMIC_CONF_CACHE_TTL_DAYS: int = 180
@@ -4244,29 +3992,21 @@ ACADEMIC_CONF_CACHE_TTL_DAYS: int = 180
 # None の場合はモジュール側のデフォルト定数が使われる
 ACADEMIC_CONF_CONFIG: dict | None = None  # 本番時は辞書を設定
 
-# ── Wave7-C: 中期経営計画トラッカー（midterm_plan_tracker.py）──
+# ── 中期経営計画トラッカー（midterm_plan_tracker.py）──
 
 # midterm_plan_cache.json の TTL（日）
 MIDTERM_TRACKER_TTL_DAYS: int = 90
 
-# ★ 2026-06-10 SSOT修正: MIDTERM_ACHIEVEMENT_HIGH / MIDTERM_ACHIEVEMENT_RISK
-#   は BLOCK I-5 で定義済み（同値 0.90 / 0.70）のため、ここでの再定義を削除。
+# MIDTERM_ACHIEVEMENT_HIGH / MIDTERM_ACHIEVEMENT_RISK は BLOCK I-5 で定義。
 
 # 中計目標定義（ticker → plan_def 辞書）
 # None の場合はモジュール側の _DEFAULT_MIDTERM_PLANS が使われる
 MIDTERM_PLAN_TARGETS: dict | None = None  # 本番時は実際の中計目標を設定
 
-# ── Wave7-D: 規模別シグナル減衰管理（size_decay_manager.py）────
+# ── 規模別シグナル減衰管理（size_decay_manager.py）────
 
-# SIZE_DECAY_TTL_DAYS は廃止（2026-07-25 バッチ5）。
-#   size_decay_state.json / nano_evaluation_queue.json の「TTL」だったが、
-#   size_decay_manager にキャッシュ期限で捨てる処理は存在せず、
-#   モジュール側の _DEFAULT_TTL_DAYS=7 も定義だけで未使用だった。
-#   古さの扱いは TTL による破棄ではなく **指数減衰**に置き換わっている:
-#     calc_decay_factor() が days_elapsed から decay = e^(-λt) を計算し、
-#     古いシグナルほど連続的に効きを弱める（Tier別λは下の
-#     SIZE_DECAY_LAMBDA で制御）。
-#   TTLで一律に捨てると減衰履歴ごと失われるため、実装せず削除する。
+# 古いシグナルは TTL で捨てずに指数減衰させる: calc_decay_factor() が days_elapsed から
+#   decay = e^(-λt) を計算する（Tier別λは下の SIZE_DECAY_LAMBDA）。一律に捨てると減衰履歴ごと失われる。
 
 # Tier 別減衰定数 λ（$decay = e^{-\\lambda t}$）
 SIZE_DECAY_LAMBDAS: dict = {
@@ -4277,15 +4017,14 @@ SIZE_DECAY_LAMBDAS: dict = {
     "Nano":  0.03,
 }
 
-# ★ 2026-06-10 SSOT修正: NANO_EVALUATION_MAX_PER_DAY は BLOCK 25
-#   （Size Ph1）で定義済み（同値 5）のため、ここでの再定義を削除。
+# NANO_EVALUATION_MAX_PER_DAY は BLOCK 25 で定義。
 
-# ── Wave7-E: 規模帯横断シグナル（cross_size_signal.py）──────────
+# ── 規模帯横断シグナル（cross_size_signal.py）──────────
 
 # cross_size_signal_cache.json の TTL（日）
 CROSS_SIZE_SIGNAL_TTL_DAYS: int = 3
 
-# ── Wave7-F: 市場独立性スコア（independence_score_calculator.py）
+# ── 市場独立性スコア（independence_score_calculator.py）
 
 # independence_scores.json の TTL（日）
 INDEPENDENCE_SCORE_TTL_DAYS: int = 30
@@ -4302,10 +4041,10 @@ INDEPENDENCE_TIER_THRESHOLDS: dict = {
     "MID":  40.0,
 }
 
-# ── Wave7-G: 潜伏銘柄管理（latent_pearl_manager.py）────────────
+# ── 潜伏銘柄管理（latent_pearl_manager.py）────────────
 
 # latent_pearl_cache.json の TTL（日）
-LATENT_PEARL_TTL_DAYS: int = 1   # 2026-10-05: 30→1（日次の処理なのに月1回しか再計算していなかった）
+LATENT_PEARL_TTL_DAYS: int = 1  # 日次で再計算する
 
 # 潜伏Pearl → 通常Pearl への昇格閾値
 LATENT_PEARL_PROMOTION_THRESHOLD: float = 70.0
@@ -4318,7 +4057,7 @@ LATENT_PEARL_SCORE_WEIGHTS: dict = {
     "midterm":      0.15,
 }
 
-# ── Wave7-H: Pearl Score D3統合定数（pearl_score_calculator.py）
+# ── Pearl Score D3統合定数（pearl_score_calculator.py）
 
 # D3 への EDINET セグメント文脈ボーナス上限
 D3_EDINET_SEGMENT_BONUS_MAX: float = 15.0
@@ -4332,7 +4071,7 @@ D3_CATALYST_BONUS_MAX: float = 8.0
 # 潜伏Pearl昇格銘柄への pearl_score 上乗せ上限
 LATENT_PEARL_PROMOTION_BONUS_MAX: float = 8.0
 
-# ── Wave7-I: ALL_DIRS への Wave 7 キャッシュディレクトリ追加 ───
+# ── ALL_DIRS へのキャッシュディレクトリ追加 ───
 
 _WAVE7_DIRS = [
     CACHE_DIR,   # standardization_cache / academic_conf_cache /
@@ -4347,9 +4086,7 @@ for _d in _WAVE7_DIRS:
     if _d not in ALL_DIRS:
         ALL_DIRS.append(_d)
 
-# ── Wave7-J: WEEKLY_MODULES / DAILY_MODULES への登録定義 ────────
-# 実際の登録は stock_analyzer_main.py の Wave 7 第3セッションで行う。
-# ここでは実行順序の仕様を定義する。
+# ── WEEKLY_MODULES / DAILY_MODULES の実行順序の仕様 ────────
 
 # DAILY_MODULES 実行順（size_decay → cross_size → independence → latent_pearl）
 WAVE7_DAILY_MODULE_ORDER: list = [
@@ -4359,33 +4096,23 @@ WAVE7_DAILY_MODULE_ORDER: list = [
     "latent_pearl_manager",
 ]
 
-# WEEKLY_MODULES 実行順（中計 → 学術 → 標準化）
-# ★ 2026-07-25 バッチ5: 宣言順が実コードの実行順と**完全に逆**だったため是正。
-#   この2定数は誰にも読まれておらず、宣言と実装のズレに気づけない状態だった
-#   （pipeline_registry_gen --audit に整合検査を追加して検出）。
-#   実装が正: midterm_plan_tracker は screener 段（order 3830）で走る。
-#   中計達成率は pearl_score_calculator の D3ボーナス
-#   （ENABLE_D3_MIDTERM_INTEGRATION）が参照するため screener より前に
-#   確定している必要がある。残る2本は signal_aggregator 段（5035/5056）。
+# WEEKLY_MODULES 実行順（中計 → 学術 → 標準化）。実装が正（pipeline_registry_gen --audit が整合を検査）。
+#   midterm_plan_tracker は screener 段で走る。中計達成率は pearl_score_calculator の D3ボーナス
+#   （ENABLE_D3_MIDTERM_INTEGRATION）が参照するため screener より前に確定している必要がある。
+#   残る2本は signal_aggregator 段。
 WAVE7_WEEKLY_MODULE_ORDER: list = [
     "midterm_plan_tracker",
     "academic_conf_tracker",
     "industry_standard_tracker",
 ]
 
-# ── Wave7-K: Feature Flag（全Wave 7モジュールのON/OFF制御）─────
-# ★ 2026-07-25 バッチ5: 健太の指示により Wave 7 を稼働させる。
-#   7モジュールとも実装・pipeline_registry への配線・テストまで揃っており、
-#   「本番確認後ONに変更」のまま放置されていただけだった。
-#   同時に size_decay_manager / cross_size_signal の mode-key 不一致
-#   （_in_mode("size_tier") に対し DAILY_MODULES に "size_tier" が無い）も
-#   是正済み。DAILY_MODULES の末尾を参照。
-#
-#   【スコアへの影響】ON にすると以下が composite/pearl スコアに効き始める:
+# ── Feature Flag（データ収集・高度アルファ層のON/OFF）─────
+#   size_decay_manager / cross_size_signal は DAILY_MODULES の "size_tier" キーで動く。
+#   【スコアへの影響】ON のとき以下が composite/pearl スコアに効く:
 #     - independence_score / cross_size_signal → signal_aggregator のカテゴリ
 #     - latent_pearl 昇格ボーナス（ENABLE_LATENT_PEARL_BONUS 経由・最大+8pt）
 #     - midterm 達成率 → D3ボーナス（ENABLE_D3_MIDTERM_INTEGRATION 経由）
-#   いずれも上流データが溜まるまでは 0.0 のままなので、初回から大きく動くことはない。
+#   いずれも上流データが溜まるまでは 0.0。
 
 # 標準化トラッカー有効フラグ
 ENABLE_STANDARDIZATION_TRACKER: bool = True
@@ -4408,15 +4135,9 @@ ENABLE_INDEPENDENCE_SCORE: bool = True
 # 潜伏銘柄管理有効フラグ
 ENABLE_LATENT_PEARL_MANAGER: bool = True
 
-# ── D3統合・潜伏Pearlボーナスの有効フラグ（2026-07-25 配線＋値の是正）──
-# ★ 重要: 下記4フラグは False と書かれていたが、pearl_score_calculator.py が
-#   一度も読んでおらず、実際には全て「常時適用」で動いていた。
-#   2026-07-25 に実装側へ配線したうえで、値を現行の挙動（＝適用する）に
-#   合わせて True へ揃えた。これによりスコアは変わらない。
-#   ここを False にすると、今度は本当にボーナスが止まる。
-#   なお各ボーナスは上流データが無ければ 0.0 になるため、
-#   ENABLE_INDEPENDENCE_SCORE / ENABLE_MIDTERM_PLAN_TRACKER 等が False の
-#   現状では catalyst / midterm ボーナスは実質発火しない。
+# ── D3統合・潜伏Pearlボーナスの有効フラグ ──
+#   pearl_score_calculator.py が読む。False にするとボーナスが止まる。
+#   各ボーナスは上流データが無ければ 0.0（ENABLE_INDEPENDENCE_SCORE / ENABLE_MIDTERM_PLAN_TRACKER 等）。
 
 # D3 EDINET セグメント統合有効フラグ
 ENABLE_D3_EDINET_SEGMENT: bool = True
@@ -4447,49 +4168,42 @@ LEDGER_HISTORY_DAYS: int = 14       # 連続失敗・最終成功日の遡及日
 # vault パスはローカル実行専用（GitHub Actions では使用しない）。
 
 ENABLE_INVESTMENT_DEPT: bool = True
-# ── 隔週審議の間隔（2026-07-25 追加）──────────────────────────
+# ── 隔週審議の間隔 ──────────────────────────
 # deliberation_scheduler.py が参照。launchd は毎週日曜20:00に起動するが、
 # 実際に走らせるかはこの間隔で判定する（launchd に隔週指定が無いため）。
 # 前回実行日は stock_data/data/deliberation_state.json に残る。
 DELIBERATION_INTERVAL_DAYS: int = 14
 
-# ── 審議キュー（2026-07-28 追加）────────────────────────────────
+# ── 審議キュー ────────────────────────────────
 # 日次・週次メールに「次に審議へ上げる候補」を何件出すか。
 # 先頭1件が隔週ジョブ（deliberation_scheduler）で実際に選定される銘柄。
 DELIBERATION_QUEUE_TOP_N: int = 5
 ALERT_ON_DELIBERATION_QUEUE: bool = True
-# V-01=a決定（2026-07-12）: 実働正本はローカル側 Vault2_ClaudeCode_Local。
-# 旧iCloud側 Vault2_ClaudeCode は2026-06-12凍結（凍結READMEを設置済み・書込禁止）。
+# 実働の正本はローカル側 Vault2_ClaudeCode_Local（iCloud側 Vault2_ClaudeCode は凍結・書込禁止）。
 INVESTMENT_DEPT_VAULT_DIR: str = os.getenv(
     "INVESTMENT_DEPT_VAULT_DIR",
     "/Users/kentaryobe/Documents/Obsidian_Local/Vault2_ClaudeCode_Local/"
     "CEO室/departments/B-investment",
 )
 
-# ── BLOCK 38b: パイプライン実行フラグの正式定義（Wave PIPE-1）─────
-# ★ 2026-06-12 SSOT修正: 以下5フラグは stock_analyzer_main / 各モジュールが
-#   getattr デフォルト True で参照していたが config に定義が無かった
-#   （pipeline_registry_gen.py --audit で検出）。現状動作を維持して明文化。
+# ── BLOCK 38b: パイプライン実行フラグ（stock_analyzer_main / 各モジュールが読む）─────
 ENABLE_DEEP_DIVE_TRIGGER: bool = True      # 深掘りトリガー [S3-4]
 ENABLE_TECHNOLOGY_MAPPER: bool = True      # 技術マッピング [Wave6-B T-1]
 ENABLE_CLUSTER_ENGINE: bool = True         # クラスターエンジン [Wave6-B T-2]
 ENABLE_EMERGING_DETECTOR: bool = True      # 萌芽テーマ検知 [Wave6-B T-3]
 ENABLE_CLUSTER_GRAPH_EXPORT: bool = True   # クラスター結果出力 [Wave6-B T-4]
 
-# ── BLOCK 39b: オントロジー層 設定（Wave ONT-1 本番配線・2026-06-12）──
+# ── BLOCK 39b: オントロジー層 設定 ──
 # ontology_exporter.py が参照。週次（WEEKLY_MODULES "ontology_export"）で
 # エンティティグラフを BQ `ontology` データセットへ追記する。
 # BQ認証なし環境では JSONL ローカル出力に自動フォールバック。
-# 初回のみ ontology_bq_schema.py を Colab 等で手動実行しておくこと。
+# 初回のみ ontology_bq_schema.py を手動実行しておくこと。
 ENABLE_ONTOLOGY_EXPORT: bool = True
 
 # ==============================================================
-# BLOCK 40: イベントホライズン（事前アラート）設定（Wave EVT-1）
+# BLOCK 40: イベントホライズン（事前アラート）設定
 # ==============================================================
-# event_horizon_scanner.py / catalyst_calendar.py が参照。
-# ★ 従来 catalyst_calendar.py 内のデフォルト値を getattr で参照していた
-#   6つの日程表を SSOT としてここに正式定義（値は同一・挙動変更なし）。
-#   日程改定時はここだけを編集する。
+# event_horizon_scanner.py / catalyst_calendar.py が参照する日程表。日程改定時はここだけを編集する。
 
 FED_FOMC_DATES: list = [
     "2026-01-29", "2026-03-19", "2026-05-07",
@@ -4532,29 +4246,27 @@ EVENT_HORIZON_ALERT_DAYS: int = 5      # この日数前からアラート開始
 EVENT_HORIZON_EARNINGS_TTL_DAYS: int = 3   # 決算日キャッシュTTL（yfinance呼び出し抑制）
 
 # ==============================================================
-# BLOCK 41: オプション戦略アドバイザー設定（Wave OPT-1）
+# BLOCK 41: オプション戦略アドバイザー設定
 # ==============================================================
 # options_strategy_advisor.py が参照。
-# ★ 投資部ガードレール準拠: 提案は defined-risk（買い）または
+# 投資部ガードレール準拠: 提案は defined-risk（買い）または
 #   カバード戦略（covered call / cash-secured put）のみ。
 #   裸売り・ショートは提案禁止（B-investment 鉄則8と同期）。
 
 ENABLE_OPTIONS_ADVISOR: bool = True
 OPTIONS_INDEX_ETFS: list = ["SPY", "QQQ"]   # 常時監視する指数ETF
 OPTIONS_MAX_UNIVERSE: int = 10              # yfinanceチェーン取得の上限銘柄数
-# 2026-09-21: 実行時刻（米国時間外）では ATM の IV が取れず提案0件が続いたため、
-# HV の過去1年分布での位置で環境を判定する（健太の判断）。
+# 実行時刻（米国時間外）では ATM の IV が取れないため、HV の過去1年分布での位置で環境を判定する。
 OPTIONS_HV_RICH_PCTL: float = 70.0          # HVがこの分位以上 → 高ボラ＝プレミアム売り環境
 OPTIONS_HV_CHEAP_PCTL: float = 30.0         # HVがこの分位以下 → 低ボラ＝プレミアム買い環境
 OPTIONS_HV_WINDOW_DAYS: int = 20            # ヒストリカル・ボラティリティ算出窓
 OPTIONS_MIN_SCORE_FOR_CSP: float = 70.0     # cash-secured put 提案の最低composite
 
 # ==============================================================
-# BLOCK 44: 出口戦略エンジン設定（Wave R0-6 / E1）
+# BLOCK 44: 出口戦略エンジン設定
 # ==============================================================
 # exit_rule_engine.py が参照。投資哲学.md の売却ルールのコード化。
-# 設計正本: 統合ファイルなど/05_提案_2026-07-05/要件定義書_統合改修_20260705.md §R0-6
-# ★ 発注は常に健太が手動（D-01）。本エンジンは注文票生成まで。
+# 発注は常に健太が手動（D-01）。本エンジンは注文票生成まで。
 
 ENABLE_EXIT_ENGINE: bool = True
 EXIT_ONKABU_FIRE_PCT: float = 200.0   # R-A: 恩株化発火（+200%=3倍）
@@ -4572,18 +4284,17 @@ EXIT_STORY_DROP_FIRE_PCT: float = 40.0  # R-STORY: composite低下率発火
 EXIT_STORY_DROP_NEAR_PCT: float = 30.0  # R-STORY: 接近通知
 
 # ==============================================================
-# BLOCK 53: データ信頼性・鮮度SLA設定（Wave R0-1 / E7'）
+# BLOCK 53: データ信頼性・鮮度SLA設定
 # ==============================================================
-# data_reliability.py が参照。D-05: J-Quants不使用・全て無料
+# data_reliability.py が参照。J-Quants不使用・全て無料
 # （yfinanceリトライ → Stooqフォールバック → キャッシュ）。
 
 ENABLE_DATA_SLA: bool = True
-# Wave R0-2: usデータセットへのBQ格納（job/executive/facility の3モジュール）
+# usデータセットへのBQ格納
 ENABLE_US_BQ_EXPORT: bool = True
 ENABLE_US_FUNDAMENTALS_BQ: bool = True
 US_FUNDAMENTALS_BQ_TABLE: str = "fundamentals"
-# D-09（2026-07-05決定）: Notion連携は廃止（Obsidian一本化）。
-# notion_obsidian_writer.py の Notion API 呼び出しのみ停止（Obsidian出力は継続）。
+# Notion連携は廃止（Obsidian一本化）。notion_obsidian_writer.py の Notion API 呼び出しのみ停止（Obsidian出力は継続）。
 ENABLE_NOTION_API: bool = False
 STOOQ_ENABLED: bool = True
 DATA_RETRY_SCHEDULE: list = [2, 4, 8]        # リトライ間隔（秒・指数バックオフ）
@@ -4595,9 +4306,9 @@ DATA_SLA_DAYS: dict = {                      # 種別ごとの鮮度SLA（日）
 }
 
 # ==============================================================
-# BLOCK 42: 統合バックテスト基盤設定（Wave R1-1 / S1）
+# BLOCK 42: 統合バックテスト基盤設定
 # ==============================================================
-# backtest/ パッケージが参照。設計正本: 要件定義書_統合改修_20260705.md §R1-1。
+# backtest/ パッケージが参照。
 # 共通スキーマ②「仮想約定」: 約定価格 = 翌営業日始値 × (1±slippage)。
 
 BT_SLIPPAGE_BPS_JP: int = 20         # 日本株スリッページ（bps）
@@ -4613,7 +4324,7 @@ BT_SHORT_NEGATIVE_RATE: float = 0.04      # 逆日歩 保守的に年4%固定
 BT_BENCHMARK_TICKER: str = "1306.T"       # 受入テスト用ベンチマーク（TOPIX ETF）
 
 # ==============================================================
-# BLOCK 43: ペーパートレード仮想口座設定（Wave R1-2 / S2）
+# BLOCK 43: ペーパートレード仮想口座設定
 # ==============================================================
 # paper/paper_broker.py が参照。全イベントは events.jsonl に追記し
 # 口座はイベントから再構築可能（イベントソーシング）。
@@ -4621,20 +4332,16 @@ BT_BENCHMARK_TICKER: str = "1306.T"       # 受入テスト用ベンチマーク
 ENABLE_PAPER_TRADING: bool = True
 PAPER_INITIAL_CAPITAL: int = 2_000_000    # 戦略別の初期仮想資金（円）
 PAPER_STRATEGIES: list = ["screener_topN", "ignition", "pead"]
-# S6(commodity)はR4-2実装後に、S4(options)はIBKRペーパー利用のため対象外
-# ★ 2026-07-25: playbooks/*.yaml 由来のイベント戦略（R4-1 / S5）は
-#   paper_broker が adapter 登録済みのものを自動で対象に加える。
-#   ここに書かなくてよい（YAMLを置けば口座ができるのが設計意図）。
-#   従来は adapter だけ登録され PAPER_STRATEGIES に無いため口座が作られず、
-#   earnings_beat_momentum / pead_long_v1 / tdnet_buyback の3本が空回りしていた。
+# S6(commodity)・S4(options)は対象外。
+# playbooks/*.yaml のイベント戦略は paper_broker が adapter 登録済みのものを自動で対象に加える
+#   （ここに書かなくてよい。YAMLを置けば口座ができる）。
 PAPER_INCLUDE_PLAYBOOK_STRATEGIES: bool = True
 PAPER_LEDGER_PATH: str = "stock_data/paper"   # accounts.json / events.jsonl の置き場
 
 # ==============================================================
-# BLOCK 48: ポジションサイジングv2設定（Wave R1-5 / E5）
+# BLOCK 48: ポジションサイジングv2設定
 # ==============================================================
-# position_sizer.py の calc_position_size_v2 が参照。
-# D-15（2026-07-05確定）: σターゲット=15%。
+# position_sizer.py の calc_position_size_v2 が参照。σターゲット=15%。
 
 VOL_TARGET_ANNUAL: float = 0.15      # ポートフォリオ年率ボラ上限（D-15）
 CONVICTION_MULT: dict = {1: 0.5, 2: 0.75, 3: 1.0, 4: 1.25, 5: 1.5}
@@ -4646,25 +4353,20 @@ CASINO_BUDGET_PCT: float = 15.0      # カジノ枠 = min(総資産×15%, 200万
 CASINO_BUDGET_CAP_YEN: int = 2_000_000
 
 # ==============================================================
-# BLOCK 55: taxonomy信号設定（Wave R2-5,R2-6 / T-4,T-5）
+# BLOCK 55: taxonomy信号設定
 # ==============================================================
-# taxonomy_hotness.py（node_hotness算出）と signal_aggregator.py
-# （カテゴリV）が参照。設計正本: HANDOFF_2026-06-30 §4-3。
-# ※ BLOCK 54 は S12信用ユニット用に予約済みのため 55 を使用。
+# taxonomy_hotness.py（node_hotness算出）と signal_aggregator.py（カテゴリV）が参照。
+# ※ BLOCK 54 は S12信用ユニット用に予約。
 
 ENABLE_TAXONOMY_SIGNAL: bool = True
 TAXONOMY_HOTNESS_BASELINE_DAYS: int = 20   # 加熱判定のベースライン日数
 TAXONOMY_LEADING_ONLY_TH: float = 65.0     # 「先行だけ点灯」の先行閾値
 TAXONOMY_MARKET_DEFAULT: str = "JP"        # T-3 get_company_taxonomy_scores の既定market
-# 2026-09-21: 業種スコアの関与度加重に使う、1業種あたりの参照銘柄数
+# 業種スコアの関与度加重に使う、1業種あたりの参照銘柄数
 TAXONOMY_SECTOR_TICKER_LIMIT: int = 10
 
-# ── taxonomy 台帳の定期投入（2026-07-25 追加）────────────────
-# taxonomy_loader.py（T-1後半 / R2-1）と taxonomy_company_mapper.py
-# （T-2A / R2-3）の有効フラグ。
-# 【背景】どちらも実装・テストまで揃っていたのに GitHub Actions にも
-# launchd にも登録が無く、承認済みseed 293ノードが BQ に入らないまま
-# taxonomy 信号が空を参照していた（2026-07-25 の棚卸しで判明）。
+# ── taxonomy 台帳の定期投入 ────────────────
+# taxonomy_loader.py と taxonomy_company_mapper.py の有効フラグ。
 # 週次（月曜）に daily_run.yml から実行する。どちらも node_id /
 # (company_id, node_id) キーの MERGE で冪等。
 # taxonomy_loader は _meta.status が APPROVED のバッチしか投入しないため、
@@ -4673,10 +4375,9 @@ ENABLE_TAXONOMY_LOADER: bool = True
 ENABLE_TAXONOMY_COMPANY_MAPPER: bool = True
 
 # ==============================================================
-# BLOCK 49: ドローダウン制御設定（Wave R3-3 / E9）
+# BLOCK 49: ドローダウン制御設定
 # ==============================================================
-# dd_controller.py が参照。D-16=c（より許容）で2026-07-05確定。
-# 設計正本: 要件定義書_統合改修_20260705.md §R3-3。売却強制なし（推奨のみ・D-01）。
+# dd_controller.py が参照。売却強制なし（推奨のみ・D-01）。
 
 ENABLE_DD_CONTROL: bool = True
 DD_CAUTION: float = 0.15        # NORMAL→CAUTION 発火（dd>=15%）
@@ -4685,10 +4386,9 @@ DD_CAUTION_EXIT: float = 0.10   # CAUTION→NORMAL 復帰（dd<10%・ヒステ�
 DD_DEFENSE_EXIT: float = 0.20   # DEFENSE→CAUTION 復帰（dd<20%・ヒステリシス）
 
 # ==============================================================
-# BLOCK 52: 税・NISA最適化設定（Wave R3-5 / S10）
+# BLOCK 52: 税・NISA最適化設定
 # ==============================================================
 # tax_optimizer.py が参照。税務の最終判断は健太（レポートに明記）。
-# 設計正本: 要件定義書_統合改修_20260705.md §R3-5。
 
 ENABLE_TAX_OPTIMIZER: bool = True
 TAX_RATE_NISA: float = 0.20315        # 特定口座の譲渡益課税率（NISAは非課税=0）
@@ -4698,10 +4398,9 @@ NISA_GROWTH_TOTAL_LIMIT: int = 12_000_000   # 新NISA 成長投資枠 生涯上�
 NISA_LONG_HOLD_MONTHS: int = 12       # NISA推奨の想定保有下限（>1年）
 
 # ==============================================================
-# BLOCK 45: イベントドリブン短期戦略設定（Wave R4-1 / S5）
+# BLOCK 45: イベントドリブン短期戦略設定
 # ==============================================================
-# event_strategy_runner.py が参照。プレイブックはYAML（playbooks/）で外部化。
-# 設計正本: 要件定義書_統合改修_20260705.md §R4-1。発注は健太手動（D-01）。
+# event_strategy_runner.py が参照。プレイブックはYAML（playbooks/）で外部化。発注は健太手動（D-01）。
 
 ENABLE_EVENT_STRATEGY: bool = True
 PLAYBOOK_DIR: str = "playbooks"
@@ -4710,10 +4409,9 @@ PROMOTION_MIN_PF: float = 1.3       # 実弾昇格M2: ProfitFactor下限
 PROMOTION_MAX_P: float = 0.10       # 実弾昇格M2: bootstrap p上限
 
 # ==============================================================
-# BLOCK 46: コモディティ/マクロ・ローテーション設定（Wave R4-2 / S6）
+# BLOCK 46: コモディティ/マクロ・ローテーション設定
 # ==============================================================
-# commodity_rotation.py が参照（月初実行）。東証ETF・無料データで完結。
-# 設計正本: 要件定義書_統合改修_20260705.md §R4-2。配分≤総資産10%。
+# commodity_rotation.py が参照（月初実行）。東証ETF・無料データで完結。配分≤総資産10%。
 
 ENABLE_COMMODITY_ROTATION: bool = True
 CMD_MAX_ALLOC_PCT: float = 10.0    # コモディティ配分の総資産比上限
@@ -4736,10 +4434,9 @@ CMD_REGIME_ALLOW: dict = {
 }
 
 # ==============================================================
-# BLOCK 50: マルチ戦略資金配分メタ設定（Wave R4-4 / S11）
+# BLOCK 50: マルチ戦略資金配分メタ設定
 # ==============================================================
-# allocation_meta.py が参照（月次）。分数ケリー×リスクパリティ。
-# 設計正本: 要件定義書_統合改修_20260705.md §R4-4。健太承認後にconfig反映。
+# allocation_meta.py が参照（月次）。分数ケリー×リスクパリティ。健太承認後にconfig反映。
 
 ENABLE_ALLOCATION_META: bool = True
 KELLY_FRACTION: float = 0.25       # 分数ケリー（フルケリーの1/4）
@@ -4749,10 +4446,9 @@ CULL_MONTHS: int = 6               # 淘汰判定の観測月数
 CULL_P_TH: float = 0.5             # 淘汰: bootstrap p がこれ超
 
 # ==============================================================
-# BLOCK 51: MLメタモデル設定（Wave R5-1 / S7）
+# BLOCK 51: MLメタモデル設定
 # ==============================================================
-# ml/ が参照。LightGBM回帰・Purged Walk-Forward CV。
-# 設計正本: 要件定義書_統合改修_20260705.md §R5-1。フラグ変更は健太承認。
+# ml/ が参照。LightGBM回帰・Purged Walk-Forward CV。フラグ変更は健太承認。
 
 # ※ 既存 BLOCK RESEARCH-4（旧XGBoost ML_CORRECTION_*）とは別系統のため ML_META_* で命名。
 ML_META_TARGET_HORIZON_D: int = 20   # 目的変数の先読み営業日数
@@ -4770,21 +4466,18 @@ ML_META_DATASET_MAX_DAYS: int = 500  # features.jsonl の保持日数（古い�
 ENABLE_ML_META_DATASET: bool = True  # 特徴量スナップショット蓄積（学習用・補正はしない）
 
 # ==============================================================
-# BLOCK 56: JP/US共通スコア設定（Wave R5-2 Phase A / E10・Phase B / U-9）
+# BLOCK 56: JP/US共通スコア設定
 # ==============================================================
-# score_calculator.py が参照。SPEC_core §8-2 の統合方針の第一段階。
-# Phase A対象 = 保有銘柄 ＋ us_screener 上位N のみ（要件定義書 §R5-2）。
-# 対象ユニバースは Phase B でも拡大しない（決定 J-03=a / 2026-07-27）。
+# score_calculator.py が参照。対象 = 保有銘柄 ＋ us_screener 上位N のみ（ユニバースは広げない）。
 ENABLE_SCORE_CALCULATOR: bool = True
 UNIFIED_SCORE_US_TOP_N: int = 50     # us_screener からの対象上位件数
 
-# ── Phase B（U-9 / 2026-07-28）: 共通成分による調整 ──────────────
+# ── Phase B: 共通成分による調整 ──────────────
 # composite = clamp(base + dcf_adj + tech_adj + geo_adj, 0, 100)
 # 各成分は results（technical_scorer / dcf_valuation / sectors 等）から
 # 「読むだけ」で取得する。score_calculator は yfinance / BQ を叩かない。
-# 成分が取れない銘柄は当該成分を 0 として base のみで算出するため、
-# 全滅しても Phase A から劣化しない。
-# ★ UNIFIED_SCORE_PHASE_B_ENABLED=False で Phase A と完全に同じ出力へ戻る
+# 成分が取れない銘柄は当該成分を 0 として base のみで算出する。
+# UNIFIED_SCORE_PHASE_B_ENABLED=False で Phase A と完全に同じ出力へ戻る
 #   （非常口。tests/test_score_calculator.py が同値性を保証）。
 UNIFIED_SCORE_PHASE_B_ENABLED: bool = True
 UNIFIED_SCORE_DCF_MAX_ADJ:  float = 5.0   # DCF調整の上限（±pt）
@@ -4803,20 +4496,13 @@ ENABLE_KEY_HEALTH: bool = True
 KEY_HEALTH_CSE_ENABLED: bool = False
 
 # ==============================================================
-# BLOCK 58: 月次・四半期ランナー設定（2026-07-25 / B-5）
+# BLOCK 58: 月次・四半期ランナー設定
 # ==============================================================
-# monthly_runner.py が参照。月初に走る「提案・レビュー系」を1本に束ねる。
-# 設計上ここが唯一の実行主体で、GitHub Actions（daily_run.yml の月初判定）と
-# 司令塔シェル（invest-monthly）の両方から同じコマンドで起動される。
+# monthly_runner.py が参照。月初に走る「提案・レビュー系」を1本に束ねる唯一の実行主体で、
+# GitHub Actions（daily_run.yml の月初判定）と司令塔シェル（invest-monthly）の両方から起動される。
 #
-# 【背景】2026-07-25 の棚卸しで、月次設計のモジュール群
-# （signal_culling_report / monthly_strategy_review / commodity_rotation /
-#  allocation_meta / paper/monthly_report / tax_optimizer）に
-# GitHub Actions・launchd のどちらにも実行主体が無く、設計だけあって
-# 一度も走っていなかったことが判明したため新設した。
-#
-# 対象月は既定で「前月」。月初1日に走らせて、閉じたばかりの月を
-# レビューする運用のため（commodity_rotation だけは翌月への配分提案なので当月）。
+# 対象月は既定で「前月」。月初に閉じたばかりの月をレビューする
+# （commodity_rotation だけは翌月への配分提案なので当月）。
 ENABLE_MONTHLY_RUNNER: bool = True
 # 各ステップの個別スイッチ。False にするとそのステップだけスキップされる。
 ENABLE_SIGNAL_CULLING: bool = True          # E4 シグナル淘汰レポート（月次）
@@ -4827,18 +4513,10 @@ TAX_OPTIMIZER_MONTHS: tuple = (1, 4, 7, 10, 11)
 MONTHLY_RUN_MAX_DAY: int = 3
 
 # ==============================================================
-# BLOCK 59: 実装モジュール定数の集約（2026-07-25 SSOT移設 第1弾）
+# BLOCK 59: 実装モジュール定数の集約
 # ==============================================================
-# 【背景】Colab で1ファイルずつ書き足していた名残で、各モジュールが
-# 自分用の閾値定数を持ったまま config へ集約されず、
-# 「config を編集しても効かない」状態のものが543件あった（棚卸しレポート参照）。
-# 本ブロックはそのうち **スコアに直結する優先度1の中核** を移設したもの。
-#
-# 【取り込み方式】各モジュールが config_sync.sync_module_constants() を
-# run_* の冒頭で1回呼び、モジュール定数を上書きする。
-# 参照箇所（数十箇所）を書き換えないため差分が小さく、リスクが低い。
-#
-# 【値】すべて移設時点の実装値と同一。したがって挙動は変わらない。
+# 各モジュールが config_sync.sync_module_constants() を run_* の冒頭で1回呼び、
+# モジュール定数をここの値で上書きする（参照箇所を書き換えない方式）。
 # 命名はモジュール別プレフィックスで衝突を避けている。
 
 # ── market_breadth.py（市場幅指標 [3-7]）────────────────────
@@ -4894,9 +4572,8 @@ TS_WEIGHT_VALUE:         float = 0.25
 TS_WEIGHT_QUALITY:       float = 0.20
 TS_WEIGHT_TECHNICAL:     float = 0.20
 
-# ── SSOT移設 第2弾（優先度1・2026-07-26）────────────────────
-# 値は各実装モジュールの移設前既定値と同一。run_* の入口で config_sync が
-# 実行時の設定を取り込むため、環境変数による上書きも反映される。
+# ── モジュール定数（優先度1）────────────────────
+# run_* の入口で config_sync が取り込むため、環境変数による上書きも反映される。
 
 # rule_optimizer.py
 RO_WEIGHT_MIN: float = 0.30
@@ -4991,8 +4668,7 @@ CREDIT_PENALTY_OVERHEAT: float = -5.0
 # ignition_detector.py（既存 IGNITION_* 設定へカテゴリ検出閾値を追加）
 IGNITION_CATEGORY_DETECT_THRESHOLD: float = 0.30
 
-# ── SSOT移設 第3弾（優先度1・2026-07-26）────────────────────
-# 実装モジュールの既定値を集約。各入口で config_sync が値を取り込む。
+# ── モジュール定数（優先度1・続き）────────────────────
 ACT_ACADEMIC_SCORE_MAX: float = 100.0
 AA_IC_HIGH_THRESHOLD: float = 0.10
 AA_IC_MID_THRESHOLD: float = 0.05
@@ -5159,8 +4835,7 @@ SAM_DELTA_THRESHOLDS: dict = {
     "vix": 5.0, "sp500": 100.0, "gold": 30.0,
 }
 
-# ── SSOT移設 第4弾（優先度2・2026-07-26）────────────────────
-# 観測・保持期間。値は移設前の実装既定値と同一。
+# ── モジュール定数（優先度2：観測・保持期間）────────────────────
 B4_ALPHA_ATTRIBUTER_LOOKBACK_WEEKS = 26  # LOOKBACK_WEEKS
 B4_ANOMALY_DETECTOR_VOLUME_LOOKBACK = 20  # VOLUME_LOOKBACK
 B4_ANOMALY_DETECTOR_HISTORY_PERIOD = '3mo'  # HISTORY_PERIOD
@@ -5192,10 +4867,6 @@ B4_FINBERT_ANALYZER_CACHE_VALID_DAYS = 7  # CACHE_VALID_DAYS
 B4_GOOGLE_TRENDS_PIPELINE_CACHE_VALID_DAYS = 7  # CACHE_VALID_DAYS
 B4_GOOGLE_TRENDS_PIPELINE_LOOKBACK_WEEKS = 13  # LOOKBACK_WEEKS
 B4_INDEPENDENCE_SCORE_CALCULATOR_ROLLING_WINDOW_DAYS = 60  # _ROLLING_WINDOW_DAYS
-# 2026-07-28 U-6: insider_monitor.py の米国 Form 4 経路（_parse_form4_simple 等、
-# LOOKBACK_DAYS を参照していた唯一の箇所）を us_insider_form4_scraper.py へ委譲・削除した
-# ため、LOOKBACK_DAYS 定数自体が不要になった。
-# 削除して未参照0件を維持する（旧値は30日）。
 B4_INSIDER_MONITOR_CACHE_HOURS = 24 * 7  # CACHE_HOURS
 B4_JP_US_SECTOR_BRIDGE_CORR_LOOKBACK_WEEKS = 52  # CORR_LOOKBACK_WEEKS
 B4_JP_US_SECTOR_BRIDGE_ROTATION_LOOKBACK = 8  # ROTATION_LOOKBACK
@@ -5241,8 +4912,7 @@ B4_US_INSIDER_FORM4_SCRAPER_WINDOW_DAYS_DEFAULT = 30  # _WINDOW_DAYS_DEFAULT
 B4_US_SECTOR_BRIDGE_ENHANCED_MAPPING_CACHE_DAYS = 30  # MAPPING_CACHE_DAYS
 B4_WEEKLY_FEEDBACK_RUNNER_STALE_DAYS = 7  # STALE_DAYS
 
-# ── SSOT移設 第5弾（優先度3・2026-07-26）────────────────────
-# API・実行時パラメータ。値は移設前の実装既定値と同一。
+# ── モジュール定数（優先度3：API・実行時パラメータ）────────────────────
 B5_DATA_RELIABILITY_DEFAULT_RETRY_SCHEDULE = [2, 4, 8]  # _DEFAULT_RETRY_SCHEDULE
 B5_POLITICIAN_MONITOR_REQUEST_TIMEOUT = 20  # _REQUEST_TIMEOUT
 B5_POLITICIAN_MONITOR_RETRY_COUNT = 3  # _RETRY_COUNT
@@ -5263,10 +4933,7 @@ B5_US_FUNDAMENTAL_ROTATOR_DAILY_FETCH_LIMIT = 100  # DAILY_FETCH_LIMIT
 B5_US_FUNDAMENTAL_ROTATOR_REQUEST_DELAY = 0.12  # REQUEST_DELAY
 B5_US_FUNDAMENTAL_ROTATOR_REQUEST_TIMEOUT = 15  # REQUEST_TIMEOUT
 B5_PAID_MEDIA_SEARCHER_CSE_DEAD_LIMIT = 3  # _CSE_DEAD_LIMIT
-# 2026-09-09: 下記3件は各モジュールの _CFG_CONST_MAP が参照しているのに
-# config 側に無く、sync_module_constants が黙って何もしていなかった
-# （getattr(cfg, name, None) が None なら continue するため、
-#   モジュール既定値のまま動き config から制御できない）。
+# 下記は各モジュールの _CFG_CONST_MAP が参照する（config に無いと sync_module_constants が黙って何もしない）。
 B5_STOCK_SNAPSHOT_WRITER_MAX_ROWS = 2000      # MAX_ROWS
 B5_PRICE_HISTORY_WRITER_LOOKBACK_DAYS = 7     # LOOKBACK_DAYS
 B5_PRICE_HISTORY_WRITER_MAX_ROWS = 20000      # MAX_ROWS
@@ -5279,11 +4946,8 @@ B5_EDINET_CLIENT_DAILY_BUDGET = 80  # DAILY_BUDGET
 B5_PEAD_MONITOR_FETCH_DELAY = 0.5  # _FETCH_DELAY
 B5_SELF_EVALUATOR_FETCH_DELAY = 0.25  # FETCH_DELAY
 B5_SEC_GEOGRAPHIC_EXTRACTOR_FETCH_TIMEOUT = 30  # _FETCH_TIMEOUT
-# 2026-07-27 U-1b: sec_geographic_extractor の独自リトライ・レート制限を sec_client.py へ
-# 統合したため、下記2定数は BLOCK 60 の SEC_MAX_RETRIES / SEC_RATE_LIMIT_RPS に代替された。
-# 削除して未参照0件を維持する（旧値は RETRY_WAIT_SEC=6 / SEC_RATE_LIMIT=0.12 秒間隔）。
-# ※ B5_SEC_GEOGRAPHIC_EXTRACTOR_FETCH_TIMEOUT は移行後も timeout=30 の明示指定で
-#   参照が残っているため存置する。
+# SEC のリトライ・レート制限は BLOCK 60（SEC_MAX_RETRIES / SEC_RATE_LIMIT_RPS）。
+# B5_SEC_GEOGRAPHIC_EXTRACTOR_FETCH_TIMEOUT は timeout=30 の明示指定で使っている。
 B5_ACADEMIC_CONF_TRACKER_REQUEST_TIMEOUT = 20  # _REQUEST_TIMEOUT
 B5_EARNINGS_SURPRISE_FETCH_DELAY = 0.3  # FETCH_DELAY
 B5_US_8K_MONITOR_REQUEST_TIMEOUT = 10  # REQUEST_TIMEOUT
@@ -5316,8 +4980,7 @@ B5_COUNTRY_RISK_UPDATER_FETCH_TIMEOUT = 20  # _FETCH_TIMEOUT
 B5_COUNTRY_RISK_UPDATER_RETRY_WAIT = 5  # _RETRY_WAIT
 B5_COUNTRY_RISK_UPDATER_GDELT_TOTAL_FAIL_LIMIT = 8  # _GDELT_TOTAL_FAIL_LIMIT
 
-# ── SSOT移設 第6弾（優先度4・2026-07-26）────────────────────
-# 投資方針・資金管理・統計モデルの可変数値。値は移設前の実装既定値と同一。
+# ── モジュール定数（優先度4：投資方針・資金管理・統計モデルの可変数値）────────────────────
 B6_LEARNING_AUDIT_LOG_MANUAL_REVIEW_TRIGGER = 2  # MANUAL_REVIEW_TRIGGER
 B6_REGIME_DETECTOR_N_STATES = 4  # N_STATES
 B6_REGIME_DETECTOR_N_FEATURES = 7  # N_FEATURES
@@ -5458,30 +5121,11 @@ B6_COUNTRY_RISK_UPDATER_GDELT_MAX_COUNTRIES = 15  # _GDELT_MAX_COUNTRIES
 B6_STRATEGY_OUTPUT_SCHEMA_SATELLITE_SMALLCAP_DISCOVERY = 80  # SATELLITE_SMALLCAP_DISCOVERY
 
 # ==============================================================
-# BLOCK 60: SEC共通アクセス層設定（Wave J1 / U-1a）
+# BLOCK 60: SEC共通アクセス層設定（sec_client.py）
 # ==============================================================
-# 【背景】SEC EDGAR アクセスが insider_monitor / institutional_13f_monitor /
-# sec_geographic_extractor / sec_summarizer / us_8k_monitor /
-# us_fundamental_rotator / us_insider_form4_scraper / us_sector_bridge_enhanced
-# の8ファイルに散在し、User-Agent・CIK解決・レート制限・リトライ・キャッシュを
-# 各自が独自実装していた（D-6/D-7、要件定義書_JP-US統合_20260726.md §2-1）。
-# sec_client.py（新設）がこれらを1箇所に集約する。本ブロックはその設定。
-#
-# 【既定値の根拠】既存8ファイルの実測（2026-07-27 U-1a着手時点）:
-#   FETCH_DELAY: insider_monitor=0.12 / us_8k_monitor=0.15 /
-#                sec_geographic_extractor=0.5 / sec_summarizer=0.5 /
-#                us_insider_form4_scraper=_FETCH_DELAY=0.5（最も保守的）
-#   → SEC_RATE_LIMIT_RPS はこの 0.5s 間隔（=2 req/s）に合わせた。
-#   TIMEOUT:     us_8k_monitor=10 / us_insider_form4_scraper=_HTTP_TIMEOUT=15 /
-#                us_fundamental_rotator=15（通常経路。XBRL大容量取得のみ30）
-#   → 汎用HTTPタイムアウトとして 15 を採用（XBRL等の特大レスポンス用の
-#     30秒は sec_client の責務外＝各モジュールが timeout= で個別指定する）。
-#   TTL:         us_insider_form4_scraper._TICKER_MAP_TTL = 7（日）
-#   RETRIES:     us_stock_screener._fetch_one の既定 max_retries=3 に準拠
-#
-# 【本バッチ（U-1a）の範囲】sec_client.py の新設のみ。既存8ファイルの
-# この設定への移行は別バッチで行う（現時点でこの4定数を参照するのは
-# sec_client.py のみ）。
+# SEC EDGAR へのアクセス（User-Agent・CIK解決・レート制限・リトライ・キャッシュ）は sec_client.py に集約。
+#   SEC_RATE_LIMIT_RPS: 0.5秒間隔（=2 req/s）。SECのアクセス規約内で最も保守的な値。
+#   TIMEOUT: 汎用HTTPは15秒。XBRL等の特大レスポンスは各モジュールが timeout= で個別指定する。
 SEC_RATE_LIMIT_RPS: float = 2.0      # 現行の FETCH_DELAY=0.5 相当（最も保守的）
 SEC_HTTP_TIMEOUT: int = 15           # 現行の最大値（通常経路。XBRL等の特大取得を除く）
 SEC_CIK_MAP_TTL_DAYS: int = 7        # us_insider_form4_scraper の _TICKER_MAP_TTL 準拠
@@ -5491,7 +5135,7 @@ SEC_MAX_RETRIES: int = 3
 # BLOCK 61: 市場別プロファイル索引（Wave J3 / U-8）
 # ==============================================================
 # 既存の *_JP / *_US 設定値は削除・複製しない。市場横断コードが必要とする
-# 設定名をここで索引化し、実値は従来どおり各定数を正本とする。
+# 設定名をここで索引化し、実値は各定数を正本とする。
 # revision_multiplier / revision_cap は screener_common.py にだけ存在していた
 # 市場差を移したもの。既存の JP/US スコア挙動は変えない。
 MARKET_PROFILE: dict = {
