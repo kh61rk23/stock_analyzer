@@ -3372,6 +3372,10 @@ CONFIDENCE_PRIOR_ALPHA    = 0.15   # EMA 更新率（S3-3 confidence_prior）
 #   前回値は score_history.json から読み、結果は sector_results と score_history に残す（スコア自体は変えない）。
 ENABLE_S3_CONFIDENCE_PRIOR: bool = True
 
+# 経営者スコア（ceo_evaluator）の経営トップ・就任日の取得元。有報PDFの「役員の状況」を読む（officer_extractor.py）。
+ENABLE_OFFICER_EXTRACTOR: bool = True
+OFFICER_DAILY_LIMIT: int = 40          # 1日に読む有報の上限（1冊1〜3秒）
+
 # ── S4/FE-F: スコア事前確率・ファクターモメンタム定数 ─────────────
 # SCORE_PRIOR_TTL_DAYS     : score_prior_manager のキャッシュ TTL（日）
 # SCORE_PRIOR_FRESHNESS_HALF_LIFE: 鮮度係数の半減期（日）

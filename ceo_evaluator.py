@@ -179,7 +179,7 @@ def _get_ceo_tenure(ticker: str, edinet_db: dict) -> tuple[Optional[str], Option
     if not isinstance(analysis, dict):
         return None, None
 
-    # edinet_rotation_manager が蓄積する想定のキー
+    # 経営トップと就任日は officer_extractor（有報「役員の状況」）が analysis["officers"] に入れる
     officers = analysis.get("officers", {})
     ceo_data = officers.get("representative_director", {})
 
@@ -643,6 +643,65 @@ def evaluate_ceo(
 # BLOCK 9: バッチ処理
 # ==============================================================
 
+def bq_financial_history(tickers: list) -> dict:
+    """BQ edinet.financials → {ticker: {operating_income: [古→新], roe_history: [...], total_assets}}（BQ 1本）。"""
+    codes = sorted({t[:-2] for t in tickers if str(t).endswith(".T")})
+    if not codes:
+        return {}
+    from edinet_bq_client import EDINETBQClient
+    from google.cloud import bigquery
+    bq = EDINETBQClient()
+    q = (f"SELECT company_code, fiscal_year, operating_income, roe, total_assets "
+         f"FROM `{bq.project}.edinet.financials` WHERE company_code IN UNNEST(@codes) "
+         f"AND fiscal_year IS NOT NULL ORDER BY company_code, fiscal_year")
+    job = bq.client.query(q, job_config=bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ArrayQueryParameter("codes", "STRING", codes)]))
+    out: dict = {}
+    seen: dict = {}
+    for r in job.result():
+        key = (r.company_code, r.fiscal_year)
+        if key in seen:          # 同じ年度が複数行（訂正等）なら後の行だけ使う
+            continue
+        seen[key] = True
+        f = out.setdefault(f"{r.company_code}.T", {"operating_income": [], "roe_history": []})
+        f["operating_income"].append(r.operating_income)
+        f["roe_history"].append(r.roe)
+        if r.total_assets:
+            f["total_assets"] = r.total_assets
+    return out
+
+
+def _with_officers_and_financials(cfg, edinet_db: dict, tickers: list) -> dict:
+    """蓄積DB（約30社）に無い銘柄を、officers.json の経営トップと BQ の財務推移で補う。"""
+    import copy
+    db = copy.copy(edinet_db or {})
+    analysis = dict(db.get("analysis", {}) or {})
+    try:
+        import officer_extractor as _oe
+        tops = {t: _oe.load_top(cfg, t) for t in tickers}
+    except Exception:
+        tops = {}
+    try:
+        fins = bq_financial_history(tickers)
+    except Exception as exc:
+        print(f"    ⚠️  [ceo] BQ財務の取得失敗: {str(exc)[:60]}")
+        fins = {}
+    for t in tickers:
+        top, fin = tops.get(t), fins.get(t)
+        if not top and not fin:
+            continue
+        a = dict(analysis.get(t) or {})
+        if top and not (a.get("officers") or {}).get("representative_director"):
+            a["officers"] = {"representative_director": {
+                "name": top.get("name"), "title": top.get("title"),
+                "appointed_date": top.get("appointed_date") or ""}}
+        if fin and not (a.get("financials") or {}).get("operating_income"):
+            a["financials"] = {**(a.get("financials") or {}), **fin}
+        analysis[t] = a
+    db["analysis"] = analysis
+    return db
+
+
 def run_ceo_evaluator(
     cfg,
     edinet_db:        dict,
@@ -697,10 +756,11 @@ def run_ceo_evaluator(
 
     eval_results     = {}
     renewal_candidates = []
+    edinet_db = _with_officers_and_financials(cfg, edinet_db, tickers)
 
     for ticker in tickers:
         try:
-            # EDINETデータが存在する銘柄のみ評価（データなしはスキップ）
+            # 経営トップか財務のどちらかが分かる銘柄だけ評価する
             analysis = edinet_db.get("analysis", {}).get(ticker, {})
             if not analysis:
                 continue

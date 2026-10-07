@@ -58,6 +58,7 @@ torch>=2.0.0
 
 # policy_radar PDF抽出（オプション・インストール失敗でもスキップ動作）
 pdfplumber>=0.10.0
+pymupdf>=1.24
 PyMuPDF>=1.23.0
 
 google-cloud-bigquery

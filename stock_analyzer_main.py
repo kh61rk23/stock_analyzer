@@ -3955,6 +3955,24 @@ def run_all_tasks(mode: str = "all") -> dict:
                     c["ticker"] for c in _sc_res.get("candidates", [])
                     if c.get("pass_filters")
                 ]
+                # 有報「役員の状況」から経営トップと就任日を読む（書類が変わった会社だけ・1日上限あり）
+                if getattr(cfg, "ENABLE_OFFICER_EXTRACTOR", True):
+                    try:
+                        import officer_extractor as _oe
+                        _hold = []
+                        try:
+                            import csv as _csv_h
+                            with open(Path(getattr(cfg, "PROJECT_DIR", ".")) / "data" / "portfolio_holdings.csv",
+                                      encoding="utf-8-sig") as _fh:
+                                _hold = [r["ticker"] for r in _csv_h.DictReader(_fh)]
+                        except OSError:
+                            pass
+                        _oe_stats = _oe.run(cfg, _ce_tickers + _hold)
+                        logger.add("officer_extractor", "success" if not _oe_stats.get("error") else "warn",
+                                   f"対象{_oe_stats['targets']}社 / 読取{_oe_stats['ok']}社 / "
+                                   f"トップ不明{_oe_stats['no_top']} / 失敗{_oe_stats['error']}")
+                    except Exception as _oee:
+                        logger.add("officer_extractor", "error", f"{type(_oee).__name__}: {str(_oee)[:80]}")
                 ce_result = _ce.run_ceo_evaluator(
                     cfg, _edb, _ce_tickers,
                     surprise_cache  = _es_cache,

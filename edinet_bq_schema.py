@@ -45,6 +45,22 @@ for ds_name in datasets:
 TABLE_DEFINITIONS = {
     # --- edinet データセット ---
     "edinet": {
+        # 有報「役員の状況」（officer_extractor.py が EDINET の有報PDFから抽出）
+        "officers": """(
+            officer_id STRING NOT NULL,        -- doc_id_連番
+            doc_id STRING,                     -- 有報の書類管理番号
+            company_code STRING,               -- 証券コード (4桁)
+            edinet_code STRING,
+            fiscal_year_end DATE,
+            seq INT64,                         -- 役員一覧での順番
+            title STRING,                      -- 役職名
+            name STRING,                       -- 氏名
+            birth_date DATE,
+            is_top BOOL,                       -- 経営トップ（代表者のうち社長/CEO）
+            appointed_top DATE,                -- 経営トップの就任年月（1日）
+            career_json STRING,                -- 略歴 [[YYYY-MM, 文], ...]
+            updated_at TIMESTAMP
+        )""",
         "doc_index": """(
             doc_id STRING NOT NULL,            -- 書類管理番号 (Primary Key相当)
             company_code STRING,               -- 証券コード (4桁)
