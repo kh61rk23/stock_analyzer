@@ -3,7 +3,7 @@
 使い方:
   python3 tools/history_comments.py scan [ファイル...]      # 履歴コメントのブロック一覧（JSON）
   python3 tools/history_comments.py archive --out <md>     # 全ブロックをファイル別に Markdown へ書き出す
-  python3 tools/history_comments.py same-code <git-rev>    # 指定リビジョンとコード（AST・docstring除く）が同じか
+  python3 tools/history_comments.py same-code <git-rev> [ファイル...]  # 指定リビジョンとコード（AST・docstring除く）が同じか
 
 修正の経緯は開発ログ（board の 40_開発ログ.jsonl）に置き、コードのコメントには
 「今どう動くか」と「なぜそうしているか（知らずに直すと壊れる理由）」だけを書く（CLAUDE.md）。
@@ -72,8 +72,8 @@ def main(argv: list[str]) -> int:
     cmd = argv[0] if argv else "scan"
     if cmd == "same-code":
         rev = argv[1]
-        changed = subprocess.run(["git", "diff", "--name-only", rev, "--", "*.py"], cwd=ROOT,
-                                 capture_output=True, text=True).stdout.split()
+        changed = argv[2:] or subprocess.run(["git", "diff", "--name-only", rev, "--", "*.py"], cwd=ROOT,
+                                             capture_output=True, text=True).stdout.split()
         bad = same_code(rev, changed)
         print(f"コメント以外の変更: {len(bad)}件 / 対象{len(changed)}ファイル")
         for b in bad:
