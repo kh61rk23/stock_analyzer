@@ -59,7 +59,7 @@ def _jname(c: dict) -> str:
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-# ── 審議キューの機械可読マーカー（2026-07-28）────────────────
+# ── 審議キューの機械可読マーカー ────────────────
 # Claude の予定済みタスクが Gmail MCP でこのメールを読み、審議対象を
 # 取り出すための固定プレフィックス。**変更するとタスク側の抽出が壊れる**
 # ため、変えるときは以下も同時に更新すること:
@@ -216,8 +216,7 @@ def extract_alerts(cfg, results: dict) -> list:
                     if isinstance(x[1], dict) else 0,
                 reverse=True,
             )
-            # 2026-09-17: 投資に関係しない記事（事件・事故など）は出さない。
-            # 判定は news_pipeline が付ける investment_relevant を使う。
+                        # 投資に関係しない記事（事件・事故など）は出さない（news_pipeline の investment_relevant）。
             def _relevant(a):
                 return a.get("investment_relevant") is not False
             for code, _ in sorted_secs[:5]:
@@ -267,7 +266,7 @@ def extract_alerts(cfg, results: dict) -> list:
                 lines.append(
                     f"  {icon} {t['theme_name']}({etfs}): 熱量{t['heat_score']:.0f}点"
                     f"（ETF {t.get('etf_momentum_score', 0):.0f}点 × 論文 {t.get('arxiv_trend_score', 0):.0f}点）")
-                # 2026-09-29: 論文の中身が分かるよう件数の推移と代表論文を出す
+                                # 論文の中身が分かるよう件数の推移と代表論文を出す
                 if ad.get("source") == "arxiv_api":
                     lines.append(f"      論文 直近4週{ad.get('recent_4w', 0)}件"
                                  f"（前4週{ad.get('prev_4w', 0)}件・{ad.get('growth_rate', 0):+.0f}%）"
@@ -302,11 +301,8 @@ def extract_alerts(cfg, results: dict) -> list:
             if reason:
                 line += f"\n    💬 {reason}"
 
-            # 代表銘柄の財務ハイライト（yfinance全フィールドから抽出）
-            # 2026-07-28: 表示件数が 2 固定で「代表2銘柄しか出ない」状態だったため
-            # config 化した（ALERT_SECTOR_TOP_COMPANIES / 既定は従来どおり 2）。
-            # 2026-09-29: 代表銘柄は「BQ の業種一覧を証券コード順に数件」で、毎回同じ
-            # コード番号の若い銘柄が出ていた。その業種のスクリーナー通過上位（総合点順）を出す
+                        # 代表銘柄の財務ハイライト。その業種のスクリーナー通過上位（総合点順）を
+                        # ALERT_SECTOR_TOP_COMPANIES 件出す（BQ の業種一覧順だと毎回同じ銘柄になる）。
             _top_n = int(getattr(cfg, "ALERT_SECTOR_TOP_COMPANIES", 3))
             _scr = [c for c in ((results.get("screener") or {}).get("candidates") or [])
                     if c.get("pass_filters") and str(c.get("sector_code")) == str(code)]
@@ -350,8 +346,7 @@ def extract_alerts(cfg, results: dict) -> list:
                     line += f"\n    {r_icon} 信用スコア: {cs}/100"
                     risks = analysis.get("risk_factors", [])
                     if risks:
-                        # 2026-09-17: 有報の個別リスク見出しを上位3件並べる
-                        #（従来は本文の先頭文＝全社共通の前置きが出ていた）
+                                                # 有報の個別リスク見出しを上位3件並べる（本文の先頭文は全社共通の前置き）
                         line += f"\n    ⚠️  主要リスク: {' / '.join(str(x) for x in risks[:3])[:80]}"
                 fin = tdata.get("financials", {})
                 if fin:
@@ -360,9 +355,7 @@ def extract_alerts(cfg, results: dict) -> list:
                         line += f"\n    📈 売上CAGR(3年): {rev_cagr*100:+.1f}%/年"
                 gov = tdata.get("gov_meta", {})
                 if gov:
-                    # 2026-07-28 バグ修正: submit_date はキーが存在して値が None の
-                    # ケースがあり、get(key,'N/A') では None がそのまま出て
-                    # 「📋 有報提出: None」と表示されていた。値が無いなら行ごと出さない。
+                                        # submit_date はキーがあって値が None のことがある。値が無いなら行ごと出さない。
                     _submit = gov.get("submit_date")
                     if _submit:
                         line += f"\n    📋 有報提出: {_submit}"
@@ -377,11 +370,7 @@ def extract_alerts(cfg, results: dict) -> list:
                 "severity": "info",
             })
 
-    # ── ⑥-2 米国株サマリー（2026-07-28 新設） ──────────────────
-    # 【背景】us_screener は毎日 900〜1000社をスクリーニングし 300社超が通過
-    #   しているのに、alert_notifier.py には us_screener / us_sectors への参照が
-    #   1つも無く、日次メールに米国株の情報が一切載っていなかった。
-    #   （grep "us_screener\|us_sectors" alert_notifier.py → 0件で実測確認）
+        # ── ⑥-2 米国株サマリー（us_screener / us_sectors） ──────────────────
     if getattr(cfg, "ALERT_ON_US_SUMMARY", True):
         try:
             _us_lines = []
@@ -392,7 +381,7 @@ def extract_alerts(cfg, results: dict) -> list:
             _ok = [r for r in _sec_list
                    if isinstance(r, dict) and r.get("score_result", {}).get("fetch_ok")]
             if _ok:
-                # 2026-09-29: 上位3＋最下位1の4行だけだったのを全セクター（11）に
+                                # 全セクター（11）を出す
                 _us_lines.append(f"  【セクター】{len(_ok)}セクター（点数順）")
                 for r in sorted(_ok, key=lambda r: -((r.get("score_result") or {}).get("score") or 0)):
                     _s = r.get("sector", {}) or {}
@@ -441,10 +430,10 @@ def extract_alerts(cfg, results: dict) -> list:
         except Exception as _us_err:
             print(f"  ⚠️  [alert] 米国株サマリー生成失敗: {str(_us_err)[:80]}")
 
-    # ── ⑥-3 審議キュー候補（2026-07-28 新設） ──────────────────
-    # 隔週のB部門審議（E3）へ次に上げる銘柄を、毎日メールで見えるようにする。
-    # 並び順は deliberation_scheduler.build_deliberation_queue と同一なので、
-    # ここに出る先頭銘柄が隔週ジョブで実際に選定される銘柄になる。
+        # ── ⑥-3 審議キュー候補 ──────────────────
+        # 隔週のB部門審議（E3）へ次に上げる銘柄を、毎日メールで見えるようにする。
+        # 並び順は deliberation_scheduler.build_deliberation_queue と同一なので、
+        # ここに出る先頭銘柄が隔週ジョブで実際に選定される銘柄になる。
     if getattr(cfg, "ALERT_ON_DELIBERATION_QUEUE", True):
         try:
             from deliberation_scheduler import get_queue_for_report
@@ -452,7 +441,7 @@ def extract_alerts(cfg, results: dict) -> list:
                 cfg, results,
                 top_n=int(getattr(cfg, "DELIBERATION_QUEUE_TOP_N", 5)))
             _q = _dq.get("queue", [])
-            # 2026-09-29: 前回からの入れ替わり（連続日数・外れた銘柄と理由）
+                        # 前回からの入れ替わり（連続日数・外れた銘柄と理由）
             _chg = {}
             try:
                 from deliberation_scheduler import (queue_changes, resolve_deliberated,
@@ -511,12 +500,12 @@ def extract_alerts(cfg, results: dict) -> list:
                     # 「審議済みなのに候補に出る」ことが起こり得る。
                     _ql.append("  ⚠️ 判断台帳（正本）を参照できていないため、"
                                "審議済み銘柄が混じる可能性があります")
-                # ── 機械可読マーカー（2026-07-28）─────────────────
-                # Claude の予定済みタスクが Gmail MCP でこのメールを読み、
-                # 審議対象を取り出すための行。整形済みの日本語本文を
-                # スクレイピングすると書式変更で壊れるため、
-                # 「固定プレフィックス＋カンマ区切りティッカー」だけを置く。
-                # 本文は HTML で送られるが、この形なら正規表現で拾える。
+                                # ── 機械可読マーカー ─────────────────
+                                # Claude の予定済みタスクが Gmail MCP でこのメールを読み、
+                                # 審議対象を取り出すための行。整形済みの日本語本文を
+                                # スクレイピングすると書式変更で壊れるため、
+                                # 「固定プレフィックス＋カンマ区切りティッカー」だけを置く。
+                                # 本文は HTML で送られるが、この形なら正規表現で拾える。
                 _ql.append("")
                 _ql.append(f"{DELIBERATION_QUEUE_MARKER} "
                            + ",".join(str(c.get("ticker", "")) for c in _q))
@@ -529,10 +518,9 @@ def extract_alerts(cfg, results: dict) -> list:
         except Exception as _dq_err:
             print(f"  ⚠️  [alert] 審議キュー生成失敗: {str(_dq_err)[:80]}")
 
-    # ── ⑦ 高配当銘柄アラート ────────────────────────────────
-    # 2026-09-29: 各業種の代表2〜3銘柄（約90社）の中だけを見ており、しかも
-    # スクリーナー経由の利回りは yfinance の %値を比率扱いして100倍ずれていた。
-    # 日本株スクリーナーの全取得銘柄（約460社）と米国株スクリーナー（約830社）から探す。
+        # ── ⑦ 高配当銘柄アラート ────────────────────────────────
+        # 日本株スクリーナーの全取得銘柄と米国株スクリーナーから探す。
+        # yfinance の配当利回りは %値のことがあるので比率にそろえてから比べる。
     if getattr(cfg, "ALERT_ON_HIGH_DIVIDEND", True):
         _hd = build_high_dividend_alert(cfg, results, sector_results)
         if _hd:
@@ -670,9 +658,7 @@ def extract_alerts(cfg, results: dict) -> list:
                     z_s = f" Z={z:.2f}" if z is not None else ""
                     # 複合異常は価格+出来高の両根拠を表示
                     sub = []
-                    # 2026-09-14: anomaly_detector は price_change を既に「%値」で
-                    # 格納する（round(last_chg * 100, 2)）。ここで更に *100 して
-                    # いたため -11.38% が -1138.0% と表示されていた。
+                                        # anomaly_detector は price_change を既に「%値」で格納する（ここで100倍しない）。
                     if a.get("price_change"):
                         sub.append(f"価格{a['price_change']:+.1f}%")
                     if a.get("volume_ratio"):
@@ -692,8 +678,7 @@ def extract_alerts(cfg, results: dict) -> list:
                     atype = a.get("anomaly_type", "")
                     if atype == "volume":
                         ratio = a.get("volume_ratio") or a.get("spike_ratio")
-                        # 2026-09-14: 0.3倍（Z=-2.57）を「急増」と表示していた。
-                        # 出来高異常は Z の絶対値で拾うので、減少側もここに来る。
+                                                # 出来高異常は Z の絶対値で拾うので、減少側もここに来る（「急増」と決めつけない）。
                         _vol_word = "急増" if (ratio or 0) >= 1 else "急減"
                         extra = f" {ratio:.1f}倍{_vol_word}" if ratio else ""
                     elif atype == "price":
@@ -1051,18 +1036,13 @@ def extract_alerts(cfg, results: dict) -> list:
             c for c in screener_res.get("candidates", [])
             if c.get("is_high_prob_surprise") and c.get("pass_filters")
         ]
-        # 2026-07-25 バッチ3: ALERT_ON_NEGATIVE_RISK を配線。
-        # 従来このブロック全体が ALERT_ON_HIGH_PROB_SURPRISE だけで守られており、
-        # ネガ側の専用フラグは定義だけで誰も読んでいなかった（False にしても
-        # ネガティブサプライズ通知が止まらなかった）。
+                # ネガティブサプライズ通知は ALERT_ON_NEGATIVE_RISK で別に止められる。
         neg_risk = [
             c for c in screener_res.get("candidates", [])
             if c.get("is_negative_risk")
         ] if getattr(cfg, "ALERT_ON_NEGATIVE_RISK", True) else []
 
-        # 2026-09-29: 上位5社（ネガは3社）の名前だけで理由も決算日も無かった。
-        # 決算が近い順に最大10社、判定理由（EPS加速×会社予想の保守度・過去の上振れ）と
-        # 次回決算日を付ける
+                # 決算が近い順に最大10社、判定理由（EPS加速×会社予想の保守度・過去の上振れ）と次回決算日を付ける
         _n = int(getattr(cfg, "ALERT_SURPRISE_TOP_N", 10))
 
         def _surprise_lines(rows, icon):
@@ -1383,7 +1363,7 @@ def extract_alerts(cfg, results: dict) -> list:
                 })
         except Exception:
             pass
-    # ── [Wave0-⑭] 重要議員取引シグナルアラート（Policy Ph1）─────
+        # ── ⑭ 重要議員取引シグナルアラート（Policy Ph1）─────
     if getattr(cfg, "ENABLE_POLITICIAN_MONITOR", True):
         pm_result = results.get("politician_monitor", {})
         if pm_result and not pm_result.get("skipped"):
@@ -1393,8 +1373,7 @@ def extract_alerts(cfg, results: dict) -> list:
                 lines = []
                 for t in high_trades[:5]:
                     direction = "買" if t.get("direction") == "buy" else "売"
-                    # 2026-09-15: 取引日を併記。無いと別日の同銘柄取引が重複に見え、
-                    # 古い取引かどうかもメールから判別できなかった。
+                                        # 取引日を併記する（別日の同銘柄取引の区別・古い取引かどうかの判別用）。
                     _td = t.get("transaction_date", "")
                     lines.append(
                         f"  [{t.get('score', 0):.0f}pt] "
@@ -1415,7 +1394,7 @@ def extract_alerts(cfg, results: dict) -> list:
                     "severity": "high",
                 })
 
-    # ── [Wave0-⑲] screener急増業種アラート（Idea2-C）─────────────
+        # ── ⑲ screener急増業種アラート（Idea2-C）─────────────
     sh_result = results.get("screener_heatmap", {})
     if sh_result and not sh_result.get("skipped"):
         surge_sectors = sh_result.get("surge_sectors", [])
@@ -1441,11 +1420,11 @@ def extract_alerts(cfg, results: dict) -> list:
                 "body":     "\n".join(lines),
                 "severity": "medium",
             })
-    # ==============================================================
-    # [Wave 2 - FE-2] トリガーW2-⑳: アナリスト修正×Ignition Cat-B 重複
-    # 条件: セクター平均 revision_score > 0.5 かつ Ignition Cat-B detected
-    # チャネル: Gmail 週次通知（severity: medium）
-    # ==============================================================
+        # ==============================================================
+        # [FE-2] トリガー⑳: アナリスト修正×Ignition Cat-B 重複
+        # 条件: セクター平均 revision_score > 0.5 かつ Ignition Cat-B detected
+        # チャネル: Gmail 週次通知（severity: medium）
+        # ==============================================================
     try:
         screener_res = results.get("screener", {})
         candidates   = (screener_res.get("passed")
@@ -1498,11 +1477,11 @@ def extract_alerts(cfg, results: dict) -> list:
     except Exception:
         pass
 
-    # ==============================================================
-    # [Wave 2 - FE-4] トリガーW2-㉑: Ignition Detector 収束シグナル
-    # 条件A: convergence_score ≥ 3.0    → LINE 即時通知（severity: high）
-    # 条件B: ≥ 3.5 かつ is_critical True → 最高警戒LINE（severity: critical）
-    # ==============================================================
+        # ==============================================================
+        # [FE-4] トリガー㉑: Ignition Detector 収束シグナル
+        # 条件A: convergence_score ≥ 3.0    → LINE 即時通知（severity: high）
+        # 条件B: ≥ 3.5 かつ is_critical True → 最高警戒LINE（severity: critical）
+        # ==============================================================
     try:
         ignition_res = results.get("ignition", {})
         ign_alerts   = ignition_res.get("alerts", [])
@@ -1572,7 +1551,7 @@ def extract_alerts(cfg, results: dict) -> list:
         pass
 
 # ==============================================================
-    # [Wave 3 - Independence Ph1] トリガー⑰: Latent Pearl プロモーション
+    # [Independence Ph1] トリガー⑰: Latent Pearl プロモーション
     # 条件: promoted_score ≥ 0.7 → LINE 即時通知
     # ==============================================================
     try:
@@ -1581,8 +1560,7 @@ def extract_alerts(cfg, results: dict) -> list:
         if not _promoted_tickers:
             pass
         else:
-            # Wave 7: get_promoted_tickers は list[str] を返す
-            # latent_pearl_cache から詳細を取得して通知を組み立てる
+                        # get_promoted_tickers は list[str] を返す。詳細は latent_pearl_cache から取って通知を組み立てる
             import json as _jal
             from pathlib import Path as _pal
             _lp_path_al = (
@@ -1623,13 +1601,13 @@ def extract_alerts(cfg, results: dict) -> list:
     except Exception:
         pass
 
-    # ==============================================================
-    # [Wave 3 - Independence Ph1] トリガー⑱: セクター反転検出
-    # 条件: sector_reversal (LAGGING→IMPROVING) かつ Latent Pearl 存在
-    #       → Gmail 週次通知
-    # ==============================================================
+        # ==============================================================
+        # [Independence Ph1] トリガー⑱: セクター反転検出
+        # 条件: sector_reversal (LAGGING→IMPROVING) かつ Latent Pearl 存在
+        #       → Gmail 週次通知
+        # ==============================================================
     try:
-        # Wave 7: load_latent_pearl_cache は廃止。直接 JSON を読み込む
+                # latent_pearl_cache の JSON を直接読む
         import json as _jrev
         from pathlib import Path as _prev
         _lp_cache_path = (
@@ -1672,10 +1650,10 @@ def extract_alerts(cfg, results: dict) -> list:
     except Exception:
         pass
 
-    # ==============================================================
-    # [Wave 3 - FE-5] トリガー㉒: PEAD スコアアラート
-    # 条件: pead_score ≥ threshold かつ volume_ratio ≥ 1.5 → LINE通知
-    # ==============================================================
+        # ==============================================================
+        # [FE-5] トリガー㉒: PEAD スコアアラート
+        # 条件: pead_score ≥ threshold かつ volume_ratio ≥ 1.5 → LINE通知
+        # ==============================================================
     try:
         from pead_monitor import get_alert_candidates as _get_pead_alerts
         _pead_alerts = _get_pead_alerts(cfg)
@@ -1700,11 +1678,11 @@ def extract_alerts(cfg, results: dict) -> list:
     except Exception:
         pass
 
-    # ==============================================================
-    # [Wave 3 - FE-6] トリガー㉓: ポートフォリオ集中警告
-    # 条件: HHI > 0.30 かつ 高相関ペア ≥ 3組 → Gmail週次警告
-    #       Ignition 抑制中は skip
-    # ==============================================================
+        # ==============================================================
+        # [FE-6] トリガー㉓: ポートフォリオ集中警告
+        # 条件: HHI > 0.30 かつ 高相関ペア ≥ 3組 → Gmail週次警告
+        #       Ignition 抑制中は skip
+        # ==============================================================
     try:
         _div = results.get("diversity", {})
         if (
@@ -1743,10 +1721,10 @@ def extract_alerts(cfg, results: dict) -> list:
     except Exception:
         pass
 
-    # ==============================================================
-    # [Wave 3 - FE-7] トリガー㉔: Triple Catalyst 最優先通知
-    # 条件: 3種以上のカタリストが14日以内に重複 → LINE最優先通知
-    # ==============================================================
+        # ==============================================================
+        # [FE-7] トリガー㉔: Triple Catalyst 最優先通知
+        # 条件: 3種以上のカタリストが14日以内に重複 → LINE最優先通知
+        # ==============================================================
     try:
         _cat = results.get("catalyst", {})
         _triple_tickers = _cat.get("triple_tickers", [])
@@ -1771,12 +1749,12 @@ def extract_alerts(cfg, results: dict) -> list:
     except Exception:
         pass
 
-    # ==============================================================
-    # [Wave 4 - Policy Ph3] トリガー⑮: Buffett新規取得 → LINE即時
-    # 条件: institutional_13f の new_tier1 に Tier1（Berkshire）の
-    #       new_position が含まれる
-    # チャネル: LINE 即時通知（severity: critical）
-    # ==============================================================
+        # ==============================================================
+        # [Policy Ph3] トリガー⑮: Buffett新規取得 → LINE即時
+        # 条件: institutional_13f の new_tier1 に Tier1（Berkshire）の
+        #       new_position が含まれる
+        # チャネル: LINE 即時通知（severity: critical）
+        # ==============================================================
     try:
         _inst = results.get("institutional_13f", {})
         _new_tier1 = _inst.get("new_tier1", [])
@@ -1802,14 +1780,14 @@ def extract_alerts(cfg, results: dict) -> list:
     except Exception:
         pass
 
-    # ==============================================================
-    # [Wave 4 - Policy Ph3] トリガー⑯: 大手機関新規取得10億ドル超 → Gmail
-    # 条件: institutional_13f の new_large に
-    #       value_usd >= INSTITUTION_MIN_NEW_POSITION_USD(10億ドル) の
-    #       Tier2/Tier3 機関の new_position が含まれる
-    # チャネル: Gmail 通知（severity: high）
-    # ※ Tier1（Buffett）は⑮で処理済みのため除外
-    # ==============================================================
+        # ==============================================================
+        # [Policy Ph3] トリガー⑯: 大手機関新規取得10億ドル超 → Gmail
+        # 条件: institutional_13f の new_large に
+        #       value_usd >= INSTITUTION_MIN_NEW_POSITION_USD(10億ドル) の
+        #       Tier2/Tier3 機関の new_position が含まれる
+        # チャネル: Gmail 通知（severity: high）
+        # ※ Tier1（Buffett）は⑮で処理済みのため除外
+        # ==============================================================
     try:
         _inst     = results.get("institutional_13f", {})
         _new_large = [
@@ -1847,8 +1825,8 @@ def extract_alerts(cfg, results: dict) -> list:
     except Exception:
         pass
 
-    # ── ㉔ 出口戦略アラート（Wave R0-6 / E1・R0-7 / E11統合ブリーフ） ──
-    # 既存Gmail 1通への統合方針（D-06）: 新規メールは増やさず本関数に集約。
+        # ── ㉔ 出口戦略アラート（統合ブリーフ） ──
+        # 既存Gmail 1通への統合方針（D-06）: 新規メールは増やさず本関数に集約。
     try:
         _ex = results.get("exit_alerts", {}) or {}
         _ex_alerts = _ex.get("alerts", [])
@@ -1876,19 +1854,13 @@ def extract_alerts(cfg, results: dict) -> list:
     except Exception:
         pass
 
-    # ── ㉕ データ鮮度SLA違反（Wave R0-1 / E7'） ──────────────────
+        # ── ㉕ データ鮮度SLA違反 ──────────────────
     try:
         _sla = results.get("data_sla_report", {}) or {}
         _violations = _sla.get("violations", [])
         if _violations:
-            # 2026-07-28 バグ修正:
-            #  ① status="missing" のとき data_reliability は age_days=None を
-            #     明示的に入れる。get(key, '?') は「キーがある」ため None を返し、
-            #     「経過None日」と表示されていた。missing は経過日数が無意味なので
-            #     文言自体を分ける。
-            #  ② パスを [-50:] で切っていたため先頭が欠けて
-            #     「zer/stock_analyzer/...」のような判読不能な断片になっていた。
-            #     欠けた場合は先頭に … を付けて「省略」であることを示す。
+                        # status="missing" のとき age_days は None（経過日数が無意味なので文言を分ける）。
+                        # パスは末尾だけ残し、欠けた場合は先頭に … を付けて省略を示す。
             def _sla_path(p: str, width: int = 50) -> str:
                 p = str(p or "")
                 return p if len(p) <= width else "…" + p[-(width - 1):]
@@ -1915,9 +1887,9 @@ def extract_alerts(cfg, results: dict) -> list:
     except Exception:
         pass
 
-    # ── EdinetDB 取り込み結果（2026-09-29・健太の要望）─────────────
-    # 毎日「どの会社の有報データがBQに入ったか」をメールで確認できるようにする。
-    # 0社の日も「0社だった」ことを知らせる（静かに止まっていないかの確認用）。
+        # ── EdinetDB 取り込み結果 ─────────────
+        # 毎日「どの会社の有報データがBQに入ったか」をメールで確認できるようにする。
+        # 0社の日も「0社だった」ことを知らせる（静かに止まっていないかの確認用）。
     if getattr(cfg, "ALERT_ON_EDINETDB_INGEST", True):
         ing = results.get("edinetdb_ingest") or {}
         if isinstance(ing, dict) and not ing.get("skipped") and "success" in ing:
@@ -1936,7 +1908,7 @@ def extract_alerts(cfg, results: dict) -> list:
             alerts.append(build_edinetdb_ingest_alert(
                 ing, _web, _jl(_dd / "edinetdb_cache" / f"daily_{_today}.json"), 100))
 
-    # 2026-10-05: 国債利回り（日米 10/5/3年・前日比/前週比）と政策金利（米・欧・日）
+        # 国債利回り（日米 10/5/3年・前日比/前週比）と政策金利（米・欧・日）
     if getattr(cfg, "ALERT_ON_RATES", True):
         try:
             from rates_monitor import get_rates, format_lines
@@ -1947,7 +1919,7 @@ def extract_alerts(cfg, results: dict) -> list:
         except Exception as _rte:
             print(f"    ⚠️ 金利節の生成失敗: {str(_rte)[:80]}")
 
-    # 2026-10-05: 不動産DB（取り込みと業種スコアへの反映）
+        # 不動産DB（取り込みと業種スコアへの反映）
     if getattr(cfg, "ALERT_ON_REAL_ESTATE", True):
         try:
             _re = build_real_estate_alert(results.get("fudosan_ingest") or {}, sector_results)
@@ -1956,7 +1928,7 @@ def extract_alerts(cfg, results: dict) -> list:
         except Exception as _ree:
             print(f"    ⚠️ 不動産DB節の生成失敗: {str(_ree)[:80]}")
 
-    # 2026-10-05: コードだけで出ている所に名前を補う（日本株ティッカー・業種コード）
+        # コードだけで出ている所に名前を補う（日本株ティッカー・業種コード）
     try:
         from name_resolver import enrich_text
         for a in alerts:
@@ -2147,8 +2119,7 @@ def build_message(alerts: list, mode: str = "line") -> str:
     else:  # email HTML
         severity_color = {"high": "#ef4444", "medium": "#f59e0b", "info": "#3b82f6"}
         severity_label = {"high": "🔴 重要", "medium": "🟡 注意", "info": "ℹ️  情報"}
-        # 2026-10-06: 本文中の保存ファイル名をGitHubへのリンクにし、末尾に本日の保存ファイル一覧
-        #   （GitHub・Drive検索リンク）を付ける（健太指示「メールから保存しているファイルのURLに飛ぶように」）
+                # 本文中の保存ファイル名をGitHubへのリンクにし、末尾に本日の保存ファイル一覧（GitHub・Drive検索）を付ける
         _files, _fidx, _files_html = [], {}, ""
         try:
             import os as _os

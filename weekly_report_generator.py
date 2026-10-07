@@ -126,7 +126,7 @@ def _section_jp_sectors(results: dict) -> list:
     return lines
 
 # ==============================================================
-# BLOCK 2.5: セクション生成関数（Wave 6 - G-N：国別リスク）
+# BLOCK 2.5: セクション生成関数（G-N：国別リスク）
 # ==============================================================
 
 def _section_geo_country_risk(results: dict, cfg=None) -> list:
@@ -552,7 +552,7 @@ def _section_geo_signal_detail(results: dict, cfg=None) -> list:
         if not isinstance(d, dict):
             continue
         geo_comp = (d.get("components") or {}).get("geo_signal", {})
-        # 2026-10-05: 内訳が数値だけで入っている業種があり 'float' に .get して毎週エラーだった
+                # 内訳が数値だけで入っている業種がある（dict とは限らない）
         geo_score = geo_comp.get("score") if isinstance(geo_comp, dict) else geo_comp
         if geo_score is None:
             continue
@@ -606,19 +606,14 @@ def _section_us_sectors(results: dict) -> list:
     top3   = us.get("top3",    [])
     bottom3 = us.get("bottom3", [])
 
-    # 2026-09-14: top3/bottom3 は us_sector_pipeline がスコア順に並べたもので、
-    # 週間パフォーマンス順ではない（見出しが実態と違っていた）。
+        # top3/bottom3 は us_sector_pipeline のスコア順（週間パフォーマンス順ではない）。
     if top3:
         lines.append(f"**スコア上位**: {' ＞ '.join(top3[:3])}")
     if bottom3:
         lines.append(f"**スコア下位**: {' ＜ '.join(bottom3[:3])}")
 
-    # 上位セクターの詳細
-    # 2026-09-14: sector_list の要素は {"sector": {...}, "score_result": {...}} の
-    # 入れ子だが、ここは name / composite_score / return_1w / trend を直接
-    # 読んでいた。どれも存在しないため、9/14 の週次メールでは
-    # 「|  | 0 | N/A |  |」の空行が並んでいた。週次リターンは算出されて
-    # いないので、実在する1ヶ月リターン（%値）とリスク区分を出す。
+        # 上位セクターの詳細。sector_list の要素は {"sector": {...}, "score_result": {...}} の入れ子。
+        # 週次リターンは算出していないので、1ヶ月リターン（%値）とリスク区分を出す。
     if sector_list:
         lines.append("")
         lines.append("| セクター | スコア | 1ヶ月リターン | リスク |")
@@ -649,7 +644,7 @@ def _section_etf(results: dict) -> list:
     if not etf or etf.get("skipped"):
         lines.append("*データなし*"); lines.append(""); return lines
 
-    # ★修正: thematic_etf_tracker の出力は "themes" キー / 各要素は theme_name / heat_score
+        # thematic_etf_tracker の出力は "themes" キー / 各要素は theme_name / heat_score
     etf_list = etf.get("themes", [])
     if not etf_list:
         lines.append("*データなし*"); lines.append(""); return lines
@@ -818,9 +813,7 @@ def _section_screener(results: dict) -> list:
         ra    = c.get("risk_adjusted_score", score)
         per_s = f"{c['per']:.1f}x"  if c.get("per")  else "N/A"
         pbr_s = f"{c['pbr']:.2f}x"  if c.get("pbr")  else "N/A"
-        # 2026-09-14: stock_screener は roe を「%値」（14.3）で格納する
-        # （round(roe * 100, 1)）。_pct() は比率→% 変換なので二重に100倍され、
-        # Fuji Electric が「ROE 1430.0%」と表示されていた。
+                # stock_screener は roe を「%値」で格納する（_pct() は比率→% 変換なので使わない）。
         _roe = c.get("roe")
         roe_s = f"{float(_roe):.1f}%" if _roe is not None else "N/A"
         dy_s  = _pct(c.get("dividend_yield"))
@@ -834,7 +827,7 @@ def _section_screener(results: dict) -> list:
 
     lines.append("")
 
-    # ── ボラ調整後ランキング（Wave 2 - FE-1） ──────────────────
+        # ── ボラ調整後ランキング（FE-1） ──────────────────
     if any(c.get("risk_adjusted_score") for c in passed):
         lines.append("### 📉 ボラ調整後ランキング TOP10（FE-1）")
         lines.append("")
@@ -1003,7 +996,7 @@ def _section_midterm_tracker(results: dict) -> list:
         import sys as _sys, importlib as _imp
         _sys.path.insert(0, __file__.rsplit("/", 1)[0])
         _mt = _imp.import_module("midterm_plan_tracker")
-        # ★ 2026-06-11 バグ修正: run_midterm_plan_tracker の戻りキーは "plans"
+                # run_midterm_plan_tracker の戻りキーは "plans"
         return _mt.format_midterm_section(
             mt_result.get("plans", mt_result.get("results", {})))
     except Exception:
@@ -1031,9 +1024,7 @@ def _section_biz_summaries(results: dict) -> list:
             name = d.get("name", ticker)
         core = d.get("core_summary", "")
         if core:
-            # 2026-07-28 バグ修正: ここは「原文が英語か翻訳済みか」を表す記号だったが、
-            # 未翻訳の日本株にも 🇺🇸 が付き「米国銘柄」と誤読される状態だった。
-            # 国旗は市場（.T なら JP）から決め、翻訳状態は別記号で示す。
+                        # 国旗は市場（.T なら JP）から決め、翻訳状態は別記号で示す。
             translated = d.get("translated", False)
             market_icon = "🇯🇵" if str(ticker).upper().endswith(".T") else "🇺🇸"
             trans_icon  = " 🌐" if translated else ""
@@ -1056,11 +1047,7 @@ def _section_macro(results: dict) -> list:
     if isinstance(policy, dict):
         rates = policy.get("current_rates", {})
         if rates:
-            # 2026-07-28 バグ修正: producer/consumer キー不整合。
-            # policy_tracker.py L456 は {"label","bank","value","date"} を格納するが、
-            # ここは "rate" / "current" を読んでいたため全行 "N/A%" になっていた。
-            # 表示名も辞書キー（"^IRX" 等の yfinance ティッカー）をそのまま
-            # 出していたため「主要中銀 政策金利」の見出しと内容が食い違っていた。
+                        # policy_tracker は {"label","bank","value","date"} を格納する。表示名は label を使う。
             lines.append("**主要政策金利・指標**")
             for ticker, info in rates.items():
                 if not isinstance(info, dict):
@@ -1070,8 +1057,7 @@ def _section_macro(results: dict) -> list:
                     continue
                 label = info.get("label") or info.get("bank") or ticker
                 chg   = info.get("change_pt", 0)
-                # 2026-09-14: 為替（JPY=X 等）にも一律で % を付けており
-                # 「USD/JPY（JPY=X）: 154.482%」と出ていた。
+                                # 為替（JPY=X 等）には % を付けない。
                 _is_fx = "=X" in str(ticker) or "/" in str(label)
                 _unit, _chg_unit = ("", "") if _is_fx else ("%", "%pt")
                 chg_s = f"（{chg:+.3f}{_chg_unit}）" if chg else ""
@@ -1197,13 +1183,8 @@ def _section_policy_radar(results: dict) -> list:
     if events:
         lines.append("### 📅 今後30日の政策イベント")
         lines.append("")
-        # 2026-09-10: ここは name / date_estimate / days_until / boost_active を
-        # 参照していたが、産出側（policy_radar._detect_events_30d）が返すのは
-        # label / keyword / sectors / direction / lead_days / source / link /
-        # detected_at で、参照キーが1つも存在しなかった。
-        # そのため policy_radar がイベントを1件でも返した週は
-        # KeyError: 'name' で週次レポート生成が丸ごと落ちていた
-        # （台帳 2026-09-07 weekly_report [error] 'name'）。
+                # policy_radar._detect_events_30d が返すキーは label / keyword / sectors / direction /
+                # lead_days / source / link / detected_at（name 等は無い）。
         for ev in events[:5]:
             tailwind = str(ev.get("direction", "")) == "tailwind"
             icon = "⚡" if tailwind else "📌"
@@ -1361,7 +1342,7 @@ def _section_sr_vp(results: dict) -> list:
                 f"zone={p.get('current_zone','?')} {p.get('label','')}"
             )
         lines.append("")
-    return lines   # ★追加
+    return lines
 
 def _section_jp_us_bridge(results: dict) -> list:
     bridge = results.get("jp_us_bridge", {})
@@ -1471,7 +1452,7 @@ def _section_rule_optimizer_alert(results: dict, cfg=None) -> list:
         # ── 3. 統合スコア上位/下位推移 ───────────────────────────
         sa_res        = results.get("signal_aggregator", {})
         sector_sigs   = sa_res.get("sector_signals", {})
-        # ★ 2026-06-10 バグ修正: main の書き込みキーは "total_signal_score"
+                # main の書き込みキーは "total_signal_score"
         total_sig_res = results.get("total_signal_score", results.get("total_signal", {}))
         tss_score     = total_sig_res.get("total_signal_score") if total_sig_res else None
         tss_coeff     = total_sig_res.get("contraction_coefficient", 1.00) if total_sig_res else 1.00
@@ -1482,7 +1463,7 @@ def _section_rule_optimizer_alert(results: dict, cfg=None) -> list:
             lines.append(f"- **現在値**: {tss_score:.1f}点 — {total_sig_res.get('signal_label', '')}"
                          f"（推奨: {total_sig_res.get('recommended_action', '—')}）")
             lines.append(f"- **縮退係数適用後**: 係数={tss_coeff:.2f}")
-            # 2026-10-05: 根拠（要素ごとの点数×重み＝寄与）を出す
+                        # 根拠（要素ごとの点数×重み＝寄与）を出す
             _comp = total_sig_res.get("components") or {}
             _labels = {
                 "macro_phase_score": f"景気局面（象限{total_sig_res.get('d1_phase', '?')}・債務サイクル補正込み）",
@@ -1809,7 +1790,7 @@ def _section_dcf(results: dict) -> list:
     return lines
 
 # ==============================================================
-# BLOCK 8.5: Wave 0 新規セクション（Policy Ph1 / Idea2-A）
+# BLOCK 8.5: Policy Ph1 / Idea2-A セクション
 # ==============================================================
 
 def _section_politician_highlight(results: dict) -> list:
@@ -1928,7 +1909,7 @@ def _format_pearl_row_detail(c: dict) -> str:
     d4     = c.get("d4_score")
     bonus  = c.get("pearl_bonus", 0)
 
-    # ── Wave 7 追加フィールド ────────────────────────────────────
+        # ── 追加フィールド（独立性・減衰など）────────────────────────────────────
     lp_score    = float(c.get("latent_pearl_score", 0.0))
     cat_flags   = c.get("catalyst_flags", [])
     cat_preview = " / ".join(str(f).split("（")[0] for f in cat_flags[:2])
@@ -1953,7 +1934,7 @@ def _format_pearl_row_detail(c: dict) -> str:
         f"/ D4発見Gap={_fmt(d4)} "
         f"| +{bonus:.1f}pt ボーナス"
     )
-    # Wave 7 拡張行
+        # 拡張行
     ext_parts = []
     if lp_score >= 30.0:
         ext_parts.append(f"💎潜伏Pearl={lp_score:.0f}pt")
@@ -2008,11 +1989,8 @@ def _section_pearl_ranking(results: dict, cfg=None) -> list:
         except Exception:
             pass
 
-    # 2026-09-14: pearl_candidates.json は日次で追記され TTL 7日で残るため、
-    # 同じ銘柄が日付違いで複数行入る。9/14 の週次メールでは MSGM×2 /
-    # HESAY×3 / IDEXY×3 / TCEHY×3 / RELY×2 と重複掲載され、下の
-    # 「発見: 計261銘柄」も水増しされていた。銘柄ごとに1行へ畳む
-    # （日付の新しい方を優先し、同日なら高スコア側）。
+        # pearl_candidates.json は日次で追記され TTL 7日で残るため、同じ銘柄が日付違いで複数行入る。
+        # 銘柄ごとに1行へ畳む（日付の新しい方を優先し、同日なら高スコア側）。
     _best: dict = {}
     for c in candidates:
         _t = c.get("ticker") or c.get("code")
@@ -2082,9 +2060,9 @@ def _section_pearl_ranking(results: dict, cfg=None) -> list:
             )
         lines.append("")
 
-    # ── 2026-10-05: 日本株（健太指示「光る原石ランキングに日本株も入れて」）──
-    # 日本株スクリーナーは売上上位の企業が対象で D4（発見Gap＝小型・未発見）が低く、
-    # Tier B（50点）に届かず上の表にほぼ出ない。Tier未満も含めて上位を別枠で出す。
+        # ── 日本株 ──
+        # 日本株スクリーナーは売上上位の企業が対象で D4（発見Gap＝小型・未発見）が低く、
+        # Tier B（50点）に届かず上の表にほぼ出ない。Tier未満も含めて上位を別枠で出す。
     _jp = [c for c in (results.get("screener") or {}).get("candidates", [])
            if str(c.get("ticker", "")).endswith(".T") and c.get("pearl_score")]
     if _jp:
@@ -2114,7 +2092,7 @@ def _section_pearl_ranking(results: dict, cfg=None) -> list:
     return lines
 
 # ==============================================================
-# BLOCK 8.8: Wave 2 新規セクション
+# BLOCK 8.8: FE系セクション
 # ==============================================================
 
 def _section_analyst_revision(results: dict, cfg=None) -> list:
@@ -2301,7 +2279,7 @@ def _section_ignition_alert(results: dict, cfg=None) -> list:
         return ["## 🔥 今週の収束シグナル（Ignition Alert）", "", "*生成エラー*", ""]
 
 # ==============================================================
-# BLOCK 8.9: Wave 3 新規セクション
+# BLOCK 8.9: 独立性・PEAD・分散・カタリストのセクション
 # ==============================================================
 
 def _section_latent_pearl_promotion(results: dict, cfg=None) -> list:
@@ -2322,7 +2300,7 @@ def _section_latent_pearl_promotion(results: dict, cfg=None) -> list:
         }
         cross_latent = bridge.get("cross_market_latent", [])
 
-        # Wave 7: latent_pearl_cache から取得
+                # latent_pearl_cache から取得
         latent_entries: list = []
         promoted_tickers: list = []
         try:
@@ -2384,7 +2362,7 @@ def _section_latent_pearl_promotion(results: dict, cfg=None) -> list:
                 )
             lines.append("")
 
-        # ── Wave 7: size×taxonomy コンテキスト付き潜伏候補 ────────
+                # ── size×taxonomy コンテキスト付き潜伏候補 ────────
         tax_notable = [
             e for e in latent_entries
             if float(e.get("latent_pearl_score", 0)) >= 30.0
@@ -2443,7 +2421,7 @@ def _section_latent_pearl_promotion(results: dict, cfg=None) -> list:
         return ["## 💎 潜伏銘柄プロモーション", "", "*生成エラー*", ""]
 
 # ==============================================================
-# BLOCK 8.9-B: Wave 7 新規セクション（市場形成前シグナル / size×taxonomy）
+# BLOCK 8.9-B: 市場形成前シグナル / size×taxonomy
 # ==============================================================
 
 def _section_wave7_premarket_signals(results: dict, cfg=None) -> list:
@@ -2851,7 +2829,7 @@ def _section_portfolio_concentration(results: dict, cfg=None) -> list:
     try:
         lines = ["## 🔀 ポートフォリオ集中リスク（FE-6）", ""]
 
-        # 2026-10-05: 実際の保有（円評価額）の集中度を先に出す
+                # 実際の保有（円評価額）の集中度を先に出す
         try:
             from portfolio_diversity_filter import load_holdings_concentration as _lhc
             _hc = _lhc()
@@ -3104,9 +3082,7 @@ def _section_action_guide(results: dict) -> list:
             lines.append(f"- **{name}** スコア{score:.0f}点: {reason}")
         lines.append("")
 
-    # [P-3] 長期保有候補（片山晃モデル「10年持てる銘柄」）
-    # 2026-07-25 バッチ1: screener が longterm_top を生成していたのに
-    # どのレポートにも載らず、成果物が誰にも届いていなかったため追加。
+        # [P-3] 長期保有候補（片山晃モデル「10年持てる銘柄」・screener の longterm_top）
     longterm_top = screener.get("longterm_top", []) or []
     if longterm_top:
         lines.append("### 🌱 長期保有候補（P-3: 財務堅牢×増益×高ROE）")
@@ -3183,7 +3159,7 @@ def _section_risk_constraints(results: dict) -> list:
     return lines
 
 # ==============================================================
-# BLOCK 8.95: Wave 6 - B 新規セクション（技術クラスター）
+# BLOCK 8.95: 技術クラスター
 # ==============================================================
 
 def _section_technology_cluster(results: dict, cfg=None) -> list:
@@ -3369,7 +3345,7 @@ def _section_technology_cluster(results: dict, cfg=None) -> list:
         ]
 
 # ==============================================================
-# BLOCK 9-B: Wave 6 - I系 オルタナティブデータセクション
+# BLOCK 9-B: I系 オルタナティブデータセクション（廃止済み・呼び出しなし）
 # ==============================================================
 
 def _section_hiring_signal(results: dict, cfg=None) -> list:
@@ -3649,7 +3625,7 @@ def generate_weekly_report(cfg, results: dict) -> dict:
 
     # 全セクションを構築
     sections = []
-    # ★修正: タイトルを先頭、推論・signal_aggregatorをその直後に配置
+        # タイトルを先頭、推論・signal_aggregatorをその直後に配置
     sections.append([
         f"# 📊 週次投資判断レポート",
         f"**{today}（第{week_num}週）** — stock_analyzer 自動生成",
@@ -3662,16 +3638,16 @@ def generate_weekly_report(cfg, results: dict) -> dict:
     sections.append(_section_module_ledger(cfg))                  # Wave OBS-1: 実行台帳（健全性）
     sections.append(_section_rule_optimizer_alert(results, cfg))  # Wave 6 - 第4セッション: 縮退アラート
     sections.append(_section_macro(results))
-    sections.append(_section_us_macro(results))     # ★ Phase US-2追加
+    sections.append(_section_us_macro(results))
     sections.append(_section_anomaly_season(results))
     sections.append(_section_market_breadth(results))
     sections.append(_section_jp_sectors(results))
     sections.append(_section_geo_country_risk(results, cfg))# Wave 6 - G-N: 国別リスクセクション追加(G-Xで作成)
     sections.append(_section_us_sectors(results))
     sections.append(_section_etf(results))
-    sections.append(_section_risk_constraints(results))   # ★ C-1/C-2追加
+    sections.append(_section_risk_constraints(results))
     sections.append(_section_screener(results))
-    sections.append(_section_deliberation_queue(results, cfg))   # 2026-07-28
+    sections.append(_section_deliberation_queue(results, cfg))
     sections.append(_section_analyst_revision(results, cfg))        # Wave 2 - FE-2
     sections.append(_section_ignition_alert(results, cfg))          # Wave 2 - FE-4
     sections.append(_section_pead_drift_candidates(results, cfg))   # Wave 3 - FE-5
@@ -3682,21 +3658,20 @@ def generate_weekly_report(cfg, results: dict) -> dict:
     sections.append(_section_wave7_size_taxonomy(results, cfg))      # Wave 7: size×taxonomy比較
     sections.append(_section_wave7_independence(results, cfg))       # Wave 7: 市場独立性スコア
     sections.append(_section_strategy_breakdown(results))
-    sections.append(_section_earnings_watchlist(results))   # ★ I-2追加
-    sections.append(_section_midterm_tracker(results))     # ★ I-5追加
+    sections.append(_section_earnings_watchlist(results))
+    sections.append(_section_midterm_tracker(results))
     sections.append(_section_scenario(results))
-    sections.append(_section_longterm_scenario(results))   # ★ R-5追加
+    sections.append(_section_longterm_scenario(results))
     sections.append(_section_performance(results))
     sections.append(_section_position_sizer(results))
     sections.append(_section_biz_summaries(results))
     sections.append(_section_news(results))
-    sections.append(_section_policy_radar(results))           # ★ policy_radar追加
+    sections.append(_section_policy_radar(results))
     sections.append(_section_catalyst_upcoming(results, cfg)) # Wave 3 - FE-7
     sections.append(_section_politician_highlight(results))   # Wave0 Policy Ph1
-    sections.append(_section_finbert_sentiment(results))   # ★ RESEARCH-5追加
+    sections.append(_section_finbert_sentiment(results))
     sections.append(_section_technology_cluster(results, cfg))  # Wave 6 - B: 技術クラスター
-    # 2026-10-05: 人材投資（求人票）・役員体制転換・施設着工は 2026-09-29 に機能を廃止したため節を出さない
-    #   （毎週「データなし」が3節並んでいた）
+        # 人材投資（求人票）・役員体制転換・施設着工は廃止済みなので節を出さない
     sections.append(_section_action_guide(results))
     sections.append(_section_stress_test(results))
     sections.append(_section_dividend_calendar(results))
@@ -3706,7 +3681,7 @@ def generate_weekly_report(cfg, results: dict) -> dict:
     sections.append(_section_jp_us_bridge(results))
     sections.append(_section_jp_us_correlation(results))      # Wave0 Idea2-A
     sections.append(_section_rule_optimizer(results))
-    sections.append(_section_alpha_attribution(results))    # ★ GAP-8追加
+    sections.append(_section_alpha_attribution(results))
     sections.append(_section_backtest(results))
     sections.append(_section_comps(results))
     sections.append(_section_self_evaluator(results))
@@ -3724,13 +3699,9 @@ def generate_weekly_report(cfg, results: dict) -> dict:
     except Exception:
         pass
 
-    # Wave 6 - G-X: 資源権益・地政学影響セクション
-    # 2026-07-28 バグ修正: sections は「行リストのリスト」であり、末尾の結合が
-    #   "\n".join(line for sec in sections for line in sec)
-    # と2重ループになっている。ここだけ sections.append("文字列") や
-    # sections += _section_*() を使っていたため、文字列が1文字ずつ
-    # イテレートされ、レポートが縦書き（1文字1行）になっていた。
-    # 他の全セクションと同じく「行リストを1個 append する」形に統一する。
+        # G-X: 資源権益・地政学影響セクション
+        # sections は「行リストのリスト」（末尾で2重ループで結合する）。文字列を直接 append すると
+        # 1文字ずつ展開されるので、必ず「行リストを1個 append する」。
     try:
         if getattr(cfg, "ENABLE_GEO_SIGNAL", False):
             sections.append([""])
@@ -3756,10 +3727,7 @@ def generate_weekly_report(cfg, results: dict) -> dict:
             "",
         ])
 
-    # フッター
-    # 2026-09-14: フッターを地政学（G-X）節より前に積んでいたため、
-    # 週次メールでは「自動生成: …」の後ろに地政学節が付く並びになっていた。
-    # 必ず最後に置く。
+        # フッターは必ず最後に置く
     sections.append([
         "---",
         f"*自動生成: stock_analyzer_main.py | {today}*",
@@ -3768,8 +3736,7 @@ def generate_weekly_report(cfg, results: dict) -> dict:
 
     # Markdown全文結合
     report_md = "\n".join(line for sec in sections for line in sec)
-    # 2026-10-05: 銘柄列を「ティッカー | 銘柄名」の2列に分け、文中のコードに名前を補う
-    # （健太指示「共通修正事項：ティッカーと銘柄名は列を分ける」）
+        # 銘柄列を「ティッカー | 銘柄名」の2列に分け、文中のコードに名前を補う
     try:
         from name_resolver import enrich_report
         report_md = enrich_report(report_md)
