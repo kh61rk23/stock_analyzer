@@ -1737,6 +1737,100 @@ def _section_signal_aggregator(results: dict) -> list:
     text = sa.get("summary_text", "")
     return text.split("\n") if text else []
 
+def _section_seisakudb(results: dict, cfg=None) -> list:
+    """政策DB: 公的支出ランキング・保有銘柄の公的支出・経済安保認定・募集中の補助金。"""
+    sk = results.get("seisakudb") or {}
+    pf = results.get("public_funding") or {}
+    if (not isinstance(sk, dict) or sk.get("skipped")) and not pf:
+        return []
+    sk = sk if isinstance(sk, dict) and not sk.get("skipped") else {}
+    try:
+        from name_resolver import name_of
+    except Exception:
+        name_of = lambda t, default="": default
+
+    def _oku(v):
+        return f"{(v or 0):,.1f}"
+
+    def _yen_oku(v):
+        return f"{(v or 0) / 1e8:,.1f}"
+
+    lines = ["## 🏛️ 政策DB: 公的支出・経済安保", ""]
+    rank = sk.get("rank_top") or []
+    if rank:
+        lines += ["### 公的支出ランキング上位10（億円）", "",
+                  "| ティッカー | 銘柄名 | 合計 | 補助金 | 調達 | 子会社経由 |",
+                  "|-----|-----|-----|-----|-----|-----|"]
+        for r in rank[:10]:
+            tk = f"{r.get('code')}.T"
+            nm = r.get("listed_name") or name_of(tk, default="")
+            lines.append(f"| {tk} | {nm} | {_oku(r.get('total_oku'))} | {_oku(r.get('subsidy_oku'))} "
+                         f"| {_oku(r.get('procurement_oku'))} | {_oku(r.get('via_subsidiary_oku'))} |")
+        lines.append("")
+
+    hold = []
+    try:
+        import csv as _csv
+        with open(Path(getattr(cfg, "PROJECT_DIR", ".")) / "data" / "portfolio_holdings.csv",
+                  encoding="utf-8-sig") as fh:
+            hold = [r["ticker"] for r in _csv.DictReader(fh)]
+    except Exception:
+        pass
+    held = [(t, pf[t]) for t in hold if t in pf and (pf[t].get("total_yen") or 0) > 0]
+    if held:
+        held.sort(key=lambda x: x[1].get("total_yen") or 0, reverse=True)
+        lines += ["### 保有銘柄の公的支出", "",
+                  "| ティッカー | 銘柄名 | 累計(億円) | 直近1年(億円) | 件数 | 売上比 |",
+                  "|-----|-----|-----|-----|-----|-----|"]
+        for t, f in held[:10]:
+            ratio = f.get("ratio_to_sales")
+            lines.append(f"| {t} | {name_of(t, default='')} | {_yen_oku(f.get('total_yen'))} "
+                         f"| {_yen_oku(f.get('recent_1y_yen'))} | {f.get('n_events', 0)} "
+                         f"| {'—' if ratio is None else f'{ratio * 100:.1f}%'} |")
+        lines.append("")
+
+    mats = dict(sk.get("certs_by_material") or {})
+    hit: dict = {}
+    for t, f in pf.items():
+        for m in f.get("econ_security_materials") or []:
+            hit.setdefault(m, []).append(t)
+    if mats or hit:
+        lines += ["### 経済安保の認定", ""]
+        for m in sorted(set(mats) | set(hit), key=lambda m: -(mats.get(m) or len(hit.get(m, [])))):
+            n = mats.get(m)
+            tks = hit.get(m, [])
+            txt = f"- {m}: {n}社" if n else f"- {m}"
+            if tks:
+                txt += "（保有・候補: " + "・".join(f"{t} {name_of(t, default='')}".strip() for t in tks[:5]) + "）"
+            lines.append(txt)
+        lines.append("")
+
+    cands = [c for c in ((results.get("screener") or {}).get("candidates") or [])
+             if (c.get("public_funding_bonus_preview") or 0) > 0]
+    if cands:
+        on = bool(getattr(cfg, "ENABLE_PUBLIC_FUNDING_BONUS", False))
+        lines += [f"### 公的支出の加点が付く候補（{'反映中' if on else '加点は停止中・付くはずの点数'}）", "",
+                  "| ティッカー | 銘柄名 | 加点 | 理由 |", "|-----|-----|-----|-----|"]
+        for c in sorted(cands, key=lambda c: -(c.get("public_funding_bonus_preview") or 0))[:15]:
+            t = c.get("ticker", "")
+            lines.append(f"| {t} | {name_of(t, default='')} | +{c['public_funding_bonus_preview']:.1f} "
+                         f"| {'・'.join(c.get('public_funding_reasons') or [])} |")
+        lines.append("")
+
+    subs = sorted((sk.get("open_subsidies") or []), key=lambda x: x.get("acceptance_end") or "9999")[:10]
+    if subs:
+        lines += ["### 募集中の補助金（締切が近い10件）", "",
+                  "| 締切 | 名称 | 機関 | 上限 |", "|-----|-----|-----|-----|"]
+        for x in subs:
+            lines.append(f"| {x.get('acceptance_end') or '—'} | {(x.get('title') or '')[:40]} "
+                         f"| {x.get('institution_name') or ''} | {x.get('subsidy_max_limit') or '—'} |")
+        lines.append("")
+    if len(lines) <= 2:
+        return []
+    lines.append("出典: 政策DB（seisakudb.jp）")
+    return lines
+
+
 def _section_comps(results: dict) -> list:
     ca = results.get("comps_analyzer", {})
     top = ca.get("top_cheap", [])
@@ -3684,6 +3778,7 @@ def generate_weekly_report(cfg, results: dict) -> dict:
     sections.append(_section_alpha_attribution(results))
     sections.append(_section_backtest(results))
     sections.append(_section_comps(results))
+    sections.append(_section_seisakudb(results, cfg))
     sections.append(_section_self_evaluator(results))
     sections.append(_section_wave7_pearl_backtest(results, cfg))  # Pearl BT
     sections.append(_section_screener_heatmap(results))

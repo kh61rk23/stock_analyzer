@@ -2080,6 +2080,22 @@ def build_seisakudb_alert(sk: dict) -> dict | None:
             lines.append(f"    {r.get('event_date') or ''} {tk} {nm}: {(r.get('title') or '')[:40]}"
                          f"（{r.get('kind') or ''}{'・' + r['ministry'] if r.get('ministry') else ''}）"
                          f" {_yen(r.get('amount_yen'))}")
+    rank = sk.get("rank_top") or []
+    if rank:
+        lines.append("  【公的支出の多い上場企業（上位5）】")
+        for r in rank[:5]:
+            tk = f"{r.get('code')}.T"
+            lines.append(f"    {tk} {r.get('listed_name') or name_of(tk, default='')}: "
+                         f"合計{(r.get('total_oku') or 0):,.1f}億円"
+                         f"（補助金{(r.get('subsidy_oku') or 0):,.1f}・調達{(r.get('procurement_oku') or 0):,.1f}）")
+    if sk.get("certs_mapped"):
+        lines.append(f"  【経済安保認定のうち証券コードに対応できた企業】{sk['certs_mapped']}件")
+    subs = sorted((sk.get("open_subsidies") or []), key=lambda x: x.get("acceptance_end") or "9999")[:3]
+    if subs:
+        lines.append("  【締切が近い補助金（3件）】")
+        for x in subs:
+            lines.append(f"    {x.get('acceptance_end') or '—'} {(x.get('title') or '')[:40]}"
+                         f"（{x.get('institution_name') or ''}）")
     lines.append("    出典: 政策DB（seisakudb.jp）")
     return {"trigger": "seisakudb", "title": f"🏛️ 政策DB 公的支出 直近{sk.get('recent', 0)}件・個社{sk.get('companies_ok', 0)}社",
             "body": "\n".join(lines), "severity": "info", "channel": "gmail"}

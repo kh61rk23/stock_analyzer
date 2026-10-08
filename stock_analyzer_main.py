@@ -3893,7 +3893,7 @@ def run_all_tasks(mode: str = "all") -> dict:
             print(f"  ⚠️  経営者スコアエラー: {str(e)[:80]}")
 
     # ── 政策DB（公的支出・経済安保）の取り込み ─────────────
-    # 保有銘柄を先頭に、スクリーナー候補の個社公的支出を30日に1回取り直す。スコアには使わない（表示・蓄積のみ）。
+    # 保有銘柄を先頭に、スクリーナー候補、上場全社の順で個社の公的支出を1日の予算が尽きるまで取る。
     if getattr(cfg, "ENABLE_SEISAKUDB", True) and _in_mode("seisakudb"):
         try:
             import seisakudb_ingestor as _sk
@@ -3919,6 +3919,29 @@ def run_all_tasks(mode: str = "all") -> dict:
                            + (f" / 停止: {_st}" if _st else ""))
         except Exception as _ske:
             logger.add("seisakudb", "error", f"{type(_ske).__name__}: {str(_ske)[:80]}")
+    # ── 公的支出の特徴量（保有+候補）を候補に付ける ─────────────
+    # 加点は ENABLE_PUBLIC_FUNDING_BONUS が真のときだけ。偽のときは表示用の付与のみ。
+    if getattr(cfg, "ENABLE_PUBLIC_FUNDING_FEATURES", True) and _in_mode("seisakudb"):
+        try:
+            import public_funding_features as pff
+            import stock_screener as _sc_pf
+            _pf_hold = []
+            try:
+                import csv as _csv_p
+                with open(Path(getattr(cfg, "PROJECT_DIR", ".")) / "data" / "portfolio_holdings.csv",
+                          encoding="utf-8-sig") as _fh:
+                    _pf_hold = [r["ticker"] for r in _csv_p.DictReader(_fh)]
+            except OSError:
+                pass
+            _pf_cands = (results.get("screener", {}) or {}).get("candidates", [])
+            _pf_tk = list(dict.fromkeys(_pf_hold + [c["ticker"] for c in _pf_cands if c.get("ticker")]))
+            _pf_feats = pff.build_features(cfg, _pf_tk)
+            results["public_funding"] = _pf_feats
+            _sc_pf.attach_public_funding(_pf_cands, _pf_feats, cfg)
+            logger.add("public_funding_features", "success",
+                       f"{len(_pf_feats)}銘柄 / 加点{'ON' if getattr(cfg, 'ENABLE_PUBLIC_FUNDING_BONUS', False) else 'OFF'}")
+        except Exception as _pfe:
+            logger.add("public_funding_features", "error", f"{type(_pfe).__name__}: {str(_pfe)[:80]}")
         # ── [I-5] 中期経営計画達成率トラッカー ─────────────
     if getattr(cfg, "ENABLE_MIDTERM_PLAN_TRACKER", True) and _in_mode("screener"):
         try:

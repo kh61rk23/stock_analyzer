@@ -102,6 +102,31 @@ JP_SECTOR_TICKERS = {
 # BLOCK 0.5: セクター振り分けユーティリティ（④セクター振り分け）
 # ==============================================================
 
+def attach_public_funding(candidates: list, features: dict, cfg=None) -> list:
+    """候補に公的支出の特徴量を付ける。加点は ENABLE_PUBLIC_FUNDING_BONUS が真のときだけ。
+
+    加点が止まっていても、付くはずの点数と理由は public_funding_bonus_preview / public_funding_reasons に残す
+    （加点をオンにするかを判断する材料）。加点したら composite_score の降順に並べ直す（同じリストを書き換えて返す）。
+    """
+    import public_funding_features as pff
+    bonus_on = bool(getattr(cfg, "ENABLE_PUBLIC_FUNDING_BONUS", False))
+    cap = float(getattr(cfg, "SCORE_MAX_COMPOSITE", 100.0))
+    for c in candidates or []:
+        feat = (features or {}).get(c.get("ticker"))
+        if feat is None:
+            continue
+        c["public_funding"] = feat
+        pt, reasons = pff.public_funding_bonus(feat, cfg)
+        c["public_funding_bonus_preview"] = pt
+        c["public_funding_reasons"] = reasons
+        c["public_funding_bonus"] = pt if bonus_on else 0.0
+        if bonus_on and pt:
+            c["composite_score"] = min(cap, (c.get("composite_score") or 0.0) + pt)
+    if bonus_on and candidates:
+        candidates.sort(key=lambda x: x.get("composite_score") or 0.0, reverse=True)
+    return candidates
+
+
 def _build_jp_ticker_to_sector() -> dict:
     """
     JP_SECTOR_TICKERS の逆引きマップを生成する。

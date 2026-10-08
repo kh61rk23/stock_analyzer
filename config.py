@@ -1333,13 +1333,23 @@ RE_BONUS_MAX: float = 3.0
 FUDOSANDB_BASE_URL: str = FUDOSAN_BASE_URL  # 後方互換
 FUDOSANDB_DAILY_BUDGET: int = FUDOSAN_DAILY_BUDGET  # 後方互換
 
-# 政策DB（seisakudb.jp）。Free プランは1日100回（成功したリクエストだけ数える）。データは月次更新。
+# 政策DB（seisakudb.jp）。1日1000回まで（成功したリクエストだけ数える）。データは月次更新。
 SEISAKUDB_API_KEY: str = os.getenv("SEISAKUDB_API_KEY", "")   # GitHub Secrets
 ENABLE_SEISAKUDB: bool = True
-SEISAKUDB_DAILY_BUDGET: int = 90          # 手動確認用に10回残す
-SEISAKUDB_COMPANY_DAILY: int = 60         # 個社の公的支出を1日に取る上限
-SEISAKUDB_COMPANY_TTL_DAYS: int = 30      # 個社を取り直す間隔（データは月次更新）
-SEISAKUDB_RECENT_LIMIT: int = 200         # 直近イベントの取得件数
+SEISAKUDB_DAILY_BUDGET: int = 1000       # 1日の上限。固定取得のあと個社ローテーションで使い切る
+SEISAKUDB_RESERVE: int = 0               # 手動確認用に残す回数
+SEISAKUDB_RECENT_LIMIT: int = 500        # 直近イベントの取得件数
+SEISAKUDB_TOP_LIMIT: int = 2000          # 公的支出ランキングの取得件数
+SEISAKUDB_MIN_INTERVAL_SEC: float = 0.5  # 送信間隔の下限（1000回で約10分。連打すると429を誘発する）
+# 公的支出の特徴量（銘柄ごとの受給額・経済安保認定）。スコア加点は承認後に True にする。
+ENABLE_PUBLIC_FUNDING_FEATURES: bool = True
+ENABLE_PUBLIC_FUNDING_BONUS: bool = False
+SEISAKU_BONUS_ECON_SECURITY: float = 1.5   # 経済安保の認定あり
+SEISAKU_BONUS_GOV_DEMAND: float = 1.0      # 直近1年の公的支出が売上の一定割合
+SEISAKU_BONUS_RECENT_AWARD: float = 0.5    # 直近180日に受給あり
+SEISAKU_RATIO_MIN: float = 0.01
+SEISAKU_RATIO_MAX: float = 0.30            # 超えると政府依存が強すぎるので加点しない
+SCORE_MAX_PUBLIC_FUNDING_ADJ: float = 3.0  # 公的支出加点の上限
 ALERT_ON_SEISAKUDB: bool = True           # 日次メールに政策DB節を出す
 # 対象銘柄の選定は fudosan_ingestor が保有銘柄・screener候補から動的に行う。
 
