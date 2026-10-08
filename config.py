@@ -54,7 +54,7 @@ ARXIV_DIR    = INSIGHT_DIR / "arxiv"
 SECTOR_DIR   = INSIGHT_DIR / "sectors"       # Step 2 以降で使用
 MACRO_DIR    = INSIGHT_DIR / "macro"         # Step 2 以降で使用
 LOG_DIR      = DRIVE_BASE / "logs"
-CACHE_DIR    = DRIVE_BASE / "cache"          # Wave 0 以降で使用
+CACHE_DIR    = DRIVE_BASE / "cache"          # キャッシュ置き場
 
 # setup_dirs() で一括作成するフォルダ一覧
 ALL_DIRS = [
@@ -150,9 +150,8 @@ ARXIV_HEADERS = {
 }
 
 # 投資キーワード定義
-# 【v1.0 との差分】
-#   ・文字列リストから (keyword, タイトル点数, サマリー点数) のタプルリストに変更
-#   ・タイトルヒット時とサマリーヒット時で点数を区別できるようになった
+# (keyword, タイトル点数, サマリー点数) のタプルリスト。
+#   ・タイトルヒット時とサマリーヒット時で点数を区別する
 #   ・日本市場関連キーワードは高点数（3/2）を設定
 ARXIV_KEYWORDS = [
     # ── 日本・アジア市場（高優先度）──────────────────────────
@@ -217,7 +216,6 @@ ARXIV_KEYWORDS = [
 # ==============================================================
 # BLOCK 3: 日本株 33業種 定義（東証業種コード準拠）
 # ==============================================================
-# 【v1.0 との差分】新規追加
 # JAPAN_SECTORS のキー
 
 JAPAN_SECTORS = {
@@ -1093,7 +1091,6 @@ GOV_RULES = {
 # ==============================================================
 # BLOCK 5: セクターエージェント インターフェース仕様
 # ==============================================================
-# 【v1.0 との差分】新規追加
 #
 # base_agent.run_sector_analysis() 参照
 #
@@ -1335,6 +1332,15 @@ RE_BONUS_MIN: float = -2.0
 RE_BONUS_MAX: float = 3.0
 FUDOSANDB_BASE_URL: str = FUDOSAN_BASE_URL  # 後方互換
 FUDOSANDB_DAILY_BUDGET: int = FUDOSAN_DAILY_BUDGET  # 後方互換
+
+# 政策DB（seisakudb.jp）。Free プランは1日100回（成功したリクエストだけ数える）。データは月次更新。
+SEISAKUDB_API_KEY: str = os.getenv("SEISAKUDB_API_KEY", "")   # GitHub Secrets
+ENABLE_SEISAKUDB: bool = True
+SEISAKUDB_DAILY_BUDGET: int = 90          # 手動確認用に10回残す
+SEISAKUDB_COMPANY_DAILY: int = 60         # 個社の公的支出を1日に取る上限
+SEISAKUDB_COMPANY_TTL_DAYS: int = 30      # 個社を取り直す間隔（データは月次更新）
+SEISAKUDB_RECENT_LIMIT: int = 200         # 直近イベントの取得件数
+ALERT_ON_SEISAKUDB: bool = True           # 日次メールに政策DB節を出す
 # 対象銘柄の選定は fudosan_ingestor が保有銘柄・screener候補から動的に行う。
 
 # ==============================================================
@@ -1373,7 +1379,7 @@ SHORT_TERM_TOP_N: int = 5
 # → MACRO_DIR を共用（BLOCK 1 で定義済み）
 
 # ==============================================================
-# BLOCK 10: 政策金利トラッカー設定（3-C 追加）
+# BLOCK 10: 政策金利トラッカー設定（3-C）
 # ==============================================================
 
 # 政策金利トラッカーを有効化するフラグ
@@ -1409,7 +1415,7 @@ POLICY_CHANGE_THRESHOLD: float = 0.05
 # DATA_DIR/policy_events.json （累積イベントログ）
 
 # ==============================================================
-# BLOCK 11: アイデアジェネレーター設定（4-A 追加）
+# BLOCK 11: アイデアジェネレーター設定（4-A）
 # ==============================================================
 
 # アイデアジェネレーターを有効化するフラグ
@@ -1425,7 +1431,7 @@ IDEA_KW_THRESHOLD: int = 1
 # → INSIGHT_DIR を共用（BLOCK 1 で定義済み）
 
 # ==============================================================
-# BLOCK 12: アイデアエバリュエーター設定（4-B 追加）
+# BLOCK 12: アイデアエバリュエーター設定（4-B）
 # ==============================================================
 
 # アイデアエバリュエーターを有効化するフラグ
@@ -1454,7 +1460,7 @@ CREDIT_OVERHEAT_PCTL: float = 90.0   # 倍率が上位この%以上 → 過熱
 CREDIT_CAUTION_PCTL:  float = 75.0   # 倍率が上位この%以上 → 注意（加減点なし）
 ENABLE_CORRELATION_HEATMAP: bool = True   # 相関ヒートマップ [3-2]
 ENABLE_SCENARIO_ANALYSIS: bool = True   # シナリオ分析（フェーズ3）
-ENABLE_PERFORMANCE_TRACKER: bool = True      # パフォーマンストラッカー有効化（2-3追加）
+ENABLE_PERFORMANCE_TRACKER: bool = True      # パフォーマンストラッカー有効化（2-3）
 ENABLE_MULTI_CURRENCY:    bool = True   # 多通貨モニタリング [A-6]
 ENABLE_EARNINGS_SURPRISE: bool = True   # 決算サプライズ検出 [A-7]
 
@@ -1508,7 +1514,7 @@ NEWS_FEEDS_ENABLED = None         # None=全フィード有効 / リスト指定
 NEWS_ALERT_MAX_ARTICLES: int = 5  # Gmailアラートに含める記事数
 
 # ==============================================================
-# BLOCK 13: 自律サイクル設定（4-C 追加）
+# BLOCK 13: 自律サイクル設定（4-C）
 # ==============================================================
 
 # ── デイリーサイクル（毎朝自動実行）──────────────────────────
@@ -1523,6 +1529,7 @@ DAILY_MODULES = [
     "edinetdb_ingest",  # DB統合W3: EdinetDB→BQ（company/financials/segments/text）
     "edinet_doc_index", # DB統合W3: 開示書類インデックス（有報は年1回=窓400日）
     "fudosan_ingest",   # DB統合W5: 企業保有不動産→BQ
+    "seisakudb",        # 政策DB: 上場企業の公的支出・経済安保認定→BQ
     "gov",           # 政府データパイプライン
     "macro",         # マクロ指標取得
     "sector",        # セクターエージェント
@@ -1554,13 +1561,13 @@ DAILY_MODULES = [
     "volume_profile",   # 出来高プロファイル分析 [4-7]
     "notion_obsidian",   # Notion/Obsidian書き込み [6-4]（毎日実行）
     "policy_radar",  # 政策レーダー
-    "policy_signal_applier",       # Wave 3 - Policy Ph2（17.8番・日次）
-    "pead_monitor",                # Wave 3 - FE-5（screener直後・日次）
-    "ml_meta",                     # Wave R5-1 - S7 ML特徴量スナップショット（日次蓄積）
-    "score_calculator",            # Wave R5-2 Phase A - E10 JP/US共通スコア
+    "policy_signal_applier",       # Policy Ph2（17.8番・日次）
+    "pead_monitor",                # FE-5（screener直後・日次）
+    "ml_meta",                     # S7 ML特徴量スナップショット（日次蓄積）
+    "score_calculator",            # E10 JP/US共通スコア
         # size_decay_manager / cross_size_signal は stock_analyzer_main が _in_mode("size_tier") でゲートする。
         #   ここに "size_tier" が無いと日次・週次では永久に実行されない。
-    "size_tier",                   # Wave 7: 規模別減衰管理 + 規模帯横断シグナル
+    "size_tier",                   # 規模別減衰管理 + 規模帯横断シグナル
 ]
 
 # ── ウィークリーサイクル（月曜朝に追加実行）───────────────────
@@ -1570,13 +1577,13 @@ WEEKLY_MODULES = [
     "congress_monitor",  # US法案議会進行追跡 [Ph4]（L4キャッシュ減衰で日次適用）
     "ontology_export",  # エンティティグラフBQ追記（週次）
     "correlation",   # 米国債×業種 相関監査
-    "size_tier_classifier",      # Wave0 Size Ph1（sector実行直後・週次）
-    "business_model_classifier", # Wave0 BM Ph1（size_tier_classifierの直後・週次）
+    "size_tier_classifier",      # Size Ph1（sector実行直後・週次）
+    "business_model_classifier", # BM Ph1（size_tier_classifierの直後・週次）
         # "jp_us_sector_correlation",  ← 廃止（機能していなかった）
-    "sector_rotation_detector",    # Wave0 Idea2-B（signal_aggregatorの直前・必須）
-    "portfolio_diversity_filter",  # Wave 3 - FE-6（screener直後・Ignitionの前）
-    "ignition_detector",           # Wave 2 - FE-4（sector_rotation_detectorの直後）
-    "catalyst_calendar",           # Wave 3 - FE-7（NEDO/policy_radar直後）
+    "sector_rotation_detector",    # Idea2-B（signal_aggregatorの直前・必須）
+    "portfolio_diversity_filter",  # FE-6（screener直後・Ignitionの前）
+    "ignition_detector",           # FE-4（sector_rotation_detectorの直後）
+    "catalyst_calendar",           # FE-7（NEDO/policy_radar直後）
     "credit_data",   # 信用残高週次取得 [3-5]
     "idea",          # アイデア生成
     "evaluation",    # アイデア評価・週次集計
@@ -1596,19 +1603,19 @@ WEEKLY_MODULES = [
     "screener_heatmap",  # セクターヒートマップ
     "portfolio_optimizer",   # ポートフォリオ最適化 [6-1]
     "dcf",               # DCF理論株価 [6-3]（週次のみ / 7日キャッシュ）
-    "longterm_scenario",   # 10年単位のシナリオ R-5追加
+    "longterm_scenario",   # 10年単位のシナリオ R-5
     "google_trends",  # Google Trends
     "finbert",  # FinBERT
-    "technology_mapper",        # Wave 6 - B: 企業×技術マッピング
-    "cluster_engine",           # Wave 6 - B: 技術クラスター生成
-    "emerging_detector",        # Wave 6 - B: 萌芽テーマ検知
-    "cluster_graph_exporter",   # Wave 6 - B: クラスター結果出力
+    "technology_mapper",        # B: 企業×技術マッピング
+    "cluster_engine",           # B: 技術クラスター生成
+    "emerging_detector",        # B: 萌芽テーマ検知
+    "cluster_graph_exporter",   # B: クラスター結果出力
     "factor_crowding",  # ファクター混雑度
         # "job_posting",  ← 廃止（機能していなかった）
-    "executive_transition",  # Wave 6 - I-3: 役員転職トラッカー
+    "executive_transition",  # I-3: 役員転職トラッカー
         # "facility_expansion",  ← 廃止（機能していなかった）
         # 政策支援（BQ edinet.policy_support）の書き手。読む側は base_agent.get_policy_support_bonus。
-    "nedo",                  # Wave 1 - I-2: NEDO採択情報 → policy_support
+    "nedo",                  # I-2: NEDO採択情報 → policy_support
 ]
 
 # ウィークリー実行の曜日（0=月曜 〜 6=日曜）
@@ -1696,10 +1703,7 @@ ALERT_MIN_DIVIDEND_YIELD: float = 0.04   # 4%以上
 # 注目業種トップ3で業種ごとに出す代表銘柄の件数。
 ALERT_SECTOR_TOP_COMPANIES: int = 3  # 業種のスクリーナー上位を出す
 
-# 米国株サマリーを日次メールに載せるか。
-# us_screener は毎日900〜1000社を処理し300社超が通過しているのに、
-# alert_notifier.py に us_screener / us_sectors への参照が1つも無く、
-# 日次メールに米国株が一切載っていなかったため新設した。
+# 米国株サマリー（us_screener / us_sectors）を日次メールに載せるか（alert_notifier.py）。
 ALERT_ON_US_SUMMARY: bool = True
 ALERT_US_TOP_PICKS:    int = 10  # USスクリーナー通過銘柄の表示件数
 
@@ -1836,29 +1840,29 @@ OBSIDIAN_VAULT_DIR: str = str(DRIVE_BASE / "obsidian_vault")
 #   月次で調整した rule_weights.json の値が優先される。
 #   合計は必ず 1.00 にすること（signal_aggregator が起動時に検証する）。
 SIGNAL_WEIGHTS = {
-    "sector_score":           0.21,   # A: composite_score（Wave R2-6でVへ0.02移譲）
-    "macro_signals":          0.13,   # B: MACRO_RULES シグナル（Wave 7調整）
+    "sector_score":           0.21,   # A: composite_score
+    "macro_signals":          0.13,   # B: MACRO_RULES シグナル
     "technical_score":        0.15,   # C: テクニカル
     "market_breadth":         0.10,   # D: 市場幅
     "options_sentiment":      0.08,   # E: オプション恐怖/強欲
     "anomaly_season":         0.03,   # F: 季節アノマリー
-    "us_lead_signal":         0.03,   # G: JP×US先行シグナル（Wave 7調整）
-    "etf_heat":               0.01,   # H: テーマETF熱量（Wave 4調整）
+    "us_lead_signal":         0.03,   # G: JP×US先行シグナル
+    "etf_heat":               0.01,   # H: テーマETF熱量
     "yield_curve":            0.01,   # I: イールドカーブ
     "pearl_signal":           0.04,   # J: 光る原石スコア（Pearl Ph1）
     "independence_signal":    0.04,   # K: Independence Score（Independence Ph1）
-    "politician_signal":      0.02,   # L: 議員取引シグナル（Wave 4調整）
+    "politician_signal":      0.02,   # L: 議員取引シグナル
     "institutional_signal":   0.01,   # M: 機関投資家13Fシグナル（Policy Ph3）
-    "geo_signal":             0.04,   # N: 地政学×権益統合シグナル（Wave 6 - G-X）
-    "cluster_phase_bonus":    0.01,   # 技術クラスターフェーズボーナス（Wave 6 - B）
-    "hiring_signal":          0.01,   # O: 人材投資シグナル（Wave 6 - I-1）
-    "exec_transition":        0.01,   # P: 経営方針転換シグナル（Wave 6 - I-3）
-    "facility_signal":        0.01,   # Q: 設備投資シグナル（Wave 6 - I-4）
-    "standardization_signal": 0.01,   # R: 標準化動向シグナル（Wave 7）
-    "academic_signal":        0.01,   # S: 学術カンファレンスシグナル（Wave 7）
-    "midterm_signal":         0.01,   # T: 中計達成率シグナル（Wave 7）
-    "taxonomy_size_bonus":    0.01,   # U: taxonomy×size交差評価（Wave 7）
-    "taxonomy_signal":        0.02,   # V: node_hotness（Wave R2-6/T-5）
+    "geo_signal":             0.04,   # N: 地政学×権益統合シグナル（G-X）
+    "cluster_phase_bonus":    0.01,   # 技術クラスターフェーズボーナス（B）
+    "hiring_signal":          0.01,   # O: 人材投資シグナル（I-1）
+    "exec_transition":        0.01,   # P: 経営方針転換シグナル（I-3）
+    "facility_signal":        0.01,   # Q: 設備投資シグナル（I-4）
+    "standardization_signal": 0.01,   # R: 標準化動向シグナル
+    "academic_signal":        0.01,   # S: 学術カンファレンスシグナル
+    "midterm_signal":         0.01,   # T: 中計達成率シグナル
+    "taxonomy_size_bonus":    0.01,   # U: taxonomy×size交差評価
+    "taxonomy_signal":        0.02,   # V: node_hotness（T-5）
 }
 
 # ==============================================================
@@ -3075,7 +3079,7 @@ INSTITUTIONAL_QUARTER_DAY_FROM: int = 15              # 提出期間開始日（
 # POLICY_SECTOR_IMPACT_MAP   : 法案種別 → 影響業種コード＆スコア方向の定義
 # $L4\_override = min(impact\_score, SCORE\_MAX\_POLICY\_L4\_ADJ)$
 
-SCORE_MAX_POLICY_L4_ADJ_W4          = 25.0   # Wave 4 L4専用（BLOCK31と区別）
+SCORE_MAX_POLICY_L4_ADJ_W4          = 25.0   # L4専用（BLOCK31と区別）
 EMERGENCY_DAILY_DROP_THRESHOLD       = -0.04  # 日次-4%超で緊急フラグ
 POLICY_STRUCTURAL_CACHE_TTL_MONTHS   = 12
 PDF_URL_CACHE_TTL_DAYS               = 30
@@ -4151,7 +4155,7 @@ ENABLE_D3_CATALYST_INTEGRATION: bool = True
 # 潜伏Pearl昇格ボーナス有効フラグ
 ENABLE_LATENT_PEARL_BONUS: bool = True
 # ==============================================================
-# BLOCK 38: 観測性 — モジュール実行台帳設定（Wave OBS-1）
+# BLOCK 38: 観測性 — モジュール実行台帳設定（OBS-1）
 # ==============================================================
 # module_ledger.py が参照する。日次の全モジュール成否を台帳化し、
 # 連続失敗・配線漏れ（記録なし）を可視化する。
@@ -4162,7 +4166,7 @@ LEDGER_CONSEC_FAIL_DAYS: int = 3    # この日数以上の連続失敗で Gmail
 LEDGER_HISTORY_DAYS: int = 14       # 連続失敗・最終成功日の遡及日数
 
 # ==============================================================
-# BLOCK 39: 投資部（マルチエージェント審議）連携設定（Wave DEPT-1）
+# BLOCK 39: 投資部（マルチエージェント審議）連携設定（DEPT-1）
 # ==============================================================
 # agent_packet_exporter.py が参照する。SPEC_investment_dept.md 参照。
 # vault パスはローカル実行専用（GitHub Actions では使用しない）。
@@ -4188,10 +4192,10 @@ INVESTMENT_DEPT_VAULT_DIR: str = os.getenv(
 
 # ── BLOCK 38b: パイプライン実行フラグ（stock_analyzer_main / 各モジュールが読む）─────
 ENABLE_DEEP_DIVE_TRIGGER: bool = True      # 深掘りトリガー [S3-4]
-ENABLE_TECHNOLOGY_MAPPER: bool = True      # 技術マッピング [Wave6-B T-1]
-ENABLE_CLUSTER_ENGINE: bool = True         # クラスターエンジン [Wave6-B T-2]
-ENABLE_EMERGING_DETECTOR: bool = True      # 萌芽テーマ検知 [Wave6-B T-3]
-ENABLE_CLUSTER_GRAPH_EXPORT: bool = True   # クラスター結果出力 [Wave6-B T-4]
+ENABLE_TECHNOLOGY_MAPPER: bool = True      # 技術マッピング [B T-1]
+ENABLE_CLUSTER_ENGINE: bool = True         # クラスターエンジン [B T-2]
+ENABLE_EMERGING_DETECTOR: bool = True      # 萌芽テーマ検知 [B T-3]
+ENABLE_CLUSTER_GRAPH_EXPORT: bool = True   # クラスター結果出力 [B T-4]
 
 # ── BLOCK 39b: オントロジー層 設定 ──
 # ontology_exporter.py が参照。週次（WEEKLY_MODULES "ontology_export"）で
@@ -5132,7 +5136,7 @@ SEC_CIK_MAP_TTL_DAYS: int = 7        # us_insider_form4_scraper の _TICKER_MAP_
 SEC_MAX_RETRIES: int = 3
 
 # ==============================================================
-# BLOCK 61: 市場別プロファイル索引（Wave J3 / U-8）
+# BLOCK 61: 市場別プロファイル索引（U-8）
 # ==============================================================
 # 既存の *_JP / *_US 設定値は削除・複製しない。市場横断コードが必要とする
 # 設定名をここで索引化し、実値は各定数を正本とする。

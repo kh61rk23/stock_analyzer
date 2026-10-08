@@ -1,8 +1,6 @@
 # ==============================================================
 # config_reference_gen.py — 構成管理資料 CONFIG_REFERENCE.md を config.py から再生成する
-# 2026-10-03 新設
-# 【背景】CONFIG_REFERENCE.md は 2026-07-28 に機械抽出したきり生成手段が残っておらず、
-#   以後の設定追加（EdinetDB枠・Web事前確認・財務細目・スクリーナー拡大など）が反映されていなかった。
+# 【用途】CONFIG_REFERENCE.md の唯一の生成手段。手で直すと設定追加が反映されなくなるため、
 #   改修のたびに本スクリプトで作り直す（stock-analyzer-refit スキル §6 の完了手順に組み込む）。
 # 【実行】python3 config_reference_gen.py [--out <path>]
 #   既定の出力先: ../02_Configuration_Management/02_ファイル構成/CONFIG_REFERENCE.md

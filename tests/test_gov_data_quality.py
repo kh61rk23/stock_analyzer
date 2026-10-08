@@ -1,9 +1,9 @@
 # ==============================================================
 # tests/test_gov_data_quality.py — gov_data_pipeline データ品質ガードの回帰テスト
 # ==============================================================
-# 2026-07-12 実行ログ照合で発見した実害の再発防止:
-#   ・毎月勤労統計(2009年)・労働力調査(2005年)の前年比がシグナル化されていた → 鮮度ガード
-#   ・建設着工「前年比-83.5%」（カテゴリ混在起因の異常値）がシグナル化 → 異常値クランプ
+# 防ぐもの:
+#   ・古い年次（例: 毎月勤労統計2009年・労働力調査2005年）の前年比をシグナル化する → 鮮度ガード
+#   ・カテゴリ混在起因の異常値（例: 建設着工の前年比-83.5%）をシグナル化する → 異常値クランプ
 # ==============================================================
 import sys
 from pathlib import Path
@@ -61,7 +61,7 @@ class TestCalculateChanges:
         assert ch["latest_time"] == "2026-05"
 
 
-# ── 2026-09-26: e-Stat 10桁時間コード / 同月比較 / 陳腐化フェイルオーバー ──
+# ── e-Stat 10桁時間コード / 同月比較 / 陳腐化フェイルオーバー ──
 class TestEstatTimeCode:
     def test_monthly_10digit_code(self):
         from gov_data_pipeline import _parse_time_code
@@ -110,7 +110,7 @@ class TestStaleFailover:
         assert used == "NEW" and recs == new
 
 
-# ── 2026-09-29: e-Stat の統計表ID追跡をやめ、FRED（固定の系列ID）から取る ──
+# ── FRED（固定の系列ID）から取る（e-Stat の統計表IDは追跡しない） ──
 class TestFredSource:
     def test_csv_parsing_skips_missing_and_sorts_desc(self, monkeypatch):
         import types

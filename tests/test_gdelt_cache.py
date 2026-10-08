@@ -1,7 +1,7 @@
 # country_risk_updater — GDELT「最後に取れた値」永続キャッシュ（純粋ロジック）
-# 2026-07-17追加（Issue J-1）:
-#   GitHub Actions共有IPがGDELTに恒常的にブロックされ全件429で全滅する日が
-#   常態化したため、取得失敗時は永続キャッシュ値を減衰付きで代用する。
+# Issue J-1:
+#   GitHub Actions共有IPはGDELTにブロックされ全件429になる日があるため、
+#   取得失敗時は永続キャッシュ値を減衰付きで代用する。
 #   本テストは decayed_score() 等の純粋関数のみを対象とし、ネットワーク・
 #   ファイルI/Oには依存しない（cfg.CACHE_DIR は tmp_cfg でtmp_pathに隔離）。
 from datetime import date

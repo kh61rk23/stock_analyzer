@@ -407,13 +407,10 @@ def _calc_paper_weight(paper: dict, ss_data: dict) -> float:
 
 
 # ArXiv論文の持ち越しキャッシュ
-# 2026-09-12: etf_tracker は **日次**、arxiv_monitor は **週次** なのに、
-# 論文データを results["arxiv"]（その実行のメモリ上）からしか受け取って
-# いなかった。そのため月曜以外は arxiv_result が None になり、
-# 全8テーマが中立の 50 に落ちていた（実測 2026-09-07 月曜は
-# 100/50/100/50/50/100/100 と動き、他の曜日は一律50）。
+# etf_tracker は **日次**、arxiv_monitor は **週次**。results["arxiv"]（その実行の
+# メモリ上）だけに頼ると月曜以外は arxiv_result が None になり、全テーマが中立の 50 に落ちる。
 # 論文は「直近4週 vs その前4週」で比較する性質上、直近の週次取得分を
-# 持ち越して使うのが正しい。取得できた日に保存し、無い日は読み出す。
+# 持ち越して使う。取得できた日に保存し、無い日は読み出す。
 _ARXIV_CACHE_FILE = "arxiv_papers_cache.json"
 # 何日前までの取得分を使うか。arxiv は週次なので1回飛んでも耐える2週間。
 # これより古いと「直近4週」バケットが空になり比較が壊れる。
@@ -430,10 +427,9 @@ def _extract_papers(arxiv_result) -> list:
     """arxiv_result から論文リストを取り出す（キー名の揺れを吸収）。"""
     if not isinstance(arxiv_result, dict):
         return []
-    # 2026-09-14: 既読を除いた "papers"（新着のみ）を先に採っていたが、
     # トレンドは「直近4週 vs その前4週」の比較なので母集団は全件が必要。
-    # 既読除外は窓ごとに不均一に件数を削り、9/14 は量子=0 / AI=11 のような
-    # 極端値を出していた。全件（all_papers）を優先する。
+    # 既読を除いた "papers"（新着のみ）は窓ごとに不均一に件数が削られ極端値を出すため、
+    # 全件（all_papers）を優先する。
     for key in ("all_papers", "papers", "new_papers_list"):
         v = arxiv_result.get(key)
         if isinstance(v, list) and v:
@@ -563,23 +559,22 @@ def _calc_arxiv_trend_score(theme: dict, arxiv_result: Optional[dict],
 # ==============================================================
 
 # ==============================================================
-# arXiv 検索APIでテーマごとの論文数を直接数える（2026-09-29）
-# 以前は週次の ArXiv 監視が取った約150件（分野が偏る）をキーワードで数えており、
-# 8テーマ中6テーマが「該当なし＝固定50点」、1テーマが0点だった。
-# 実測（9/29）: 量子計算 直近4週741件←前4週592件・原子力13←6・サイバー149←124
+# arXiv 検索APIでテーマごとの論文数を直接数える
+# 週次の ArXiv 監視が取る約150件は分野が偏り、キーワードで数えると
+# 多くのテーマが「該当なし＝固定50点」になるため、テーマごとに検索する。
 # ==============================================================
 _ARXIV_API = "https://export.arxiv.org/api/query"
 _ARXIV_THEME_CACHE = "arxiv_theme_counts.json"
 _ARXIV_LAG_DAYS = 3        # 直近数日は登録が遅れるので集計から外す
 _ARXIV_SMOOTH = 5          # 少数件の伸び率が極端にならないよう分母分子に足す
-_ARXIV_MIN_SAMPLE = 40     # 直近+前期の合計がこれ未満なら点数を中立へ寄せる（2026-10-01）
+_ARXIV_MIN_SAMPLE = 40     # 直近+前期の合計がこれ未満なら点数を中立へ寄せる
 
 
 def build_arxiv_query(keywords: list, cats: list, start: str, end: str) -> str:
     """題名・要旨の語句一致 × 分野カテゴリ × 投稿日で絞る検索式（純関数）。
 
-    2026-10-01: 旧版は all:（著者・コメント欄も含む全文）で広い語（SMR, energy storage,
-    transformer 等）を引いており、ウランに AI 評価の論文、電池に AutoML の論文が混ざっていた。
+    all:（著者・コメント欄も含む全文）で広い語（SMR, energy storage, transformer 等）を
+    引くと、ウランに AI 評価の論文、電池に AutoML の論文が混ざるため ti:/abs: に絞る。
     """
     kw = " OR ".join(f'ti:"{k}" OR abs:"{k}"' for k in keywords)
     q = f"({kw})"
@@ -596,7 +591,7 @@ def _arxiv_query(keywords: list, start: str, end: str, n: int = 1, cats: list = 
     q = build_arxiv_query(keywords, list(cats or []), start, end)
     url = _ARXIV_API + "?" + urllib.parse.urlencode({
         "search_query": q, "max_results": max(1, n),
-        # 件数は並び順に依存しない。代表論文は関連度順の方がテーマに沿う（2026-10-01）
+        # 件数は並び順に依存しない。代表論文は関連度順の方がテーマに沿う
         "sortBy": "relevance", "sortOrder": "descending"})
     for attempt in range(3):
         try:
@@ -812,10 +807,10 @@ def run_thematic_etf_tracker(cfg, arxiv_result: Optional[dict] = None) -> dict:
     top_n   = getattr(cfg, "ETF_TOP_N", 3)
     themes  = getattr(cfg, "ETF_THEME_IDS", None)   # None = 全テーマ実行
 
-    # 2026-09-12: 本モジュールは日次、arxiv_monitor は週次。
+    # 本モジュールは日次、arxiv_monitor は週次。
     # 週次で取れた日は保存し、取れなかった日は前回分を読み出す。
     # これが無いと月曜以外は全テーマが ArXiv=50（中立）に固定され、
-    # 熱量スコアの4割が死んだ状態になっていた。
+    # 熱量スコアの4割が効かなくなる。
     _fresh = _extract_papers(arxiv_result)
     if _fresh:
         _save_arxiv_papers(cfg, _fresh)

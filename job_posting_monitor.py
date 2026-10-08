@@ -1,5 +1,5 @@
 # ==============================================================
-# job_posting_monitor.py  v1.0  (Wave 6 - I-1)
+# job_posting_monitor.py  v1.0  (I-1)
 # ==============================================================
 # 【役割】
 #   Wantedly / Green 等の求人票情報を収集・解析し、
@@ -395,8 +395,8 @@ def _detect_surge(
 
     for cat, curr in curr_counts.items():
         prev  = prev_counts.get(cat, 0)
-        # 2026-09-29: 前回の件数が無い（初回・0件）ときに curr/1 を比率にしており、
-        # 3件以上あれば必ず「急増」扱いで業種に+10点が30日乗っていた。基準が無い回は判定しない
+        # 前回の件数が無い（初回・0件）回は判定しない。curr/1 を比率にすると
+        # 3件以上で必ず「急増」扱いになり、業種に+10点が30日乗ってしまう
         if prev <= 0:
             continue
         ratio = curr / prev
@@ -457,7 +457,7 @@ def run_job_posting_monitor(cfg, results: dict) -> dict:
     # ── キャッシュ確認 ────────────────────────────────────────
     cache = _load_cache(cfg)
     if cache and not cache.get("prev_counts"):
-        # 2026-09-29: 基準（前回件数）の無い判定で作られたキャッシュは加点を捨てる
+        # 基準（前回件数）の無い判定で作られたキャッシュは加点を捨てる
         cache = {**cache, "sector_boosts": {}, "surge_detected": []}
     if cache:
         print(
@@ -546,7 +546,7 @@ def run_job_posting_monitor(cfg, results: dict) -> dict:
     }
     _save_cache(cfg, new_cache)
 
-    # ── BQ格納（Wave R0-2 / SPEC_db_schema.md §6-2）─────────────
+    # ── BQ格納（R0-2 / SPEC_db_schema.md §6-2）─────────────
     # ローカルキャッシュが正本・BQ失敗でも処理は継続（try/except）。
     if bool(getattr(cfg, "ENABLE_US_BQ_EXPORT", True)):
         try:

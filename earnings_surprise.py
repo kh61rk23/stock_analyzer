@@ -114,7 +114,7 @@ _CFG_CONST_MAP = {
     'B6_EARNINGS_SURPRISE_SURPRISE_COMBO_NEG_CONSERV': 'SURPRISE_COMBO_NEG_CONSERV',
 }
 
-# ── config 参照ヘルパー（2026-07-25 追加）─────────────────────
+# ── config 参照ヘルパー ─────────────────────
 # analyze_ticker() は cfg を引数に取らない設計のため、フラグ参照用に
 # ここで遅延ロードする。呼び出し側のシグネチャを変えずに済ませるための措置。
 _CFG_CACHE = None
@@ -138,11 +138,10 @@ def _cfg_es():
 def _row_quarter(row):
     """earnings_history の行から四半期末日を取り出す。
 
-    2026-09-17: yfinance の earnings_history は四半期日付を**インデックス**に持ち
+    yfinance の earnings_history は四半期日付を**インデックス**に持ち
     （列は epsActual / epsEstimate / epsDifference / surprisePercent のみ）、
-    row.get("quarter") は常に None だった。quarter が全行 "" になり新しい順の
-    並べ替えが効かず、yfinance の古い順のまま history[0] を「直近」として扱っていた
-    （6674.T は直近3四半期が上振れなのに最古の下振れで -2pt、6594.T は逆に +2pt）。
+    row.get("quarter") は常に None。インデックスから取らないと新しい順の
+    並べ替えが効かず、yfinance の古い順のまま最古の四半期を「直近」と誤認する。
     """
     dt = row.get("quarter") or row.get("Quarter")
     if dt is None and hasattr(row.name, "strftime"):
@@ -158,13 +157,9 @@ def _fetch_earnings_history_extended(ticker: str, n_quarters: int = None) -> lis
     n_quarters を省略すると config.py BLOCK I-2 の
     CONSERVATISM_MIN_QUARTERS（既定8）を使う。
 
-    ★ 2026-07-25 バッチ3: 四半期数を config から読むよう是正。
-      従来はモジュール定数 CONSERVATISM_QUARTERS=8 だけが効いており、
-      config 側 CONSERVATISM_MIN_QUARTERS=4 は誰にも読まれていなかった
-      （名前も値も食い違う二重定義）。健太の指示により実装値 8 を正とし、
-      config を 8 へ揃えたうえで config を正本にした（挙動は不変）。
-      既定引数に置かず None 判定にしているのは、既定値が def 実行時に
-      固定されて config の変更が反映されなくなるのを避けるため。
+    四半期数の正本は config（モジュール定数 CONSERVATISM_QUARTERS と二重定義しない）。
+    既定引数に置かず None 判定にしているのは、既定値が def 実行時に
+    固定されて config の変更が反映されなくなるのを避けるため。
     """
     if n_quarters is None:
         n_quarters = int(getattr(_cfg_es(), "CONSERVATISM_MIN_QUARTERS",
@@ -378,8 +373,8 @@ def _calc_screener_bonus(consec_pos: int, consec_neg: int) -> float:
 # BLOCK 3: キャッシュ管理
 # ==============================================================
 
-# 2026-09-29: 24時間でファイル全体を作り直す方式だと、前日の通過銘柄（約25社）の
-# 分だけしか持てなかった。銘柄ごとに analyzed_at を持たせ、TICKER_TTL_DAYS 以内なら
+# 24時間でファイル全体を作り直す方式だと前日の通過銘柄の分しか持てないため、
+# 銘柄ごとに analyzed_at を持たせ、TICKER_TTL_DAYS 以内なら
 # 使い回す（決算データは四半期に1度しか変わらない）。
 TICKER_TTL_DAYS = 7
 
@@ -400,7 +395,7 @@ def _load_cache(cfg, max_age_days: float | None = None) -> dict:
                 age = (datetime.now() - datetime.fromisoformat(at[:19])).total_seconds() / 86400
             except ValueError:
                 continue
-            # 2026-10-01: 利益の加速度（profit_accel）が無い旧形式の結果は分析し直す
+            # 利益の加速度（profit_accel）が無い旧形式の結果は分析し直す
             if age <= ttl and "profit_accel" in (r or {}):
                 out[t] = r
         return out
@@ -460,10 +455,9 @@ def _next_earnings_date(ticker: str) -> str | None:
 def calc_profit_acceleration(quarterly: list, annual: list) -> dict | None:
     """利益の加速度（純関数）。
 
-    2026-10-01: 旧来の「EPS加速」は yfinance の earningsQuarterlyGrowth×4 − earningsGrowth
-    だったが、両者はどちらも前年同期比でほぼ同値（7203.T 0.756/0.869）。結果は
-    「増益率の約3倍」で、増益なら一律に加速扱いになっていた（121社中48社が高確率）。
-    ここでは 直近四半期の前年同期比 − 通期の前年比 を加速度とする。
+    直近四半期の前年同期比 − 通期の前年比 を加速度とする。
+    yfinance の earningsQuarterlyGrowth×4 − earningsGrowth は使わない（両者とも
+    前年同期比でほぼ同値のため「増益率の約3倍」になり、増益なら一律に加速扱いになる）。
     quarterly / annual は [(期末日 "YYYY-MM-DD", 値)]。日本株は四半期が
     「直近期と前年同期」の2列しか無いことが多いので、列順ではなく日付で前年同期を探す。
     赤字を含む比較は伸び率が意味を持たないので None。
@@ -572,7 +566,7 @@ def _fetch_profit_acceleration(ticker: str) -> dict | None:
                                              list(zip(ais.columns, ais.loc[ar].values)))
                 if r:
                     return r
-        # 2026-10-03: yfinance に四半期が無い日本株は EdinetDB の単四半期で補う
+        # yfinance に四半期が無い日本株は EdinetDB の単四半期で補う
         return _jp_quarterly_accel(ticker)
     except Exception:
         return _jp_quarterly_accel(ticker)
@@ -582,10 +576,10 @@ def apply_surprise_flags(candidates: list, cache: dict, cfg=None,
                          today: str | None = None) -> dict:
     """当日の分析結果で候補の高確率／ネガティブ判定をやり直す（純関数）。
 
-    以前はスクリーナーの時点（前日の分析結果）で判定していた。理由と次回決算日も付ける。
+    スクリーナー時点（前日の分析結果）の判定は使わない。理由と次回決算日も付ける。
     Returns: {"high_prob": n, "negative": n}
     """
-    # 2026-10-01: 判定は当日の分析結果（利益の加速度×会社予想の保守度）で行う。
+    # 判定は当日の分析結果（利益の加速度×会社予想の保守度）で行う。
     #   高確率: 加速 +15pt 以上 × 保守度70以上 × 直近決算が下振れでない
     #   ネガ  : (加速 −15pt 以下 × 保守度45以下) または 2期以上連続の下振れ
     # 分析結果が無い銘柄は、スクリーナー時点の仮判定を残さず「判定なし」にする。
@@ -660,9 +654,8 @@ def analyze_ticker(ticker: str) -> Optional[dict]:
     bonus          = _calc_screener_bonus(consec_pos, consec_neg)
 
     # [I-2] 保守度スコアを同時計算（拡張履歴で）
-    # 2026-07-25: BLOCK I-2 の ENABLE_CONSERVATISM_SCORE を配線。
-    # 実装はここに揃っていたのに有効フラグだけ誰にも読まれておらず、
-    # False にしても保守度の追加取得（履歴8四半期のfetch）が止まらなかった。
+    # BLOCK I-2 の ENABLE_CONSERVATISM_SCORE=False で保守度の追加取得
+    # （履歴8四半期のfetch）を止める。
     # 無効時は中立50・bonus 0 として下流の式を壊さずスキップする。
     if not getattr(_cfg_es(), "ENABLE_CONSERVATISM_SCORE", True):
         conserv_result = {"conservatism_score": 50.0, "skipped": True}
@@ -702,8 +695,8 @@ def analyze_ticker(ticker: str) -> Optional[dict]:
         "is_conservative":    conserv_result["is_conservative"],
         "conservatism_bonus": conserv_bonus,
         "combo_flag":         combo,
-        "next_earnings":      _next_earnings_date(ticker),   # 2026-09-29
-        "profit_accel":       _fetch_profit_acceleration(ticker),   # 2026-10-01
+        "next_earnings":      _next_earnings_date(ticker),
+        "profit_accel":       _fetch_profit_acceleration(ticker),
     }
 
 
@@ -785,14 +778,14 @@ def run_earnings_surprise(cfg, tickers: Optional[list] = None) -> dict:
         screener_candidates = getattr(cfg, "EDINET_SCREENER_CANDIDATES", [])
         tickers = list(set(tickers + screener_candidates))
 
-    # 2026-10-02: アナリスト予想が無く結果が出ない銘柄（実測364社中232社）も
-    # 毎日取り直していた。「データ無し」も7日間は記録を使う
+    # アナリスト予想が無く結果が出ない銘柄が多いため、
+    # 「データ無し」も7日間は記録を使う（毎日取り直さない）
     no_data = _load_no_data(cfg)
     todo = [t for t in dict.fromkeys(tickers) if t not in cached and t not in no_data]
     print(f"    対象: {len(set(tickers))}銘柄（キャッシュ有効 {len(set(tickers)) - len(todo)} / "
           f"新規分析 {len(todo)}）")
 
-    # 2026-09-29: 1銘柄ずつ（info＋履歴＋拡張履歴＋決算日）を5並列に
+    # 1銘柄ずつ（info＋履歴＋拡張履歴＋決算日）を5並列で取る
     from concurrent.futures import ThreadPoolExecutor
     workers = max(1, int(getattr(cfg, "EARNINGS_SURPRISE_WORKERS", 5)))
     with ThreadPoolExecutor(max_workers=workers) as pool:

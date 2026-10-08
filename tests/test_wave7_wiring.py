@@ -1,15 +1,13 @@
 # ==============================================================
-# tests/test_wave7_wiring.py（2026-07-25 バッチ5）
-# Wave 7 の稼働と、Wave6/Wave7 定数の config 正本化
+# tests/test_wave7_wiring.py
+# WAVE7 系7モジュールの稼働と、WAVE6/WAVE7 定数の config 正本化を固定する
 # ==============================================================
-# 【背景】Wave 7 の7モジュールは実装・pipeline_registry 配線・テストまで
-# 揃っていたのに ENABLE_* が全て False（「本番確認後ONに変更」のまま放置）で
-# 一度も動いていなかった。さらに:
+# 防ぐこと:
+#   - ENABLE_* が False に戻り、7モジュールが動かなくなる
 #   - size_decay_manager / cross_size_signal は _in_mode("size_tier") で
-#     ゲートされているのに "size_tier" が DAILY/WEEKLY のどちらにも無く、
-#     ENABLE を True にしても daily/weekly では永久に実行されなかった
-#   - WAVE7_WEEKLY_MODULE_ORDER の宣言順が実コードの実行順と完全に逆だった
-# 健太の指示により Wave 7 を稼働させ、上記の配線バグも是正した。
+#     ゲートされるため、"size_tier" が DAILY/WEEKLY に無いと
+#     ENABLE が True でも daily/weekly で実行されない
+#   - WAVE7_WEEKLY_MODULE_ORDER の宣言順が実コードの実行順とずれる
 # ==============================================================
 import sys
 from pathlib import Path

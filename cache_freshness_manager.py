@@ -49,15 +49,13 @@ from typing import Optional
 DEFAULT_HALF_LIFE_HOURS: dict[str, float] = {
     # 市場データ（価格・オプション）
     "yfinance_price":       4.0,
-    # 2026-09-10: 4.0h → 26.0h。options_monitor は日次モジュールで
-    # 1日1回しか書かれないのに半減期が4時間だったため、鮮度チェックが
-    # 走る実行開始時点では必ず「経過≒24h」で強制再取得判定になり、
-    # 71日間ずっとアラートに載り続けていた。実際の更新周期に合わせる
-    # （日次実行の遅延ぶんの余裕として+2h）。
+    # options_monitor は日次モジュールで1日1回しか書かれない。鮮度チェックが
+    # 走る実行開始時点では「経過≒24h」なので、半減期を短くすると常に
+    # 強制再取得判定になる。実際の更新周期に合わせる（日次実行の遅延ぶん+2h）。
     "options_monitor":     26.0,
     "macro_snapshot":      26.0,   # 同上（日次更新）
     "us_8k":               20.0,
-    # 2026-09-11: 26.0h → 720.0h。policy_radar は日次で「実行」されるが、
+    # policy_radar は日次で「実行」されるが、
     # 実際にキャッシュを書き直すのは POLICY_RADAR_INTENT_CACHE_TTL_DAYS
     # （config: 30日）を過ぎたときだけで、それまでは
     # 「✅ キャッシュ利用 (0秒)」で即返す＝ファイルの timestamp が
@@ -70,14 +68,14 @@ DEFAULT_HALF_LIFE_HOURS: dict[str, float] = {
     "gov_data":           168.0,   # 7日
     "google_trends":      168.0,
     "sentiment":          168.0,
-    "us_macro":            26.0,   # 日次更新（旧12.0は実周期より短かった）
+    "us_macro":            26.0,   # 日次更新
 
     # 長期データ（月次・四半期）
     "edinet":             720.0,   # 30日
     "sec_edgar":          720.0,   # 30日
     "rule_weights":       720.0,   # 30日
-    # us_sector_mapping は書き手が存在しないため 2026-09-10 に監視対象から除外。
-    # （CACHE_FILE_MAP からも削除済み。復活させる際は両方に戻すこと）
+    # us_sector_mapping は書き手が存在しないため監視対象外。
+    # （CACHE_FILE_MAP にも無い。復活させる際は両方に戻すこと）
     "longterm_scenario":  168.0,   # 週次更新
 }
 
@@ -307,16 +305,14 @@ def enrich_us_fundamental_with_freshness(
 # BLOCK 4: 全キャッシュ一括鮮度レポート
 # ==============================================================
 
-# 2026-09-10: 本マップは「監視側が想像したパス」で書かれており、産出側の
-# 実態と5件ずれていた。その結果 cache_freshness は 2026-07-01 から
-# 71日連続で「強制再取得推奨」を出し続け、常時アラートのため
-# 誰も内容を見なくなっていた（オオカミ少年化）。実態は以下:
-#   macro_snapshot : 時刻キーが `_cached_at`（先頭アンダースコア）で未検出
+# 本マップは産出側の実際のパス・時刻キーに合わせること（想像で書くと
+# 常時「強制再取得推奨」になり、アラートが誰にも読まれなくなる）。注意点:
+#   macro_snapshot : 時刻キーが `_cached_at`（先頭アンダースコア）
 #   us_macro       : 保存先が CACHE_DIR、時刻キーは `_fetched_at`
-#   policy_radar   : 保存先が CACHE_DIR（DATA_DIR を見ていた）
+#   policy_radar   : 保存先が CACHE_DIR（DATA_DIR ではない）
 #   gov_data       : 実ファイルは gov_cache/data_{id}_{month}.json で
-#                    cpi.json は一度も生成されない
-#   us_sector_mapping : 書き手が存在しない（純粋な幽霊エントリ）
+#                    cpi.json は生成されない
+#   us_sector_mapping : 書き手が存在しないため載せない
 # 値は「候補パスのリスト」にして DATA_DIR / CACHE_DIR の両方と
 # glob を許す。先に見つかったものを採る。
 CACHE_FILE_MAP: dict[str, list[str]] = {
@@ -417,10 +413,9 @@ def get_freshness_report(
         saved_at = _extract_saved_at(file_path) if file_path else None
 
         freshness = calc_freshness(saved_at, cache_type, cfg)
-        # 2026-09-10: 「まだ生成されていない」と「古い」を分ける。
-        # 両方とも force_refresh=True にしていたため、そもそも書き手が
-        # 走っていないだけのものが「強制再取得推奨」に混ざり、
-        # 本当に再取得すべきキャッシュが埋もれていた。
+        # 「まだ生成されていない」と「古い」を分ける。両方を force_refresh=True に
+        # すると、書き手が走っていないだけのものが「強制再取得推奨」に混ざり、
+        # 本当に再取得すべきキャッシュが埋もれる。
         missing = file_path is None
         report[cache_type] = {
             "freshness":     freshness,

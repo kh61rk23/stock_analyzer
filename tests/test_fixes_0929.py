@@ -1,6 +1,6 @@
-# 2026-09-29: EDINET DB 取り込みの見える化
+# EDINET DB 取り込みの見える化
 #   ・その日取り込んだ銘柄をメール（Gmail）に載せる
-#   ・対象があるのに取り込み0社の日を success と記録していた
+#   ・対象があるのに取り込み0社の日を success と記録しない
 import alert_notifier as an
 
 
@@ -12,7 +12,7 @@ def test_ingest_alert_lists_companies():
         "missing_companies": [{"sec_code": "5866", "name": "新規上場A"}],
         "doc_index_rows": 14, "api_calls": 20})
     assert al["channel"] == "gmail" and al["severity"] == "info"
-    # 2026-10-05: 証券コードと銘柄名を列で分け、年次（Web）・本文（API）・四半期（API）を分けて表示
+    # 証券コードと銘柄名を列で分け、年次（Web）・本文（API）・四半期（API）を分けて表示
     assert "3983 | オロ" in al["body"] and "7203 | トヨタ自動車" in al["body"]
     assert "5866 | 新規上場A" in al["body"] and "【API使用】20/100回" in al["body"]
     assert al["title"].startswith("🗂 EDINET DB 本日 年次0社・本文2社")
@@ -155,7 +155,7 @@ def test_prefilter_skips_no_data_and_fills_quota():
                                       today=_date(2026, 9, 29), sleep=lambda s: None)
     assert sel == ["E2", "E4"] and skip == ["E1", "E3"]
     assert meta["E1"]["web_check"] == {"date": "2026-09-29", "has": False,
-                                       "latest_fy": None, "fy_month": None}   # 2026-10-02 項目追加
+                                       "latest_fy": None, "fy_month": None}
     # 翌日は記録を使い、Web を見に行かない
     calls = []
     sel2, _ = edi.prefilter_targets(["E1", "E2"], 2, meta, _types.SimpleNamespace(),

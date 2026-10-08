@@ -1,5 +1,5 @@
 # ==============================================================
-# cluster_graph_exporter.py  v1.0  (Wave 6 - B)
+# cluster_graph_exporter.py  v1.0  (B)
 # クラスター結果 外部利用用出力モジュール
 # ==============================================================
 # 【役割】
@@ -54,13 +54,10 @@ def _build_taxonomy_rows(
     cluster_phase_cache と cluster_master から
     taxonomy.company_taxonomy_map テーブルへの書込行を構築する。
 
-    ★ 2026-07-10（Wave R2-2）実スキーマ是正:
-      旧実装は company_code/market/score/taxonomy_share/as_of_date 列で書き込んでいたが、
-      実テーブル（ground truth: bq_all_schemas_20260704.json）の列は
+    実スキーマ（ground truth: bq_all_schemas_20260704.json）の列:
       map_id/company_id/node_id/relevance_score/confidence/revenue_share_est/
       confidence_type/evidence_source/rationale/valid_from/auto_derived/verified_flag/updated_at。
-      列名不一致で insert_rows_json が常に失敗＝「producer配線済みだが実質空」
-      （HANDOFF_2026-06-30 §4-8）の根本原因だったため、実スキーマに合わせた。
+      列名が1つでも違うと insert_rows_json が常に失敗し、テーブルが空のままになる。
 
     行の規約（叩き台=draft層）:
       company_id      "sector:{market}:{sector_code}"（業種レベルの擬似企業ID。
@@ -249,10 +246,9 @@ def _write_to_bq(rows: list[dict], cfg) -> tuple[bool, int]:
 
     try:
         project = getattr(cfg, "BQ_PROJECT_ID", "stock-analyzer-edinet")
-        # 2026-09-14: 書込先は taxonomy データセット固定。cfg.BQ_DATASET は
-        # EdinetDB 用の既定データセット（"edinet"）で、これを流用したため
-        # 存在しない edinet.company_taxonomy_map を指して毎週 404 になっていた。
-        # 行の列は taxonomy.company_taxonomy_map の実スキーマと一致を確認済み。
+        # 書込先は taxonomy データセット固定。cfg.BQ_DATASET は
+        # EdinetDB 用の既定データセット（"edinet"）で、流用すると存在しない
+        # edinet.company_taxonomy_map を指して 404 になる。
         dataset = "taxonomy"
 
         # staging table への INSERT → MERGE の2段階

@@ -1,5 +1,5 @@
 # ==============================================================
-# deep_dive_trigger.py  v1.0  (Wave 4 - S3-4)
+# deep_dive_trigger.py  v1.0  (S3-4)
 # ==============================================================
 # 【役割】
 #   以下2条件を検出し、該当銘柄の深掘り分析を
@@ -17,7 +17,7 @@
 #   cfg.EDINET_DEEP_DIVE_TICKERS にティッカーリストを注入する。
 #   edinet_rotation_manager._build_fetch_queue() は
 #   EDINET_DEEP_DIVE_TICKERS を priority=0（最優先）で処理する。
-#   ※ Step 8 で edinet_rotation_manager.py に受け口を追加する。
+#   ※ 受け口は edinet_rotation_manager.py 側にある。
 #
 # 【出力スキーマ（run_deep_dive_trigger の返り値）】
 #   {

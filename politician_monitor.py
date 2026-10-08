@@ -1,5 +1,5 @@
 # ==============================================================
-# politician_monitor.py  v1.0  (Wave 0 - Policy Ph1)
+# politician_monitor.py  v1.0  (Policy Ph1)
 # 米国下院 STOCK Act 議員取引監視モジュール
 # ==============================================================
 # 【役割】
@@ -62,10 +62,7 @@ from typing import Optional
 
 # US下院 STOCK Act PTR インデックスXML URL
 # 形式: {year}FD.xml = その年の全PTR一覧（DocID・氏名・FilingType）
-#
-# 2026-09-11: 旧 ptr-pdfs/{year}/{year}FD.xml は2026年分も2025年分も404で、
-# 2026-07 以降の全実行で議員取引が0件だった。現行は financial-pdfs/ 配下。
-# 実測: 2026年分 434KB / Member 1,615件（うち FilingType=P のPTRが384件）。
+# 置き場は financial-pdfs/ 配下（ptr-pdfs/ 配下は404）。
 _PTR_INDEX_URL_TMPL = (
     "https://disclosures-clerk.house.gov/public_disc/financial-pdfs/{year}FD.xml"
 )
@@ -115,12 +112,9 @@ def _clean_asset_name(prev_line: str, line: str) -> str:
     # 資産名の頭に混ざることがあるので落とす
     return re.sub(r"^[PSE]{1,2}\s+", "", name).strip(" -")
 
-# 2026-09-11: 上院 eFD の取得経路を撤去した。
-# 参照していた efts.senate.gov は **DNS解決すらできないホスト**で
-# （SEC の efts.sec.gov を模した形跡があり、実在した記録がない）、
-# 実装以来ずっと空振りしていた。実在する efdsearch.senate.gov は
-# 利用規約同意のセッションCookieを要求するため 403 で、
-# 同じ作りでは取得できない。復活させる場合は別実装が必要。
+# 上院 eFD の新規取得は行わない。efts.senate.gov は実在しないホストで、
+# 実在する efdsearch.senate.gov は利用規約同意のセッションCookieを要求する
+# （無いと403）。取得するには別実装が必要。
 # スコアリング側（_score_senate_transaction / 委員会係数）は
 # politician_history.json に残る既存の上院データを再スコアするため残置。
 
@@ -262,7 +256,7 @@ def _cache_dir(cfg) -> Path:
 def _to_iso_date(value) -> str:
     """取引日を "YYYY-MM-DD" に正規化する。解釈できなければ元の文字列を返す。
 
-    2026-09-15: 下院PTRのPDFは "03/16/2026"（MM/DD/YYYY）で日付を持つ。
+    下院PTRのPDFは "03/16/2026"（MM/DD/YYYY）で日付を持つ。
     ISO 前提の文字列比較（期限切れ判定・鮮度判定）と混ざると
     "03/.." < "2026-.." で常に古い扱いになるため、入口と比較の両方で揃える。
     """
@@ -300,11 +294,9 @@ def _save_politician_history(cfg, history: dict) -> None:
 
         txs = history.get("transactions", [])
         # TTL を超えた古い取引を削除
-        # 2026-09-15: 取引日が PDF 由来の "MM/DD/YYYY" になっており、ISO の cutoff と
-        # 文字列比較すると "03/16/2026" < "2026-03-19" で**全件が期限切れ**として
-        # 消えていた（9/15 実行後の politician_history.json は transactions=0件）。
-        # 履歴が空のため毎回同じ届出が「新規」になり、同じ高スコアアラートが
-        # 日次で繰り返される状態だった。比較前に ISO へ揃える。
+        # 取引日は PDF 由来の "MM/DD/YYYY" のことがあり、ISO の cutoff と文字列比較すると
+        # 全件が期限切れ扱いで消える（履歴が空になり同じアラートが毎日再送される）。
+        # 比較前に ISO へ揃える。
         txs = [t for t in txs
                if (_to_iso_date(t.get("transaction_date")) or "9999") >= cutoff]
         # 行数上限
@@ -354,7 +346,7 @@ def _save_event_cache(cfg, data: dict) -> None:
         print(f"    ⚠️  [politician] event_cache保存失敗: {str(e)[:60]}")
 
 # ==============================================================
-# BLOCK 2.5: 上院データ取得（Wave 3 - Policy Ph2）
+# BLOCK 2.5: 上院データ取得（Policy Ph2）
 # ==============================================================
 
 def _score_senate_transaction(tx: dict, cfg=None) -> dict:
@@ -415,18 +407,15 @@ def _fetch_ptr_index(year: int) -> list[dict]:
             file_id = (
                 _find_text(elem, ["DocID", "FileID", "ID"])
             )
-            # 2026-09-11: インデックスは年次報告(W/C/X/D/A/H/T)も含む全提出の
-            # 一覧で、PTRのPDFが存在するのは FilingType=P だけ。
-            # 絞り込まずに回すと 1,615件中 1,231件が404になり、
-            # リトライ込みで無駄な通信が数千回に膨らむ。
+            # インデックスは年次報告(W/C/X/D/A/H/T)も含む全提出の一覧で、
+            # PTRのPDFが存在するのは FilingType=P だけ。絞らないと大半が404になり、
+            # リトライ込みで無駄な通信が膨らむ。
             filing_type = (_find_text(elem, ["FilingType", "Type"]) or "").strip().upper()
             if filing_type and filing_type != "P":
                 skipped_non_ptr += 1
                 continue
-            # 2026-09-11: 氏名は単一の <Name> ではなく <First>/<Last> に
-            # 分かれている。旧実装は "Name"/"MemberName"/"LastName" しか
-            # 見ておらず、全件で name="" になっていた（議員名が取れないと
-            # 委員会係数が常に 1.0 になり、スコアが実質無効化される）。
+            # 氏名は単一の <Name> ではなく <First>/<Last> に分かれている。
+            # 議員名が取れないと委員会係数が常に 1.0 になり、スコアが実質無効化される。
             name = _find_text(elem, ["Name", "MemberName"])
             if not name:
                 first = (_find_text(elem, ["First", "FirstName"]) or "").strip()
@@ -462,9 +451,7 @@ def _fetch_ptr_detail(file_id: str, year: int) -> list[dict]:
     """
     個別PTRのPDFを取得し、取引リストを返す。
 
-    2026-09-11: 下院は個別開示を **PDFでしか配信しておらず**、旧実装が
-    前提にしていた .xml は存在しない（実測で404）。そのため仮に
-    インデックスが取れても取引明細は常に0件になる作りだった。
+    下院は個別開示を **PDFでしか配信していない**（.xml は存在せず404）。
     PDFはテキスト埋め込み済みでOCR不要のため PyMuPDF で解析する。
 
     返り値: [{"asset","ticker","transaction_type","amount",
@@ -710,9 +697,8 @@ def detect_new_transactions(
     """
     fetched のうち existing にない新規取引を返す。
     """
-    # 2026-09-15: 既存との比較だけで、同じ回の取得分どうしの重複は素通しだった。
-    # 修正届出（同一取引の再提出）が同じ回に入ると二重に「新規」になり、
-    # 9/15 の日次メールで「[98pt] Josh Gottheimer 買: Microsoft」が2行並んでいた。
+    # 既存との比較に加え、同じ回の取得分どうしも重複を除く。
+    # 修正届出（同一取引の再提出）が同じ回に入ると二重に「新規」になるため。
     seen = {_make_tx_key(t) for t in existing}
     out = []
     for t in fetched:
@@ -843,10 +829,9 @@ def run_politician_monitor(cfg) -> dict:
         }
 
     # ── 4. 差分: 既存にない file_id を対象に詳細取得 ──────────
-    # 2026-09-19: 取得済みの判定を「履歴に残っている取引の file_id」だけで行っていた。
-    # 取引日が保存期限（180日）より古い届出は保存時に取引ごと消えるため、翌日また
-    # 「未取得」になり、毎日同じ古い届出200件を取り直して「新規1,775件」と数えていた
-    # （9/18 実行後の履歴に残った file_id は74件のみ）。処理済み file_id を別に持つ。
+    # 処理済み file_id は取引履歴とは別に持つ。取引日が保存期限（180日）より古い届出は
+    # 保存時に取引ごと消えるため、履歴の file_id だけで判定すると毎日同じ届出を
+    # 取り直して「新規」と数えてしまう。
     processed_ids = {str(x) for x in history.get("processed_file_ids", [])}
     existing_file_ids = {t.get("file_id") for t in existing_txs} | processed_ids
 
@@ -891,19 +876,16 @@ def run_politician_monitor(cfg) -> dict:
     history["processed_file_ids"] = sorted(processed_ids)[-20000:]
     _save_politician_history(cfg, history)
 
-    # ── 6.5. 上院データ取得は 2026-09-11 に撤去 ──────────────
-    # efts.senate.gov がDNS不在で、実装以来一度もレコードを返して
-    # いなかった（毎回「上院PTRデータなし」を出すだけだった）。
-    # なお当時の実装は history 保存（上の行）より後で truly_new を
-    # 伸ばしており、仮に取得できても保存されない配線でもあった。
+    # ── 6.5. 上院データ取得は停止中（efts.senate.gov が実在しないため） ──
+    # 再開する場合、truly_new への追加は history 保存（上の行）より前に行うこと。
     senate_txs: list[dict] = []
     senate_errors = 0
 
     # ── 7. 高スコア取引を抽出 ──────────────────────────────────
     min_score = int(getattr(cfg, "ALERT_POLITICIAN_MIN_SCORE", 60))
-    # 2026-09-15: 「新規」は“履歴に無い”という意味でしかなく、初回や履歴が空だった間は
-    # 年初以降の全取引が新規扱いになる（9/15 は 1,808件・高スコア93件）。
-    # 数ヶ月前の売買で今日の業種スコアを補正しないよう、取引日の鮮度で絞る。
+    # 「新規」は“履歴に無い”という意味でしかなく、初回や履歴が空のときは
+    # 年初以降の全取引が新規扱いになる。数ヶ月前の売買で今日の業種スコアを
+    # 補正しないよう、取引日の鮮度で絞る。
     max_age = int(getattr(cfg, "POLITICIAN_ALERT_MAX_AGE_DAYS", 60))
     age_cut = (datetime.now() - timedelta(days=max_age)).strftime("%Y-%m-%d")
     high_score_trades = [
@@ -939,12 +921,12 @@ def run_politician_monitor(cfg) -> dict:
         "stats": {
             "total_fetched":      len(all_fetched_txs),
             "new_count":          len(truly_new),
-            "house_new_count":    len(house_new),    # Wave 3 追加
-            "senate_new_count":   len(senate_new),   # Wave 3 追加
+            "house_new_count":    len(house_new),
+            "senate_new_count":   len(senate_new),
             "high_score_count":   len(high_score_trades),
             "fetch_error":        detail_errors > 0,
             "detail_errors":      detail_errors,
-            "senate_errors":      senate_errors,     # Wave 3 追加
+            "senate_errors":      senate_errors,
         },
         "cached":    cache_hit,
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),

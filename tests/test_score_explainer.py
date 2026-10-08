@@ -1,4 +1,4 @@
-# score_explainer.py — 根拠文生成（explain_score は2026-06-11復旧分の回帰固定）
+# score_explainer.py — 根拠文生成（explain_score の回帰固定）
 from conftest import load_module
 
 se = load_module("score_explainer")

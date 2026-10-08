@@ -1,5 +1,5 @@
 # ==============================================================
-# nedo_selection_scraper.py  v1.0  (Wave 1 - I-2)
+# nedo_selection_scraper.py  v1.0  (I-2)
 # NEDO採択情報スクレイパー + 企業名→証券コード名寄せ（Ph1）
 # ==============================================================
 # 【役割】
@@ -74,10 +74,8 @@ FUZZY_THRESHOLD  = 0.82    # SequenceMatcher 採用閾値（0.0〜1.0）
 REQUEST_TIMEOUT  = 20
 REQUEST_INTERVAL = 1.5     # スクレイプ間隔（秒）NEDO サーバー負荷軽減
 
-# 2026-09-15: 旧実装は採択結果ページのURLを4件固定で持っていたが、4件とも
-# 削除済み（HTTP 404）で、BQ edinet.policy_support は作成以来0行だった。
 # NEDO の決定ページは案件ごとに URL が変わり（SR3_ / CD3_ / EF3_ …）固定リストは
-# 必ず腐るため、公募一覧を「状況＝決定」で絞った一覧から毎回たどる。
+# すぐ 404 になるため、公募一覧を「状況＝決定」で絞った一覧から毎回たどる。
 # config.NEDO_ADOPTION_URLS を設定した場合だけ、それを優先する。
 _NEDO_DECISION_LIST_URL = "https://www.nedo.go.jp/form/event.php?f=koubo.html&state=10000175"
 _NEDO_BASE_URL = "https://www.nedo.go.jp/"
@@ -203,9 +201,8 @@ def _is_valid_company_name(name: str) -> bool:
 def _to_jp_code(code) -> str:
     """"6501.T" / "6501" / "130A.T" を4桁の証券コードに揃える。日本株以外は ""。
 
-    2026-09-16: スクリーナー候補の ticker（"6501.T"）をそのまま格納しており、
-    base_agent の照合（ticker そのまま）と edinet.company 由来の4桁コードが
-    行ごとに食い違ってボーナスが付かない組み合わせがあった。
+    スクリーナー候補の ticker（"6501.T"）と edinet.company 由来の4桁コードを
+    同じ形に揃えないと、base_agent の照合で行ごとに食い違いボーナスが付かない。
     """
     s = str(code or "").strip().upper()
     if s.endswith(".T"):
@@ -248,9 +245,7 @@ def _build_company_name_map(
     # ── Source 2: BigQuery financials テーブル ─────────────────
     if bq_client is not None and len(name_map) < 100:
         try:
-            # 2026-09-15: 旧クエリは edinet.financials に存在しない列
-            # （securities_code / company_name / period_end）を引いており、例外を
-            # 握り潰して名寄せ辞書が画面上の約26社だけになっていた。
+            # edinet.financials には securities_code / company_name 列が無い。
             # 社名と証券コードを持つ edinet.company（約3,800社）から作る。
             _ds = getattr(bq_client, "dataset", "edinet")
             df = bq_client.query_to_df(
@@ -326,7 +321,7 @@ def match_company_to_code(
     for known_name, code in name_map.items():
         if not known_name:
             continue
-        # 2026-09-15: 3文字以下の社名での包含一致は別会社への誤結合が多い
+        # 3文字以下の社名での包含一致は別会社への誤結合が多い
         # （例: 「アトム」が多数の社名に含まれる）。部分一致は4文字以上に限る。
         if min(len(known_name), len(normalized_target)) < 4:
             continue
@@ -523,7 +518,7 @@ def parse_nedo_decision_page(html: str, source_url: str = "",
                              fetch_bytes=None) -> list[dict]:
     """「実施体制の決定」ページから実施予定先（社名）を抜き出す。
 
-    2026-09-15 実測の2形式に対応する:
+    次の2形式に対応する:
       ① 本文の「N．実施予定先」見出し直下に社名（例: SR3_100022）
       ② 添付PDF「資料1：実施予定先一覧」に表で社名（例: CD3_100434）
     """
@@ -967,7 +962,7 @@ def run_nedo_selection_scraper(
     bq_inserted = False
     if bq_client is not None and bq_rows:
         try:
-            # 2026-09-15: 週次で同じ決定ページを取り直すため、追記（insert）だと
+            # 週次で同じ決定ページを取り直すため、追記（insert）だと
             # 同じ採択が毎週重複して積まれボーナスが水増しされる。出典URL×社名で冪等に MERGE。
             bq_inserted = bq_client.merge_rows(
                 "policy_support", bq_rows, ["source_url", "raw_company_name"]

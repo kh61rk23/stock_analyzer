@@ -1,4 +1,4 @@
-# 2026-09-16: EdinetDB の分析利用・書類一覧（doc_index）・NEDO採択の不具合の回帰テスト
+# EdinetDB の分析利用・書類一覧（doc_index）・NEDO採択の回帰テスト
 import pathlib
 import re
 import types
@@ -39,7 +39,7 @@ class TestEdinetBundleYears:
         assert not re.search(r"edb_[0-9A-Za-z]{16,}", _src("viewer/data_bridge.py"))
 
 
-# ── 書類一覧（doc_index）が 2026-04-26 から増えていなかった ───────────
+# ── 書類一覧（doc_index）が財務データから増えること ───────────
 class TestDocIndexFromFinancials:
     def test_map_edinetdb_doc_index_uses_real_doc_id(self):
         import edinetdb_ingestor as m

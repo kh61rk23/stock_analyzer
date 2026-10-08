@@ -293,9 +293,7 @@ RECESSION_WEIGHTS = {
     "yield_drop_speed":  10,  # 長期金利の急低下（パニック的）
 }
 
-# COMMODITY_CACHE_DAYS は削除（2026-07-25 バッチ2）。
-# キャッシュ処理そのものが未実装で、この定数を読むコードは存在しなかった。
-# config.py 側の BOND_COMMODITY_CACHE_DAYS も同時に削除している。
+# コモディティのキャッシュ処理は未実装（キャッシュ日数の定数も置いていない）。
 # 実装する場合は config を正本にすること（モジュール側に定数を作らない）。
 
 # ==============================================================
@@ -437,9 +435,8 @@ def fetch_commodity_prices() -> dict:
                         hist_close = data["Close"] if "Close" in data.columns else None
                     else:
                         # group_by="ticker" の MultiIndex は level0=ティッカー。
-                        # 旧実装は data["Close"] を見ており level0 に "Close" が
-                        # 無いため常に None となり、一括取得が丸ごと無駄になって
-                        # 全銘柄が個別取得へ落ちていた（2026-09-08 修正）。
+                        # data["Close"] を見ると level0 に "Close" が無いため常に None となり、
+                        # 全銘柄が個別取得へ落ちる。
                         if ticker in data.columns.get_level_values(0):
                             _sub = data[ticker]
                             hist_close = (_sub["Close"]
@@ -771,7 +768,7 @@ def calc_sector_deltas(commodity_data: dict) -> dict:
     return {"jp": jp_deltas, "us": us_deltas}
 
 # ==============================================================
-# BLOCK 6.5: FRED金利シグナル → GICSセクタースコア接続（Wave 1 - U-2）
+# BLOCK 6.5: FRED金利シグナル → GICSセクタースコア接続（U-2）
 # ==============================================================
 
 def calc_rate_sensitivity_deltas(yields_data: dict, cfg) -> dict:

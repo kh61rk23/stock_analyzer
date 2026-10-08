@@ -1,17 +1,16 @@
 # ==============================================================
-# tests/test_screener_history_shape.py（2026-07-25）
-# screener_history.json の形式を読み違えた回帰の防止
+# tests/test_screener_history_shape.py
+# screener_history.json の形式の読み違いを防ぐ
 # ==============================================================
 # 【何を守るテストか】
 # 正本の形式は performance_tracker.append_screener_history が書く
 #   {"YYYY-MM-DD": [候補dict, ...]}   ← 日付の値は「リスト」
-# だが、投資部まわりの読み手3箇所が {"candidates": [...]} という
-# 辞書形式を前提に entry.get("candidates") を呼んでいた。
-# リストに .get は無いので AttributeError → 各所の except で握り潰され、
+# 読み手が {"candidates": [...]} という辞書形式を前提に entry.get("candidates")
+# を呼ぶと、リストに .get は無いので AttributeError → 各所の except で握り潰され、
 #   - agent_packet_exporter: パケット①が常に「データなし」
 #   - obsidian_sync:         審議キューが常に0件
 #   - deliberation_scheduler: 審議対象が常に「候補なし」
-# と、投資部の入口が丸ごと空回りしていた（棚卸しで発見）。
+# と、投資部の入口が丸ごと空回りする。3箇所がリスト形式を読めることを固定する。
 # ==============================================================
 import json
 import sys
@@ -63,7 +62,7 @@ class TestLatestCandidates:
 
 class TestDeliberationSchedulerReadsRealShape:
     def test_selects_target_from_list_shape(self, tmp_cfg):
-        """正本形式の履歴から審議対象を選べること（旧実装では常に空だった）。"""
+        """正本形式の履歴から審議対象を選べること（空にならないこと）。"""
         from deliberation_scheduler import _load_screener_candidates
         (Path(tmp_cfg.DATA_DIR) / "screener_history.json").write_text(
             json.dumps({"2026-07-22": [CAND]}, ensure_ascii=False),

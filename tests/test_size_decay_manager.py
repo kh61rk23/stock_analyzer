@@ -1,4 +1,4 @@
-# size_decay_manager.py — Size Tier分類・tier別ウェイト（2026-06-11復旧分の回帰固定）
+# size_decay_manager.py — Size Tier分類・tier別ウェイトの回帰固定
 from conftest import load_module
 
 sdm = load_module("size_decay_manager")
@@ -16,7 +16,7 @@ class TestClassify:
 
 
 class TestResolveSizeTier:
-    """★ 2026-06-11 バグ修正（未実装API）の回帰テスト"""
+    """resolve_size_tier（呼び出し側が使うAPI）が存在し、raw優先・不明時Midで解決することを固定する"""
     def test_raw_priority(self):
         assert sdm.resolve_size_tier(ticker="7203.T",
                                      market_cap_raw=40e12, market="JP") == "Large"

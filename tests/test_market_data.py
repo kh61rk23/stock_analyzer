@@ -1,22 +1,21 @@
 # ==============================================================
-# tests/test_market_data.py — U-5 market_data.py 新設（L2正規化層）
+# tests/test_market_data.py — U-5 market_data.py（L2正規化層）
 # ==============================================================
 # 目的（要件定義書_JP-US統合_20260726.md §3-3(a) / §6-J2 U-5、
-#       HANDOFF_JP-US統合_20260727.md §4 Batch 6）:
+#       HANDOFF_JP-US統合_20260727.md §4）:
 #
 #   R5-1: fetch_quote() が §3-3(a) の契約辞書を返すこと。
 #         **market_cap_b は返さない**（F-4 の根治）。
 #   R5-2: 429 リトライ（3s/6s/12s）が fetch_quote に集約され、
 #         JP にも適用されること。
 #   R5-3: 両スクリーナーの _fetch_ticker_data / _fetch_one が
-#         「fetch_quote を呼んで従来キーへ写像する薄い層」に縮退しても、
-#         **返り値が U-5 変更前と一致する**こと（等価性・最重要）。
+#         「fetch_quote を呼んで既存キーへ写像する薄い層」であっても、
+#         **返り値が U-5 以前の実装と一致する**こと（等価性・最重要）。
 #
-#   等価性テストの期待値は、U-5 変更前の実装（stock_screener.py および
-#   us_stock_screener.py の旧 _fetch_ticker_data / _fetch_one）を
-#   一時スクリプトで逐語コピーして同じ .info モックに対して実行し、
-#   得られた**実測値**である（2026-07-28 実測。全14フィクスチャで
-#   JP=14/14 一致・US=13/14 一致。唯一の相違は下記 NaN の1件で、
+#   等価性テストの期待値は、U-5 以前の実装（stock_screener.py および
+#   us_stock_screener.py の _fetch_ticker_data / _fetch_one）を
+#   逐語コピーして同じ .info モックに対して実行し得た**実測値**である
+#   （全14フィクスチャで JP=14/14 一致・US=13/14 一致。唯一の相違は下記 NaN の1件で、
 #   test_us_nan_is_normalized_to_none_documented_divergence が凍結する）。
 #
 #   ネットワークには一切出ない。yfinance は関数内 import であるため、
@@ -46,7 +45,7 @@ class _FakeTicker:
 
 def _install(monkeypatch, info):
     """sys.modules["yfinance"] を、渡した info を返すフェイクに差し替える。"""
-    # 2026-10-01: 利益加速度（損益計算書の取得）はこの同値性テストの対象外
+    # 利益加速度（損益計算書の取得）はこの同値性テストの対象外
     monkeypatch.setattr(ss, "_profit_accel", lambda t: None, raising=False)
     monkeypatch.setitem(
         sys.modules, "yfinance",
@@ -99,7 +98,7 @@ FULL_INFO = {
     "averageVolume10days": 3_900_000,
     "trailingPE": 12.5,
     "priceToBook": 1.8,
-    "dividendYield": 2.3,   # yfinance は %値で返す（2026-09-29 に比率化を入口でそろえた）
+    "dividendYield": 2.3,   # yfinance は %値で返す（入口で比率に揃える）
     "returnOnEquity": 0.15,
     "returnOnAssets": 0.08,
     "operatingMargins": 0.21,
@@ -387,7 +386,7 @@ JP_FULL = {
     'stockholders_equity': 8000000000.0, 'target_price': 120.0,
     'ticker': 'TEST.T', 'total_assets': 20000000000.0,
     'total_cash': 5000000000.0, 'total_debt': 2000000000.0,
-    'dividend_yield': 0.023,   # 2026-09-29 追加（比率）
+    'dividend_yield': 0.023,   # 比率
 }
 
 JP_MINIMAL = {
@@ -544,7 +543,7 @@ class TestUsScreenerEquivalence:
 def test_market_cap_b_units_differ_between_screeners(monkeypatch):
     """
     同じ marketCap に対し JP=億円 / US=十億USD になる。
-    U-5 では互換性維持のため是正せず、事実をテストで固定する。
+    互換性維持のため揃えず、事実をテストで固定する。
     市場をまたぐ比較には fetch_quote()["market_cap_raw"] を使うこと。
     """
     _install(monkeypatch, FULL_INFO)

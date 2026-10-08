@@ -1,7 +1,6 @@
 # MERGE の PARSE_JSON は wide_number_mode='round' でなければならない
 #
-# 2026-09-11 実測: edinet.financials への MERGE が11社中6社で 400 になり、
-# BigQuery のジョブ履歴に残っていた理由は全件これだった。
+# 既定のままだと edinet.financials への MERGE が次のエラーで 400 になる。
 #   Invalid input: Input number: 0.057161 cannot round-trip through
 #   string representation; error in PARSE_JSON expression
 # PARSE_JSON の既定は wide_number_mode='exact' で、FLOAT64/NUMERIC へ
@@ -55,7 +54,7 @@ def _bq(fake):
     return value
 
 
-# 2026-09-11 の本番で実際に弾かれた値
+# 本番で実際に弾かれた値
 REAL_FAILING_VALUES = [0.057161, -0.137364, 0.081948,
                        60026484.18059, 0.071943, 0.07093]
 

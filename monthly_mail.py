@@ -1,6 +1,5 @@
 # ==============================================================
 # monthly_mail.py — 月次レポートをまとめてメールで送る
-# 2026-10-05 新設（健太指摘「monthly：メールがない」）
 #
 # monthly_runner.py の最後のステップ（monthly_mail）として月初3日以内に1回だけ動く。
 # 対象月（前月）の各レポート md を1通にまとめて Gmail で送る:
@@ -91,7 +90,7 @@ def build(ym: str, insights: Path) -> tuple[str, str, int]:
             body = p.read_text(encoding="utf-8")
         except OSError:
             continue
-        try:   # 2026-10-06: 元ファイルへのリンク（GitHub・Drive検索）
+        try:   # 元ファイルへのリンク（GitHub・Drive検索）
             import file_links as fl
             link = (f' — <a href="{html.escape(fl.github_url(p))}">GitHub</a>'
                     f' / <a href="{html.escape(fl.drive_search_url(p.name))}">Drive</a>')

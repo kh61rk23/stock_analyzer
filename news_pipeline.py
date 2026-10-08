@@ -40,9 +40,8 @@ from typing import Optional
 # BLOCK 0: RSSフィード定義
 # ==============================================================
 
-# 2026-09-19: 0件が続いていたフィードを単体で疎通確認し、URL変更は付け替え（財務省・
-# Arabian Business・Globes）、SEC は SEC_USER_AGENT で取得、配信終了・403継続は削除
-# （Reuters×2・AP・日経ヘッドライン＝ドメイン消滅 / OpenSecrets＝403 / BIS FSI＝3日連続0件）。
+# SEC のフィードは SEC_USER_AGENT を付けて取得する。
+# 0件が続くフィードは単体で疎通確認し、URL変更なら付け替え、配信終了・403継続なら外す。
 RSS_FEEDS = [
     # ── 優先度S: 速報性・信頼性 最高位 ──────────────────────
     {
@@ -192,8 +191,8 @@ RSS_FEEDS = [
 # 各業種コードに対して「この単語が記事に含まれたらマッチ」を定義
 # 日本語・英語の両方に対応
 
-# 2026-09-17: 英字は単語単位の照合に変えたため（_keyword_hit）、部分一致で偶然
-# 拾えていた原油・IPO・フィンテック等の記事が落ちないよう語を補った。
+# 英字は単語単位で照合する（_keyword_hit）ため、部分一致に頼らず
+# 原油・IPO・フィンテック等の記事を拾えるよう語形を明示している。
 SECTOR_KEYWORDS = {
     "1001": ["水産", "農林", "漁業", "養殖", "fishery", "agriculture", "farming"],
     "1002": ["鉱業", "石油", "天然ガス", "LNG", "原油", "mining", "crude oil", "natural gas"],
@@ -264,8 +263,7 @@ HIGH_IMPORTANCE_KEYWORDS = [
 # ==============================================================
 
 # 0件だったフィードの理由 {feed_id: "HTTP 403" など}。
-# 2026-09-26: HTTPエラー・例外・「2日以内の記事なし」がすべて「0件」と
-# 同じ表示になり、Arabian Business の連日0件の原因が切り分けられなかった。
+# HTTPエラー・例外・「2日以内の記事なし」を区別し、0件の原因を切り分けられるようにする。
 _FETCH_DIAG: dict = {}
 
 
@@ -381,13 +379,12 @@ _ASCII_KEYWORD = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .&/+-]*$")
 def _keyword_hit(keyword: str, text: str) -> bool:
     """キーワードが記事本文に含まれるかを判定する。
 
-    2026-09-17: 英字キーワードも部分一致で照合しており、"AI" が "said" /
-    "Taiwan" に、"IT" が "with" に、"EC" が "tech" に、"ANA" が "Analysis" に、
-    "port" が "report" に、"Fed" が "Federal" に当たっていた（9/17 は Defense News の
-    軍事記事の大半が IT・半導体業種にマッチ）。
+    英字を部分一致で照合すると "AI" が "said" / "Taiwan" に、"IT" が "with" に、
+    "EC" が "tech" に、"ANA" が "Analysis" に、"port" が "report" に、"Fed" が
+    "Federal" に当たるため、英字は次の規則で照合する。
       - 3文字以下の英字は単語単位。大文字を含む略語は大文字のまま（代名詞 "it" を拾わない）
       - 4文字以上の英字は語頭一致（"ports" "chips" "sales" は拾い、"report" は拾わない）
-      - 日本語は従来どおり部分一致
+      - 日本語は部分一致
     """
     if not keyword:
         return False
@@ -436,17 +433,17 @@ _SHOPPING_DEAL = re.compile(
 
 
 def is_investment_relevant(article: dict) -> bool:
-    """記事が投資判断に関係するかを返す（2026-09-17 追加）。
+    """記事が投資判断に関係するかを返す。
 
-    9/17 の注目ニュースに「洋菓子店4人死亡事件」（"ガソリン"・"住宅"で業種マッチ）や
-    「空自グローバルホーク墜落」（"said" の "ai" で半導体にマッチ）が入っていた。
+    事件・事故記事が業種キーワード（"ガソリン"・"住宅" など）で注目ニュースに
+    混ざるのを防ぐ。
       1. 表題に事件・事故・天気・スポーツ等の語があり、経済の語が無い → 除外
       2. 業種キーワードにも経済の語にも当たらない → 除外
     業種・業界ニュース（鉱山の新規発見、EVの新型車など）は 2 で残る。
     """
     title = str(article.get("title", "") or "")
     if _SHOPPING_DEAL.search(title):
-        return False   # 2026-09-19: 9/19 の注目ニュースに電動自転車のセール告知が入っていた
+        return False   # セール告知などの買い物記事は除外
     text = title + " " + str(article.get("summary", "") or "")
     economic = any(_keyword_hit(kw, text) for kw in INVESTMENT_KEYWORDS)
     if not economic and any(_keyword_hit(kw, title) for kw in NON_INVESTMENT_KEYWORDS):
@@ -628,10 +625,8 @@ def run_news_pipeline(cfg) -> dict:
     print(f"  📡 {len(RSS_FEEDS)}フィードを取得中...")
     articles = fetch_all_feeds(RSS_FEEDS, cfg)
     # 有料メディア記事を Google CSE で補完
-    # 2026-09-12: 無効時はこの if で関数ごと呼ばれず、paid_media_searcher 側の
-    # スキップ表示（「⏩ 有料メディア検索: スキップ」）にも到達しないため、
-    # ワークフローのログ上は「何も起きていない」ようにしか見えなかった。
-    # 止めていることが実行ログから判るよう、ここで明示する。
+    # 無効時は下の if で関数ごと呼ばれず、paid_media_searcher 側のスキップ表示にも
+    # 到達しない。止めていることが実行ログから判るよう、ここで明示する。
     if not getattr(cfg, "ENABLE_PAID_MEDIA_SEARCH", False):
         print("  ⏩ 有料メディア検索（Google CSE）: スキップ"
               "（ENABLE_PAID_MEDIA_SEARCH=False / APIキー要点検）")

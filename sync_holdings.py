@@ -1,17 +1,15 @@
 # ==============================================================
 # sync_holdings.py — PC の保有銘柄CSV（投資部）→ リポジトリの data/portfolio_holdings.csv
-# 2026-10-05 新設（健太指示「保有銘柄がPC内でcsvとしてあるので GitHub Actions もしくは DB に格納して連携」）
 #
-# 【背景】data/portfolio_holdings.csv は 2026-03 に手でアップロードしたきりで、売却済み（BBAI・IDAI）が残り
-#   INPEX・三菱重工・SPCX が無かった。週次の「ポートフォリオへの影響（総評価額 35,577万円）」
-#   「ポジションサイジング（総資産1,000万円の既定値・米国株の株価を円と誤読）」が狂う一因だった。
-# 【入力】Vault2/CEO室/departments/B-investment/data/保有銘柄.csv（健太が更新する正本・SBI等の明細）
+# 【なぜ】週次の「ポートフォリオへの影響」「ポジションサイジング」は data/portfolio_holdings.csv を読む。
+#   PC の正本CSVと同期しないと売却済み銘柄が残り・新規保有が欠け、評価額が狂う。
+# 【入力】Vault2/CEO室/departments/B-investment/data/保有銘柄.csv（手で更新する正本・SBI等の明細）
 # 【出力】data/portfolio_holdings.csv … 日本株・米国株のみ（口座違いは合算）。既存の列互換＋market_value_jpy
 #         data/portfolio_summary.json … 総資産（現金・投信・DC含む）と資産クラス別の内訳・USDJPY
-# 【取得単価】日本株は 取引履歴.csv から口座別の移動平均で計算し直す（2026-10-06）。
+# 【取得単価】日本株は 取引履歴.csv から口座別の移動平均で計算し直す。
 #   保有銘柄.csv（Excel由来）の取得原価は、同じ銘柄の売却益を差し引いた「実質原価」になっている銘柄がある
 #   （例: 三菱UFJ 実際の買付 1,289.5円・1,550.5円＝平均1,420円 → CSVは特定口座の売却益74,700円を引いた1,046.5円）。
-#   出口戦略（恩株化の+100%判定）が実際より高い含み益（+251%）で発火していたため。
+#   実質原価のままだと出口戦略（恩株化の+100%判定）が実際より高い含み益で発火する。
 #   履歴で数量が一致しない銘柄（持株会・新規上場など）は保有銘柄.csvの値のまま。
 #   Excel側の値は excel_avg_cost_jpy 列に残す。
 # 【実行】python3 sync_holdings.py [--src <csv>] [--commit]
@@ -238,7 +236,7 @@ if __name__ == "__main__":
 
 
 def holding_value_jpy(h: dict, price_local, usdjpy: float) -> float:
-    """保有1銘柄の円評価額（純関数・2026-10-05）。
+    """保有1銘柄の円評価額（純関数）。
 
     株価（現地通貨）があれば 数量×株価×（米国株なら為替）。無ければ保有銘柄CSVの
     円評価額（market_value_jpy）、それも無ければ 数量×取得単価（円）。
@@ -253,7 +251,7 @@ def holding_value_jpy(h: dict, price_local, usdjpy: float) -> float:
 
 
 def usd_jpy(cfg=None) -> float:
-    """ドル円（portfolio_summary.json → 為替レート取得 → 150 の順）。2026-10-06。"""
+    """ドル円（portfolio_summary.json → 為替レート取得 → 150 の順）。"""
     try:
         v = json.loads(OUT_SUMMARY.read_text(encoding="utf-8")).get("usd_jpy")
         if v:

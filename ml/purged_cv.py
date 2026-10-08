@@ -1,5 +1,5 @@
 # ==============================================================
-# ml/purged_cv.py — Purged Walk-Forward CV / rank IC（Wave R5-1 / S7）
+# ml/purged_cv.py — Purged Walk-Forward CV / rank IC（R5-1 / S7）
 # ==============================================================
 # 【役割】時系列リーク防止のための交差検証分割と評価指標（純粋ロジック）。
 #   train と test の間に embargo（既定20営業日）を空け、目的変数の観測窓
@@ -15,11 +15,10 @@ from __future__ import annotations
 
 
 def _cfg_default(name: str, fallback: int) -> int:
-    """config.py の値を既定として読む（2026-07-25 バッチ6）。
+    """config.py の値を既定として読む。
 
     本モジュールの学習は Colab（ml/train_meta.ipynb）から呼ばれるため、
-    引数省略時に config を正本とする。従来は既定引数への直書きのみで、
-    config.ML_META_* は誰にも読まれていなかった。
+    引数省略時は config.ML_META_* を正本とする（既定引数に直書きしない）。
     """
     try:
         import importlib.util
@@ -39,7 +38,7 @@ def purged_walk_forward_splits(sorted_dates: list, n_folds: int = None,
     ユニークな昇順日付リストを Walk-Forward 分割し、各 fold につき
     (train_date_set, test_date_set) を返す。
 
-    引数を省略すると config.py BLOCK 51 の値を使う（2026-07-25）:
+    引数を省略すると config.py BLOCK 51 の値を使う:
       n_folds   ← ML_META_CV_FOLDS（既定5）
       embargo_d ← ML_META_EMBARGO_D（既定20・リーク防止の最重要パラメータ）
       horizon_d ← ML_META_TARGET_HORIZON_D（既定20）

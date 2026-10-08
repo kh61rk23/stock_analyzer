@@ -70,7 +70,7 @@ def _load_config():
         ]:
             if Path(p).exists():
                 spec = importlib.util.spec_from_file_location("config", p)
-                # ★ ここに spec と loader のチェックを追加
+                # spec / loader が取れないパスはスキップ
                 if spec is None or spec.loader is None:
                     continue
                 mod  = importlib.util.module_from_spec(spec)
@@ -318,15 +318,10 @@ def fetch_single_category(
       1. requests + primary URL → feedparser（推奨・安定）
       2. requests + fallback URL → feedparser
       3. feedparser.parse(primary_url) 直接（最終手段）
+    各段でリトライする。
 
-    【v1.0 との差分】
-      v1.0: feedparser.parse(rss.arxiv.org URL) の 1 段のみ
-      v2.0: 3 段フォールバック + リトライ
-
-    2026-07-13是正: config.ARXIV_FEEDS の primary を旧 RSS(export.arxiv.org/rss)
-      から arXiv API(export.arxiv.org/api/query) に変更（日次RSSは低頻度カテゴリで
-      entries=0 が正常応答になり得るため）。取得ルート構造（3段フォールバック）
-      自体は本関数のまま変更していない。
+    config.ARXIV_FEEDS の primary は arXiv API(export.arxiv.org/api/query)。
+      日次RSS(export.arxiv.org/rss)は低頻度カテゴリで entries=0 が正常応答になり得るため使わない。
     """
     primary  = urls["primary"]
     fallback = urls["fallback"]
@@ -413,7 +408,7 @@ def save_seen_papers(seen: set):
     )
 
 # ==============================================================
-# BLOCK 3.5: Semantic Scholar API + 引用数キャッシュ（Wave 0 - Idea1）
+# BLOCK 3.5: Semantic Scholar API + 引用数キャッシュ（Idea1）
 # ==============================================================
 # citation_cache.json 形式:
 #   {"arxiv_id": {"count": int, "cached_at": "YYYY-MM-DD"}, ...}
@@ -547,15 +542,14 @@ def get_citation_count(arxiv_id: str) -> int:
         return 0
 
 # ==============================================================
-# BLOCK 4: スコアリング（Wave 0 - Idea1: 5乗数重み付け式）
+# BLOCK 4: スコアリング（Idea1: 5乗数重み付け式）
 # ==============================================================
-# 【v1.0 との差分】
-#   v1.0: INVESTMENT_KEYWORDS は文字列リスト。タイトル含む→2点、その他→1点 固定
-#   v2.0: cfg.ARXIV_KEYWORDS は (keyword, title_pts, summary_pts) のタプルリスト
-#         keyword ごとに点数を個別設定できる
-# 【v2.1 との差分（v2.0 → v2.1）】
-#   v2.0: キーワード一致のみ（title_pts / summary_pts の単純加算）
-#   v2.1: 以下の5乗数を基礎スコアに乗算して最終スコアを算出する
+# 【基礎スコア】
+#   cfg.ARXIV_KEYWORDS は (keyword, title_pts, summary_pts) のタプルリスト。
+#   keyword ごとに点数を個別設定でき、一致した点数を単純加算する
+#   （文字列だけの要素はタイトル→2点、その他→1点）。
+# 【最終スコア】
+#   以下の5乗数を基礎スコアに乗算して最終スコアを算出する
 #
 #   $final = base\_kw\_score \times W_{inst} \times W_{cite}
 #            \times W_{cat} \times W_{repro} \times W_{hot}$
@@ -566,7 +560,7 @@ def get_citation_count(arxiv_id: str) -> int:
 #   W_repro: 再現性スコア     （1.0〜1.3）コード・データセット公開で加算
 #   W_hot:  ホット度スコア    （0.9〜1.2）公開直後ほど高い
 #
-#   ★ base_kw_score = 0 の論文（キーワード不一致）は最終スコアも 0
+#   ⚠️ base_kw_score = 0 の論文（キーワード不一致）は最終スコアも 0
 
 # 投資関連カテゴリ → カテゴリ整合倍率
 _CAT_MULTIPLIER: dict = {
@@ -614,7 +608,7 @@ _INST_MULTIPLIER_DEFAULT = 1.00
 
 def score_paper(paper: dict) -> tuple:
     """
-    5乗数重み付け式でスコアリングする（Wave 0 - Idea1）。
+    5乗数重み付け式でスコアリングする（Idea1）。
 
     $final = base\\_kw\\_score \times W_{inst} \times W_{cite}
              \times W_{cat} \times W_{repro} \times W_{hot}$
@@ -662,7 +656,7 @@ def score_paper(paper: dict) -> tuple:
             matched.append(f"[×機関{w_inst:.2f}]")
 
         # ── ③ W_cite: 引用数スコア（Semantic Scholar）──────────────
-        # ★ 引用数取得はコストが高いため、base_score が高い論文のみ実行
+        # 引用数取得はコストが高いため、base_score が高い論文のみ実行
         w_cite = 1.0
         if base_score >= 2 and arxiv_id:
             try:
@@ -734,7 +728,7 @@ def score_paper(paper: dict) -> tuple:
         return final, matched
 
     except Exception:
-        # 全体エラー時は従来方式にフォールバック
+        # 全体エラー時はキーワード単純加算方式にフォールバック
         try:
             title   = paper.get("title",   "").lower()
             summary = paper.get("summary", "").lower()
@@ -938,8 +932,8 @@ def run_monitor(investment_threshold: int | None = None) -> dict:
         "investment_ideas_found": len(high_score),
         "report_path":            report_path,
         "fetch_log":              fetch_log._records,
-        "papers":                 new_papers,        # ★ thematic_etf_tracker連携用
-        "all_papers":             list(all_papers),  # ★ 全論文（キャッシュ済み含む）
+        "papers":                 new_papers,        # thematic_etf_tracker連携用
+        "all_papers":             list(all_papers),  # 全論文（キャッシュ済み含む）
     }
 
 # 単体テスト用

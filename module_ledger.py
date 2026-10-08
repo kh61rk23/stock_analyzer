@@ -42,9 +42,9 @@ from typing import Optional
 
 _LATEST_FILENAME = "module_ledger_latest.json"
 
-# ── mode-key → 実際に logger.add() で使われる記録キー（2026-07-25 B-3）──
+# ── mode-key → 実際に logger.add() で使われる記録キー ──
 # DAILY_MODULES の mode-key と記録キーが一致せず、かつ接頭辞派生でもない
-# ケースは、接頭辞ルールでは救えず「記録なし」に誤検出されていた。
+# ケースは、接頭辞ルールでは救えず「記録なし」に誤検出されるためここで対応づける。
 #   key_health → api_key_health（記録側が前に付く＝接頭辞が逆）
 #   screener   → stock_screener（同上）
 # 新しいステージを追加して mode-key と記録キーがズレる場合はここに追記する。
@@ -52,12 +52,11 @@ _LATEST_FILENAME = "module_ledger_latest.json"
 _DEFAULT_MODE_KEY_ALIASES: dict = {
     "key_health":       ["api_key_health"],
     "screener":         ["stock_screener"],
-    "excel_export":     ["correlation_heatmap"],   # Excel出力は 2026-09-29 に削除
+    "excel_export":     ["correlation_heatmap"],   # Excel出力は削除済み
     "ml_meta":          ["ml_meta_dataset", "ml_meta_correction"],
     "us_sector_bridge": ["us_sector_bridge"],
     # mode-key "size_tier" で走るのは size_decay_manager / cross_size_signal で、
-    # どちらも "size_tier_" 接頭辞を持たないため接頭辞ルールで救えず、
-    # 正常実行されているのに毎回「記録なし（配線漏れ疑い）」に出ていた。
+    # どちらも "size_tier_" 接頭辞を持たないため接頭辞ルールで救えない。
     # （週次の "size_tier_classifier" は別の登録mode-keyなので含めない）
     "size_tier":        ["size_decay_manager", "cross_size_signal"],
 }
@@ -117,10 +116,9 @@ def build_daily_ledger(cfg, logs: list, date_str: str = None) -> dict:
             "datetime": e.get("datetime", ""),
         }
 
-    # warn / alert は success でも error でもないため、旧集計ではどこにも
-    # 計上されず「失敗0」と表示されていた。成果ゼロで alert を出している
-    # モジュール（2026-08-27 の edinetdb_ingest 0/11・fudosan_ingest 0/45）が
-    # 健全に見えてしまうため、要確認として明示的に数える。
+    # warn / alert は success でも error でもないため、数えないと「失敗0」に見え、
+    # 成果ゼロで alert を出しているモジュールが健全に見えてしまう。
+    # 要確認として明示的に数える。
     stats = {
         "success": sum(1 for m in modules.values() if m["status"] == "success"),
         "error":   sum(1 for m in modules.values() if m["status"] == "error"),
@@ -134,11 +132,9 @@ def build_daily_ledger(cfg, logs: list, date_str: str = None) -> dict:
     # （ENABLE=False の意図的スキップはログに "skipped" が残る想定のため、
     #   ここに出るものは「配線漏れ or ログ未配線」の疑い）
     #
-    # ★ DAILY_MODULES は _in_mode() 用の mode-key（例 "gov" / "sector" / "tdnet"）
+    # DAILY_MODULES は _in_mode() 用の mode-key（例 "gov" / "sector" / "tdnet"）
     #   だが、各モジュールが logger.add() で記録するキーは実装名（"gov_pipeline" /
-    #   "sector_agent" / "tdnet_monitor" 等）で、両者が食い違うため、実際は実行・記録
-    #   されているモジュールまで「記録なし」に誤検出されていた（gov/sector/tdnet/
-    #   imf/anomaly 等）。mode-key の接頭辞派生（mode-key + "_..."）で記録されて
+    #   "sector_agent" / "tdnet_monitor" 等）で食い違う。mode-key の接頭辞派生（mode-key + "_..."）で記録されて
     #   いれば「記録済み」とみなす。ただし記録キー自体が別の登録 mode-key（例
     #   "policy_radar"）の場合は、その別モジュールの記録なので接頭辞一致から除外する
     #   （"policy" を "policy_radar" の記録で誤って満たさないため）。
@@ -149,7 +145,7 @@ def build_daily_ledger(cfg, logs: list, date_str: str = None) -> dict:
     def _is_recorded(mode_key: str) -> bool:
         if mode_key in modules:
             return True
-        # ① 明示エイリアス（接頭辞ルールで救えないズレ・2026-07-25 B-3）
+        # ① 明示エイリアス（接頭辞ルールで救えないズレ）
         for alias in aliases.get(mode_key, ()):
             if alias in modules:
                 return True
@@ -346,9 +342,9 @@ def format_ledger_section(cfg) -> list:
         return []
     s = ledger.get("stats", {})
     lines = ["## 📒 モジュール実行台帳（システム健全性）", ""]
-    # 2026-09-14: 週次レポートは当日の台帳確定（実行の最後）より前に作られる
-    # ため、ここに出るのは常に「前回実行」の台帳。日付だけだと当日分に見え、
-    # 9/14 のメールでは「2026-09-12: 成功66」と古い数字が当日分のように出ていた。
+    # 週次レポートは当日の台帳確定（実行の最後）より前に作られる
+    # ため、ここに出るのは常に「前回実行」の台帳。日付だけだと当日分に見えるので
+    # 「実行分」と明示する。
     lines.append(
         f"- 直近の確定台帳（{ledger.get('date', '')} 実行分）: "
         f"成功 **{s.get('success', 0)}** / 失敗 **{s.get('error', 0)}** / "

@@ -1,5 +1,5 @@
 # ==============================================================
-# geo_signal.py  v1.0  (Wave 6 - G-X1)
+# geo_signal.py  v1.0  (G-X1)
 # ==============================================================
 # 【役割】
 #   地政学リスク × 企業権益エクスポージャーを統合し、
@@ -71,20 +71,16 @@ _RAW_BQ_CACHE: Any = None
 _RISK_SCORE_CACHE: dict[str, float] = {}     # {country_code: score}
 _EXPOSURE_CACHE:   dict[str, list]  = {}     # {ticker: exposure_list}
 _CACHE_DATE: str = ""                         # キャッシュの日付（日次リセット）
-# キャッシュを張った時刻（2026-07-25: GEO_RISK_CACHE_TTL_SEC 判定用）
+# キャッシュを張った時刻（GEO_RISK_CACHE_TTL_SEC 判定用）
 _CACHE_STAMP: float = 0.0
 
-# 2026-07-28: exposure クエリのサーキットブレーカー。
-# 本番ログで全銘柄について
-#   「geo_signal exposure BQ [8766.T]: 400 Name ticker not found inside e」
-# が延々と出ていた。原因はテーブル定義の乖離（下記）で、銘柄ごとに再試行しても
-# 絶対に成功しないため、1回失敗したらセッション内では以降 BQ を叩かない。
+# exposure クエリのサーキットブレーカー。
+# テーブル定義の乖離（例「400 Name ticker not found inside e」）は銘柄ごとに
+# 再試行しても成功しないため、1回失敗したらセッション内では以降 BQ を叩かない。
 #
-# 【根本原因（2026-07-28 実測）】
-#   edinet_bq_schema.py の DDL は company_country_exposure に ticker 列を
-#   定義しているが、本番の BQ 実表には ticker 列が無い（実表12列 / DDL 22列）。
-#   CREATE TABLE IF NOT EXISTS は既存テーブルを変更しないため、DDL を後から
-#   拡張しても実表に反映されていなかった。
+# 【前提】
+#   CREATE TABLE IF NOT EXISTS は既存テーブルを変更しないため、
+#   edinet_bq_schema.py の DDL を拡張しても BQ 実表には反映されない。
 #   → 実表への不足列追加は setup_db_integration_bq.py（Actions の
 #     「Ensure edinetDB bigquery schema」）の ALTER ADD COLUMN 群で行う。
 _EXPOSURE_BQ_DISABLED: bool = False
@@ -112,10 +108,8 @@ def _get_raw_bq(project_id: str = "stock-analyzer-edinet"):
 def _reset_daily_cache(cfg=None) -> None:
     """キャッシュの有効期限を過ぎたらリセットする。
 
-    2026-07-25 バッチ5: 有効期限を config.GEO_RISK_CACHE_TTL_SEC（既定86400秒）
-    から読むよう是正。従来は「日付が変わったら」の日次リセット固定で、
-    config 側の定数は誰にも読まれていなかった。
-    既定の86400秒＝1日なので、既定値のままなら実質的な挙動は変わらない。
+    有効期限は config.GEO_RISK_CACHE_TTL_SEC（既定86400秒＝1日）。
+    日付が変わった場合もリセットする。
     """
     global _RISK_SCORE_CACHE, _EXPOSURE_CACHE, _CACHE_DATE, _CACHE_STAMP
     global _EXPOSURE_BQ_DISABLED, _EXPOSURE_BQ_ERROR
@@ -141,12 +135,9 @@ def prefetch_exposures(tickers, market: str = "JP", cfg=None,
                        project_id: str = "stock-analyzer-edinet") -> int:
     """複数銘柄の権益エクスポージャーを1クエリでまとめてキャッシュへ載せる。
 
-    2026-09-10: _get_exposure_list() は銘柄ごとにBQを叩き、1実行で85本の
-    クエリが走っていた。BigQuery は**参照テーブル1つにつき最低10MB**を
-    課金するため、company_country_exposure が0行でも
-    2テーブルJOIN × 85本 = 約1.7GB/実行が課金されていた
-    （課金実測: 全体6.9GB/日のうちこの経路だけで1.7GB）。
-    費用がデータ量ではなくクエリ本数で決まる以上、束ねるのが唯一の対策。
+    _get_exposure_list() は銘柄ごとにBQを叩く。BigQuery は
+    **参照テーブル1つにつき最低10MB**を課金するため、テーブルが0行でも
+    費用はクエリ本数で決まる。束ねて1クエリにするのが唯一の対策。
 
     ヒットしなかった銘柄にも空リストを入れる。入れないと
     _get_exposure_list() が毎回キャッシュミスして元の1銘柄1クエリに戻る。
@@ -299,7 +290,7 @@ def _get_exposure_list(
             _EXPOSURE_CACHE[cache_key] = result
             return result
         except Exception as e:
-            # 2026-07-28: 銘柄ごとに同じエラーを出し続けないよう、初回だけ報告して
+            # 銘柄ごとに同じエラーを出し続けないよう、初回だけ報告して
             # 以降はセッション内で BQ 経路を止める（下の④フォールバックへ落ちる）。
             _EXPOSURE_BQ_DISABLED = True
             _EXPOSURE_BQ_ERROR    = str(e)

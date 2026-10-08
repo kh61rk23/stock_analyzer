@@ -1,4 +1,4 @@
-# 2026-09-15 の日次メール・Actionsログから見つかった不具合の回帰テスト
+# 日次メール・Actionsログから見つかった不具合の回帰テスト
 import json
 import pathlib
 import types

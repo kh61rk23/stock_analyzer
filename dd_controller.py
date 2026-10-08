@@ -1,10 +1,10 @@
 # ==============================================================
-# dd_controller.py — ドローダウン制御（Wave R3-3 / E9）
+# dd_controller.py — ドローダウン制御（R3-3 / E9）
 # ==============================================================
 # 【役割】ポートフォリオ全体の投資部分のドローダウンを日次監視し、
 #   NORMAL / CAUTION / DEFENSE の3状態をヒステリシス付きで遷移させる。
 #   状態は results["dd_state"] に格納しブリーフ⑤・ダッシュボード②に表示。
-#   **売却の強制はしない**（推奨レポートのみ・実行は健太＝D-01）。
+#   **売却の強制はしない**（推奨レポートのみ・売買の実行は人が行う＝D-01）。
 # 【設計正本】要件定義書_統合改修_20260705.md §R3-3（D-16=c 確定・変更禁止）:
 #   equity = portfolio_holdings×当日価格（現金は対象外＝投資部分のみ / DR3-2推奨案=単一state）
 #   peak   = 過去最高値（stock_data/dd_state.json に永続化）
@@ -54,7 +54,7 @@ def next_state(current: str, dd: float, cfg=None) -> str:
 
 
 def state_action(state: str) -> dict:
-    """状態ごとの推奨アクション（注文票発行制御のヒント・実行は健太）。"""
+    """状態ごとの推奨アクション（注文票発行制御のヒント・実行は人が行う）。"""
     return {
         "NORMAL": {"core_new_buy": "allow", "casino_new_buy": "allow",
                    "note": "通常運転"},
@@ -148,7 +148,7 @@ def compute_portfolio_equity(cfg) -> tuple[float, int]:
         if price is None:
             price = avg          # 取得不能は簿価で代替（保守的）
         else:
-            price = price_in_jpy(h, price, fx)   # 2026-10-06: 米国株はドル→円
+            price = price_in_jpy(h, price, fx)   # 米国株はドル→円
             n += 1
         equity += float(price) * qty
     return equity, n

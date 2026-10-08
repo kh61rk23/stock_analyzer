@@ -1,10 +1,9 @@
 # ==============================================================
-# tests/test_batch6_ssot.py（2026-07-25 バッチ6・最終バッチ）
-# R系・ML系・単発の config 正本化と、淘汰判定・USマクロ反映の実装
+# tests/test_batch6_ssot.py
+# R系・ML系・単発の config 正本化と、淘汰判定・USマクロ反映の検証
 # ==============================================================
-# 【最重要】SIGNAL_WEIGHTS は config 側が**9カテゴリの古い版**、実装が
-# **23カテゴリの現行版**で完全に乖離していた。誰も config を読んでいなかった
-# ため、Wave 6/7 で14カテゴリ追加されても config は更新されず気づけなかった。
+# 【最重要】SIGNAL_WEIGHTS は config が正本（23カテゴリ）。実装だけが
+# 独自の重みを持つと、カテゴリ追加時に config が更新されず乖離に気づけない。
 # ==============================================================
 import sys
 from pathlib import Path
@@ -40,7 +39,7 @@ class TestSignalWeightsSSOT:
         assert sum(_cfg().SIGNAL_WEIGHTS.values()) == pytest.approx(1.0)
 
     def test_wave67_categories_present(self):
-        """Wave 6/7 で追加されたカテゴリが config にもあること。"""
+        """geo_signal〜academic_signal 等の追加カテゴリが config にもあること。"""
         cfg = _cfg()
         for k in ("geo_signal", "independence_signal", "taxonomy_signal",
                   "midterm_signal", "standardization_signal", "academic_signal"):
@@ -78,7 +77,7 @@ class TestSignalWeightsSSOT:
 
 
 class TestAllocationCulling:
-    """S11 の淘汰判定。従来 PF/p が None 固定で一度も働いていなかった。"""
+    """S11 の淘汰判定。PF/p が None 固定で判定が働かない状態を防ぐ。"""
 
     def test_profit_factor(self):
         import allocation_meta as am
@@ -140,7 +139,7 @@ class TestMlMetaDefaults:
 
 
 class TestPromotionM2:
-    """実弾昇格M2基準。従来レポートに文言を書くだけで判定が無かった。"""
+    """実弾昇格M2基準。レポートの文言だけでなく判定が実際に働くこと。"""
 
     @staticmethod
     def _acc(fills, monthly_factor):

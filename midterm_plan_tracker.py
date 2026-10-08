@@ -1,5 +1,5 @@
 # ==============================================================
-# midterm_plan_tracker.py  v1.0  (Wave 7 - Step 3)
+# midterm_plan_tracker.py  v1.0
 # 中期経営計画達成率自動追跡モジュール
 # ==============================================================
 # 【役割】
@@ -61,7 +61,7 @@
 #   Level 4: 中計目標は config.py の MIDTERM_PLAN_TARGETS から静的読み込み
 #
 # 【依存】
-#   config.py（BLOCK I-5、Wave 7追加定数参照）
+#   config.py（BLOCK I-5 の定数参照）
 #   BigQuery（edinet.financials）
 #   edinet_rotation_manager.py（ローテーションキャッシュ）
 #   yfinance（Level 3フォールバック）
@@ -665,8 +665,7 @@ def get_achievement_rate(cfg, ticker: str):
     """
     中計達成率の平均値を返す（ceo_evaluator [I-3] 軸2の補助情報）。
 
-    ★ 2026-06-11 バグ修正: ceo_evaluator.py が本関数名で呼んでいたが
-      実体が存在せず、中計DB優先参照パスが常時フォールバックしていた。
+    ceo_evaluator.py が本関数名で呼ぶ（中計DB優先参照パス）。改名しないこと。
     """
     try:
         cache = _load_cache(cfg)
@@ -690,8 +689,7 @@ def get_ceo_axis2_score(cfg, ticker: str) -> float:
     経営者スコア軸2（中計達成・0〜25pt）を返す。
     overall_score（0〜100）の 1/4 スケール変換。
 
-    ★ 2026-06-11 バグ修正: ceo_evaluator.py が本関数名で呼んでいたが
-      実体が存在しなかった（未実装の計画API）。
+    ceo_evaluator.py が本関数名で呼ぶ。改名しないこと。
     ※ 当該銘柄の中計データが無い場合は LookupError を送出する
       （呼び出し側の try/except が EDINET 直接取得へフォールバックする設計）。
     """
@@ -707,8 +705,7 @@ def format_midterm_section(plans: dict) -> list:
     """
     週次レポート用の中計達成状況セクション（Markdown行リスト）を生成。
 
-    ★ 2026-06-11 バグ修正: weekly_report_generator.py が本関数名で
-      呼んでいたが実体が存在せず、[I-5] セクションが常時空だった。
+    weekly_report_generator.py が本関数名で呼ぶ（[I-5] セクション）。改名しないこと。
     """
     if not plans:
         return []

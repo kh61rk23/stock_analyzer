@@ -45,11 +45,9 @@
 #   }
 #
 # 【依存】sec_client.py / config.py
-# 2026-07-27是正（Wave J1 / U-1c）: SEC EDGAR への HTTP 呼び出し・User-Agent・
-# CIK 解決は sec_client.py（U-1a 新設）に一本化した。CIK→ticker の逆引きは
-# 従来 us_cik_map.json（US-1/us_fundamental_rotator.py が生成）を再利用して
-# いたが、sec_client.cik_map() の共通キャッシュに切替えたため us_8k_monitor.py
-# 単独で us_fundamental_rotator の実行順に依存しなくなった。
+# [U-1c] SEC EDGAR への HTTP 呼び出し・User-Agent・CIK 解決は sec_client.py に
+# 一本化している。CIK→ticker の逆引きは sec_client.cik_map() の共通キャッシュを
+# 使うため、us_fundamental_rotator の実行順に依存しない。
 # ==============================================================
 
 from __future__ import annotations
@@ -117,10 +115,9 @@ ITEM_PRIORITY = {
 # BLOCK 1: キャッシュ管理
 # ==============================================================
 
-# 2026-07-13是正（I-4同型バグ）: SECは連絡先を含まないUser-Agentを403で拒否する。
-# 旧 "stock_analyzer/1.0 (educational use)" は拒否対象だった。
-# us_fundamental_rotator / institutional_13f_monitor と同じ SEC_USER_AGENT 規約に統一。
-# 2026-07-27是正（U-1c）: 実体は sec_client.user_agent() に一本化。
+# SECは連絡先を含まないUser-Agentを403で拒否する。
+# us_fundamental_rotator / institutional_13f_monitor と同じ SEC_USER_AGENT 規約で、
+# 実体は sec_client.user_agent()。
 # 引数なし呼び出し時の解決順（環境変数 → import config → 固定フォールバック）は
 # sec_client.user_agent(cfg=None) と完全に同一のため、既存の回帰テスト
 # （tests/test_sec_user_agent.py）の期待値はそのまま成立する。
@@ -196,8 +193,8 @@ def _fetch_8k_filings(target_date: str) -> list[dict]:
             cik_raw  = src.get("file_num", "") or ""
             # file_num は "0000320193-24-000001" 形式から CIK を抽出
             entity   = src.get("entity_name", "")
-            # 2026-10-06: EFTS の _id は "受付番号:ファイル名"（例 0001832483-26-000040:serv-20261005.htm）。
-            #   旧実装は _id をそのまま受付番号として索引URLを作り 403 になっていた。受付番号は adsh、
+            # EFTS の _id は "受付番号:ファイル名"（例 0001832483-26-000040:serv-20261005.htm）で、
+            #   そのまま索引URLに使うと 403 になる。受付番号は adsh、
             #   会社の CIK は ciks[0]（受付番号の先頭は提出代行者の CIK のことがある）を使う。
             accession = src.get("adsh") or hit.get("_id", "").split(":")[0]
             ciks = src.get("ciks") or []
@@ -270,10 +267,8 @@ def _load_cik_to_ticker_map(cfg) -> dict:
     sec_client.cik_map()（{TICKER: "0000320193"} 形式・共通キャッシュ）から
     {cik_int: ticker} の逆引きマップを作る。
 
-    2026-07-27是正（U-1c）: 従来は us_fundamental_rotator.py が書き出す
-    us_cik_map.json（{ticker: cik_int}）を直接読んでいたため、当モジュール
-    単体では実行順序に依存していた（rotator 未実行だとスキップされる）。
-    sec_client 側の共通 CIK マップに切替えたことでこの依存が解消された。
+    [U-1c] sec_client 側の共通 CIK マップを使うため、us_fundamental_rotator の
+    実行順に依存しない。
     """
     try:
         ticker_to_cik = sec_client.cik_map(cfg=cfg)
@@ -472,8 +467,8 @@ def run_us_8k_monitor(cfg, results: dict = None) -> dict:
             continue   # ticker が不明な場合はスキップ
 
         # Item 検知（対象銘柄のみ実行・上限あり）
-        # 2026-10-06: EFTS の検索結果に Item 番号（例 "2.02"）が入っているのでそれを使う。
-        #   無いときだけ従来どおり対象銘柄の索引ページを読む。
+        # EFTS の検索結果に Item 番号（例 "2.02"）が入っているのでそれを使う。
+        #   無いときだけ対象銘柄の索引ページを読む。
         items = list(filing.get("items") or [])
         is_target = (ticker in target_set)
         if not items and is_target and item_fetched < max_item_fetch:

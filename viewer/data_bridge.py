@@ -5,10 +5,10 @@
 #       ディスクキャッシュ管理、Google Drive パス管理、Google Sheets 連携
 #
 # ★ Google Drive パスはこのファイルで一元定義し全モジュールで使用
-# ★ EDINET DB 連携 (edinetdb.jp) を追加 —— 日本株は財務系指標を優先採用
+# ★ EDINET DB 連携 (edinetdb.jp) —— 日本株は財務系指標を優先採用
 #
 # データソース優先順位:
-#   米国株: yfinance → Alpha Vantage → ディスクキャッシュ（変更なし）
+#   米国株: yfinance → Alpha Vantage → ディスクキャッシュ
 #   日本株: yfinance（株価・チャート）+
 #           EDINET DB（財務指標・セクター等）→ マージ後キャッシュ
 # ==============================================================
@@ -24,21 +24,20 @@ import gspread
 import streamlit as st
 from google.oauth2.service_account import Credentials
 
-# 2026-09-10: 直 yfinance から実行内キャッシュ経由へ。
+# yfinance は実行内キャッシュ（yf_cache）経由で使う。
 # base_agent.fetch_financials() は本モジュールの fetch_stock_data() を
-# **最優先の取得経路**として銘柄ごとに呼ぶため、ここが素の yfinance の
-# ままだと 2026-09-09 の重複取得一掃が主経路だけ素通りしていた
-# （同一銘柄の .info / history を各モジュールが取り直す）。
+# **最優先の取得経路**として銘柄ごとに呼ぶため、ここが素の yfinance だと
+# 同一銘柄の .info / history を各モジュールが取り直すことになる。
 # yf_cache が無い環境（viewer 単体起動など）では素の yfinance に落ちる。
 try:
     import yf_cache as yf
 except ImportError:  # pragma: no cover - viewer 単体起動時のみ
     import yfinance as yf
 
-# ★ 2026-07-12: 日次バッチ（GitHub Actions・streamlitランタイム無し）から本モジュールが
+# ★ 日次バッチ（GitHub Actions・streamlitランタイム無し）から本モジュールが
 #   importされると @st.cache_data 呼出のたびに「No runtime found」WARNINGが大量出力される。
 #   streamlit自身のimportでloggerが再構成されるため、import後にここで抑制する
-#   （main側の事前設定では効かなかった実害あり）。UI実行時の動作には影響しない。
+#   （main側で事前に設定しても効かない）。UI実行時の動作には影響しない。
 import logging as _logging
 _logging.getLogger("streamlit.runtime.caching.cache_data_api").setLevel(_logging.ERROR)
 
@@ -73,8 +72,7 @@ AV_API_KEY_ENV = "ALPHAVANTAGE_API_KEY"
 
 # ── EDINET DB 設定 ─────────────────────────────────────────────
 # edinetdb.jp — 全上場企業3848社の財務データ REST API（毎日8:00 JST更新）
-# 2026-09-15: API キーが平文で直書きされていた（git 履歴にも残る）。
-# 他モジュールと同じく環境変数（GitHub Secrets → run_headless.py の ENV_MAP）から読む。
+# API キーはコードに直書きせず、他モジュールと同じく環境変数（GitHub Secrets → run_headless.py の ENV_MAP）から読む。
 EDINET_DB_API_KEY = os.getenv("EDINETDB_API_KEY", "")
 EDINET_DB_BASE    = "https://edinetdb.jp/v1"
 EDINET_DB_TIMEOUT = 10   # リクエストタイムアウト（秒）

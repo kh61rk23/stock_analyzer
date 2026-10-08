@@ -1,5 +1,5 @@
 # ==============================================================
-# institutional_signal_scorer.py  v1.0  (Wave 4 - Policy Ph3)
+# institutional_signal_scorer.py  v1.0  (Policy Ph3)
 # ==============================================================
 # 【役割】
 #   institutional_13f_monitor.py の出力を受け取り、
@@ -47,7 +47,7 @@ from typing import Optional
 
 # Tier 別 L3 Override 発動閾値
 _L3_TRIGGER: dict = {
-    # 2026-10-06: Tier1/2 も1億ドル未満は対象外（config.INSTITUTION_MIN_NEW_POSITION_USD_ACTIVE）
+    # Tier1/2 も1億ドル未満は対象外（config.INSTITUTION_MIN_NEW_POSITION_USD_ACTIVE）
     1: {"new_position": True,  "min_adj": 0.0,  "min_usd": 100_000_000},
     2: {"new_position": True,  "min_adj": 8.0,  "min_usd": 100_000_000},
     3: {"new_position": True,  "min_adj": 0.0,  "min_usd": 1_000_000_000}, # Tier3は10億ドル超

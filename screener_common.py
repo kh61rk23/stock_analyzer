@@ -2,8 +2,8 @@
 # screener_common.py — JP/US スクリーナー共通ロジック（U-3）
 # ==============================================================
 # 目的（要件定義書_JP-US統合_20260726.md §6-J2 U-3）:
-#   stock_screener.py（JP）と us_stock_screener.py（US）に存在した
-#   完全重複 / ほぼ重複の Wave2/Wave3 FE関数を1本化する。
+#   stock_screener.py（JP）と us_stock_screener.py（US）で
+#   完全重複 / ほぼ重複の FE関数を1本化する。
 #
 #   移設対象と対応関係:
 #     JP `_calc_risk_adjusted_score`  ⇔ US `_calc_risk_adjusted_score_us`
@@ -17,8 +17,8 @@
 #         → 完全同一ロジック（catalyst_calendar.calc_catalyst_bonus への
 #            薄いラッパー）。そのまま `calc_catalyst_bonus()` へ。
 #
-#   両スクリーナー側の旧関数は削除せず、本モジュールへの1行委譲に
-#   置き換える（呼び出し箇所を一切変更しないため）。
+#   両スクリーナー側の関数は残し、本モジュールへの1行委譲にしている
+#   （呼び出し箇所を変えないため）。
 #
 #   市場別パラメータは config.py BLOCK 61 の `MARKET_PROFILE` を正本とする。
 #   既存の *_JP / *_US 設定は文字列の索引として参照し、値を複製しない。

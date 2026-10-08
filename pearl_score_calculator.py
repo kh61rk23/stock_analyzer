@@ -1,5 +1,5 @@
 # ==============================================================
-# pearl_score_calculator.py  v1.1  (Wave 7 - Step 9)
+# pearl_score_calculator.py  v1.1
 # 光る原石スコア計算共通ライブラリ
 # ==============================================================
 # 【役割】
@@ -20,7 +20,7 @@
 #   D4: 発見ギャップスコア（0〜100）
 #     アナリストカバレッジ / 時価総額による未発見度 / discovery_score活用
 #
-#   D5: 逆張りシグナルスコア（0〜100）（Wave 2 - Pearl Ph2）
+#   D5: 逆張りシグナルスコア（0〜100）（Pearl Ph2）
 #     OLS残差ε（実績リターン - β×市場リターン）で逆張り機会を定量化
 #
 #   D2: 持続性（Ph2未実装 → None）
@@ -55,7 +55,7 @@
 # 【依存】
 #   config.py（BLOCK 24定数参照）
 #   追加ライブラリなし（標準ライブラリのみ）
-#   ★ try/except で全ブロックを保護。失敗時はゼロスコアを返す。
+#   ⚠️ try/except で全ブロックを保護。失敗時はゼロスコアを返す。
 # ==============================================================
 
 from __future__ import annotations
@@ -71,7 +71,7 @@ from typing import Optional
 # BLOCK 0: デフォルト定数（config.py が読めない場合のフォールバック）
 # ==============================================================
 
-# Wave 3 - Pearl Ph3: D2（Smart Money）を追加し5次元ウェイトを再調整
+# Pearl Ph3: D2（Smart Money）を含む5次元ウェイト
 # $pearl\_score = D1 \times 0.25 + D2 \times 0.15 + D3 \times 0.30$
 #              $+ D4 \times 0.15 + D5 \times 0.15$
 
@@ -126,7 +126,7 @@ _CACHE_FILES = {
 }
 
 # ==============================================================
-# BLOCK 0-B: Wave 7 追加定数（EDINETセグメント統合・潜伏銘柄補正）
+# BLOCK 0-B: 定数（EDINETセグメント統合・潜伏銘柄補正）
 # ==============================================================
 
 # D3 への EDINETセグメント文脈スコアの加算上限
@@ -206,9 +206,8 @@ def _calc_d1_direction(data: dict) -> tuple[float, list[str]]:
 
         # ── ② EPS加速度: max 30pt ────────────────────────────
         # 直接渡された acceleration フィールド or 生の成長率から計算
-        # 2026-10-01: 旧式の「四半期成長率×4 − 年率」は、yfinance の2つがどちらも
-        # 前年同期比でほぼ同値のため実質「増益率×3」だった。四半期の前年同期比 −
-        # 通期の前年比（earnings_surprise.calc_profit_acceleration）に統一する。
+        # 加速度は「四半期の前年同期比 − 通期の前年比」（earnings_surprise.calc_profit_acceleration）。
+        # 「四半期成長率×4 − 年率」は yfinance の2値がほぼ同値のため実質「増益率×3」になり使えない。
         accel = data.get("earnings_acceleration")
         if accel is None:
             pa = data.get("profit_accel")
@@ -291,7 +290,7 @@ def _calc_d1_direction(data: dict) -> tuple[float, list[str]]:
 #   ROE水準                  : max 20pt
 #   粗利率品質               : max 20pt
 #
-# 【M-Score proxy 3変数版 (FE-3 Wave 2)】
+# 【M-Score proxy 3変数版 (FE-3)】
 #   $M_{3var} = -4.84 + 0.920 \times DSRI + 0.528 \times GMI + 0.404 \times ACQI$
 #   DSRI : Days Sales Receivable Index proxy（売上成長→売掛金増加リスク）
 #   GMI  : Gross Margin Index proxy（粗利率水準から低下リスクを近似）
@@ -302,7 +301,7 @@ def _calc_d1_direction(data: dict) -> tuple[float, list[str]]:
 
 def _calc_m_score_3var(data: dict, cfg=None) -> tuple[float, bool, bool, str]:
     """
-    Beneish M-Score 3変数 proxy を計算する（Wave 2 - FE-3）。
+    Beneish M-Score 3変数 proxy を計算する（FE-3）。
 
     yfinance で取得可能なフィールドから DSRI・GMI・ACQI を近似する。
 
@@ -403,7 +402,7 @@ def _calc_d3_earnings_quality(data: dict, cfg=None) -> tuple[float, list[str], f
         revenue_growth = data.get("revenue_growth")
 
         # ── ① アクルーアル品質（TATA proxy）: max 35pt ──────────
-        # M-Score 3変数版（FE-3 Wave 2）を先行計算し、後段でペナルティ乗数を適用
+        # M-Score 3変数版（FE-3）を先行計算し、後段でペナルティ乗数を適用
         m_score_3v, m_is_strong, m_is_medium, m_flag = _calc_m_score_3var(
             data, cfg=cfg   # cfg はクロージャ外のため None（閾値デフォルト使用）
         )
@@ -482,7 +481,7 @@ def _calc_d3_earnings_quality(data: dict, cfg=None) -> tuple[float, list[str], f
             except (TypeError, ValueError):
                 pass
 
-        # ── M-Score 3変数 乗数ペナルティ（FE-3 Wave 2） ──────────
+        # ── M-Score 3変数 乗数ペナルティ（FE-3） ──────────
         # 加算ペナルティではなく乗数方式で D3 全体を減衰させる。
         # $M_{3var} > -1.78$ → score × 0.50（強ペナルティ）
         # $-1.78 \geq M_{3var} > -2.22$ → score × 0.75（中ペナルティ）
@@ -494,17 +493,12 @@ def _calc_d3_earnings_quality(data: dict, cfg=None) -> tuple[float, list[str], f
             score = pre_penalty_score * _M_SCORE_MEDIUM_MULTIPLIER
             flags.append(f"⚠️ M-Score中ペナルティ適用（×{_M_SCORE_MEDIUM_MULTIPLIER}）")
 
-# ── Wave 7: EDINETセグメント文脈スコアの統合 ──────────
+# ── EDINETセグメント文脈スコアの統合 ──────────
         # latent_pearl_manager / independence_score_calculator の
         # カタリストデータを D3 に反映する。
         # $D3_{final} = D3_{base} + bonus_{segment} + bonus_{catalyst} + bonus_{midterm}$
 
-        # 2026-07-25: Wave7 の D3統合フラグ3本を配線。
-        # 実装（_calc_edinet_segment_bonus / _calc_catalyst_bonus /
-        # _calc_midterm_bonus）はここに揃っていたのに、config の
-        # ENABLE_D3_* が誰にも読まれず「常時適用」になっていた。
-        # フラグ値は現在の挙動（＝常時適用）に合わせて True へ揃えてあるため、
-        # 本配線でスコアは変わらない。切りたい時に初めて効くようになる。
+        # config の ENABLE_D3_* で3種のボーナスを個別に切れる（既定 True＝常時適用）。
         _d3_seg_on = getattr(cfg, "ENABLE_D3_EDINET_SEGMENT", True)
         _d3_cat_on = getattr(cfg, "ENABLE_D3_CATALYST_INTEGRATION", True)
         _d3_mid_on = getattr(cfg, "ENABLE_D3_MIDTERM_INTEGRATION", True)
@@ -552,7 +546,7 @@ def _calc_d3_earnings_quality(data: dict, cfg=None) -> tuple[float, list[str], f
         return 0.0, ["D3計算エラー"], 0.0
 
 # ==============================================================
-# BLOCK 2-B: D3補助関数（Wave 7 - EDINETセグメント統合）
+# BLOCK 2-B: D3補助関数（EDINETセグメント統合）
 # ==============================================================
 
 def _calc_edinet_segment_bonus(data: dict, cfg=None) -> float:
@@ -810,7 +804,7 @@ def _calc_d4_discovery_gap(data: dict, market: str = "JP") -> tuple[float, list[
 
 
 # ==============================================================
-# BLOCK 4: D2スコア — Smart Money（Wave 3 - Pearl Ph3）
+# BLOCK 4: D2スコア — Smart Money（Pearl Ph3）
 # ==============================================================
 # 【構成】
 #   機関投資家保有率スコア     : max 40pt
@@ -834,7 +828,7 @@ def _calc_d2_smart_money(
     cfg=None,
 ) -> tuple[float, list[str]]:
     """
-    D2: Smart Money スコアを算出する（Wave 3 - Pearl Ph3）。
+    D2: Smart Money スコアを算出する（Pearl Ph3）。
 
     Args:
         data:   screener / base_agent のデータ辞書
@@ -923,7 +917,7 @@ def _calc_d2_smart_money(
 
 
 # ==============================================================
-# BLOCK 5: D5スコア — 逆張りシグナル（Contrarian Signal / Wave 2 - Pearl Ph2）
+# BLOCK 5: D5スコア — 逆張りシグナル（Contrarian Signal / Pearl Ph2）
 # ==============================================================
 # 【構成】
 #   OLS残差ε（CAPM簡易版）         : max 80pt
@@ -945,7 +939,7 @@ def _calc_d2_smart_money(
 # ==============================================================
 
 def _calc_d5_valuation(data: dict, market: str = "JP") -> tuple[float | None, list[str]]:
-    """割安度（バリュエーション）スコア（0〜100）。2026-10-05 新設（健太指示）。
+    """割安度（バリュエーション）スコア（0〜100）。
 
     PER（低いほど高得点: 8倍以下=100・30倍以上=0）、PBR（0.8倍以下=100・5倍以上=0）、
     FCF利回り（8%以上=100・0%以下=0）のうち取れたものの平均。どれも無ければ None。
@@ -985,7 +979,7 @@ def _calc_d5_contrarian(
     market: str = "JP",
 ) -> tuple[float, list[str]]:
     """
-    逆張りシグナルスコア（D5）を計算する（Wave 2 - Pearl Ph2）。
+    逆張りシグナルスコア（D5）を計算する（Pearl Ph2）。
 
     OLS残差ε = 実績リターン − β×市場リターン で、
     市場期待比での割負け度合いを定量化する。
@@ -1371,21 +1365,21 @@ def calc_pearl_score(
         if not getattr(cfg, "ENABLE_PEARL_SCORE", True):
             return _zero_result()
 
-        # ── 次元重みの取得（5次元 / Wave 3 - Pearl Ph3）────────────
+        # ── 次元重みの取得（5次元 / Pearl Ph3）────────────
         weights = getattr(cfg, "PEARL_DIMENSION_WEIGHTS", _DEFAULT_WEIGHTS)
         w1 = float(weights.get("D1", 0.25))
-        w2 = float(weights.get("D2", 0.15))   # Wave 3 追加
+        w2 = float(weights.get("D2", 0.15))
         w3 = float(weights.get("D3", 0.30))
         w4 = float(weights.get("D4", 0.15))
         w5 = float(weights.get("D5", 0.15))
 
         # ── 各次元スコアの計算 ────────────────────────────────────
         d1_score, d1_flags  = _calc_d1_direction(data)
-        d2_score, d2_flags  = _calc_d2_smart_money(data, market, cfg)  # Wave 3 Ph3
+        d2_score, d2_flags  = _calc_d2_smart_money(data, market, cfg)
         d3_score, d3_flags, m_score_3v = _calc_d3_earnings_quality(data, cfg)
         d4_score, d4_flags  = _calc_d4_discovery_gap(data, market)
         d5_score, d5_flags  = _calc_d5_contrarian(data, market)
-        # 2026-10-05: D5 ＝ 割安度（バリュエーション）50% ＋ 逆張り（市場比の割負け）50%
+        # D5 ＝ 割安度（バリュエーション）50% ＋ 逆張り（市場比の割負け）50%
         _val, _val_flags = _calc_d5_valuation(data, market)
         if _val is not None:
             d5_score = round(0.5 * _val + 0.5 * d5_score, 1)
@@ -1404,17 +1398,15 @@ def calc_pearl_score(
         )
         pearl_score = min(100.0, max(0.0, pearl_score))
 
-        # ── Wave 7: 潜伏Pearl昇格銘柄へのボーナス付与 ────────
+        # ── 潜伏Pearl昇格銘柄へのボーナス付与 ────────
         # latent_pearl_manager.py で promotion_eligible == True の銘柄は
         # pearl_score に上乗せボーナスを加算する。
         # $pearl_{final} = pearl_{base} + latent\\_bonus$
         # $latent\\_bonus = (latent\\_score / 100) \\times LATENT\\_PEARL\\_PROMOTION\\_BONUS\\_MAX$
         try:
             _ticker = ticker or data.get("ticker", data.get("Symbol", ""))
-            # 2026-07-25: ENABLE_LATENT_PEARL_BONUS を配線（D3三種と同じ理由）。
-            # 上限値も config.LATENT_PEARL_PROMOTION_BONUS_MAX を正本にする。
-            # 従来はモジュール定数 _LATENT_PEARL_PROMOTION_BONUS_MAX が固定で、
-            # config 側の同名定数が誰にも読まれていなかった（SSOT違反）。
+            # ENABLE_LATENT_PEARL_BONUS で切れる。上限値は config.LATENT_PEARL_PROMOTION_BONUS_MAX が正本
+            # （モジュール定数 _LATENT_PEARL_PROMOTION_BONUS_MAX は config に無い時のフォールバック）。
             if (_ticker and cfg is not None
                     and getattr(cfg, "ENABLE_LATENT_PEARL_BONUS", True)):
                 import json as _json
@@ -1431,7 +1423,7 @@ def calc_pearl_score(
                         latent_bonus = round((lp_score / 100.0) * _lp_max, 2)
                         pearl_score = min(100.0, pearl_score + latent_bonus)
                         # all_flags は後段で定義されるため、
-                        # Wave 7ボーナスフラグは d3_flags に一時格納する
+                        # 潜伏Pearlボーナスのフラグは d3_flags に一時格納する
                         d3_flags.append(
                             f"[Wave7] 潜伏Pearl昇格ボーナス+{latent_bonus:.1f}pt💎"
                         )
@@ -1446,7 +1438,7 @@ def calc_pearl_score(
         if d1_flags:
             all_flags.extend([f"[D1] {f}" for f in d1_flags])
         if d2_flags:
-            all_flags.extend([f"[D2] {f}" for f in d2_flags])   # Wave 3 Ph3
+            all_flags.extend([f"[D2] {f}" for f in d2_flags])
         if d3_flags:
             all_flags.extend([f"[D3] {f}" for f in d3_flags])
         if d4_flags:
@@ -1459,7 +1451,7 @@ def calc_pearl_score(
             "pearl_tier":    tier,
             "pearl_bonus":   bonus,
             "d1_score":      d1_score,
-            "d2_score":      d2_score,   # Wave 3 - Pearl Ph3 実装
+            "d2_score":      d2_score,   # Pearl Ph3
             "d3_score":      d3_score,
             "d4_score":      d4_score,
             "d5_score":      d5_score,

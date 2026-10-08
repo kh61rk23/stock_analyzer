@@ -1,9 +1,9 @@
-# 政府EDINET APIの撤去 と CSEスキップの可視化（2026-09-12）
+# 政府EDINET APIの撤去 と CSEスキップの可視化
 #
 # 金融庁 EDINET API（EDINET_API_KEY）は直取得の経路が
 # ENABLE_EDINET_ROTATION / ENABLE_EDINET_DIRECT_FETCH /
-# ENABLE_EXECUTIVE_TRANSITION の全てで停止済みで、キー未設定のまま
-# api_key_health に「⬜ 未設定」として毎回出続けていた。EdinetDBへ一本化する。
+# ENABLE_EXECUTIVE_TRANSITION の全てで停止済みでキーも撤去済み。EdinetDBへ一本化。
+# api_key_health に「⬜ 未設定」として出続けないことを確かめる。
 import pathlib
 import re
 
@@ -43,7 +43,7 @@ class TestGovEdinetKeyRemoved:
 
 
 class TestEstatProbeTimeout:
-    """e-Stat のプローブが毎回 ⚠️ になっていた（本体の取得は成功していた）"""
+    """e-Stat は応答が遅く、既定タイムアウトだと本体は取得できてもプローブが ⚠️ になる"""
 
     def test_slow_timeout_is_defined_and_longer(self):
         import api_key_health as kh
@@ -59,7 +59,7 @@ class TestEstatProbeTimeout:
 
 class TestPaidMediaSkipIsVisible:
     def test_bloomberg_is_removed_from_sources(self):
-        """CSE経由で一度も取得できていなかった"""
+        """Bloomberg は CSE 経由で取得できないため対象外"""
         import paid_media_searcher as pm
         ids = [s["id"] for s in pm.PAID_MEDIA_SOURCES]
         assert "bloomberg" not in ids

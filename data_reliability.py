@@ -1,5 +1,5 @@
 # ==============================================================
-# data_reliability.py  v1.0  (Wave R0-1 / E7')
+# data_reliability.py  v1.0  (R0-1 / E7')
 # データ取得の冗長化・リトライ・鮮度SLA検査
 # ==============================================================
 # 【役割】
@@ -229,14 +229,11 @@ def run_data_sla_check(cfg, results: dict) -> dict:
 
     # 既定の検査対象（config側 DATA_SLA_TARGETS で上書き/追加可能）
     #
-    # 2026-09-10: news / financials の既定パスが産出側と食い違っており、
-    # 2026-07-12 から毎日「SLA違反:2件」を出し続けていた（実体は
-    # ファイルが古いのではなく、**そもそも存在しないパスを見ていた**）。
+    # パスは産出側の実ファイルに合わせる（存在しないパスを見ると常時SLA違反になる）。
     #   news       : 実体は news_cache/news_{日付}.json というディレクトリ。
     #                `news_cache.json` というファイルは生成されない
-    #   financials : CACHE_DIR/edinet は旧ローテーション（ENABLE_EDINET_
-    #                ROTATION=False で退役済み）。現行の取り込みは
-    #                edinetdb_ingestor で、状態は
+    #   financials : CACHE_DIR/edinet は退役済み（ENABLE_EDINET_ROTATION=False）。
+    #                取り込みは edinetdb_ingestor で、状態は
     #                DATA_DIR/edinetdb_rotation_meta.json に日次で書かれる
     # 「監視が実態からずれて常時アラート」はオオカミ少年化して
     # 本物の違反を隠すため、実ファイルに合わせる。

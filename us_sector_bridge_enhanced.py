@@ -7,8 +7,8 @@
 #   CIK → ticker → SIC code → JP業種コード の4段チェーンで
 #   「米国半導体企業の決算サプライズ → JP電気機器に波及シグナル」を実現する。
 #
-# 【従来の jp_us_sector_bridge との違い】
-#   従来: ETFスコアの相関（週次・遅延あり）
+# 【jp_us_sector_bridge との違い】
+#   bridge: ETFスコアの相関（週次・遅延あり）
 #   本版: 8-K決算発表（当日）→ SICマップ → JP業種に即日シグナル
 #
 # 【SIC マッピング設計】
@@ -57,7 +57,7 @@
 #   cross_signals は results["cross_sector_signals"] にも追記され、
 #   他モジュール共通の CROSS_SECTOR シグナル経路に合流する。
 #
-# 【消費者（grep実測。2026-07-28）】
+# 【消費者】
 #   ・screener_candidate_builder.py:140,186 _load_us_bridge_jp_reps() 等 —
 #     jp_affected を読み、影響業種の代表銘柄をスクリーナー候補に反映する
 #   ・results["cross_sector_signals"] 経由（間接消費）: alpha_attributer.py / signal_dedup.py
@@ -76,14 +76,9 @@
 #     本モジュールはUSの決算イベント発生（8-K）を起点に動くイベント駆動型で、
 #     JP側のスコア時系列は参照しない。
 #
-# 【既知の状態（2026-07-28 時点・X-3）】
-#   実行台帳に「記録なし」が続いていた（2026-07-06・2026-07-13 台帳とも
-#   日次・週次ともunrecorded）。本タスク（U-10）で原因調査のみ実施し、
-#   修正はしていない（別案件 X-3 として切り出し済み）。調査結果の詳細は
-#   実装セッションの完了報告を参照。
-#   意思決定 J-04（2026-07-27, 健太承認）は jp_us_bridge / jp_us_sector_correlation を
-#   名指しした決定だが、本タスクの対象範囲としては本モジュールも含め
-#   「今回は削除・機能修正をしない」対象として扱う。
+# 【既知の状態（X-3）】
+#   実行台帳に記録が残らない（日次・週次とも unrecorded）問題は未修正（X-3）。
+#   意思決定 J-04 の扱いに合わせ、本モジュールも削除・機能修正はしない対象。
 #
 # 【依存】requests / config.py / us_8k_monitor / us_fundamental_rotator
 # ==============================================================
@@ -250,7 +245,7 @@ def save_sector_mapping(cfg, mapping: dict) -> None:
 # BLOCK 2: SIC 取得（SEC submissions API）
 # ==============================================================
 
-# 2026-07-27是正（U-2 / F-2）: SECは連絡先を含まないUser-Agentを403で拒否する。
+# U-2 / F-2: SECは連絡先を含まないUser-Agentを403で拒否する。
 # us_8k_monitor.py:116-122 の _sec_user_agent() と同型（優先順: 環境変数 →
 # cfg.SEC_USER_AGENT（cfg未指定時は import config でのフォールバック取得）→ 固定文字列）。
 # U-1b: 実体は sec_client.user_agent() に統合済み。本関数は tests/test_sec_user_agent.py
@@ -329,7 +324,7 @@ def update_sector_mapping(cfg, tickers_with_cik: list[dict]) -> dict:
         if last_upd:
             try:
                 days_old = (date.today() - date.fromisoformat(last_upd)).days
-                # 2026-07-25 バッチ6: キャッシュ日数を config から読む
+                # キャッシュ日数は config から読む
                 _cache_days = int(getattr(cfg, "US_SECTOR_MAPPING_CACHE_DAYS",
                                           MAPPING_CACHE_DAYS))
                 if days_old < _cache_days and existing.get("sic"):

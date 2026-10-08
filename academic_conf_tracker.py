@@ -1,5 +1,5 @@
 # ==============================================================
-# academic_conf_tracker.py  v1.0  (Wave 7 - Step 2)
+# academic_conf_tracker.py  v1.0
 # 学術カンファレンス発表追跡モジュール
 # ==============================================================
 # 【役割】
@@ -63,9 +63,9 @@
 #   Level 4: キャッシュ継続使用
 #
 # 【依存】
-#   config.py（Wave 7追加定数参照）
+#   config.py（ACADEMIC_CONF_* 定数参照）
 #   requests, BeautifulSoup（外部ライブラリ）
-#   ★ try/except で全ブロックを保護
+#   try/except で全ブロックを保護
 # ==============================================================
 
 from __future__ import annotations
@@ -825,11 +825,9 @@ def run_academic_conf_tracker(cfg=None, force_refresh: bool = False) -> dict:
                 "timestamp":      datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
 
-    # 2026-07-28: config.ACADEMIC_CONF_CONFIG は「本番時は辞書を設定」の
-    # プレースホルダとして None が入っている。getattr の第3引数は
-    # 「属性が存在しないとき」しか効かないため、None が入っていると
-    # そのまま None が返り .items() で落ちていた（3日連続失敗）。
-    # midterm_plan_tracker と同じく、falsy なら既定値へ倒す。
+    # config.ACADEMIC_CONF_CONFIG はプレースホルダとして None が入り得る。
+    # getattr の第3引数は「属性が存在しないとき」しか効かず None が返って
+    # .items() で落ちるため、falsy なら既定値へ倒す（midterm_plan_tracker と同じ）。
     conf_config = getattr(cfg, "ACADEMIC_CONF_CONFIG", _DEFAULT_CONF_CONFIG)
     if not conf_config:
         conf_config = _DEFAULT_CONF_CONFIG

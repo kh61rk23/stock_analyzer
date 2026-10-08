@@ -1,9 +1,7 @@
 # country_risk_updater._build_risk_merge_query — BQ MERGE クエリ生成（純粋関数）
-# 2026-06-25 修正の回帰固定:
-#   旧コードは UNNEST([ STRUCT <fields> ]) と書いており、STRUCT の直後に "<" が
-#   無いため BigQuery が "Syntax error: Expected \"<\" but got identifier
-#   country_code" を返し、国別リスク更新が常時 0 件だった。
-#   正しい型付き配列リテラル UNNEST(ARRAY<STRUCT<fields>>[ (values) ]) を固定する。
+# 回帰固定: 型付き配列リテラル UNNEST(ARRAY<STRUCT<fields>>[ (values) ]) を使うこと。
+#   UNNEST([ STRUCT <fields> ]) の形は BigQuery が構文エラー
+#   （Expected "<" but got identifier）にし、国別リスク更新が 0 件になる。
 from conftest import load_module
 
 cru = load_module("country_risk_updater")

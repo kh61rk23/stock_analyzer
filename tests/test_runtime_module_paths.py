@@ -49,10 +49,8 @@ def test_report_writers_do_not_target_legacy_root_insights():
 
 
 def test_edinet_ingest_is_enabled_by_default():
-    """2026-07-30（健太決定）: 日次でも EdinetDB を叩く方針へ変更。
+    """EdinetDB 取込は日次でも既定で有効（ENABLE_EDINETDB_INGEST=True）。
 
-    旧テスト名 test_edinet_ingest_flag_is_opt_in は
-    「既定 False（opt-in）」を固定していたが、その前提自体が覆った。
     月次コール枠を使い切ったら edinetdb_ingestor 側が自動スキップするため、
     既定 True でも枠を超過しない設計になっている。
     """
@@ -76,9 +74,8 @@ def test_daily_workflow_runs_edinet_after_provider_refresh():
     workflow = (repo / ".github/workflows/daily_run.yml").read_text(
         encoding="utf-8"
     )
-    # UTC 00:17 = JST 09:17。UTC 00:00 ちょうどは混雑で毎日3〜4時間
-    # 遅延していたため分をずらした（2026-09-09）。
-    # ★ UTC 00:xx を維持すること。前倒しして 23:xx にすると JST月曜の回が
+    # UTC 00:17 = JST 09:17。UTC 00:00 ちょうどは混雑で数時間遅延するため分をずらす。
+    # ⚠️ UTC 00:xx を維持すること。前倒しして 23:xx にすると JST月曜の回が
     #   UTC では日曜になり、下の weekly 判定が一度も成立しなくなる。
     assert 'cron: "17 0 * * 1-6"' in workflow
     assert '$(date -u +%u)" = "1"' in workflow
@@ -93,9 +90,8 @@ def test_daily_workflow_runs_edinet_after_provider_refresh():
 def test_edinetdb_sync_is_not_duplicated_in_workflow():
     """EdinetDB同期をワークフローから直接呼ばない（1日2回叩かない）
 
-    2026-09-09: 専用ステップと DAILY_MODULES の両方に存在し、
-    専用ステップが日次予算46をほぼ使い切ったあとに本体が走るため、
-    本体の edinetdb_ingest は毎回 success 0 / 予算到達で終わっていた。
+    専用ステップと DAILY_MODULES の両方にあると、専用ステップが日次予算を
+    ほぼ使い切ったあとに本体が走り、本体の edinetdb_ingest が予算到達で空振りする。
     """
     import config
 

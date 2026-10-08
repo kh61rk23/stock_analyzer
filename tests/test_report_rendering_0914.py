@@ -1,12 +1,12 @@
-# 2026-09-14 の日次・週次メールで見つかった表示とロジックの不具合の回帰テスト
+# 日次・週次メールの表示とロジックの不具合の回帰テスト
 #
-# 実際にメール本文で観測した症状:
+# 防ぐ症状（メール本文で観測された形）:
 #   日次: 異常検知「-1138.0%」（本文は -11.38%）/ 0.3倍を「出来高急増」/
 #         SoftBank Group の配当利回り「17.0%」
 #   週次: Pearl ランキングの重複掲載（HESAY×3 等）/ ROE「1430.0%」/
 #         米国セクター表が「|  | 0 | N/A |  |」の空行 / 台帳が前回日付のまま /
 #         地政学節がフッターの後ろ / 「USD/JPY: 154.482%」/ 配当「利回262.0%」/
-#         日次「FOMC 1日後」と週次「2026-09-17（3日後）」の矛盾
+#         日次「FOMC 1日後」と週次「（3日後）」の矛盾
 import pathlib
 import types
 
@@ -185,7 +185,7 @@ class TestLogDerivedFixes:
 
     def test_analyze_sections_uses_shared_transformers_import(self):
         block = _block(_src("finbert_analyzer.py"), "def _get_or_init_pipeline")
-        # 修正理由のコメントに旧コードの文字列を残しているので、コード行だけを見る
+        # コメントに同じ文字列が出てきても誤検知しないよう、コード行だけを見る
         code = "\n".join(l for l in block.splitlines()
                          if not l.lstrip().startswith("#"))
         assert "from transformers import pipeline" not in code
@@ -239,7 +239,7 @@ class TestCatalystCacheInvalidation:
         from datetime import datetime
         import catalyst_calendar as c
         cfg = self._cfg(tmp_path)
-        # 9/14 にコミットされた形（fomc_source を持たない旧キャッシュ）
+        # fomc_source を持たない旧形式のキャッシュ
         (tmp_path / "catalyst_calendar.json").write_text(json.dumps({
             "generated": datetime.now().strftime("%Y-%m-%d"),
             "global_events": [{"date": "2026-09-17", "type": "fed_fomc"}],

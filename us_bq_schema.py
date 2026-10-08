@@ -1,15 +1,11 @@
 # ==============================================================
-# us_bq_schema.py  v1.0  (2026-07-04 新規作成)
-# 米国株オルタナティブデータ層 BigQuery スキーマ定義（Wave 6 - U-4 / I-1 / I-3 / I-4）
+# us_bq_schema.py  v1.0
+# 米国株オルタナティブデータ層 BigQuery スキーマ定義（U-4 / I-1 / I-3 / I-4）
 # ==============================================================
 # 【なぜこのファイルが必要か】
-#   SPEC_db_schema.md §6（us データセット）は institutional_13f_monitor.py 等が
-#   `us.institutional_positions` へ INSERT する実装を持つ前提で書かれていたが、
-#   2026-06-30 / 2026-07-04 の2回にわたる実スキーマ突合（bq_all_schemas_*.json）
-#   で `us.*` のテーブルが1件も確認できなかった。
-#   原因は「us データセット自体を作成するスクリプトがリポジトリに存在しなかった」こと
-#   （edinet_bq_schema.py の datasets リストにも us は含まれていなかった）。
-#   本ファイルは ontology_bq_schema.py と同じパターンで us データセット + 4テーブルを
+#   institutional_13f_monitor.py 等は `us.institutional_positions` へ INSERT するが、
+#   us データセットを作るのはこのファイルだけ（edinet_bq_schema.py の datasets
+#   リストに us は含まれない）。本ファイルは ontology_bq_schema.py と同じパターンで us データセット + 4テーブルを
 #   冪等に作成する。
 #
 # 【役割】   dataset `us` の5テーブルを冪等に作成する
@@ -151,14 +147,10 @@ def create_all() -> None:
     cli = bqc.EDINETBQClient()
     project = cli.project
     for ddl in DDL:
-        # NOTE(2026-07-04): 以前は ddl.format(project=project) だったが、
-        # job_signal_cache / executive_transitions の OPTIONS(description=...) に
-        # 記述例として含まれる素の中括弧（例: '{sector_code: boost_pt}'）まで
-        # str.format() のプレースホルダとして解釈され KeyError('sector_code') で
-        # 落ちていた（GitHub Actions実行ログで確認・institutional_positionsまでは
-        # 作成成功していたため IAM/BUG-06 は無関係と判明）。
-        # DDL中の置換対象は "{project}" のみのため、format()ではなくreplace()に
-        # 変更し、コメント中の任意の中括弧の影響を受けないようにする。
+        # NOTE: format() は使わない。job_signal_cache / executive_transitions の
+        # OPTIONS(description=...) に記述例として素の中括弧（例: '{sector_code: boost_pt}'）
+        # が含まれ、str.format() だと KeyError('sector_code') で落ちる。
+        # DDL中の置換対象は "{project}" のみなので replace() で置換する。
         sql = ddl.replace("{project}", project)
         cli.client.query(sql).result()
         first = sql.strip().splitlines()[0].strip()

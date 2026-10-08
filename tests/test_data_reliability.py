@@ -1,5 +1,5 @@
 # ==============================================================
-# tests/test_data_reliability.py  (Wave R0-1 / E7')
+# tests/test_data_reliability.py  (R0-1 / E7')
 # ==============================================================
 import json
 import sys

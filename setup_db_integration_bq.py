@@ -62,15 +62,12 @@ def _statements(project: str) -> list[str]:
           source STRING,
           updated_at TIMESTAMP
         )""",
-        # ── 2026-07-28: geopolitics.company_country_exposure の列欠落を修復 ──
-        # 【事象】geo_signal.py が毎銘柄
-        #   「400 Name ticker not found inside e」で失敗していた。
-        # 【原因】edinet_bq_schema.py の DDL には ticker 等 20 列が定義されて
-        #   いるが、本番の実表は 12 列しか無かった（MCP で実測確認）。
-        #   CREATE TABLE IF NOT EXISTS は既存テーブルを変更しないため、
-        #   DDL を後から拡張しても実表に反映されていなかった。
+        # ── geopolitics.company_country_exposure の列を DDL に揃える ──
+        # CREATE TABLE IF NOT EXISTS は既存テーブルを変更しないため、
+        # edinet_bq_schema.py の DDL を拡張しても実表には反映されない。
+        # 列が欠けると geo_signal.py が「Name ticker not found」で落ちる。
         # 【注意】BigQuery の ALTER ADD COLUMN は REQUIRED 列を追加できないため、
-        #   すべて NULLABLE で追加する（既存行が無いので実害なし・実表0行）。
+        #   すべて NULLABLE で追加する。
         f"ALTER TABLE `{project}.geopolitics.company_country_exposure` "
         f"ADD COLUMN IF NOT EXISTS ticker STRING",
         f"ALTER TABLE `{project}.geopolitics.company_country_exposure` "
@@ -87,10 +84,9 @@ def _statements(project: str) -> list[str]:
         f"ADD COLUMN IF NOT EXISTS auto_derived BOOL",
         f"ALTER TABLE `{project}.geopolitics.company_country_exposure` "
         f"ADD COLUMN IF NOT EXISTS review_flag BOOL",
-        # 2026-09-09 DB移管 Phase 1: スクリーナー結果の日次スナップショット。
-        # 銘柄mdに出ている指標の約半分（technical系・FCFマージン・D/E・
-        # 自己資本比率・配当利回り等）は screener_history.json の14項目に
-        # 含まれず、その日のmdを開く以外に参照する方法がなかった。
+        # スクリーナー結果の日次スナップショット（DB移管 Phase 1）。
+        # 銘柄mdの指標の約半分（technical系・FCFマージン・D/E・自己資本比率・
+        # 配当利回り等）は screener_history.json の14項目に含まれないため、
         # ここを正本にして時系列で追えるようにする。
         f"""CREATE TABLE IF NOT EXISTS `{project}.analytics.stock_snapshot` (
           snapshot_date DATE NOT NULL,
@@ -132,10 +128,8 @@ def _statements(project: str) -> list[str]:
           pass_filters BOOL,
           ingested_at TIMESTAMP
         ) PARTITION BY snapshot_date CLUSTER BY ticker, market""",
-        # 2026-09-09: 株価の永続化。従来は50モジュールが個別に yfinance を
-        # 叩くだけで、OHLCV はどこにも保存されていなかった（BQに時系列
-        # テーブルが存在しなかった）。yf_cache が実行内で集めた日足を
-        # ここへ落とし、事後検証と yfinance 障害時の参照元にする。
+        # 株価の永続化。yf_cache が実行内で集めた日足をここへ落とし、
+        # 事後検証と yfinance 障害時の参照元にする。
         f"""CREATE TABLE IF NOT EXISTS `{project}.analytics.price_daily` (
           trade_date DATE NOT NULL,
           ticker STRING NOT NULL,
@@ -147,9 +141,9 @@ def _statements(project: str) -> list[str]:
           source STRING,
           ingested_at TIMESTAMP
         ) PARTITION BY trade_date CLUSTER BY ticker""",
-        # 2026-10-03: 財務三表の細目（売上原価・販管費・研究開発費・支払利息・棚卸資産・
-        # のれん・支払配当金など154項目）。EdinetDB /financials は1年度178項目を返すのに
-        # edinet.financials へは約25項目しか入れておらず、残りは受け取って捨てていた。
+        # 財務三表の細目（売上原価・販管費・研究開発費・支払利息・棚卸資産・
+        # のれん・支払配当金など154項目）。edinet.financials は約25項目だけなので、
+        # EdinetDB /financials（1年度178項目）の残りをここに縦持ちで入れる。
         # 項目定義は edinetdb_fields.py（区分 PL/BS/CF/株式/人的資本/環境/指標）。
         f"""CREATE TABLE IF NOT EXISTS `{project}.edinet.financial_items` (
           item_id STRING NOT NULL,
@@ -168,7 +162,7 @@ def _statements(project: str) -> list[str]:
           source STRING,
           updated_at TIMESTAMP
         ) CLUSTER BY edinet_code, statement, item""",
-        # 2026-10-03: 単四半期の財務細目（EdinetDB period=quarterly_standalone）
+        # 単四半期の財務細目（EdinetDB period=quarterly_standalone）
         f"""CREATE TABLE IF NOT EXISTS `{project}.edinet.financial_items_q` (
           item_id STRING NOT NULL,
           edinet_code STRING NOT NULL,
@@ -194,10 +188,8 @@ def _statements(project: str) -> list[str]:
 def setup() -> None:
     """全ステートメントを実行する。
 
-    2026-07-28 改善: 従来は最初の失敗で例外送出して打ち切っていたため、
-    本番ログが「✅ 1/8」の直後にスタックトレースで終わり、
-    残り7件が成功するのか失敗するのか分からなかった。
-    全件試して最後にまとめて報告し、1件でも失敗したら非ゼロ終了する。
+    最初の失敗で打ち切らず全件試し、最後にまとめて報告する
+    （残りの成否がログから分かるように）。1件でも失敗したら非ゼロ終了する。
     """
     bq = EDINETBQClient()
     statements = _statements(bq.project)      # 毎回組み立て直さない
@@ -206,11 +198,10 @@ def setup() -> None:
 
     for index, sql in enumerate(statements, 1):
         head = " ".join(sql.split())[:90]
-        # 2026-07-28: 同一テーブルへ ALTER を連続実行すると
+        # 同一テーブルへ ALTER を連続実行すると
         # 「Exceeded rate limits: too many table update operations for this table」
         # になる（テーブルのメタデータ更新は数秒あたり数回が上限）。
-        # 実際に company_country_exposure への8件連続 ALTER で5件目までしか
-        # 通らなかったため、レート制限だけは待って再試行する。
+        # レート制限だけは待って再試行する。
         for attempt in range(_RATE_LIMIT_RETRIES + 1):
             try:
                 bq.client.query(sql).result()

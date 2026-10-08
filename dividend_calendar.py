@@ -168,9 +168,7 @@ def _fetch_dividend_info(ticker: str, name: str, market: str) -> Optional[dict]:
 
         # 配当額
         div_amount = info.get("lastDividendValue") or info.get("dividendRate") or 0
-        # 2026-09-14: yfinance の dividendYield は「%値」（2.62 = 2.62%）で返る
-        # ようになっており、下の yield_pct で更に *100 して 8306.T を
-        # 「利回262.0%」、7203.T を「利回330.0%」と表示していた。
+        # yfinance の dividendYield は「%値」（2.62 = 2.62%）で返る（下の yield_pct で更に100倍しない）。
         # 比率で返る trailingAnnualDividendYield を優先し、無ければ %値として扱う。
         _ttm_yield = info.get("trailingAnnualDividendYield")
         _pct_yield = info.get("dividendYield") or info.get("forwardDividendYield")
@@ -259,8 +257,8 @@ def format_dividend_alert_text(result: dict) -> str:
     urgent   = result.get("urgent_7d", [])
 
     lines = [f"📅 配当権利確定カレンダー（30日以内: {len(upcoming)}銘柄）"]
-    # 2026-09-14: 銘柄名が取れないと name にティッカーが入り、
-    # 「8306.T 8306.T: …」と二重に表示されていた。同一なら1回だけ出す。
+    # 銘柄名が取れないと name にティッカーが入るため、
+    # 「8306.T 8306.T: …」と二重に出さないよう、同一なら1回だけ出す。
 
     if urgent:
         lines.append(f"\n🚨 緊急（7日以内）:")

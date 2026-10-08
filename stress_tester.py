@@ -939,7 +939,7 @@ def run_stress_test(
         sd = _fetch_stock_data(ticker, usdjpy)
         time.sleep(FETCH_DELAY)
 
-        # 2026-10-05: 株価が取れない米国株で円の取得単価に為替を掛けていた（評価額が膨張）
+        # 株価が取れない米国株では円の取得単価に為替を掛けない（評価額が膨張するため）
         from sync_holdings import holding_value_jpy
         value_jpy = holding_value_jpy(h, sd["current_price"] if sd else None, usdjpy)
 

@@ -1,15 +1,13 @@
 # ==============================================================
-# tests/test_anomaly_thresholds_ssot.py（2026-07-25 バッチ2）
+# tests/test_anomaly_thresholds_ssot.py
 # 異常検知の閾値が config.py を正本として読まれること
 # ==============================================================
-# 【背景】config.py BLOCK 21 の ANOMALY_* と anomaly_detector.py の
-# モジュール定数が**同じ意味・同じ値で別名の二重定義**になっており、
-# 実装はモジュール側しか読んでいなかった。そのため config.py の
-# ANOMALY_* を編集しても検知閾値は一切変わらなかった（SSOT違反）。
+# 【防ぐもの】config.py BLOCK 21 の ANOMALY_* を編集しても検知閾値が
+# 変わらない状態（anomaly_detector.py のモジュール定数だけが読まれる SSOT違反）。
 #
 # 検知関数は cfg を引数に取らない設計なので、cfg を持つ
 # run_anomaly_scan() の冒頭で sync_thresholds_from_config() を呼び、
-# モジュール定数へ取り込む方式にした。
+# モジュール定数へ取り込む方式になっている。
 # ==============================================================
 import sys
 from pathlib import Path
@@ -122,7 +120,7 @@ class TestDetectionUsesSyncedThresholds:
                 "volume": [1000] * len(closes)}
 
     def test_price_anomaly_follows_config(self):
-        """閾値を緩めれば、従来は検知されない変動が検知されること。
+        """閾値を緩めれば、既定では検知されない変動が検知されること。
 
         既定は MEDIUM=3% なので +1% は非検知。0.2% まで緩めれば検知される。
         ＝ config の値が実際に判定へ効いている証拠。

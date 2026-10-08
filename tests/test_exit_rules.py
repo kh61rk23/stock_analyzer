@@ -1,5 +1,5 @@
 # ==============================================================
-# tests/test_exit_rules.py  (Wave R0-6 / E1)
+# tests/test_exit_rules.py  (R0-6 / E1)
 # exit_rule_engine.evaluate_rules() の純粋ロジック検証
 # ==============================================================
 import sys

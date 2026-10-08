@@ -121,7 +121,7 @@ def map_edinetdb_financials(
         "roe": roe,
         "roa": _ratio(net_income, total_assets),
         "operating_margin": _ratio(operating_income, net_sales),
-        # 2026-09-26: 常に None で書いており、BQ の accrual_ratio 列は全2,002行が空だった
+        # 純利益と営業CFが揃うときだけ算出（どちらか欠ければ None）
         "accrual_ratio": _ratio(net_income - op_cf, total_assets)
         if net_income is not None and op_cf is not None else None,
         "fcf_yield": None,
@@ -142,9 +142,9 @@ def map_edinetdb_financial_items(
 ) -> list[dict]:
     """1年度分の財務レコードを、数値項目ごとの縦持ち行（edinet.financial_items）にする。
 
-    2026-10-03: /financials は1年度178項目（売上原価・販管費・研究開発費・支払利息・
-    棚卸資産・のれん・支払配当金など）を返すが、edinet.financials へは約25項目しか
-    写しておらず残りは捨てていた。追加のAPI呼び出しなしで全数値項目を残す。
+    /financials は1年度178項目（売上原価・販管費・研究開発費・支払利息・
+    棚卸資産・のれん・支払配当金など）を返すが、edinet.financials は約25項目だけ。
+    残りをここで全数値項目として残す（追加のAPI呼び出しなし）。
     定義に無い数値項目（API側の追加分）も区分「その他」で残す。
     """
     from edinetdb_fields import ITEM_META
@@ -180,8 +180,8 @@ def map_edinetdb_quarterly_items(row: dict, *, edinet_code: str, company_code: s
                                  now: str | None = None) -> list[dict]:
     """単四半期（period=quarterly_standalone）の1行を edinet.financial_items_q の縦持ち行にする。
 
-    2026-10-03: yfinance の日本株は四半期損益が1〜2期分しか無く、利益の加速度
-    （四半期の前年同期比−通期の前年比）が約半数の銘柄で計算できなかった。EdinetDB API の
+    yfinance の日本株は四半期損益が1〜2期分しか無く、利益の加速度
+    （四半期の前年同期比−通期の前年比）が計算できない銘柄が多い。EdinetDB API の
     単四半期データで補う。キーは <EDINETコード>_<年度>_<Qn>_<項目>。
     """
     q = str(row.get("quarter") or "").upper()
@@ -206,11 +206,9 @@ def map_edinetdb_doc_index(
 ) -> dict | None:
     """財務の年次レコードから doc_index 行を作る（追加のAPI呼び出しなし）。
 
-    2026-09-15: EdinetDB の年次財務レコードは EDINET 書類ID（doc_id / docID）と
-    提出日時（submit_date_time / submitDateTime）を持つ。BQ financials にも
-    1,647行・340社ぶん本物の書類IDが入っていたのに、doc_index は別の開示
-    エンドポイント（doc_id が空で返る）に頼っており 2026-04-26 から1件も
-    増えていなかった。同じ応答から作れば呼び出しは増えない。
+    EdinetDB の年次財務レコードは EDINET 書類ID（doc_id / docID）と
+    提出日時（submit_date_time / submitDateTime）を持つ。別の開示エンドポイントは
+    doc_id が空で返るため使えない。同じ応答から作れば呼び出しは増えない。
     書類IDが EDINET 形式（S1xxxxxx）でない合成IDの年度は作らない。
     """
     now = now or datetime.now(timezone.utc).isoformat()
@@ -365,11 +363,10 @@ def reconcile_meta_with_bq(meta: dict, companies: Iterable,
                            bq_latest: dict) -> tuple[dict, int]:
     """BQ にある取得済みデータをローテ台帳へ反映する（純関数・pytest対象）。
 
-    【なぜ必要か / 2026-07-30】
+    【なぜ必要か】
     ローテ台帳（edinetdb_rotation_meta.json）はローカルJSONのキャッシュに
-    過ぎず、Actions の状態コミットが飛ぶと BQ より遅れる。実測で
-    **BQ に 114社ある一方で台帳は 69社**しか記録しておらず、既に BQ へ
-    格納済みの約45社を毎日再取得して API 予算を空費していた。
+    過ぎず、Actions の状態コミットが飛ぶと BQ より遅れる。遅れたままだと
+    BQ に格納済みの会社を毎日再取得して API 予算を空費する。
     BQ を正とみなして台帳を補完し、「取れているもの／取れていないもの」を
     はっきりさせる。
 
@@ -414,7 +411,7 @@ def _bq_ingested_latest(cfg) -> dict:
     """BQ の取得済み企業と最終更新日を {証券コード: "YYYY-MM-DD"} で返す。
 
     読み取り1クエリのみ（EdinetDB の API 予算は消費しない）。
-    BQ が使えない環境では空dictを返し、従来どおり台帳のみで動く。
+    BQ が使えない環境では空dictを返し、台帳のみで動く。
     """
     try:
         from edinet_bq_client import EDINETBQClient
@@ -463,7 +460,7 @@ def select_ingest_targets(
 
     def fresh(code: str) -> bool:
         info = meta.get(code) or {}
-        # 2026-10-03: 年次財務を会社ページから取る運用では、API は「本文・セグメント」用。
+        # 年次財務を会社ページから取る運用では、API は「本文・セグメント」用。
         # 手元の最新年度（held_fy＝Webで更新）より API で本文を取った年度（api_fy）が古ければ取り直す
         if web_annual and info.get("held_fy") is not None:
             return info.get("api_fy") is not None and int(info["api_fy"]) >= int(info["held_fy"])
@@ -472,17 +469,15 @@ def select_ingest_targets(
             recent = (today - date.fromisoformat(value)).days < refresh_days
         except ValueError:
             return False
-        # 新年度の有報が出ているはずなら、180日以内でも取り直す（2026-10-02）
+        # 新年度の有報が出ているはずなら、180日以内でも取り直す
         return recent and not report_due(info, today)
 
     def backing_off(code: str) -> bool:
         """直近に失敗した企業を一定日数スキップする。
 
-        2026-09-10: last_fetched は**成功時にしか書かれない**ため、
-        毎回失敗する企業は永久に fresh にならず、優先度P1/P2の先頭に
-        居座って枠を塞いでいた。実際 2026-09-07/09/10 の3実行とも
-        先頭6社（E01719/E36174/E02324/E03693/E04275/E37577）が同一で、
-        11枠のうち8枠が同じ失敗の再試行に消えていた。
+        last_fetched は**成功時にしか書かれない**ため、毎回失敗する企業は
+        永久に fresh にならず、これが無いと優先度P1/P2の先頭に居座って
+        同じ失敗の再試行で枠を塞ぐ。
         指数的に間隔を空け、EdinetDB側にデータが増えたら拾い直す。
         """
         info = meta.get(code) or {}
@@ -534,8 +529,8 @@ def _save_json(path: Path, value) -> None:
 
 
 def _sec4(value) -> str:
-    # 2026-09-29: 2024年以降の新規上場は英字入りの証券コード（例: 624A・154A）。
-    # 数字4桁しか受け付けず空文字になり、BQ に company_code=None で格納されていた
+    # 2024年以降の新規上場は英字入りの証券コード（例: 624A・154A）。
+    # 数字4桁だけに絞ると空文字になり、BQ に company_code=None で格納されてしまう
     value = str(value or "").upper().replace(".T", "").strip()
     if len(value) == 5 and value.endswith("0"):
         value = value[:4]
@@ -570,9 +565,7 @@ def _priority_tickers(cfg) -> tuple[list[str], list[str], list[str]]:
             if isinstance(item, dict):
                 screener.append(item.get("ticker") or item.get("code") or "")
 
-    # 2026-07-25 バッチ6: config.EDINET_SKIP_SECTORS を配線。
-    # 「EdinetDB取得をスキップする業種コード（優先度低・APIコール節約）」と
-    # 定義されていたのに実装が一度も参照しておらず、除外が効いていなかった。
+    # config.EDINET_SKIP_SECTORS = EdinetDB取得をスキップする業種コード（APIコール節約）。
     # 保有銘柄（P1）と screener 候補（P2）は投資判断に直結するため除外しない。
     # 対象は第3優先の代表銘柄のみ＝業種まるごとの取得を間引く、という設計意図に沿う。
     _skip = {str(s) for s in (getattr(cfg, "EDINET_SKIP_SECTORS", None) or [])}
@@ -603,11 +596,10 @@ def _company_row(company: dict, now: str) -> dict:
 
 
 # ==============================================================
-# Web事前確認（2026-09-29・健太の要望）
-# EdinetDB に財務が無い会社（主に新規上場）を API で取りに行き、毎日の枠を
-# 空振りで潰していた（9/22・9/24 は11社すべて「データ無し」）。取り込み前に
-# EdinetDB の公開Webページ（APIではない・予算を消費しない）を見て、財務が
-# 無ければその会社は飛ばし、次の候補へ進む。
+# Web事前確認
+# EdinetDB に財務が無い会社（主に新規上場）を API で取りに行くと毎日の枠を
+# 空振りで潰す。取り込み前に EdinetDB の公開Webページ（APIではない・予算を
+# 消費しない）を見て、財務が無ければその会社は飛ばし、次の候補へ進む。
 # ==============================================================
 _WEB_HAS = "開示財務データ"
 _WEB_LACK = "分析に必要なデータが不足"
@@ -617,8 +609,8 @@ def page_has_financials(html: str | None, status: int = 200):
     """会社ページのHTMLから財務データの有無を判定する（純関数）。
 
     True=財務あり / False=財務なし・ページなし / None=判定不能（通信失敗など）
-    2026-09-29 実測: 財務ありの会社は「開示財務データ」欄と「FY20xxに売上高…」の
-    要約文があり、APIで not_found だった会社は全て「分析に必要なデータが不足」。
+    財務ありの会社は「開示財務データ」欄と「FY20xxに売上高…」の要約文があり、
+    APIで not_found になる会社は「分析に必要なデータが不足」と表示される。
     """
     if status == 404:
         return False
@@ -634,8 +626,7 @@ def page_has_financials(html: str | None, status: int = 200):
 def parse_company_page(html: str | None, status: int = 200) -> dict:
     """会社ページから財務の有無・掲載中の最新年度・決算月を読む（純関数）。
 
-    2026-10-02: 最新年度と決算月も読む。例: ザインエレクトロニクスは「12月期」
-    「FY2025 開示財務データ」（2025年12月期が最新・2026-03-26提出）。
+    例: 「12月期」「FY2025 開示財務データ」なら 2025年12月期が最新。
     """
     import re as _re
     out = {"has": page_has_financials(html, status), "latest_fy": None, "fy_month": None}
@@ -700,8 +691,8 @@ def report_due(info: dict, today: date | None = None, grace_days: int = 100,
                retry_days: int = 14) -> bool:
     """新しい年度の有報が出ているはずなのに、手元の最新年度が古いか（純関数）。
 
-    2026-10-02: 鮮度は「最終取得から180日」だけで見ていたため、取得直後に
-    新しい有報が出ると最大180日古いまま残る。決算月から「期末+100日」を過ぎた
+    鮮度を「最終取得から180日」だけで見ると、取得直後に新しい有報が出たとき
+    最大180日古いまま残る。そこで決算月から「期末+100日」を過ぎた
     年度を期待年度とし、手元（held_fy）がそれより古ければ取り直す。
     Webページに新しい年度が載っていれば、それも根拠にする。
     直近 retry_days 以内に取り直して増えていなければ待つ（EdinetDB側の反映待ち）。
@@ -737,7 +728,7 @@ def prefilter_targets(candidates: list[str], want: int, meta: dict, cfg,
 
     確認結果は meta[code]["web_check"]={"date","has"} に残す。
     財務なしは RECHECK 日後に再確認（後から載ることがある）、財務ありは30日有効。
-    判定不能（通信失敗）は従来どおり API で取りに行く。
+    判定不能（通信失敗）は API で取りに行く。
     Returns: (selected, skipped_no_data)
     """
     import time as _t
@@ -759,7 +750,7 @@ def prefilter_targets(candidates: list[str], want: int, meta: dict, cfg,
         if wc.get("has") is False and age < recheck:
             skipped.append(code)
             continue
-        # 決算月が未記録の旧形式は、ついでに読み直す（2026-10-02）
+        # 決算月が未記録の旧形式は、ついでに読み直す
         if wc.get("has") is True and age < 30 and "fy_month" in wc:
             selected.append(code)
             continue
@@ -850,9 +841,9 @@ def run_edinetdb_ingest(
     meta_path = data_dir / getattr(cfg, "EDINETDB_ROTATION_META", "edinetdb_rotation_meta.json")
     meta = _load_json(meta_path, {})
 
-    # 2026-07-30: 取得ローテを回す前に「BQに既にあるもの」を台帳へ反映する。
+    # 取得ローテを回す前に「BQに既にあるもの」を台帳へ反映する。
     # 台帳はローカルJSONのキャッシュに過ぎず BQ より遅れることがあり、
-    # 実測で BQ 114社 vs 台帳 69社の乖離＝約45社の無駄な再取得があった。
+    # そのままだと格納済みの会社を無駄に再取得する。
     # 読み取り1クエリだけで、EdinetDB の API 予算は消費しない。
     if getattr(cfg, "EDINETDB_RECONCILE_WITH_BQ", True) and cached_companies:
         meta, _filled = reconcile_meta_with_bq(
@@ -915,7 +906,7 @@ def run_edinetdb_ingest(
     companies = cached_companies
     cache_date = str(company_cache.get("fetched_at", ""))[:10] if isinstance(company_cache, dict) else ""
     try:
-        # 2026-10-02: 30→7日。社名変更・上場廃止・持株会社化を早く反映する（1回で全社取得）
+        # 既定7日。社名変更・上場廃止・持株会社化を早く反映する（1回で全社取得）
         cache_fresh = (date.today() - date.fromisoformat(cache_date)).days < int(
             getattr(cfg, "EDINETDB_COMPANY_CACHE_DAYS", 7))
     except ValueError:
@@ -941,8 +932,8 @@ def run_edinetdb_ingest(
     if target_limit is not None:
         targets = targets[:max(0, int(target_limit))]
     web_skipped: list[str] = []
-    # 2026-10-01: 計画は1社3回で見積もるが、text-blocks は2回に1回しか取らないため
-    # 実際は約2.5回/社で、毎日10回前後の枠が使われずに残っていた。
+    # 計画は1社3回で見積もるが、text-blocks は2回に1回しか取らないため
+    # 実際は約2.5回/社で、そのままだと毎日枠が余る。
     # 予備の候補を後ろに足しておき、ループ側で「残り枠が1社分(3回)を切るまで」回す。
     reserve_calls = (max(0, int(getattr(cfg, "EDINETDB_DOC_INDEX_RESERVE", 11)))
                      if budget is None else 0)
@@ -958,14 +949,13 @@ def run_edinetdb_ingest(
         else:
             targets = pool
     success = failure = missing = 0
-    # 2026-09-29: 取り込んだ会社を通知メールに載せるため、社名つきで返す
+    # 取り込んだ会社を通知メールに載せるため、社名つきで返す
     ingested: list[dict] = []
     missing_list: list[dict] = []
     doc_index_rows = 0
-    # 2026-09-10: failure は4つの別原因（financials欠落 / segments欠落 /
-    # text-blocks欠落 / BQ MERGE例外）を1つの数字に潰しており、
-    # 台帳に「failure: 8」と出るだけで何が起きているか分からなかった。
-    # 内訳を数え、EdinetDB側にデータが無いだけの not_found は
+    # failure は4つの別原因（financials欠落 / segments欠落 /
+    # text-blocks欠落 / BQ MERGE例外）がありうるので内訳を数える。
+    # EdinetDB側にデータが無いだけの not_found は
     # 障害ではなく "missing" として区別する。
     reasons: dict = {"financials": 0, "segments": 0, "text_blocks": 0,
                      "bq_merge": 0, "missing": 0}
@@ -988,11 +978,9 @@ def run_edinetdb_ingest(
     def _record_failure(code: str, company_code: str, kind: str) -> None:
         """失敗を記録する。
 
-        2026-09-12: EdinetDB側にそもそも当該企業のデータが無い（404）のは
+        EdinetDB側にそもそも当該企業のデータが無い（404）のは
         こちらの障害ではなく正常な結果なので `failure` に数えない。
-        従来は混ぜていたため、実問題が0でも台帳が alert になり
-        （2026-09-12 実測: failure 2 = missing 2 / bq_merge 0）、
-        本当に直すべき失敗が埋もれていた。
+        混ぜると実問題が0でも台帳が alert になり、直すべき失敗が埋もれる。
         `missing` は reasons と戻り値で別建てにする。
         """
         nonlocal failure, missing
@@ -1008,7 +996,7 @@ def run_edinetdb_ingest(
             failure += 1
         _note_attempt(code, company_code, missing=is_missing)
 
-    item_rows: list[dict] = []          # 2026-10-03: 財務三表の細目（edinet.financial_items）
+    item_rows: list[dict] = []          # 財務三表の細目（edinet.financial_items）
     items_done: set[str] = set()
 
     def _items_from(financials, code, company_code, fin_rows):
@@ -1023,7 +1011,7 @@ def run_edinetdb_ingest(
         items_done.add(code)
         return rows
 
-    # 2026-10-03: 四半期財務（単四半期）。保有・スクリーナー候補を優先し、30日に1回取り直す。
+    # 四半期財務（単四半期）。保有・スクリーナー候補を優先し、30日に1回取り直す。
     # 利益の加速度（決算サプライズ・スクリーナーの加速点）を日本株でも計算できるようにする
     q_rows: list[dict] = []
     q_done: list[str] = []
@@ -1071,16 +1059,14 @@ def run_edinetdb_ingest(
     for code in targets:
         company = by_edinet.get(code, {})
         company_code = _sec4(company.get("sec_code"))
-        # 予算枯渇・レート制限に入ったら以降の企業は必ず失敗する。
-        # 打ち切りが無かったため、2026-08-27 は予算切れ後も11社を回して
-        # failure だけを積み上げていた（成功0/11）。
+        # 予算枯渇・レート制限に入ったら以降の企業は必ず失敗するので打ち切る。
         if _stop_ingest(client):
             break
         # 残り枠がこの会社の分（2回＋本文を取る回なら1回）を切ったら止める。
-        # 3回固定で見ていたため、2回で済む会社の分の枠が毎日余っていた（2026-10-02）
+        # 3回固定で見ると、2回で済む会社の分の枠が余る
         _fc = int((meta.get(code) or {}).get("fetch_count", 0))
         _held = (meta.get(code) or {}).get("held_fy")
-        # 2026-10-03: 年次財務は会社ページ（edinetdb_web_backfill）から取る。API は本文・セグメントだけ
+        # 年次財務は会社ページ（edinetdb_web_backfill）から取る。API は本文・セグメントだけ
         web_annual = bool(getattr(cfg, "EDINETDB_ANNUAL_FROM_WEB", False)) and _held is not None
         if web_annual:
             _need = 2
@@ -1109,7 +1095,7 @@ def run_edinetdb_ingest(
             map_edinetdb_financials(item, edinet_code=code, company_code=company_code, now=now)
             for item in financials if isinstance(item, dict)
         ]
-        # 2026-10-02: APIに期末日が無く fiscal_year_end が全行空だった。
+        # APIに期末日が無いため、fiscal_year_end は
         # 会社ページの決算月（例「12月期」）から埋める
         _fm = (meta.get(code) or {}).get("fy_month") or infer_fy_month(
             [_field(i, "submit_date_time", "submitDateTime", "submit_date") for i in financials
@@ -1193,19 +1179,16 @@ def run_edinetdb_ingest(
                     print(f"    ⚠️  [edinetdb] doc_index MERGE失敗 [{code}]: "
                           f"{_brief_error(_doc_exc)}")
         except Exception as exc:
-            # 2026-09-10: ここは例外を完全に握り潰しており、BQ側の理由
-            # （スキーマ不一致・型不正など）が一切ログに出なかった。
-            # 2026-09-11: 先頭120文字だと google-cloud-bigquery が差し込む
+            # BQ側の理由（スキーマ不一致・型不正など）を必ずログに出す。
+            # 先頭だけ切り出すと google-cloud-bigquery が差し込む
             # `400 GET https://bigquery.googleapis.com/.../queries/<uuid>?...`
-            # だけで埋まり、肝心の理由が毎回切り落とされていた
-            # （実際 PARSE_JSON の round-trip エラーを1日見落とした）。
-            # URLを畳んでから出す。
+            # で埋まり理由が切り落とされるため、URLを畳んでから出す。
             print(f"    ⚠️  [edinetdb] BQ MERGE失敗 [{code}]: "
                   f"{type(exc).__name__}: {_brief_error(exc)}")
             reasons["bq_merge"] += 1
             failure += 1
             _note_attempt(code, company_code, missing=False)
-    # 2026-10-03: 取得済みの会社は細目（financial_items）が未格納。残り枠で
+    # 取得済みでも細目（financial_items）が未格納の会社がある。残り枠で
     # /financials だけ（1社1回）取り直して埋める。最近取った会社から順に。
     backfilled = 0
     if not _stop_ingest(client) and getattr(cfg, "EDINETDB_ITEMS_BACKFILL", True):

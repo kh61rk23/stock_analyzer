@@ -164,7 +164,7 @@ def audit() -> int:
     _spec0.loader.exec_module(_cfg0)
     for s in new["stages"]:
         for m in s["modules"]:
-            # Wave R1: backtest/ paper/ 等のサブディレクトリ配置を許可
+            # backtest/ paper/ 等のサブディレクトリ配置を許可
             # （要件定義書_統合改修_20260705.md 共通規約8）
             _found = (REPO / f"{m}.py").exists() or bool(
                 [p for p in REPO.glob(f"*/{m}.py")
@@ -188,11 +188,11 @@ def audit() -> int:
                 problems.append(
                     f"ENABLEフラグ未定義（getattrデフォルト動作）: {f} (L{s['order']})")
 
-    # ④ Wave 7 の宣言された実行順と、実コードの実行順の整合（2026-07-25 バッチ5）
+    # ④ 宣言された実行順と、実コードの実行順の整合
     #    WAVE7_DAILY_MODULE_ORDER / WAVE7_WEEKLY_MODULE_ORDER は
-    #    「この順で回す」という宣言だが、誰も読んでおらず、実際の実行順は
-    #    stock_analyzer_main のコード順（= registry の order）で決まっていた。
-    #    宣言と実装がズレたまま気づけない状態だったため、ここで突き合わせる。
+    #    「この順で回す」という宣言だが、実行時にはどこからも読まれず、実際の実行順は
+    #    stock_analyzer_main のコード順（= registry の order）で決まる。
+    #    宣言と実装のズレに気づけるよう、ここで突き合わせる。
     #    registry の order は AST の行番号ベースなので、実行順の代理として使える。
     _order_of = {}
     for s in new["stages"]:

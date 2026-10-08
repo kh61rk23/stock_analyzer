@@ -1,10 +1,9 @@
 # numpy型が isinstance(v, (int,float)) で弾かれる問題の再発防止
 #
-# 2026-09-09: pandas 由来の値（.sum()/.mean() の戻り値など）は
+# pandas 由来の値（.sum()/.mean() の戻り値など）は
 # numpy.float32 / numpy.int64 になることがあり、これらは Python の
 # int/float のサブクラスではないため isinstance が False になる。
-# ml/dataset_builder がこれで「sector_signals=33 なのに特徴量あり業種=0」
-# となり、ML特徴量が導入以来1行も蓄積されていなかった。
+# 弾かれると ml/dataset_builder の特徴量が全業種で空になる。
 import numpy as np
 import pytest
 

@@ -1,14 +1,11 @@
-# 日次モジュールが週次モジュールの成果を受け取れること（2026-09-12）
+# 日次モジュールが週次モジュールの成果を受け取れること
 #
-# テーマETFの ArXiv スコアが全8テーマで 50（中立）に固定されていた。
-# 原因は etf_tracker が **日次**、arxiv_monitor が **週次** なのに、
-# 論文を results["arxiv"]（その実行のメモリ上）からしか受け取って
-# いなかったこと。実測では月曜(2026-09-07)だけ 100/50/100/50/50/100/100 と
-# 動き、他の曜日は一律 50 だった＝熱量スコアの4割が週6日死んでいた。
+# etf_tracker は **日次**、arxiv_monitor は **週次**。論文を results["arxiv"]
+# （その実行のメモリ上）からしか受け取らないと、週次が回らない日は
+# テーマETFの ArXiv スコアが全テーマ 50（中立）に固定される。これを防ぐ。
 #
-# 同型の依存が signal_aggregator（日次・23カテゴリ）にもあり、
-# market_breadth / anomaly_season は results からしか読んでいなかった。
-# cluster_phase だけは以前からキャッシュを読んでおり扱いが不統一だった。
+# 同型の依存として signal_aggregator（日次）の market_breadth /
+# anomaly_season / cluster_phase もキャッシュから読めることを確認する。
 import json
 import types
 from datetime import datetime, timedelta
@@ -33,7 +30,7 @@ class TestArxivCarryOver:
     THEME = {"arxiv_keywords": ["quantum computing", "qubit"]}
 
     def test_without_carryover_score_is_stuck_at_neutral(self):
-        """従来の挙動（週次が回っていない日）"""
+        """持ち越しが無い場合の挙動（週次が回っていない日）"""
         import thematic_etf_tracker as t
         score, _ = t._calc_arxiv_trend_score(self.THEME, None)
         assert score == 50.0

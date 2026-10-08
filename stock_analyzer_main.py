@@ -494,11 +494,9 @@ def _calc_sector_tier(sector_results: dict, results: dict) -> dict:
     sector_results の composite_score の順位と momentum を元に
     各業種を TOP / MID / BOT の3段階に分類する。
 
-    2026-09-17: 固定閾値（65点以上TOP / 45点未満BOT）では、補正前の途中スコアで
-    判定していたこともあり 33業種中30業種が BOT になり、スクリーナーの対象が
-    毎日3業種前後に絞られていた（最終スコアでも27業種がBOT）。健太の判断により
     スコア順位で上位 SECTOR_TIER_TOP_SHARE を TOP、下位 SECTOR_TIER_BOT_SHARE を
-    BOT、残りを MID とする（33業種なら 11 / 11 / 11）。
+    BOT、残りを MID とする（33業種なら 11 / 11 / 11）。固定閾値だと大半の業種が BOT に
+    なり、スクリーナーの対象が数業種に偏る。
 
     Returns:
         {sector_code: "TOP" / "MID" / "BOT"}
@@ -1371,7 +1369,7 @@ def run_all_tasks(mode: str = "all") -> dict:
     results = {
         "sectors":      {},
         "screener":     {},
-        "geo_risk":     {},   # Wave 6 - G-N: 国別リスク日次更新結果
+        "geo_risk":     {},   # G-N: 国別リスク日次更新結果
               }
     source_ingest_done = {"edinet": False, "fudosan": False, "us": False}
     try:
@@ -3893,6 +3891,34 @@ def run_all_tasks(mode: str = "all") -> dict:
         except Exception as e:
             logger.add("ceo_evaluator", "error", str(e)[:100])
             print(f"  ⚠️  経営者スコアエラー: {str(e)[:80]}")
+
+    # ── 政策DB（公的支出・経済安保）の取り込み ─────────────
+    # 保有銘柄を先頭に、スクリーナー候補の個社公的支出を30日に1回取り直す。スコアには使わない（表示・蓄積のみ）。
+    if getattr(cfg, "ENABLE_SEISAKUDB", True) and _in_mode("seisakudb"):
+        try:
+            import seisakudb_ingestor as _sk
+            _sk_hold = []
+            try:
+                import csv as _csv_s
+                with open(Path(getattr(cfg, "PROJECT_DIR", ".")) / "data" / "portfolio_holdings.csv",
+                          encoding="utf-8-sig") as _fh:
+                    _sk_hold = [r["ticker"] for r in _csv_s.DictReader(_fh)]
+            except OSError:
+                pass
+            _sk_cands = [c["ticker"] for c in (results.get("screener", {}) or {}).get("candidates", [])
+                         if c.get("ticker")]
+            _sk_res = _sk.run(cfg, _sk_hold + _sk_cands)
+            results["seisakudb"] = _sk_res
+            if _sk_res.get("skipped"):
+                logger.add("seisakudb", "skipped", f"スキップ（{_sk_res.get('reason', '')}）")
+            else:
+                _st = _sk_res.get("stopped") or ""
+                logger.add("seisakudb", "warn" if (_sk_res.get("errors") or (_st and _st != "budget")) else "success",
+                           f"直近{_sk_res.get('recent', 0)}件 / 個社{_sk_res.get('companies_ok', 0)}社 / "
+                           f"経済安保{_sk_res.get('certs', 0)}件 / API {_sk_res.get('calls', 0)}回"
+                           + (f" / 停止: {_st}" if _st else ""))
+        except Exception as _ske:
+            logger.add("seisakudb", "error", f"{type(_ske).__name__}: {str(_ske)[:80]}")
         # ── [I-5] 中期経営計画達成率トラッカー ─────────────
     if getattr(cfg, "ENABLE_MIDTERM_PLAN_TRACKER", True) and _in_mode("screener"):
         try:
@@ -5132,7 +5158,7 @@ def run_all_tasks(mode: str = "all") -> dict:
         # signal_aggregator.py の抽出関数が results["wave7_trackers"] と
         # results["_cfg"] を参照するため、ここで results に注入する。
     results.setdefault("wave7_trackers", {})
-    results["_cfg"] = cfg  # Wave 7 抽出関数内での cfg 参照用
+    results["_cfg"] = cfg  # signal_aggregator の抽出関数内での cfg 参照用
 
         # ── taxonomy node_hotness ──────────────────
         # arxiv=先行 / news+policy=準先行を分離合成した技術テーマ加熱度。

@@ -1,5 +1,5 @@
 # ==============================================================
-# ignition_detector.py  v1.0  (Wave 2 - FE-4)
+# ignition_detector.py  v1.0  (FE-4)
 # Ignition Detector: カテゴリA/B/Cシグナル収束検出エンジン
 # ==============================================================
 # 【役割】
@@ -680,8 +680,8 @@ def run_ignition_detector(cfg=None, results: Optional[dict] = None) -> dict:
 
     # ── ② 対象セクターリスト取得 ──────────────────────────────
     try:
-        # 2026-10-05: 設定名は JAPAN_SECTORS（{code: {"name_ja": ...}}）。存在しない JP_SECTORS を
-        # 読んでいたため業種一覧が空になり、スクリーナー結果から推定する経路に頼っていた（10/5 は対象0業種）
+        # 設定名は JAPAN_SECTORS（{code: {"name_ja": ...}}）。JP_SECTORS は存在しない
+        # （それだけを読むと業種一覧が空になり対象0業種になる）
         jp_sectors: dict = {k: (v.get("name_ja", k) if isinstance(v, dict) else v)
                             for k, v in (getattr(cfg, "JAPAN_SECTORS", {}) or {}).items()}
         if not jp_sectors:

@@ -1,5 +1,5 @@
 # ==============================================================
-# taxonomy_loader.py — T-1後半: taxonomy_node BQローダ（Wave R2-1）
+# taxonomy_loader.py — T-1後半: taxonomy_node BQローダ
 # ==============================================================
 # 【役割】data/taxonomy_seed/batch*.json のうち **承認済み**
 #   （_meta.status が APPROVED で始まる）バッチのノードを
@@ -181,7 +181,7 @@ def main():
     except Exception:
         cfg = None
 
-    # 2026-07-25: 定期実行（週次）に載せたのに合わせて有効フラグを配線。
+    # 定期実行（週次）では有効フラグで止められる。
     # --dry-run は検証用途なのでフラグに関わらず通す。
     if not dry and not getattr(cfg, "ENABLE_TAXONOMY_LOADER", True):
         print("⏩ taxonomy_loader: スキップ（ENABLE_TAXONOMY_LOADER=False）")

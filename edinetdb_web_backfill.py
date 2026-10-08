@@ -1,9 +1,6 @@
 # ==============================================================
 # edinetdb_web_backfill.py — EdinetDB の会社ページから財務を補完する（API枠を使わない）
-# 2026-10-03 新設
-# 【背景】edinet.financial_items（財務三表の細目）は 10/3 に新設したため、取得済みの
-#   約480社は空。API の余り枠で1社1回ずつ埋めると数週間かかる。また
-#   edinet.financials の fiscal_year_end は全行が空だった。
+# 【背景】API の余り枠で1社1回ずつ財務を埋めると数週間かかる。
 #   公開の会社ページ（https://edinetdb.jp/company/<EDINETコード>）には、API の
 #   /financials と同じ約200項目が全年度ぶん JSON で埋め込まれている（キャメルケース）。
 #   これを1秒に1社のペースで読み、financials / financial_items / doc_index を MERGE する。
@@ -85,7 +82,7 @@ def build_rows(code: str, company_code: str, records: list[dict], fy_month,
 def due_targets(meta: dict, companies: list[dict], today: date | None = None) -> list[str]:
     """日次のWeb更新対象（純関数）。①新しい年度の有報が出ているはずの会社 ②未取得の会社。
 
-    2026-10-03: 年次財務は会社ページから取る運用に変更。有報の提出は6月下旬（3月決算）などに
+    年次財務は会社ページから取る。有報の提出は6月下旬（3月決算）などに
     集中するので、新年度の会社を先に、未取得の会社を後に並べる。財務なしと確認済みの会社は除く。
     """
     today = today or date.today()
@@ -135,7 +132,7 @@ def run(cfg, scope: str = "ingested", limit: int | None = None, years: int = 10,
     codes = _targets(bq, scope, companies, meta)
     if scope == "due":
         redo = True        # 新年度の会社は30日以内に補完済みでも取り直す
-    # 2026-10-03: 全社（約4,000社）は6時間のジョブ上限を超えうるので、直近に補完済みの会社は
+    # 全社（約4,000社）は6時間のジョブ上限を超えうるので、直近に補完済みの会社は
     # 飛ばして続きから再開できるようにする（--redo で全部やり直し）
     if not redo:
         cutoff = date.today().toordinal() - 30
@@ -196,8 +193,8 @@ def run(cfg, scope: str = "ingested", limit: int | None = None, years: int = 10,
         page = ing.parse_company_page(r.text, r.status_code)
         records = extract_financial_records(r.text) if r.status_code == 200 else []
         if not records:
-            # 2026-10-05: 財務の載っていない会社を記録しておらず、日次の --scope due が
-            # 毎日同じ178社を先頭から取り直して100社とも「データ無し」になっていた
+            # 財務の載っていない会社を記録する。記録しないと日次の --scope due が
+            # 毎日同じ会社を先頭から取り直し、枠を「データ無し」で使い切る
             stats["no_data"] += 1
             meta.setdefault(code, {})["web_no_records"] = today
             continue
@@ -222,7 +219,7 @@ def run(cfg, scope: str = "ingested", limit: int | None = None, years: int = 10,
             flush()
             print(f"  … {n}/{len(codes)}社 / 細目{stats['rows']['financial_items']:,}行")
     flush()
-    # 2026-10-05: 日次メール（EdinetDB節）が読む本日の結果
+    # 日次メール（EdinetDB節）が読む本日の結果
     try:
         (data_dir / "edinetdb_web_last.json").write_text(json.dumps({
             "date": today, "scope": scope, "ok": stats["ok"], "no_data": stats["no_data"],

@@ -1,5 +1,5 @@
 # ==============================================================
-# sec_geographic_extractor.py  v1.0  (Wave 6 - G-C1)
+# sec_geographic_extractor.py  v1.0  (G-C1)
 # ==============================================================
 # 【役割】
 #   SEC EDGAR の 10-K（年次報告書）から Geographic Segments /
@@ -71,7 +71,7 @@ EDGAR_VIEWER_BASE      = (
 )
 EDGAR_DOC_BASE = "https://www.sec.gov"
 
-# 2026-07-27是正（U-2 / F-2）: SECは連絡先を含まないUser-Agentを403で拒否する。
+# U-2 / F-2: SECは連絡先を含まないUser-Agentを403で拒否する。
 # us_8k_monitor.py:116-122 の _sec_user_agent() と同型（優先順: 環境変数 →
 # cfg.SEC_USER_AGENT（cfg未指定時は import config でのフォールバック取得）→ 固定文字列）。
 # U-1b: 実体は sec_client.user_agent() に統合済み。本関数は tests/test_sec_user_agent.py
@@ -274,13 +274,12 @@ def _get_latest_10k_url(cik: str, cfg=None) -> tuple[str | None, str | None]:
 def _narrow_to_target_sections(text: str, cfg=None) -> str:
     """config.GEO_SEC_TARGET_SECTIONS の見出し以降に絞ったテキストを返す。
 
-    2026-07-25 バッチ5: この定数は「10-K のどのセクションを抽出対象にするか」
-    の宣言なのに、実装は全文スキャンで一度も参照していなかった。
+    この定数は「10-K のどのセクションを抽出対象にするか」の宣言。
 
     絞り込みは**後退しない**設計にしてある:
       - 該当見出しが1つも見つからなければ元の全文をそのまま返す
       - 見つかった範囲の合計が短すぎる（<2000文字）場合も全文に戻す
-    これにより、見出し表記が想定と違う文書でも従来どおりの抽出結果になる。
+    これにより、見出し表記が想定と違う文書でも全文スキャンと同じ抽出結果になる。
     """
     sections = getattr(cfg, "GEO_SEC_TARGET_SECTIONS", None) if cfg else None
     if not sections:
@@ -317,8 +316,8 @@ def _extract_geographic_data(text: str, cfg=None) -> list[dict]:
         list of {country_code, revenue_share_est, pattern_type}
     """
     results: list[dict] = []
-    # 2026-07-25 バッチ5: config.GEO_SEC_TARGET_SECTIONS で対象セクションに
-    # 絞ってからスキャンする（該当なしなら全文＝従来どおり）
+    # config.GEO_SEC_TARGET_SECTIONS で対象セクションに
+    # 絞ってからスキャンする（該当なしなら全文）
     text_clean = re.sub(r"\s+", " ", _narrow_to_target_sections(text, cfg))
 
     # ── P1: テーブル形式（国名 + 金額/比率） ────────────────────
@@ -670,9 +669,8 @@ def run_sec_geographic_extractor(
         _js     = importlib.import_module("jogmec_scraper")
         _bq_mod = importlib.import_module("edinet_bq_client")
         raw_bq  = _bq_mod.EDINETBQClient().client
-    # 2026-07-25: 一次経路（edinet_bq_client＝Actions の BQ_CREDENTIALS 経路）の
-    # 失敗理由を握り潰し、Colabフォールバックの「No module named 'google.colab'」
-    # だけが報告されていた。真因が隠れるため両方を返す。
+    # 一次経路（edinet_bq_client＝Actions の BQ_CREDENTIALS 経路）の失敗理由も返す。
+    # Colabフォールバックの「No module named 'google.colab'」だけだと真因が隠れるため。
     except Exception as _primary_err:
         try:
             from google.cloud import bigquery as _bq_lib

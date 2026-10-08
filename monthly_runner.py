@@ -1,5 +1,5 @@
 # ==============================================================
-# monthly_runner.py  v1.0  (2026-07-25 / B-5)
+# monthly_runner.py  v1.0  (B-5)
 # 月次・四半期モジュールの一括実行
 # ==============================================================
 # 【役割】
@@ -14,8 +14,7 @@
 #   実行順は依存関係で決まっている。⑥は①のレポートと②の口座成績を読むため
 #   必ず最後。③は②が更新した accounts.json を読む。
 #
-# 【背景】2026-07-25 の棚卸しで、これらは設計・実装・テストまで揃っているのに
-#   GitHub Actions にも launchd にも実行主体が無く、一度も走っていなかった。
+# 【1本にまとめる理由】
 #   個別に6ステップを並べるのではなく1本にまとめたのは、実行順の依存を
 #   ここだけで保証し、観測点（monthly_loop_status.json）を1つにするため。
 #
@@ -125,7 +124,7 @@ def build_steps(cfg, yyyymm: str, today: date) -> list:
          [py, "monthly_strategy_review.py", yyyymm],
          "ENABLE_MONTHLY_STRATEGY_REVIEW=False"),
 
-        # 2026-10-05: 月次レポートをまとめてメール送信（健太指摘「monthly：メールがない」）。
+        # 月次レポートをまとめてメール送信。
         # 必ず最後。成功済みのステップは翌日以降飛ばすので、同じ月に二重送信しない
         ("monthly_mail",
          flag("ENABLE_MONTHLY_MAIL"),
@@ -159,8 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     yyyymm = args.month or prev_month(today)
     steps = build_steps(cfg, yyyymm, today)
 
-    # 2026-10-03: 月初3日間は毎日すべてのステップを再実行していた（10/1〜10/3 で3回）。
-    # 同じ対象月で成功済みのステップは飛ばし、失敗・未実行のものだけやり直す。
+    # 月初は複数日走るため、同じ対象月で成功済みのステップは飛ばし、失敗・未実行のものだけやり直す。
     prev = {}
     if not args.force and not args.dry_run:
         try:
@@ -210,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
                 status["steps"][name] += f" / {tail}"
                 print(f"  ❌ {name}: exit {r.returncode}\n{tail}")
         except subprocess.TimeoutExpired as e:
-            # 2026-10-01: 打ち切り時に出力を捨てていたため、どこで止まったか分からなかった
+            # 打ち切り時も出力末尾を残す（どこで止まったかを追えるように）
             status["ok"] = False
             out = e.stdout.decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
             status["steps"][name] = f"timeout {e.timeout}s / {out[-300:]}"

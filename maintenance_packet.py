@@ -30,7 +30,7 @@ from datetime import datetime
 from pathlib import Path
 
 REPO = Path(__file__).parent
-# 2026-07-22 移設: 設計正本フォルダは 統合ファイルなど → 02_Configuration_Management に改名
+# 設計正本フォルダは 02_Configuration_Management
 DOCS = REPO.parent / "02_Configuration_Management" / "01_最新版ロードマップ・必要書類"
 
 

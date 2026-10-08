@@ -1,5 +1,5 @@
 # ==============================================================
-# jp_us_sector_correlation.py  v1.0  (Wave 0 - Idea2-A)
+# jp_us_sector_correlation.py  v1.0  (Idea2-A)
 # JP 33業種 × US 11セクター 60日ローリング相関分析
 # ==============================================================
 # 【役割】
@@ -53,10 +53,10 @@
 #   config.py（DATA_DIR / CACHE_DIR / INSIGHT_DIR）
 #   score_history.json（既存モジュールが日次蓄積）
 #   yfinance（US ETF価格取得）
-#   ★ numpy 不使用・標準ライブラリのみで計算
+#   numpy 不使用・標準ライブラリのみで計算
 #
-# 【消費者（grep実測。2026-07-28）】
-#   ・weekly_report_generator.py:1727 _section_jp_us_correlation() のみ。
+# 【消費者】
+#   ・weekly_report_generator.py の _section_jp_us_correlation() のみ。
 #     significant_pairs / stats を読み「JP×US相関マトリクス（直近60日）」
 #     セクションを生成する。スコア補正には一切使われない（レポート表示専用）。
 #
@@ -74,13 +74,10 @@
 #     us_sector_bridge_enhanced.py はSICコード分類によるルールベースの
 #     イベント（8-K決算）伝播で、算出方法が全く異なる。
 #
-# 【既知の状態（2026-07-28 時点）】
-#   有意ペア0件が継続している（2026-07-06: データ26日 / 2026-07-13: データ33日、
-#   いずれも有意ペア0件）。MIN_DATA_POINTS=20 は満たしていても、
-#   LOOKBACK_DAYS=60 の設計に対してデータ蓄積が追いついていないため、
-#   安定した有意相関が出にくい状態が続いている。
-#   意思決定 J-04（2026-07-27, 健太承認）= a: score_history が60日蓄積されるまで
-#   存廃判断を保留。本ファイルは今回の U-10 で削除・無効化はしない。
+# 【既知の状態】
+#   有意ペアは0件が続いている。MIN_DATA_POINTS=20 は満たしていても、
+#   LOOKBACK_DAYS=60 の設計に対してデータ蓄積が足りず、安定した有意相関が出にくい。
+#   意思決定 J-04 = a: score_history が60日蓄積されるまで存廃判断を保留（削除・無効化しない）。
 # ==============================================================
 
 from __future__ import annotations

@@ -1,12 +1,12 @@
 # ==============================================================
-# signal_culling_report.py — シグナル自動淘汰レポート（Wave R1-4 / E4）
+# signal_culling_report.py — シグナル自動淘汰レポート（R1-4 / E4）
 # ==============================================================
 # 【役割】月次で22カテゴリ各シグナルの IC を算出し、重み変更「提案」を出す。
 #   IC = 当日カテゴリスコアと20日先リターンの Spearman 相関（業種横断プール）
 #   t  = IC×sqrt(N-2)/sqrt(1-IC²)
 #   判定: N<60 →「判定不能」/ t<=-2.0 →「重みゼロ化提案」/
 #         t>=+2.0 →「重み+20%提案」/ それ以外 → 現状維持
-# 【原則】自動では変更しない。提案MDを健太が承認したものだけ
+# 【原則】自動では変更しない。提案MDのうち承認されたものだけ
 #   次セッションで signal_aggregator.DEFAULT_WEIGHTS を変更し
 #   config_audit / pytest 通過を確認する（要件定義書 §R1-4）。
 #
@@ -218,10 +218,9 @@ def main():
         weights = {}
 
     panel = load_panel(cfg)
-    # 2026-07-25 B-5: レポート月を引数で指定できるようにした。
-    # monthly_runner が「前月」を渡し、monthly_strategy_review が同じ月の
-    # signal_culling_<yyyymm>.md を読む。today 固定のままだと月初実行時に
-    # 当月ラベルになり、集約側の参照とズレて常に「レポートなし」になっていた。
+    # B-5: レポート月は引数で受ける。monthly_runner が「前月」を渡し、
+    # monthly_strategy_review が同じ月の signal_culling_<yyyymm>.md を読む。
+    # today 固定だと月初実行時に当月ラベルになり、集約側が「レポートなし」になる。
     _args = [a for a in sys.argv[1:] if not a.startswith("-")]
     yyyymm = _args[0] if _args else date.today().strftime("%Y%m")
     print(f"📊 カテゴリパネル: {len(panel)}日分 / カテゴリ: {len(weights)}"

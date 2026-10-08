@@ -1,14 +1,13 @@
 # ==============================================================
-# tests/test_score_thresholds_ssot.py（2026-07-25 バッチ3）
+# tests/test_score_thresholds_ssot.py
 # スコア系（I-1 / I-2 / I-3）の閾値が config を正本として読まれること
 # ==============================================================
-# 【背景】いずれも実装が値を直書きしており、config.py 側の定数は
-# 誰にも読まれていなかった（config を編集してもスコアが変わらない）。
-#   I-1 ACCEL_*        : stock_screener が 0.30/0.15/0.05 を直書き
-#   I-2 保守度の四半期数: earnings_surprise が 8、config は 4（値も食い違い）
-#   I-3 CEO補正量      : ceo_evaluator が 10.0/5.0 を直書き
-# 健太の指示「実装時の値を正」に従い、config を実装値へ揃えたうえで配線した。
-# したがって本是正でスコアは変わらない。
+# 【防ぐもの】実装側の直書きで config.py の定数が読まれず、
+# config を編集してもスコアが変わらない状態。
+#   I-1 ACCEL_*        : stock_screener（0.30/0.15/0.05）
+#   I-2 保守度の四半期数: earnings_surprise（8）
+#   I-3 CEO補正量      : ceo_evaluator（10.0/5.0）
+# config の値は実装値（上記）に揃えてある。
 # ==============================================================
 import sys
 from pathlib import Path
@@ -28,7 +27,7 @@ def _cfg():
 
 
 def _data(accel):
-    # 2026-10-01: 加速度は profit_accel（四半期前年比 − 通期前年比）から読む
+    # 加速度は profit_accel（四半期前年比 − 通期前年比）から読む
     return {"profit_accel": None if accel is None else {"accel": accel},
             "per": 15.0, "pbr": 1.2, "roe": 0.12, "sector_code": "1016"}
 
@@ -67,7 +66,7 @@ class TestEpsAccelerationI1:
         assert ss._calc_scores(d, 60.0, cfg=Strict).get("acc_bonus") == 0.0
 
     def test_growth_without_acceleration_gets_no_bonus(self):
-        """2026-10-01: 増益率だけでは加点しない（旧式は増益率×3で+7〜+10だった）。"""
+        """増益率だけでは加点しない（加点は加速度のみ）。"""
         d = {"earnings_growth": 0.20, "earnings_qgrowth": 0.20,
              "per": 15.0, "pbr": 1.2, "roe": 0.12, "sector_code": "1016"}
         assert ss._calc_scores(d, 60.0, cfg=None).get("acc_bonus") == 0.0
@@ -78,7 +77,7 @@ class TestConservatismQuartersI2:
     """I-2: 保守度計算の四半期数が config を正本とすること。"""
 
     def test_config_adopts_implementation_value(self):
-        """健太の決定により実装値 8 を採用済みであること。"""
+        """config が実装値 8 を採用していること。"""
         import earnings_surprise as es
         assert _cfg().CONSERVATISM_MIN_QUARTERS == 8
         assert es.CONSERVATISM_QUARTERS == 8, "モジュール既定も8のままであること"

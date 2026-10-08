@@ -44,12 +44,10 @@
 #   より高精度な earnings_accel_score を算出する。
 #
 # 【依存】sec_client.py / config.py
-# 2026-07-27是正（Wave J1 / U-1c）: SEC EDGAR への HTTP 呼び出し・User-Agent・
-# CIK 解決（company_tickers.json）・submissions API URL 組み立ては
-# sec_client.py（U-1a 新設）に一本化した。
-# us_cik_map.json（本ファイルが生成）は us_8k_monitor.py の依存を解消した後も
-# us_sector_bridge_enhanced.py が読み手として残っているため、書き込みは
-# 従来通り維持する（詳細は load_cik_map/save_cik_map 付近のコメント参照）。
+# U-1c: SEC EDGAR への HTTP 呼び出し・User-Agent・CIK 解決（company_tickers.json）・
+# submissions API URL 組み立ては sec_client.py（U-1a）に一本化している。
+# us_cik_map.json（本ファイルが生成）は us_sector_bridge_enhanced.py が読むため、
+# 書き込みを維持する（詳細は load_cik_map/save_cik_map 付近のコメント参照）。
 # 【呼出】from us_fundamental_rotator import (
 #             run_us_fundamental_rotator,
 #             lookup_us_fundamentals,
@@ -93,13 +91,13 @@ _CFG_CONST_MAP = {
 }
 
 CACHE_DAYS         = 30    # 財務データの再取得間隔（日）
-DAILY_FETCH_LIMIT  = 100   # 1日あたりの最大取得社数（2026-09-29: 20→100・健太の判断）
+DAILY_FETCH_LIMIT  = 100   # 1日あたりの最大取得社数
 REQUEST_DELAY      = 0.12  # SEC API のレート制限対策（10req/s上限）
 REQUEST_TIMEOUT    = 15
 
 
 # ==============================================================
-# BLOCK 10: us.fundamentals BQ export (W2, 2026-07-21)
+# BLOCK 10: us.fundamentals BQ export
 # ==============================================================
 
 _US_FUNDAMENTALS_BQ_COLUMNS = (
@@ -460,10 +458,9 @@ def lookup_us_fundamentals_by_path(data_dir, ticker: str) -> Optional[dict]:
     """
     cfg 非依存でディレクトリを直接指定する lookup_us_fundamentals の別形。
 
-    ★ 2026-06-11 バグ修正: us_stock_screener.py が本関数名で呼んでいたが
-      実体が存在せず、XBRL補完（eps_accel_score_xbrl / latest_fcf）が
-      常時欠落していた。_ticker_path と同じレイアウト
-      （<data_dir>/us_fundamentals_db/<ticker>.json）を参照する。
+    us_stock_screener.py が本関数名で呼び、XBRL補完（eps_accel_score_xbrl /
+    latest_fcf）に使う。_ticker_path と同じレイアウト
+    （<data_dir>/us_fundamentals_db/<ticker>.json）を参照する。
     """
     try:
         safe = ticker.replace("/", "_").replace(".", "_")
@@ -482,7 +479,7 @@ def lookup_us_fundamentals_by_path(data_dir, ticker: str) -> Optional[dict]:
 def _sec_user_agent(cfg) -> str:
     """
     SEC EDGAR 向け User-Agent を取得する。
-    実体は sec_client.user_agent() に委譲する（2026-07-27是正 / U-1c）。
+    実体は sec_client.user_agent() に委譲する（U-1c）。
     """
     return sec_client.user_agent(cfg)
 
@@ -492,8 +489,8 @@ def _fetch_company_tickers(cfg, force_refresh: bool = False) -> dict:
     SEC の company_tickers.json を取得して ticker→CIK のマッピングを返す。
     全上場企業のCIKを一括取得できる（約15,000社）。
 
-    2026-07-27是正（U-1c）: HTTP取得・レート制限・リトライ・ディスクキャッシュは
-    sec_client.cik_map() に委譲した（US-8k監視・インサイダー監視と共通キャッシュを
+    U-1c: HTTP取得・レート制限・リトライ・ディスクキャッシュは
+    sec_client.cik_map() に委譲する（US-8k監視・インサイダー監視と共通キャッシュを
     共有する）。force_refresh=True のときは sec_client 側のキャッシュも無視して
     必ず SEC へ再取得する（ttl_days=0 で即時期限切れ扱いにする）。
 
@@ -521,9 +518,8 @@ def get_or_update_cik_map(cfg, force_refresh: bool = False) -> dict:
     CIKマップを取得する。
     存在しない場合 or force_refresh=True の場合はSECから取得して保存。
 
-    ★ us_cik_map.json（本ファイルが生成）: us_sector_bridge_enhanced.py が
-    引き続き直接読み込むため、書き込みは維持する（2026-07-27 U-1c 判断。
-    詳細はファイル冒頭コメント参照）。
+    us_cik_map.json（本ファイルが生成）は us_sector_bridge_enhanced.py が
+    直接読み込むため、書き込みを維持する（U-1c。詳細はファイル冒頭コメント参照）。
 
     Returns:
         {ticker_upper: cik_int}
@@ -550,7 +546,7 @@ def _fetch_submissions(cik: int, cfg) -> Optional[dict]:
     submissions/{CIK}.json を取得して最新提出情報を返す。
     8-K の提出タイミング検知に使用する。
 
-    2026-07-27是正（U-1c）: 実体は sec_client.submissions() に委譲。
+    U-1c: 実体は sec_client.submissions() に委譲。
     """
     try:
         data = sec_client.submissions(cik, cfg=cfg)
@@ -567,9 +563,9 @@ def _fetch_xbrl_facts(cik: int, cfg) -> Optional[dict]:
     XBRL companyfacts/{CIK}.json を取得する（全財務データの塊）。
     レスポンスは大きい（数MB）ため、必要項目のみ抽出する。
 
-    2026-07-27是正（U-1c）: 実体は sec_client.get_json() に委譲。
+    U-1c: 実体は sec_client.get_json() に委譲。
     レスポンスが大きい（数MB）ため sec_client の既定タイムアウト（15秒）では
-    不足するケースがあり、従来通り timeout=30 を明示して現行挙動を維持する。
+    不足することがあり、timeout=30 を明示する。
     """
     try:
         url  = XBRL_FACTS_URL.format(cik)
@@ -1074,9 +1070,8 @@ def _update_meta(meta: dict, result: dict) -> None:
         next_due = (date.today() + timedelta(days=CACHE_DAYS)).strftime("%Y-%m-%d")
         entry["next_due"]       = next_due
     else:
-        # 2026-09-26: 財務XBRLを持たない銘柄（例: MANA=Grayscale信託）は
-        # 何度やっても失敗するのに、last_fetched が無いため毎日キュー先頭
-        # (999日経過扱い)に入り、31回連続で1枠を潰していた。
+        # 財務XBRLを持たない銘柄（例: MANA=Grayscale信託）は常に失敗し、
+        # last_fetched が無いと毎日キュー先頭（999日経過扱い）に入って枠を潰す。
         # 連続失敗ごとに再試行間隔を倍にする（1,2,4,…日、上限CACHE_DAYS）。
         streak = entry.get("fail_streak", 0) + 1
         entry["fail_streak"]    = streak
@@ -1223,8 +1218,8 @@ def run_us_fundamental_rotator(cfg, results: dict | None = None) -> dict:
             data = result["data"]
             if (getattr(cfg, "ENABLE_US_BQ_EXPORT", True)
                     and getattr(cfg, "ENABLE_US_FUNDAMENTALS_BQ", True)):
-                # 2026-09-29: 1社ごとに MERGE（1回2〜3秒・10MB課金）していたのを、
-                # ループ後の1回にまとめる（取得社数を 20→100 に増やすため）
+                # MERGE は1回2〜3秒・10MB課金のため、1社ごとではなく
+                # ループ後の1回にまとめる
                 pending_bq.append((ticker, _us_fundamentals_to_bq_rows(ticker, data)))
             eps  = data.get("latest_eps")
             accel = data.get("eps_accel_score_xbrl")

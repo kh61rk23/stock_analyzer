@@ -1,5 +1,5 @@
 # ==============================================================
-# size_decay_manager.py  v2.0 (Wave 2 & 7 統合版)
+# size_decay_manager.py  v2.0
 # 規模別シグナル減衰・コンポジットウェイト管理モジュール
 # ==============================================================
 # 【役割】
@@ -39,8 +39,8 @@
 #
 # 【依存】
 #   size_tier_classifier.py（size_tier_master.json 参照）
-#   config.py（Wave 7追加定数参照）
-#   ★ try/except で全ブロックを保護
+#   config.py（減衰・キュー管理の定数参照）
+#   try/except で全ブロックを保護
 # 【主な機能】
 #   1. Size Tier 判定 (Large/Mid/Small/Micro/Nano)
 #   2. Tier別 composite ウェイトの提供
@@ -68,7 +68,7 @@ _DECAY_STATE_FILENAME      = "size_decay_state.json"
 _NANO_QUEUE_FILENAME       = "nano_evaluation_queue.json"
 _COMPOSITE_SCORES_FILENAME = "size_composite_scores.json"
 
-# ── Size Tier 閾値（Wave 2） ──
+# ── Size Tier 閾値 ──
 
 from config_sync import sync_module_constants
 
@@ -98,7 +98,7 @@ _DEFAULT_THRESHOLDS_US: dict[str, float] = {
     "Nano":       0.0,
 }
 
-# ── Tier別 composite ウェイト（Wave 2） ──
+# ── Tier別 composite ウェイト ──
 _TIER_COMPOSITE_WEIGHTS: dict[str, dict[str, float]] = {
     "Large": {"sector_score": 0.45, "value_score": 0.25, "quality_score": 0.30},
     "Mid":   {"sector_score": 0.40, "value_score": 0.30, "quality_score": 0.30},
@@ -111,7 +111,7 @@ _SECTOR_WEIGHT_MULTIPLIER: dict[str, float] = {
     "Large": 1.00, "Mid": 1.00, "Small": 0.90, "Micro": 0.65, "Nano": 0.40,
 }
 
-# ── 減衰・キュー管理設定（Wave 7） ──
+# ── 減衰・キュー管理設定 ──
 _DEFAULT_DECAY_LAMBDAS: dict = {
     "Large": 0.15, "Mid": 0.10, "Small": 0.07, "Micro": 0.05, "Nano": 0.03,
 }
@@ -162,7 +162,7 @@ def _save_json(filename: str, data: dict, cfg) -> None:
 
 
 # ==============================================================
-# BLOCK 2: Size Tier 判定 & コンポジットウェイト計算 (Wave 2統合)
+# BLOCK 2: Size Tier 判定 & コンポジットウェイト計算
 # ==============================================================
 
 def classify_size_tier(market_cap_raw: Optional[float], market: str = "JP", cfg=None) -> str:
@@ -245,7 +245,7 @@ def save_size_composite_score(ticker: str, score: float, size_tier: str, weights
 
 
 # ==============================================================
-# BLOCK 3: 減衰計算 (Wave 7)
+# BLOCK 3: 減衰計算
 # ==============================================================
 
 def calc_decay_factor(size_tier: str, last_signal_date: str, decay_lambdas: dict = None) -> tuple:
@@ -273,7 +273,7 @@ def calc_effective_signal(raw_signal: float, decay_factor: float, taxonomy_corre
 
 
 # ==============================================================
-# BLOCK 4: 減衰状態・Nanoキュー バッチ構築処理 (Wave 7)
+# BLOCK 4: 減衰状態・Nanoキュー バッチ構築処理
 # ==============================================================
 
 def _build_decay_state(entries: list, prev_state: dict, decay_lambdas: dict, cfg) -> dict:
@@ -438,14 +438,13 @@ def resolve_size_tier(
     """
     stock_screener.py / us_stock_screener.py から呼ばれる Size Tier 解決API。
 
-    ★ 2026-06-10 バグ修正: 両スクリーナーが本関数名で import していたが
-      実体が存在せず、ImportError がフォールバックに握り潰されて
-      Size Ph2 の tier 別 composite ウェイトが一度も適用されていなかった。
-      既存 classify_size_tier / classify_size_tier_from_b への委譲として実装。
+    両スクリーナーが本関数名で import する（無いと ImportError がフォールバックに
+    握り潰され、Size Ph2 の tier 別 composite ウェイトが適用されなくなる）。
+    classify_size_tier / classify_size_tier_from_b へ委譲する。
 
     優先順位: market_cap_raw（円/ドル生値）→ market_cap_b（十億単位）→ "Mid"
     ※ 時価総額不明時に "Nano" ではなく "Mid" を返すのは、未知銘柄へ
-      極端なウェイトを適用しない安全側の選択（従来フォールバックと同等）。
+      極端なウェイトを適用しない安全側の選択。
     ticker は将来の size_tier_master.json 参照用に受けるが現状未使用。
     """
     try:
@@ -474,15 +473,13 @@ def run_size_decay_manager(cfg=None, force_refresh: bool = False) -> dict:
                 "cached": True,
             }
 
-    # 2026-09-12: このマスタは size_tier_classifier（週次）が生成するが、
+    # このマスタは size_tier_classifier（週次）が生成するが、
     # 同モジュールは results["screener"] / ["us_screener"] を入力とするため
     # **本モジュールより後**に実行される（順序は変更できない）。
     # したがって参照するのは常に「前回の週次実行が残したファイル」であり、
-    # 永続化されていることが前提になる。
-    # 2026-09-11 まで workflow の git add が DATA_DIR 側の誤ったパスを
-    # 指しており一度も永続化されていなかったため、毎回ここが空になり
-    # 「マスタデータなし → スキップ」が出続けていた（同じ理由で
-    # independence_score も「評価対象: 0 銘柄」だった）。
+    # workflow の git add で永続化されていることが前提になる
+    # （永続化されないとここが空になり「マスタデータなし → スキップ」となる。
+    # independence_score も同じ前提）。
     master = _load_json("size_tier_master.json", cfg) or {"jp": {}, "us": {}}
     entries = []
     for m in ("jp", "us"):

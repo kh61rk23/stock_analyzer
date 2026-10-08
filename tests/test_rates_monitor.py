@@ -1,4 +1,4 @@
-# 2026-10-05: 国債利回り（日米3/5/10年）と政策金利
+# 国債利回り（日米3/5/10年）と政策金利
 from datetime import date
 
 import rates_monitor as r

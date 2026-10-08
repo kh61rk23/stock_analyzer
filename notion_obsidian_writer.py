@@ -379,7 +379,7 @@ def write_notion_pages(cfg, results: dict) -> dict:
     Returns:
         {"success": int, "failed": int, "skipped": bool}
     """
-    # ★ 2026-07-05 D-09決定: Notion連携は廃止（Obsidianに一本化）。
+    # D-09: Notion連携は廃止（Obsidianに一本化）。
     #   Obsidian書き込み側は本フラグの影響を受けない（Notion API呼び出しのみ停止）。
     #   再開する場合は config.py の ENABLE_NOTION_API を True に戻し、
     #   NOTION_API_KEY を GitHub Secrets に登録すること。

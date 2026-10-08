@@ -1,5 +1,5 @@
 # ==============================================================
-# country_risk_updater.py  v1.0  (Wave 6 - G-N2)
+# country_risk_updater.py  v1.0  (G-N2)
 # ==============================================================
 # 【役割】
 #   GDELT / 外務省RSS / 米国国務省RSS を日次でクロールし、
@@ -27,7 +27,7 @@
 #        4: 退避してください（レベル4）
 #
 #   ③ 米国国務省 旅行警告 RSS
-#      URL: https://travel.state.gov/_res/rss/TAsTWs.xml（2026-09-11 移設対応）
+#      URL: https://travel.state.gov/_res/rss/TAsTWs.xml
 #      用途: 渡航警告レベル（1〜4）の自動抽出
 #      レベル定義:
 #        1: Exercise Normal Precautions
@@ -77,15 +77,10 @@ from urllib.error import URLError, HTTPError
 MOFA_RSS_URL = "https://www.anzen.mofa.go.jp/rss/anzen_outer.xml"
 
 # 米国国務省RSSのURL
-# 2026-09-11: 旧URL（/content/travel/en/traveladvisories/RSS.xml）は
-# 404ページへ転送された上で403を返すようになっており、2026-07-14 以降の
-# 全実行で「国務省RSS: 取得失敗」となっていた。
-# 当時は「travel.state.gov が GitHub Actions IP を恒常的に拒否」と
-# 診断されていたが、自宅IPからの疎通テストでも同じ結果になったため
-# IPブロックではなく**フィードの移設**だった。
-# 現行の配信先は /_res/rss/TAsTWs.xml（Travel Advisories & Travel Warnings）。
-# 216件・全てタイトルに "Level 1〜4" を含み、_parse_state_dept_rss() が
-# 無改造で36カ国を抽出できることを実測で確認済み。
+# 配信先は /_res/rss/TAsTWs.xml（Travel Advisories & Travel Warnings）。
+# 旧URL /content/travel/en/traveladvisories/RSS.xml は403を返す（IPブロックではなく
+# フィード移設。戻さないこと）。各項目のタイトルに "Level 1〜4" を含み、
+# _parse_state_dept_rss() はこの形式を前提に抽出する。
 STATE_DEPT_RSS_URL = "https://travel.state.gov/_res/rss/TAsTWs.xml"
 
 # GDELT Doc API（国名検索・Themes=UNREST）
@@ -108,17 +103,12 @@ _FETCH_TIMEOUT = 20
 _MAX_RETRIES = 3
 _RETRY_WAIT  = 5   # 秒
 
-# GDELT レート制限対策（2026-06-25 本番で全59国が 429 になり、各国3回リトライで
-# 約31分浪費した実害への対策）
+# GDELT レート制限対策（GitHub Actions の共有IPは GDELT Doc API に強く制限され、
+# 全件429になる日がある。上限なしだとリトライ待機で数十分を浪費する）
 #   - 1回の実行で GDELT を引く最大国数（優先国から）。cfg.COUNTRY_RISK_GDELT_MAX で上書き可。
-#   - 連続失敗がこの数に達したら以降の GDELT 取得は打ち切る（サーキットブレーカー）。
-# 2026-07-12調整: 本番ログで30国中大半が429（GitHub共有IPはGDELTに強く制限され、
-# 各国リトライ3回×待機で計25分浪費）。①上限30→15 ②累計失敗でも回路を開く
-# ③429はリトライしない（_fetch_url側）の3点で「無駄な25分」を数分に短縮。
-# 2026-07-17調整: 上限15国に絞った後も全件429で全滅する日が常態化（GitHub共有IP
-# はGDELTに恒常的にブロックされている）。①サーキット閾値5→3に短縮し全滅日は
-# 数件で見切る ②取得失敗時は永続キャッシュ（gdelt_instability_cache.json）を
-# 減衰付きで代用する（BLOCK 5-2 参照）。
+#   - 連続失敗／累計失敗が閾値に達したら以降の GDELT 取得は打ち切る（サーキットブレーカー）。
+#   - 429はリトライしない（_fetch_url側）。
+#   - 取得失敗時は永続キャッシュ（gdelt_instability_cache.json）を減衰付きで代用する（BLOCK 5-2 参照）。
 _GDELT_MAX_COUNTRIES     = 15
 
 from config_sync import sync_module_constants
@@ -132,7 +122,7 @@ _CFG_CONST_MAP = {
     'B6_COUNTRY_RISK_UPDATER_GDELT_MAX_COUNTRIES': '_GDELT_MAX_COUNTRIES',
 }
 
-_GDELT_CIRCUIT_THRESHOLD = 3      # 連続失敗の閾値（2026-07-17: 5→3に短縮）
+_GDELT_CIRCUIT_THRESHOLD = 3      # 連続失敗の閾値（全滅日は数件で見切る）
 _GDELT_TOTAL_FAIL_LIMIT  = 8      # 累計失敗の閾値（成功が挟まっても打ち切る）
 
 # GDELT「最後に取れた値」永続キャッシュ（取得失敗時の代用に使う）
@@ -370,11 +360,8 @@ def _fetch_url(url: str, timeout: int = _FETCH_TIMEOUT) -> str | None:
                 except UnicodeDecodeError:
                     return raw.decode("latin-1", errors="replace")
         except (HTTPError, URLError) as e:
-            # ★ 2026-07-12: 429（レート制限）は待っても同一実行内では回復しない
-            #   （GitHub共有IP起因）ためリトライせず即諦める。1国あたり最大
-            #   ~75秒→~30秒に短縮し、サーキットブレーカーへ早く到達させる。
-            # ★ 2026-07-19: 403（IPブロック。travel.state.gov が GitHub Actions IP を
-            #   恒常的に拒否）も同一実行内では回復しないためリトライしない。
+            # 429（レート制限）・403（拒否）は同一実行内では回復しないため
+            #   リトライせず即諦める（待機時間を省き、サーキットブレーカーへ早く到達させる）。
             if isinstance(e, HTTPError) and e.code in (403, 429):
                 print(f"    ⚠️  fetch失敗 ({url[:60]}...): HTTP {e.code}（リトライなし）")
                 return None
@@ -584,14 +571,14 @@ def _fetch_gdelt_instability(
 
 
 # ==============================================================
-# BLOCK 5-1B: GDELT BigQuery 公開データセット経路（2026-07-19追加）
+# BLOCK 5-1B: GDELT BigQuery 公開データセット経路
 # ==============================================================
 # GDELT Doc API は GitHub Actions の共有IPが恒常的に 429 でブロックされ
-# 「取りに行く」戦略が成立しない（2026-07-17時点で全滅が常態化）。
+# 「取りに行く」戦略が成立しない日が多い。
 # GDELT は BigQuery 公開データセット（gdelt-bq.gdeltv2、15分毎更新）としても
 # 提供されており、既存の BQ_CREDENTIALS で1クエリ・全対象国一括取得できる。
 # スキャン量は実測 ~4MB/クエリ（3日分・イベント表・3列）で無料枠に対し無視できる。
-# 本経路を primary とし、失敗時のみ従来の Doc API → 永続キャッシュへフォールバック。
+# 本経路を primary とし、失敗時のみ Doc API → 永続キャッシュへフォールバック。
 #
 # 意味論の差分（許容・ドキュメント化）:
 #   Doc API 版 = 「国名 AND (conflict OR unrest OR ...)」記事の平均トーン
@@ -687,12 +674,12 @@ def _fetch_gdelt_instability_bq(
 
 
 # ==============================================================
-# BLOCK 5-2: GDELT「最後に取れた値」永続キャッシュ（2026-07-17追加）
+# BLOCK 5-2: GDELT「最後に取れた値」永続キャッシュ
 # ==============================================================
-# GitHub Actions の共有IPがGDELTに恒常的にブロックされ「取りに行く」戦略が
-# 成立しない日が多い実害への対策。取得成功時に永続キャッシュへ書き込み、
+# GitHub Actions の共有IPがGDELTにブロックされ「取りに行く」戦略が
+# 成立しない日が多いための代用経路。取得成功時に永続キャッシュへ書き込み、
 # 取得失敗時（429・レート制限HTML誤200等すべて -1.0 に集約される）はキャッシュ値を
-# 経過日数に応じて減衰させて代用する。キャッシュにも無ければ従来どおり -1.0（RSSのみで評価）。
+# 経過日数に応じて減衰させて代用する。キャッシュにも無ければ -1.0（RSSのみで評価）。
 
 def decayed_score(
     score: float,
@@ -808,8 +795,8 @@ def _calc_composite_risk(
     データ欠損時の処理:
       - GDELT取得失敗（-1.0）: GDELT成分を除外し残ソースへ再正規化
       - RSS取得失敗（*_available=False）: そのソースを除外し残ソースへ再正規化
-        （2026-07-19追加。国務省RSSが403で恒常取得不能な期間、レベル0＝「安全」と
-        誤解釈してリスクを下振れさせないため、「取得失敗」と「言及なし=レベル0」を区別する）
+        （取得失敗をレベル0＝「安全」と誤解釈してリスクを下振れさせないため、
+        「取得失敗」と「言及なし=レベル0」を区別する）
       - RSS取得成功・当該国の言及なし（レベル0）: 実データとしてそのまま0で計算
     """
     components = []
@@ -1000,10 +987,8 @@ def run_country_risk_update(
         print(f"   ⚠️  外務省RSS 解析エラー: {str(e)[:80]}")
 
     # ── ② 国務省RSS 取得・解析 ─────────────────────────────────
-    # 2026-07-19: travel.state.gov は GitHub Actions IP を恒常403でブロックしており
-    # 取得失敗が常態。403は非リトライ化済み（_fetch_url）のため実行時間ロスは
-    # 1リクエスト分のみ。失敗時は合成スコアを残ソース（GDELT+外務省）で
-    # 再正規化する（state_available フラグ）。
+    # 403は _fetch_url でリトライしないため、失敗時の実行時間ロスは1リクエスト分のみ。
+    # 失敗時は合成スコアを残ソース（GDELT+外務省）で再正規化する（state_available フラグ）。
     state_levels: dict[str, int] = {}
     state_available = False
     print("   📡 国務省RSS 取得中...")
@@ -1026,7 +1011,7 @@ def run_country_risk_update(
     if skip_gdelt:
         print("   ⏩ GDELT: スキップ（skip_gdelt=True）")
     else:
-        # ── ③-a BigQuery 公開データセット経路（primary・2026-07-19）──────
+        # ── ③-a BigQuery 公開データセット経路（primary）──────
         # 1クエリで全対象国を一括取得。レート制限なし・BQ_CREDENTIALS流用。
         print(f"   📡 GDELT 取得中（BigQuery公開データセット経路・{len(all_codes)}国一括）...")
         bq_scores = _fetch_gdelt_instability_bq(all_codes, days_back=3)
@@ -1042,11 +1027,11 @@ def run_country_risk_update(
             print(f"   ✅ GDELT(BQ): {len(bq_scores)} 国取得完了")
 
     if not skip_gdelt and not gdelt_scores:
-        # ── ③-b Doc API 経路（BQ失敗時のフォールバック・従来ロジック）────
+        # ── ③-b Doc API 経路（BQ失敗時のフォールバック）────
         # GDELT は高リスク国（外務省/国務省でLv2以上）を優先して取得。
         # API負荷・レート制限(429)対策として、取得は上限件数までに絞り、
-        # 連続失敗が閾値に達したら以降は打ち切る（旧コードは全59件を無条件で
-        # 順次取得し、全件429時に各国3回リトライで約31分浪費していた）。
+        # 連続失敗が閾値に達したら以降は打ち切る（全件429の日に全国を順次リトライすると
+        # 数十分を浪費するため）。
         priority_codes = list(set(
             list(mofa_levels.keys()) + list(state_levels.keys())
         ))
@@ -1074,8 +1059,8 @@ def run_country_risk_update(
                 gdelt_scores[code] = score
                 # 失敗の監視（-1.0 = 取得失敗。429・レート制限ページの200返却＝JSON
                 # パース失敗もすべてここに集約される）。レート制限なら早期に打ち切る。
-                # ★ 2026-07-12: 成功が間に挟まると連続カウンタがリセットされ、429の
-                #   波状失敗でも回路が開かず25分浪費した実害 → 累計カウンタを併設。
+                # 成功が間に挟まると連続カウンタがリセットされ、429の波状失敗では
+                #   回路が開かないため累計カウンタを併設する。
                 if score < 0:
                     _consec_fail += 1
                     _total_fail  += 1
@@ -1095,8 +1080,7 @@ def run_country_risk_update(
                 gdelt_scores[code] = -1.0
 
             # ── 取得失敗時（-1.0）は永続キャッシュを減衰付きで代用 ──────
-            # 2026-07-17: GitHub共有IPがGDELTに恒常的にブロックされ「取りに行く」
-            # 戦略自体が成立しない日が多いための対策。
+            # GitHub共有IPがGDELTにブロックされ「取りに行く」戦略自体が成立しない日が多いため。
             if gdelt_scores[code] < 0:
                 fb_score, fb_days = _gdelt_cached_or_fallback(_gdelt_cache, code, _today)
                 if fb_score >= 0:

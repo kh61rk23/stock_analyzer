@@ -1,14 +1,12 @@
 # ==============================================================
-# tests/test_longterm_stance_p3.py（2026-07-25）
+# tests/test_longterm_stance_p3.py
 # [P-3] 長期保有候補が投資スタンス判定に反映されること
 # ==============================================================
-# 【背景】determine_investment_stance() は引数 is_longterm_hold_flag を
-# 受け取りながら**本体で一度も使っていなかった**。さらに呼び出し側が
-# 業種dictから読んでいたため、渡る値も常に False という二重の不作動だった。
+# 【防ぐもの】determine_investment_stance() が is_longterm_hold_flag を
+# 受け取っても判定に使わない／呼び出し側が常に False を渡す、という不作動。
 #
-# 2026-07-25: P-3 候補がいる業種は長期側の閾値（long_high）を
-# LONGTERM_HOLD_STANCE_RELAX_PT だけ緩める方式で分岐に組み込んだ。
-# 短期側（short_high）には影響させない。
+# 仕様: P-3 候補がいる業種は長期側の閾値（long_high）を
+# LONGTERM_HOLD_STANCE_RELAX_PT だけ緩める。短期側（short_high）には影響させない。
 # ==============================================================
 import sys
 from pathlib import Path
@@ -44,7 +42,7 @@ class TestP3AffectsStance:
         assert _stance(62, 50, True, 1)["stance"] == "accumulate"
 
     def test_no_p3_is_unchanged(self):
-        """P-3 が無い業種は従来の判定と完全に同じであること。"""
+        """P-3 が無い業種は緩和なしの判定と完全に同じであること。"""
         for lt, st in ((70, 65), (62, 65), (62, 50), (55, 50), (70, 50)):
             got = _stance(lt, st, False)["stance"]
             lt_high = lt >= ls.STANCE_THRESHOLDS["long_high"]
@@ -87,7 +85,7 @@ class TestP3AffectsStance:
 
 class TestRelaxIsConfigurable:
     def test_zero_relax_restores_previous_behaviour(self):
-        """緩和幅0なら P-3 は判定に影響しない（従来挙動へ戻せる）。"""
+        """緩和幅0なら P-3 は判定に影響しない（緩和を無効化できる）。"""
         class NoRelax:
             LONGTERM_HOLD_STANCE_RELAX_PT = 0.0
 

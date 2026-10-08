@@ -1,5 +1,5 @@
 # ==============================================================
-# sector_rotation_detector.py  v1.0  (Wave 0 - Idea2-B)
+# sector_rotation_detector.py  v1.0  (Idea2-B)
 # 業種ローテーション 4象限分類 & 象限変化シグナル検出
 # ==============================================================
 # 【役割】
@@ -92,7 +92,7 @@
 #   score_history.json（_append_score_history が日次蓄積）
 #   ★ numpy 不使用・追加ライブラリなし
 #
-# 【消費者（grep実測。2026-07-28）】
+# 【消費者】
 #   ・signal_aggregator.py:801 _apply_rotation_boost() — quadrants を読み、
 #     rising/peak/trough/falling を ±ptのブーストに変換して signal_score に加算する。
 #     これが本モジュールの正式なスコア反映経路（【役割】節に記載の設計どおり）。
@@ -101,8 +101,7 @@
 #     bundle["sector_rotation"]["sectors"][code]["rotation_score"] を参照しているが、
 #     本モジュールの実際の出力キーは quadrants / sector_stats / changes / summary であり
 #     "sectors" キーも "rotation_score" フィールドも存在しない（producer/consumerキー不一致の疑い。
-#     修正は本タスクのスコープ外・ignition_detector.py は担当ファイル外のため未修正。
-#     完了報告の「疑問点」に記載）。
+#     ignition_detector.py 側は未修正）。
 #
 # 【他3モジュールとの違い】
 #   ・vs jp_us_sector_bridge.py: bridge にも detect_rotation_phase() という
@@ -115,13 +114,11 @@
 #   ・vs us_sector_bridge_enhanced.py: 本モジュールはscore_historyのみに基づく統計判定。
 #     USの決算イベントは参照しない。
 #
-# 【既知の状態（2026-07-28 時点）】
-#   象限分類自体は出力されているが、象限「変化」の検出が0件で継続している
-#   （2026-07-06・2026-07-13 台帳とも変化0件）。score_history の蓄積不足により
-#   前回キャッシュとの比較で有意な変化が検出しにくい状態が疑われる。
-#   意思決定 J-04（2026-07-27, 健太承認）は jp_us_bridge / jp_us_sector_correlation を
-#   名指しした決定だが、本タスク（U-10）の対象範囲としては同様に
-#   「score_history 蓄積待ち・削除や機能修正は今回のスコープ外」として扱う。
+# 【既知の状態】
+#   象限分類自体は出力されているが、象限「変化」の検出は0件が続いている。
+#   score_history の蓄積不足により、前回キャッシュとの比較で有意な変化が
+#   検出しにくい状態が疑われる。J-04 / U-10 の扱いに準じ、score_history の
+#   蓄積待ちとし、削除や機能修正はしていない。
 # ==============================================================
 
 from __future__ import annotations

@@ -39,6 +39,7 @@ SCHEMA: dict[str, list[str]] = {
     "bond_commodity": ["stock_analyzer_main"],
     "catalyst": ["stock_analyzer_main"],
     "ceo_scores": ["stock_analyzer_main"],
+    "seisakudb": ["stock_analyzer_main"],
     "cluster_export": ["cluster_graph_exporter"],
     "cluster_master": ["technology_mapper"],
     "cluster_phase": ["stock_analyzer_main", "technology_cluster_engine"],

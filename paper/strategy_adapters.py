@@ -1,5 +1,5 @@
 # ==============================================================
-# paper/strategy_adapters.py — 戦略アダプタ（Wave R1-2 / S2）
+# paper/strategy_adapters.py — 戦略アダプタ（R1-2 / S2）
 # ==============================================================
 # 各adapterは日次 results から翌日分の注文リストを生成する。
 # 注文形式（dict）: {"ticker", "side": BUY/SELL, "qty" or "weight", "tag"}

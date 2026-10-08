@@ -1,5 +1,5 @@
 # ==============================================================
-# jogmec_scraper.py  v1.0  (Wave 6 - G-C1)
+# jogmec_scraper.py  v1.0  (G-C1)
 # ==============================================================
 # 【役割】
 #   JOGMEC（独立行政法人エネルギー・金属鉱物資源機構）の
@@ -186,7 +186,7 @@ COUNTRY_NAME_TO_CODE: dict[str, str] = {
     "タンザニア":             "TZA",
     "ジンバブエ":             "ZWE",
     # 英語表記（プレスリリース向け）
-    # ※ "UAE" は日本語セクションで定義済み（同値 "ARE"）のため重複削除（2026-06-11）
+    # ※ "UAE" は日本語セクションで定義済み（同値 "ARE"）のためここには置かない
     "Saudi Arabia":          "SAU",
     "Iran":                  "IRN",
     "Iraq":                  "IRQ",
@@ -740,10 +740,9 @@ def run_jogmec_scraper(
         _bq_mod = importlib.import_module("edinet_bq_client")
         _bq     = _bq_mod.EDINETBQClient()
         raw_bq  = _bq.client
-    # 2026-07-25: 一次経路（edinet_bq_client＝GitHub Actions の BQ_CREDENTIALS
-    # 経路）の失敗理由を握り潰しており、報告されるのは Colab フォールバックの
-    # 「No module named 'google.colab'」だけだった。真因（認証情報なし等）が
-    # 隠れて調査が空振りするため、両方の理由を返す。
+    # 一次経路（edinet_bq_client＝GitHub Actions の BQ_CREDENTIALS 経路）の
+    # 失敗理由も返す。Colab フォールバックの「No module named 'google.colab'」
+    # だけだと真因（認証情報なし等）が隠れるため、両方の理由を返す。
     except Exception as _primary_err:
         try:
             from google.cloud import bigquery as _bq_lib

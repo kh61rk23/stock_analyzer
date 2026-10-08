@@ -67,10 +67,9 @@ def _get_gdp_growth(results: dict, cfg) -> tuple[Optional[float], str]:
         if imf_cache_path.exists():
             imf_data = json.loads(imf_cache_path.read_text(encoding="utf-8"))
             # NGDP_RPCH = Real GDP growth rate (percent change)
-            # ★ 2026-07-12是正: imf_pipeline._save_imf_cache の実構造は
-            #   {"indicators": {indicator: {country: {year: val}}}} なのに
-            #   {country: {indicator: ...}} を読んでいて常時失敗→GDP N/A だった
-            #   （producer/consumerキー不整合）。実構造を優先し旧想定は後段に残す。
+            # imf_pipeline._save_imf_cache の実構造は
+            #   {"indicators": {indicator: {country: {year: val}}}}。
+            #   これを優先し、{country: {indicator: ...}} 形式は後段のフォールバック。
             _ind = imf_data.get("indicators", {}) or {}
             jpn = ((_ind.get("NGDP_RPCH", {}) or {}).get("JPN", {})
                    or imf_data.get("JPN", {}).get("NGDP_RPCH", {}))
@@ -148,9 +147,9 @@ def _get_cpi_change(results: dict, cfg) -> tuple[Optional[float], str]:
     try:
         gov = results.get("gov", {})
         if isinstance(gov, dict):
-            # ★ 2026-07-12是正: gov v9.0 の実構造は
+            # gov v9.0 の実構造は
             #   {"stat_results": [{"stat": {"id": "cpi", ...}, "changes": {...}}, ...]}
-            #   なのに gov["cpi"] を読んでいて常時失敗→CPI N/A だった。
+            #   （gov["cpi"] は存在しない）。
             for _sr in gov.get("stat_results", []) or []:
                 if ((_sr.get("stat", {}) or {}).get("id") == "cpi"):
                     _ch = _sr.get("changes", {}) or {}
@@ -418,8 +417,7 @@ def _load_phase_history(cfg) -> list:
     形式: [{"date": "YYYY-MM-DD", "phase": "B", "gdp": 0.5, "cpi": 1.2}, ...]
     保持: 直近12ヶ月分
     """
-    # 2026-07-25 バッチ4: ファイル名を config.CYCLE_PHASE_HISTORY_FILE から読む
-    # （従来は直書きで config 側の定数が未参照だった）
+    # ファイル名は config.CYCLE_PHASE_HISTORY_FILE から読む
     path = (Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
             / getattr(cfg, "CYCLE_PHASE_HISTORY_FILE", "cycle_phase_history.json"))
     if path.exists():
@@ -455,8 +453,7 @@ def _save_phase_history(cfg, today: str, phase: str,
     history = [h for h in history if h.get("date", "") >= cutoff]
     history = sorted(history, key=lambda x: x.get("date", ""))
 
-    # 2026-07-25 バッチ4: ファイル名を config.CYCLE_PHASE_HISTORY_FILE から読む
-    # （従来は直書きで config 側の定数が未参照だった）
+    # ファイル名は config.CYCLE_PHASE_HISTORY_FILE から読む
     path = (Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
             / getattr(cfg, "CYCLE_PHASE_HISTORY_FILE", "cycle_phase_history.json"))
     try:

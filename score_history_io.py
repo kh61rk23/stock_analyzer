@@ -12,11 +12,10 @@ from pathlib import Path
 
 
 def load_score_history(cfg) -> dict:
-    """insights用の2候補を従来順で読み、失敗時は次候補または空dictを返す。"""
-    # 2026-09-21: insights/ だけを見ていたが、stock_analyzer_main._append_score_history は
-    # DATA_DIR/score_history.json に書く（insights 側のファイルは存在しない）。
-    # このため jp_us_sector_bridge・self_evaluator・screener_sector_heatmap が
-    # 毎回「score_history.json なし」でスキップしていた。DATA_DIR を先に見る。
+    """score_history.json を候補順（DATA_DIR → insights）に読み、失敗時は次候補または空dictを返す。"""
+    # stock_analyzer_main._append_score_history は DATA_DIR/score_history.json に書く
+    # （insights 側のファイルは通常存在しない）。insights だけを見ると
+    # jp_us_sector_bridge・self_evaluator・screener_sector_heatmap がスキップされるため、DATA_DIR を先に見る。
     data_dir = Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
     candidates = [
         data_dir / "score_history.json",

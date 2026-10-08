@@ -361,14 +361,14 @@ STANCE_THRESHOLDS = {
 }
 
 # [P-3] 長期保有候補がいる業種で long_high を緩める幅（pt）。
-# 既定値は config.LONGTERM_HOLD_STANCE_RELAX_PT が正本（2026-07-25）。
+# 既定値は config.LONGTERM_HOLD_STANCE_RELAX_PT が正本。
 LONGTERM_HOLD_STANCE_RELAX_PT = 5.0
 
 
 def _count_longterm_holds_by_sector(results: dict) -> dict:
     """業種コード → その業種の長期保有候補（[P-3]）の社数。
 
-    2026-07-25 追加。is_longterm_hold は screener が銘柄単位に付けるため、
+    is_longterm_hold は screener が銘柄単位に付けるため、
     業種単位のスタンス判定に渡すには集計が要る。
     screener が未実行・候補ゼロなら空dictを返す（呼び出し側は0扱い）。
     """
@@ -400,9 +400,7 @@ def determine_investment_stance(
     """
     長期スコア × 短期スコアからデュアル評価を行い投資スタンスを判定する。
 
-    ★ 2026-07-25: [P-3] 長期保有候補フラグをスタンス分岐に組み込んだ。
-      従来 is_longterm_hold_flag は引数にあるだけで本体が一度も使っておらず、
-      さらに呼び出し側が業種dictから読んでいたため常に False だった（二重の不作動）。
+    ★ [P-3] 長期保有候補フラグをスタンス分岐に使う。
 
       【組み込み方】P-3 候補がその業種に存在する場合、長期側の閾値
       （long_high）を LONGTERM_HOLD_STANCE_RELAX_PT だけ緩める。
@@ -412,9 +410,9 @@ def determine_investment_stance(
       1段上げてよい、という考え方。短期側（short_high）には影響させない。
 
       効果の例（long_high=65 / relax=5 の場合）:
-        長期62pt × 短期65pt × P-3あり → trade だったものが core_hold へ
-        長期62pt × 短期50pt × P-3あり → avoid だったものが accumulate へ
-        P-3なしの業種は完全に従来どおり（挙動不変）
+        長期62pt × 短期65pt × P-3あり → trade ではなく core_hold
+        長期62pt × 短期50pt × P-3あり → avoid ではなく accumulate
+        P-3なしの業種は緩めない
 
     Args:
         is_longterm_hold_flag: その業種に P-3 候補が存在するか
@@ -620,11 +618,9 @@ def run_longterm_scenario(cfg, results: dict = None) -> dict:
     dominant_scenario = max(weights.items(), key=lambda x: x[1])[0]
 
     # ── Step6: 投資スタンス判定（短期スコアと統合）──────────
-    # ★ 2026-07-25 バッチ1: is_longterm_hold の取得元を是正。
-    #   従来は sector_results[code]["is_longterm_hold"] を読んでいたが、
-    #   このフラグ（[P-3] 片山晃モデル）は screener が **銘柄単位** に
-    #   付けるもので、業種の dict には存在しない。結果 is_lt は常に False で、
-    #   P-3 の判定結果が長期スタンスに一度も届いていなかった。
+    # ★ is_longterm_hold（[P-3] 片山晃モデル）は screener が **銘柄単位** に
+    #   付けるもので、業種の dict（sector_results[code]）には存在しない
+    #   （そこから読むと常に False）。
     #   業種単位では「その業種に長期保有候補が何社いるか」で表現する。
     sector_results  = results.get("sectors", {})
     lt_counts = _count_longterm_holds_by_sector(results)

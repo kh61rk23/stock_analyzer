@@ -1,5 +1,5 @@
 # ==============================================================
-# taxonomy_hotness.py — T-4: node_hotness 算出（Wave R2-5）
+# taxonomy_hotness.py — T-4: node_hotness 算出
 # ==============================================================
 # 【役割】taxonomyノードごとの「テーマ加熱度」を日次算出する。
 # 【設計正本】HANDOFF_2026-06-30 §4-3（決定3の具体化・変更禁止）:
@@ -131,8 +131,7 @@ def compute_node_hotness(today_counts: dict, history: dict,
     today_counts: {node_id: {"leading": int, "news": int, "policy": int}}
     history:      {date: {node_id: {"leading": int, "news": int, "policy": int}}}
     """
-    # 2026-07-25 バッチ6: ベースライン日数を config から読む
-    # （従来はモジュール定数 BASELINE_DAYS のみで config 側は未参照）
+    # ベースライン日数は config から読む（未定義ならモジュール定数 BASELINE_DAYS）
     _base_days = int(getattr(cfg, "TAXONOMY_HOTNESS_BASELINE_DAYS", BASELINE_DAYS))
     past_dates = sorted(d for d in history if d < today)[-_base_days:]
     out = {}
@@ -156,8 +155,7 @@ def leading_only_nodes(hotness: dict, lead_th: float = None,
                        semi_th: float = 55.0, cfg=None) -> list:
     """「先行だけ点灯」ノード＝まだニュース化していない仕込み候補（§4-3）。
 
-    lead_th 省略時は config.TAXONOMY_LEADING_ONLY_TH（既定65.0）を使う
-    （2026-07-25 バッチ6: 従来は既定引数の直書きのみだった）。
+    lead_th 省略時は config.TAXONOMY_LEADING_ONLY_TH（既定65.0）を使う。
     """
     if lead_th is None:
         lead_th = float(getattr(cfg, "TAXONOMY_LEADING_ONLY_TH", 65.0))
@@ -191,14 +189,13 @@ def sector_scores_from_hotness(hotness: dict, sector_to_nodes: dict) -> dict:
 
 def fetch_sector_node_weights(cfg, sector_codes: list) -> dict:
     """
-    [T-3消費配線 / Wave R2] company_taxonomy_map の関与度を業種ごとに集約して返す。
+    [T-3消費配線] company_taxonomy_map の関与度を業種ごとに集約して返す。
     {sector_code: {node_id: relevance_score}}。BQ未接続・空なら {} を返し、
     呼び出し側は _SECTOR_TO_TAXONOMY にフォールバックする。
 
-    2026-09-21: 業種コードで company_taxonomy_map を引いていたが、表のキーは
-    4桁の企業コードで業種擬似ID（"sector:JP:1016"）の行は1件も無く、毎日
-    フォールバック（均等加重）に落ちていた。さらに業種ごとに1本ずつBQを
-    引く N+1 でもあった。業種→銘柄（1本）→銘柄の関与度（1本）の計2本で集約する。
+    company_taxonomy_map のキーは4桁の企業コードで、業種擬似ID（"sector:JP:1016"）
+    の行は無い（業種コードで引くと常にフォールバックになる）。N+1 を避けるため
+    業種→銘柄（1本）→銘柄の関与度（1本）の計2本で集約する。
     """
     try:
         from edinet_bq_client import EDINETBQClient

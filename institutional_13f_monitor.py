@@ -1,5 +1,5 @@
 # ==============================================================
-# institutional_13f_monitor.py  v1.0  (Wave 4 - Policy Ph3)
+# institutional_13f_monitor.py  v1.0  (Policy Ph3)
 # ==============================================================
 # 【役割】
 #   SEC EDGAR Form 13F を四半期ごとに取得し、
@@ -97,11 +97,11 @@ _CHANGE_MULTIPLIER: dict = {
 _KNOWN_CIKS: dict = {
     "0001067983": {"name": "Berkshire Hathaway Inc", "tier": 1},
     "0001336528": {"name": "Pershing Square Capital Management", "tier": 2},
-    # 2026-10-06: 旧CIK（1418819＝Iridium / 1011006＝Altaba / 1113169＝T. Rowe Price Group）は
-    #   13F を出していない別法人で「13F ファイリングなし」になっていた。13F 提出主体の CIK に訂正。
+    # CIK は 13F 提出主体のもの。1418819＝Iridium / 1011006＝Altaba / 1113169＝T. Rowe Price Group は
+    #   13F を出していない別法人なので使わない。
     "0001791786": {"name": "Elliott Investment Management", "tier": 2},
     "0001040273": {"name": "Third Point LLC", "tier": 2},
-    "0002012383": {"name": "BlackRock Inc", "tier": 3},   # 2026-10-06: 旧1364742は2024-06で提出終了（再編）
+    "0002012383": {"name": "BlackRock Inc", "tier": 3},   # 1364742 は提出終了（再編）のため使わない
     "0000102909": {"name": "Vanguard Group", "tier": 3},
     "0000093751": {"name": "State Street", "tier": 3},
     "0000315066": {"name": "Fidelity", "tier": 3},
@@ -202,7 +202,7 @@ def _safe_parse_dt(s: str) -> datetime:
 # BLOCK 3: SEC EDGAR API からポジション取得
 # ==============================================================
 
-# 2026-07-27是正（U-2 / F-2）: SECは連絡先を含まないUser-Agentを403で拒否する。
+# U-2 / F-2: SECは連絡先を含まないUser-Agentを403で拒否する。
 # us_8k_monitor.py:116-122 の _sec_user_agent() と同型（優先順: 環境変数 →
 # cfg.SEC_USER_AGENT（cfg未指定時は import config でのフォールバック取得）→ 固定文字列）。
 # U-1b: 実体は sec_client.user_agent() に統合済み。本関数は tests/test_sec_user_agent.py
@@ -220,7 +220,7 @@ def _fetch_cik_filings(cik: str, cfg=None) -> Optional[dict]:
     URL: https://data.sec.gov/submissions/{CIK}.json
 
     挙動注記: タイムアウトは sec_client 側（HTTP_TIMEOUT 既定15秒 / cfg.SEC_HTTP_TIMEOUT
-    で上書き可）に委譲する。旧実装の既定値（15秒）と同一。
+    で上書き可）に委譲する。
 
     Returns:
         submissions dict or None
@@ -238,8 +238,7 @@ def _fetch_cik_filings(cik: str, cfg=None) -> Optional[dict]:
 def _find_infotable_url(cik: str, acc_clean: str, cfg=None) -> Optional[str]:
     """提出書類の索引（index.json）から保有明細XMLのURLを探す。
 
-    2026-10-05: 旧実装は存在しない固定名 infotable.json を取りに行き、全機関が404だった
-    （2026-07 以降 us.institutional_positions は0行）。明細XMLの名前は提出ごとに違う
+    固定名 infotable.json は存在しない（404）。明細XMLの名前は提出ごとに違う
     （例 53405.xml / form13fInfoTable.xml）ので、primary_doc.xml 以外の XML を明細とみなす。
     """
     base = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{acc_clean}/"
@@ -282,7 +281,7 @@ def parse_infotable_xml(text: str, value_in_thousands: bool = False) -> list[dic
                     "value_usd": value * 1000 if value_in_thousands else value,
                     "shares": shares, "ticker": ""})
     # 2023年以降でも千ドル単位で出す提出者がある（T. Rowe Price 等）。1株あたり評価額の中央値が
-    # $1 未満なら千ドル単位とみなす（2026-10-06）。
+    # $1 未満なら千ドル単位とみなす。
     if not value_in_thousands:
         px = sorted(r["value_usd"] / r["shares"] for r in out if r["shares"] > 0)
         if px and px[len(px) // 2] < 1.0:
@@ -330,10 +329,7 @@ def _fetch_13f_holdings(
 
 
 def _resolve_tickers(holdings: list, cfg=None) -> None:
-    """CUSIP → ティッカー（OpenFIGI・キー不要・結果は cusip_ticker.json に保存して使い回す）。
-
-    2026-10-05: 旧実装は十数社の手書き対応表だけで、ほとんどの保有がティッカー無しになっていた。
-    """
+    """CUSIP → ティッカー（OpenFIGI・キー不要・結果は cusip_ticker.json に保存して使い回す）。"""
     import json as _json
     import urllib.request as _ur
     cache_p = Path(getattr(cfg, "CACHE_DIR", "stock_data/cache")) / "cusip_ticker.json"
@@ -382,7 +378,7 @@ def _get_latest_13f_accession(submissions: dict) -> Optional[str]:
     return None
 
 
-HISTORY_VERSION = 2   # 2026-10-06: 前回提出との差分方式（version 1 の履歴は使わずに取り直す）
+HISTORY_VERSION = 2   # 前回提出との差分方式（version 1 の履歴は使わずに取り直す）
 
 
 def _get_13f_filings(submissions: dict, n: int = 2) -> list[tuple[str, str]]:
@@ -415,8 +411,7 @@ def _period_to_quarter(report_date: str) -> str:
 def diff_holdings(curr: list[dict], prev: list[dict], cik_info: dict) -> list[dict]:
     """同じ機関の今回と前回の13F保有明細（CUSIP単位）を比べて変化を返す（純関数）。
 
-    2026-10-06: 旧実装は「前四半期の保存データ」と比べていたが、保存が空だと全保有が
-    new_position（BlackRock等で1,900件超の『新規取得』）になっていた。前回提出そのものと比べる。
+    保存データではなく前回提出そのものと比べる（保存が空だと全保有が new_position になるため）。
     増減は株数で判定（評価額は株価で動くため）。株数が無いときだけ評価額で見る。
     """
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -682,7 +677,7 @@ def run_institutional_13f_monitor(
     print(f"    🎯 [13f] 監視対象: {len(target_ciks)}機関")
 
     # ── 各機関: 最新の13F と その前の13F を比べる ───────────────
-    # 2026-10-06: 提出が前回から変わっていない機関は取り直さない（提出期間中の毎日39分を回避）。
+    # 提出が前回から変わっていない機関は取り直さない（提出期間中に毎日全件取り直すと長時間かかる）。
     #   ティッカー変換（OpenFIGI）は変化のあった銘柄だけ。大手機関（Tier3）は評価額が
     #   INSTITUTION_MIN_NEW_POSITION_USD 以上の変化だけ残す（数千件の小口変化はノイズ）。
     min_large = float(getattr(cfg, "INSTITUTION_MIN_NEW_POSITION_USD", 1_000_000_000))

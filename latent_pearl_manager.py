@@ -1,5 +1,5 @@
 # ==============================================================
-# latent_pearl_manager.py  v1.0  (Wave 7 - Step 8)
+# latent_pearl_manager.py  v1.0
 # 潜伏銘柄（Latent Pearl）管理モジュール
 # ==============================================================
 # 【役割】
@@ -55,7 +55,7 @@
 #   cross_size_signal.py（get_signals_for_ticker / get_target_tickers_by_signal_type）
 #   midterm_plan_tracker.py（get_midterm_score / get_midterm_trajectory）
 #   size_decay_manager.py（get_nano_queue）
-#   config.py（Wave 7追加定数）
+#   config.py（潜伏銘柄用の定数）
 # 【役割】
 #   independence_score_calculator.py が検出した Latent Pearl 候補を
 #   latent_pearl_cache.json に登録・更新・TTL管理し、
@@ -202,12 +202,11 @@ def _save_cache(cfg, data: dict) -> None:
 # ==============================================================
 
 def _get_live_catalysts(ticker: str, cfg) -> tuple[float, list]:
-    """いま動いている材料からカタリスト点（0〜10）を数える（2026-10-05）。
+    """いま動いている材料からカタリスト点（0〜10）を数える。
 
-    カタリストの元だったテキストシグナル（text_signal）を 2026-09 に停止したため、
-    independence_scores の catalyst_score が全銘柄 0 になり、条件A（独立性×カタリスト）が
-    一度も成立していなかった。直近30日の TDnet（自社株買い・増配）、決算サプライズ高確率、
-    PEAD（決算後の上方ドリフト）を材料として数える。
+    テキストシグナル（text_signal）は停止中のため、independence_scores の catalyst_score は
+    全銘柄 0 になる（それに頼ると条件Aが成立しない）。代わりに直近30日の TDnet
+    （自社株買い・増配）、決算サプライズ高確率、PEAD（決算後の上方ドリフト）を材料として数える。
     """
     from datetime import timedelta as _td
     score, flags = 0.0, []
@@ -494,8 +493,7 @@ def _check_promotion(
             pc_path   = cache_dir / "pearl_candidates.json"
             if pc_path.exists():
                 pc_data = json.loads(pc_path.read_text(encoding="utf-8"))
-                # 2026-10-05: pearl_candidates.json は「行のリスト」。辞書として探していたため
-                # 一度も昇格フラグが書かれていなかった
+                # pearl_candidates.json は「行のリスト」（辞書として探すと一致しない）
                 rows = pc_data if isinstance(pc_data, list) else []
                 hit = False
                 for row in rows:

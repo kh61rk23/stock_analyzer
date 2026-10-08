@@ -101,10 +101,9 @@ BOJ_DECISION_DATES_2026 = [
 ]
 
 # FOMC 予定（2026年・公開情報）
-# 2026-09-14: FRB公式（federalreserve.gov/monetarypolicy/fomccalendars.htm）と
-# 照合して是正。旧リストは 8回中6回（1・3・4/5・6・10/11・12月）が
-# 1日〜2週間ずれていた。catalyst_calendar もこのリストを正本として
-# 議決日（初日＋1日）を組み立てるので、変更時はここだけ直せばよい。
+# 正本は FRB公式（federalreserve.gov/monetarypolicy/fomccalendars.htm）。更新時は必ず照合する。
+# catalyst_calendar もこのリストを正本として議決日（初日＋1日）を組み立てるので、
+# 変更時はここだけ直せばよい。
 FOMC_MEETINGS_2026 = [
     "2026-01-27",   # 27-28日, 決定: 28日
     "2026-03-17",   # 17-18日, 決定: 18日（SEP）

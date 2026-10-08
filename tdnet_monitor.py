@@ -222,8 +222,8 @@ def _parse_tdnet_rows(html: str, date_str: str) -> list[dict]:
             title_s = cells[3][0]  # "自己株式取得に関するお知らせ"
             url_s   = cells[3][1]  # URL（あれば）
 
-            # 2026-09-17: TDnet のコード欄は "67580" / "130A0" の5桁（末尾0）で、
-            # 4桁数字だけを通す判定により全行が捨てられ毎日「解析行数: 0件」だった。
+            # TDnet のコード欄は "67580" / "130A0" の5桁（末尾0）。
+            # 4桁数字だけを通す判定にすると全行が捨てられる。
             code_s = code_s.strip().upper()
             if re.match(r"^[0-9][0-9A-Z]{3}0$", code_s):
                 code_s = code_s[:4]
@@ -286,10 +286,8 @@ def _classify_event(title: str, cfg=None) -> Optional[str]:
     """
     開示タイトルをキーワードマッチングで分類する。
 
-    2026-07-25 バッチ4: 監視対象カテゴリを config.TDNET_MONITOR_CATEGORIES で
-    絞り込めるようにした。従来 DETECT_PATTERNS の全カテゴリが無条件に検知され、
-    config 側の定数は誰にも読まれていなかった。
-    未設定・空なら全カテゴリを対象とする（従来どおり）。
+    監視対象カテゴリは config.TDNET_MONITOR_CATEGORIES で絞り込める。
+    未設定・空なら DETECT_PATTERNS の全カテゴリを対象とする。
 
     Returns:
         カテゴリ文字列 or None（対象外）
@@ -340,9 +338,8 @@ def _find_activist_hits(events: list[dict], cfg) -> list[dict]:
     screener_history.json の直近エントリから activist_score を参照。
     """
     threshold = getattr(cfg, "ACTIVIST_SCORE_THRESHOLD", 70.0)
-    # 2026-07-25: BLOCK M-3 の ENABLE_ACTIVIST_FILTER を配線。
-    # ACTIVIST_SCORE_THRESHOLD / ACTIVIST_CATALYST_ALERT は読まれていたのに
-    # 機能そのものの有効フラグだけが誰にも読まれていなかった。
+    # BLOCK M-3 の ENABLE_ACTIVIST_FILTER（機能そのものの有効フラグ）。
+    # tests/test_enable_flags_wiring.py が配線を検査する。
     if not getattr(cfg, "ENABLE_ACTIVIST_FILTER", True):
         return []
     if not getattr(cfg, "ACTIVIST_CATALYST_ALERT", True):
@@ -503,9 +500,8 @@ def run_tdnet_monitor(cfg, results: dict = None) -> dict:
     t0       = datetime.now()
 
     # ── Step 1-2: HTML 取得・行解析 ──────────────────────────
-    # 2026-09-17: 本日分の1ページ目だけを読んでいた。実行は JST 9〜14時台で、
-    # 決算など大半の開示は前営業日の15時以降に出るため**一度も読まれず**、
-    # 100件を超える日は2ページ目以降も落ちていた。前営業日と本日の全ページを読む
+    # 実行は JST 9〜14時台で、決算など大半の開示は前営業日の15時以降に出る。
+    # 100件を超える日は2ページ目以降もあるため、前営業日と本日の全ページを読む
     # （通知済みキャッシュで重複は除外される）。日付は JST で決める。
     rows: list[dict] = []
     days = _tdnet_target_days(datetime.now(timezone.utc))
@@ -565,8 +561,8 @@ def run_tdnet_monitor(cfg, results: dict = None) -> dict:
         "div_up":         div_up,
         "cancel":         cancel,
         "mbo":            mbo,
-        "large_holding":  large_holding,    # ★ P-4追加
-        "midterm_plan":   [ev for ev in new_events if ev["category"] == "MIDTERM_PLAN"],  # ★ I-5追加
+        "large_holding":  large_holding,    # P-4
+        "midterm_plan":   [ev for ev in new_events if ev["category"] == "MIDTERM_PLAN"],  # I-5
         "activist_hits":  activist_hits,
         "total":          len(new_events),
         "date":           today_s,

@@ -63,13 +63,12 @@ class DBRestClient:
         self.session = session
         self.usage_endpoint = usage_endpoint
         self._auth_failed = False
-        # 2026-09-08: 連続GETが速すぎて 429 を誘発し、その再試行が日次予算を
-        # 食い潰して全件失敗していた（edinetdb 0/11・fudosandb 0/45）。
+        # 連続GETが速すぎると 429 を誘発し、その再試行が日次予算を食い潰す。
         # 送信間隔を最低 min_interval 秒あけて 429 自体を防ぐ。
         self.min_interval = max(0.0, float(min_interval))
         self._last_request_at = 0.0
         self._rate_limited = False   # 429が続いたら当日は打ち切る
-        # 2026-07-28: ログ抑制カウンタと直近の失敗種別。
+        # ログ抑制カウンタと直近の失敗種別。
         # last_error は呼び出し側が「404=恒久的な不在」と
         # 「429/予算枯渇=一時障害」を区別するために読む。
         self._log_counts: dict[str, int] = {}
@@ -137,9 +136,8 @@ class DBRestClient:
             print(f"⚠️ {self.source_name} 日次台帳の保存失敗: {exc}")
 
     def _headers(self) -> dict[str, str]:
-        # 両ベンダーの公式案内は Authorization: Bearer。旧実装の X-API-Key でも
-        # 通っていた実績があるため、どちらか一方しか見ないサーバーでも
-        # 認証が成立するよう両方送る。
+        # 両ベンダーの公式案内は Authorization: Bearer だが X-API-Key でも通る。
+        # どちらか一方しか見ないサーバーでも認証が成立するよう両方送る。
         return {
             "Authorization": f"Bearer {self.api_key}",
             "X-API-Key": self.api_key,
@@ -167,8 +165,8 @@ class DBRestClient:
     def _log_once(self, key: str, message: str) -> None:
         """同一種別のログを1実行につき1回だけ出す。
 
-        2026-07-28: 「日次予算到達」「GET再試行上限」が呼び出しのたびに
-        出力され、本番ログが同じ行で埋まって他の異常が見えなくなっていた。
+        「日次予算到達」「GET再試行上限」を呼び出しのたびに出すと
+        本番ログが同じ行で埋まり他の異常が見えなくなるため。
         件数は最後に集計して出す（_log_summary）。
         """
         self._log_counts[key] = self._log_counts.get(key, 0) + 1
@@ -241,8 +239,7 @@ class DBRestClient:
             if response.status_code == 429:
                 # 429は「速すぎる」の合図。間隔を広げて数回だけ待ち、
                 # それでも続くなら当日は打ち切る。再試行を重ねるほど
-                # 日次予算を食い潰し、他モジュールの取得まで巻き添えになる
-                # （2026-08-27: fudosandb がこれで予算90を空にして0/45）。
+                # 日次予算を食い潰し、他モジュールの取得まで巻き添えになる。
                 self.min_interval = min(8.0, max(1.0, self.min_interval * 2))
                 if attempt == MAX_RETRIES:
                     self._rate_limited = True
@@ -346,9 +343,8 @@ class DBRestClient:
         if budget_remaining(
             ledger.get("calls_used", 0), self.daily_budget, remote_remaining
         ) <= 0:
-            # 2026-07-28 の抑制対応から漏れており、ここだけ生printのままで
-            # 予算切れ後の呼び出しごとに同じ行を出し続けていた
-            # （2026-08-27 実測で20行以上、他の異常が埋もれる）。
+            # 生printだと予算切れ後の呼び出しごとに同じ行が出て
+            # 他の異常が埋もれるため、_log_once で1回だけ出す。
             self._log_once(
                 "budget",
                 f"⏹️ {self.source_name} 日次予算{self.daily_budget}到達")

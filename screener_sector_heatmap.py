@@ -271,7 +271,7 @@ def calc_score_trend_3m(
     return results
 
 # ==============================================================
-# BLOCK 4.5: 週次トレンド変化率・急増業種検出（Wave 0 - Idea2-C）
+# BLOCK 4.5: 週次トレンド変化率・急増業種検出（Idea2-C）
 # ==============================================================
 
 def calc_sector_trend_change(weekly_counts: dict) -> dict:

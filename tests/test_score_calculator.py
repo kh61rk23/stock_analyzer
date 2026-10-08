@@ -6,7 +6,7 @@
 #   ・対象ユニバース = 保有銘柄 ＋ us_screener上位50（重複除去）
 #   ・正規化: JP業種スコア -30..100 → 0..100 / 出力は常に0..100
 #
-# Phase B（U-9 / 2026-07-28）追加分:
+# Phase B（U-9）:
 #   ・composite = clamp(base + dcf_adj + tech_adj + geo_adj, 0, 100)
 #   ・UNIFIED_SCORE_PHASE_B_ENABLED=False で Phase A と完全一致（非常口）
 #   ・成分が取れない銘柄は base のみ（＝Phase A と同値・劣化しない）
@@ -131,7 +131,7 @@ class TestRunScoreCalculator:
 
 
 # ==============================================================
-# Phase B（U-9 / 2026-07-28）
+# Phase B（U-9）
 # ==============================================================
 
 class CfgB:
@@ -274,7 +274,7 @@ class TestPhaseBComponents:
 
 class TestPhaseBApplicability:
     """
-    二重計上の排除（2026-07-28 是正）。base に含まれる成分は加算しない。
+    二重計上の排除。base に含まれる成分は加算しない。
     根拠: stock_screener.apply_valuation_to_candidate（L1162-1179）が
     composite に tech/dcf を織り込み、base_agent が業種 composite に geo を
     織り込む。us_stock_screener._calc_score はいずれも含まない。

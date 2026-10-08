@@ -1,5 +1,5 @@
 # ==============================================================
-# tests/test_taxonomy_wiring.py — Wave R2（taxonomy完遂）の受入テスト
+# tests/test_taxonomy_wiring.py — taxonomy 配線の受入テスト
 # ==============================================================
 # 対象:
 #   R2-1 taxonomy_loader（承認済み抽出・検証・BQ行整形・MERGE SQL）

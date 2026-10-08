@@ -761,9 +761,8 @@ def run_options_monitor(cfg, sector_results: Optional[dict] = None) -> dict:
     print("    VIX / VVIX 取得中...")
     vix_data = _fetch_vix_data()
     # ── [Phase US-4] VIX term structure & SKEW ───────────────
-    # 2026-07-25: BLOCK US-4 の3フラグ（ENABLE_VIX_TERM_STRUCTURE /
-    # ENABLE_SKEW_INDEX / ENABLE_IV_SPIKE_DETECT）を配線。実装は揃っていたのに
-    # 有効フラグが誰にも読まれず、False にしても外部取得が止まらなかった。
+    # BLOCK US-4 の3フラグ（ENABLE_VIX_TERM_STRUCTURE / ENABLE_SKEW_INDEX /
+    # ENABLE_IV_SPIKE_DETECT）で外部取得を個別に止められる。
     # 無効時は空dictを入れる（下流は .get() で読むため式は壊れない）。
     _ts_on   = getattr(cfg, "ENABLE_VIX_TERM_STRUCTURE", True)
     _skew_on = getattr(cfg, "ENABLE_SKEW_INDEX", True)
@@ -828,8 +827,8 @@ def run_options_monitor(cfg, sector_results: Optional[dict] = None) -> dict:
             us_tickers = sector_results["_us_screener_tickers"][:10]
         if us_tickers and getattr(cfg, "ENABLE_IV_SPIKE_DETECT", True):
             print(f"    IV急騰チェック: {len(us_tickers)}銘柄...")
-            # 閾値も config を正本にする（従来はモジュール定数が既定値を
-            # 固定しており、config.IV_SPIKE_THRESHOLD が効かなかった）。
+            # 閾値も config.IV_SPIKE_THRESHOLD を正本にする（モジュール定数の
+            # 既定値に任せると config 側が効かない）。
             iv_spikes = detect_iv_spikes(
                 us_tickers,
                 threshold=int(getattr(cfg, "IV_SPIKE_THRESHOLD",
@@ -843,11 +842,11 @@ def run_options_monitor(cfg, sector_results: Optional[dict] = None) -> dict:
         "vix_data":     vix_data,
         "sentiment":    sentiment,
         "adjustments":  adjustments,
-        "term_structure":   ts_data,          # ★ US-4追加
-        "skew":             skew_data,        # ★ US-4追加
-        "iv_spikes":        iv_spikes,        # ★ US-4追加
-        "term_score":       ts_data.get("term_score", 50.0),  # ★ signal_aggregator用
-        "crisis_signal":    ts_data.get("crisis_signal", False),  # ★ inference_engine用
+        "term_structure":   ts_data,          # US-4
+        "skew":             skew_data,        # US-4
+        "iv_spikes":        iv_spikes,        # US-4
+        "term_score":       ts_data.get("term_score", 50.0),  # signal_aggregator用
+        "crisis_signal":    ts_data.get("crisis_signal", False),  # inference_engine用
         "timestamp":    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
     result["summary_text"] = format_options_report(result)

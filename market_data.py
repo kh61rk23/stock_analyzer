@@ -8,17 +8,16 @@
 #
 #   要件定義書_JP-US統合_20260726.md
 #     §3-1（4層モデル）/ §3-2（新規モジュールの責務）/ §3-3(a)（返り値契約）
-#   HANDOFF_JP-US統合_20260727.md §4 Batch 6（U-5）
+#   HANDOFF_JP-US統合_20260727.md §4（U-5）
 #
 # 【この層が解消する問題】
 #   F-4: `market_cap_b` が JP=億円 / US=十億USD と **同名で単位が違う**。
 #        → 本モジュールは `market_cap_b` を **返さない**。現地通貨の生値
-#          `market_cap_raw` のみを持つ（単位の是正は消費側の責務）。
-#   F-1: JP 側に `recommendationMean` 等が無く revision_score が恒常0だった。
+#          `market_cap_raw` のみを持つ（単位の換算は消費側の責務）。
+#   F-1: JP 側でも `recommendationMean` 等が無いと revision_score が恒常0になる。
 #        → `rec_mean` / `rec_key` / `target_price` / `analyst_upside` /
 #          `beta` / `week52_change` / `accrual_ratio` を **両市場で必ず取得**する。
-#   品質差: US だけが 429 リトライを持っていた。
-#        → リトライを本モジュールへ集約し、JP にも自動的に適用される。
+#   品質差: 429 リトライを本モジュールへ集約し、JP/US 両方に適用する。
 #
 # 【この層の責務でないもの】
 #   - スコア計算・フィルタ判定（各スクリーナーに残す）
@@ -99,8 +98,8 @@ def _normalize(ticker: str, market: str, info: dict,
     ここには市場分岐を **置かない**（市場差は取得側＝価格判定のみ）。
     """
     # ── 名称 ────────────────────────────────────────────────
-    # JP 既存実装は longName 優先、US 既存実装は shortName 優先だったため
-    # 両方を持たせる（どちらを使うかは消費側の従来挙動に委ねる）。
+    # JP 側は longName 優先、US 側は shortName 優先で使うため
+    # 両方を持たせる（どちらを使うかは消費側に委ねる）。
     long_name  = info.get("longName")
     short_name = info.get("shortName")
 
@@ -132,7 +131,7 @@ def _normalize(ticker: str, market: str, info: dict,
     # ── アナリスト ─────────────────────────────────────────
     target_price = _clean(info.get("targetMeanPrice"))
     analyst_upside = None
-    # 2026-07-27 設計判断（JP/US 揃え済み）: target_price は truthy で判定する。
+    # 設計判断（JP/US 共通）: target_price は truthy で判定する。
     # targetMeanPrice=0 は「目標株価なし」であり、乖離率 -100% を算出しない。
     if current_price and current_price > 0 and target_price:
         analyst_upside = (target_price - current_price) / current_price
@@ -160,9 +159,8 @@ def _normalize(ticker: str, market: str, info: dict,
         # ── バリュエーション（無次元） ──────────────────────
         "per":       _clean(info.get("trailingPE")),
         "pbr":       _clean(info.get("priceToBook")),
-        # 2026-09-29: yfinance の dividendYield は %値（2.72 = 2.72%）。ここだけ比率化が
-        # 漏れており、スクリーナー経由の配当利回りが100倍（2.72 → 272%表示・4%以上の
-        # 高配当判定から漏れる）になっていた。finance_logic と同じ規則で比率にそろえる
+        # yfinance の dividendYield は %値（2.72 = 2.72%）。そのまま使うと100倍
+        # （272%表示・高配当判定から漏れる）になるため、finance_logic と同じ規則で比率にそろえる
         "div_yield": _div_yield_ratio(info),
 
         # ── 収益性（比率） ──────────────────────────────────
@@ -192,7 +190,7 @@ def _normalize(ticker: str, market: str, info: dict,
         "payout_ratio":        _clean(info.get("payoutRatio")),
         "inventory_turnover":  inventory_turnover,
 
-        # ── アナリスト（★ F-1 の根治: 両市場で必ず取得する）──
+        # ── アナリスト（F-1: 両市場で必ず取得する）──
         "rec_mean":       _clean(info.get("recommendationMean")),
         "rec_key":        info.get("recommendationKey") or "",   # str のまま
         "analyst_count":  _clean_int(info.get("numberOfAnalystOpinions")),
@@ -241,7 +239,7 @@ def fetch_quote(ticker: str, market: str, *,
         market      : "JP" | "US"（大文字小文字は問わない）
         cfg         : 将来 MARKET_PROFILE（U-8）を参照するための予約引数。
                       現時点では未使用（既定挙動を変えないため）。
-        max_retries : 例外時の試行回数。既定3（us_stock_screener の従来値）。
+        max_retries : 例外時の試行回数。既定3（us_stock_screener と同じ）。
 
     Returns:
         §3-3(a) の契約辞書（`market_cap_b` は **含まない**）。

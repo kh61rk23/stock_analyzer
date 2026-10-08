@@ -1,6 +1,6 @@
 # ==============================================================
 # edinetdb_fields.py — EdinetDB /financials（年次）の数値項目の定義
-# 2026-10-03 生成: https://edinetdb.jp/v1/openapi.json (EDINET DB API 1.1.0) の
+# 生成元: https://edinetdb.jp/v1/openapi.json (EDINET DB API 1.1.0) の
 #   components.schemas.Financial から数値型（integer/number）を抽出。
 #   区分: PL=損益計算書 / BS=貸借対照表 / CF=キャッシュフロー計算書 /
 #         株式=株式・自己株式・政策保有 / 人的資本 / 環境 / 指標=1株指標・比率など
@@ -164,7 +164,7 @@ FINANCIAL_ITEMS = [
     ('trust_executive_count', '株式', '信託保有株数のうち役員向け株式給付信託', '株'),
     ('trust_period_start_count', '株式', '信託保有株数の期首値', '株'),
     ('trust_shares_count', '株式', '信託保有株数', ''),
-    # 2026-10-03: 会社ページ（edinetdb.jp/company/）の埋め込みデータにだけある数値項目
+    # 会社ページ（edinetdb.jp/company/）の埋め込みデータにだけある数値項目
     ('accumulated_oci', 'BS', 'その他の包括利益累計額', '円'),
     ('capital_stock', 'BS', '資本金', '円'),
     ('dividend_yield', '指標', '配当利回り', '小数'),

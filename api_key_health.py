@@ -3,9 +3,9 @@
 # ==============================================================
 # 目的:
 #   各種APIキーが「生きているか / 失効しているか」を、実行ログの冒頭で
-#   1行サマリ＋詳細表として一望できるようにする。従来はキー失効が
+#   1行サマリ＋詳細表として一望できるようにする。キー失効は放っておくと
 #   下流モジュールの雑多なエラー（DeepL403・CSE403・EDINET 0件 等）
-#   として散らばり、原因特定にログ考古学が必要だった。
+#   として散らばり、原因が特定しにくいため。
 #
 # 設計方針:
 #   ・probe実行部（ネットワークI/O）と判定部（純粋ロジック）を分離する。
@@ -53,14 +53,10 @@ _SUMMARY_ORDER = [STATE_ALIVE, STATE_DEAD, STATE_LIMITED, STATE_SKIPPED, STATE_U
 PROBE_TIMEOUT = 5
 
 # 遅い相手向けのタイムアウト（秒/コール）
-# 2026-09-12: e-Stat のプローブが 2026-07 以降ずっと
-# 「⚠️ 判定不能（通信エラー・タイムアウト）」を出し続けていた。
-# しかし同じ実行で本体の gov_pipeline は「政府統計取得完了: 14/8」で
-# 成功しており、キーは生きている＝プローブ側の偽陽性だった。
-# 原因は getStatsList（統計カタログの一覧）が limit=1 でも重く、
-# 米国のランナーから日本の政府APIを叩くと 5 秒に収まらないこと
-# （手元の日本からの実測では 0.2〜0.5 秒で返る）。
-# 常時⚠️は本物の異常を埋もれさせるため、相手に合わせた値にする。
+# e-Stat の getStatsList（統計カタログの一覧）は limit=1 でも重く、
+# 米国のランナーから叩くと 5 秒に収まらない（日本からなら 0.2〜0.5 秒）。
+# 5 秒だとキーが生きていても常時「⚠️ 判定不能」になり、本物の異常を
+# 埋もれさせるため、相手に合わせた値にする。
 PROBE_TIMEOUT_SLOW = 15
 
 
@@ -221,9 +217,9 @@ def _probe_edinetdb(key: str) -> dict:
     """
     EdinetDB を認証必須の /companies/{code}/analysis で1コール判定。
     200=✅ / 401,403=❌ / 429=⚠️（レート制限・失効ではない）/ 他=⚠️。
-    2026-07-16 Fable裁定: /search は認証不要のため失効キーでも200が返り
-    偽✅になる（edinet_client.py L137に明記）→ 予算1コール消費を許容して
-    認証必須エンドポイントに変更（予算80-100/日に対して1コールは無視できる）。
+    /search は認証不要のため失効キーでも200が返り偽✅になる
+    （edinet_client.py L137に明記）。予算1コール消費を許容して認証必須
+    エンドポイントを使う（予算80-100/日に対して1コールは無視できる）。
     対象は三菱UFJ（E03606）＝EdinetDBに確実に存在する大型固定コード。
     """
     req = _requests()
@@ -397,7 +393,7 @@ def _probe_bq(cfg) -> dict:
     except Exception:
         return _entry(STATE_LIMITED, "判定不能（edinet_bq_client 未ロード）")
     client = None
-    # 2026-07-16 Fable裁定: 正式APIは class EDINETBQClient（edinet_bq_client.py L34）
+    # 正式APIは class EDINETBQClient（edinet_bq_client.py L34）
     for factory in ("EDINETBQClient", "get_bq_client", "get_client", "make_client", "_get_client"):
         fn = getattr(_bq, factory, None)
         if callable(fn):
@@ -414,10 +410,10 @@ def _probe_bq(cfg) -> dict:
                 break
     if client is None:
         return _entry(STATE_LIMITED, "判定不能（BQクライアント生成関数が見つからない）")
-    # 2026-07-19是正: EDINETBQClient はラッパーで query() を持たない
+    # EDINETBQClient はラッパーで query() を持たない
     # （生の google.cloud.bigquery.Client は .client 属性に保持）。
-    # 旧コードは client.query("SELECT 1") が AttributeError になり
-    # 「認証・権限エラーの疑い」と誤報告していた（IAMは正常だった実害あり）。
+    # ラッパーに直接 query() を呼ぶと AttributeError になり、IAM が正常でも
+    # 「認証・権限エラーの疑い」と誤報告する。
     raw = getattr(client, "client", None) or client
     if not callable(getattr(raw, "query", None)):
         return _entry(STATE_LIMITED, "判定不能（query可能なBQクライアントが見つからない）")
@@ -463,11 +459,10 @@ def run_key_health(cfg) -> dict:
 
     g = lambda k: getattr(cfg, k, "") or ""
 
-    # 2026-07-28: 既定値が他モジュールと食い違っていた。
+    # 既定値は他モジュールと揃えて True。
     #   edinetdb_ingestor.py:408  → getattr(..., True)
     #   stock_analyzer_main.py:1407 → getattr(..., True)
-    #   ここだけ False で、「ingest は動いているのに health は dormant と表示」
-    #   という矛盾したログになっていた。True に揃える。
+    #   食い違うと「ingest は動いているのに health は dormant と表示」になる。
     # なお現在の config は既定 "0"（=False）なので、日次分析側の ingest
     # ステージ自体がスキップされている。EdinetDB から取りたい場合は
     # 環境変数 ENABLE_EDINETDB_INGEST=1 を設定する必要がある。

@@ -1,9 +1,9 @@
 # ==============================================================
-# politician_signal_scorer.py  v1.0  (Wave 3 - Policy Ph2)
+# politician_signal_scorer.py  v1.0  (Policy Ph2)
 # 議員取引スコア完全版・Level 4 Override エンジン
 # ==============================================================
 # 【役割】
-#   Wave 0 の politician_monitor.py（下院のみ・単純スコア）を拡張し、
+#   politician_monitor.py（下院のみ・単純スコア）を拡張し、
 #   ① 上院データ取得ロジックの追加
 #   ② 上院・下院両院の委員会マッピング完全版
 #   ③ 重要投票日との近接距離によるスコア補正
@@ -28,8 +28,8 @@
 #   composite\_score に score_adj を直接加算（jp_us_sector_bridge.py 経由）
 #
 # 【上院データソース】
-#   2026-09-11 以降、上院データの新規取得は行わない
-#   （efts.senate.gov が DNS不在。実在する efdsearch.senate.gov は
+#   上院データの新規取得は行わない
+#   （efts.senate.gov は実在しないホスト。実在する efdsearch.senate.gov は
 #     利用規約同意のセッションCookieを要求するため同じ作りでは取得不可）。
 #   politician_history.json に残る既存 Senate データの再スコアのみ行う。
 #
@@ -45,8 +45,6 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
-# 2026-09-11: urllib / time は上院 eFD への通信でのみ使っていた。
-# その経路を撤去したため import も落とす。
 
 from config_sync import sync_module_constants
 
@@ -54,12 +52,9 @@ from config_sync import sync_module_constants
 # BLOCK 0: 定数
 # ==============================================================
 
-# 2026-09-11: 上院 eFD への通信を撤去した。
-# efts.senate.gov は DNS 解決できないホストで、実装以来一度も
-# レコードを返していない。以後は politician_history.json に残る
-# 既存の上院データを再スコアする経路（get_senate_transactions）だけを使う。
-# _SENATE_PTR_INDEX（congress.gov member API）はどこからも参照されて
-# いなかったため同時に撤去。
+# 上院 eFD への通信は行わない（efts.senate.gov は実在しないホスト）。
+# politician_history.json に残る既存の上院データを再スコアする経路
+# （get_senate_transactions）だけを使う。
 
 # 上院委員会 → committee_multiplier（最大 1.8）
 _SENATE_COMMITTEE_MULTIPLIER: dict[str, float] = {
@@ -268,7 +263,7 @@ def score_transaction_ph2(
     cfg=None,
 ) -> dict:
     """
-    Wave 3 Ph2 拡張スコアリングを実行する。
+    Ph2 拡張スコアリングを実行する。
 
     Ph1（politician_monitor.py の score_transaction）に対して、
     ① 上院チャンバーボーナス
@@ -421,8 +416,7 @@ def get_senate_transactions(
         start    = start_dt.strftime("%Y-%m-%d")
 
         # ── politician_history.json の Senate データを再スコア ──
-        # 2026-09-11: 旧①「eFD API から取得」は efts.senate.gov が
-        # DNS不在で常に空を返していたため撤去。既存履歴のみを扱う。
+        # eFD API からの取得は行わず、既存履歴のみを扱う。
         try:
             cache_dir = Path(getattr(cfg, "CACHE_DIR", "/tmp"))
             p = cache_dir / "politician_history.json"
@@ -531,7 +525,7 @@ def run_politician_signal_scorer(
     cfg=None,
 ) -> dict:
     """
-    Wave 3 - Policy Ph2 のメインスコアリングエントリポイント。
+    Policy Ph2 のメインスコアリングエントリポイント。
     policy_signal_applier.py から呼ばれる。
 
     処理フロー:

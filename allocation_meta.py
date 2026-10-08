@@ -1,5 +1,5 @@
 # ==============================================================
-# allocation_meta.py — マルチ戦略資金配分メタレイヤ（Wave R4-4 / S11）
+# allocation_meta.py — マルチ戦略資金配分メタレイヤ（R4-4 / S11）
 # ==============================================================
 # 【役割】S2ペーパー/実弾の戦略別月次リターン系列から、分数ケリー×
 #   リスクパリティで資金配分を提案する（月次）。制約=カジノ枠。
@@ -9,7 +9,7 @@
 #   リスクパリティ補正: w_s = f_s'/σ_s を正規化
 #   制約: Σ(カジノ系w)×総資産 ≤ カジノ枠(min(15%,200万))・コア長期枠は不可侵
 #   淘汰: 直近6ヶ月 PF<1.0 かつ bootstrap p>0.5 → 配分0
-# 【原則】出力は提案のみ。**健太承認後に** config（PAPER_STRATEGIES枠値）を変更。
+# 【原則】出力は提案のみ。config（PAPER_STRATEGIES枠値）の変更は**人が承認してから**手で行う。
 # 使い方: python3 allocation_meta.py [YYYYMM]
 # ==============================================================
 
@@ -96,9 +96,8 @@ def calc_profit_factor(rets: list, months: int = 6) -> float | None:
 
     $PF = \\frac{\\sum |利益月|}{\\sum |損失月|}$
 
-    2026-07-25 バッチ6で実装。従来 _load_paper_returns() が PF を None 固定で
-    返しており、cull_check() が常に False → **淘汰判定が一度も働かなかった**。
-    config.CULL_MONTHS（観測月数）もそのため未参照だった。
+    cull_check() の淘汰判定の入力。PF が None 固定だと淘汰判定が一度も働かない。
+    months には config.CULL_MONTHS（観測月数）を渡す。
 
     Returns:
         PF / 損失月が無く利益がある場合は None（＝淘汰対象外・判定不要）
@@ -124,7 +123,6 @@ def bootstrap_p_value(rets: list, months: int = 6,
     帰無仮説「平均リターン ≤ 0」に対する p 値の近似。
     小さいほど「勝ちが本物」、大きいほど「偶然の勝ち／実際は負け」。
 
-    2026-07-25 バッチ6で実装（従来は None 固定）。
     再現性のため seed 固定。cull_check が p > CULL_P_TH で淘汰する。
 
     Returns: 0.0〜1.0 / データ不足は None
@@ -215,9 +213,8 @@ def _load_paper_returns(cfg) -> tuple[dict, dict, dict]:
                 if eqs[i-1]]
         if rets:
             returns[sid] = rets
-        # 2026-07-25 バッチ6: PF / bootstrap p を実際に算出する。
-        # 従来は None 固定で cull_check() が常に False を返し、
-        # 淘汰判定（S11の中核機能）が一度も働いていなかった。
+        # PF / bootstrap p を実際に算出する。None 固定だと cull_check() が
+        # 常に False を返し、淘汰判定（S11の中核機能）が働かない。
         _months = int(getattr(cfg, "CULL_MONTHS", 6))
         pf[sid] = calc_profit_factor(rets, _months)
         pval[sid] = bootstrap_p_value(rets, _months)

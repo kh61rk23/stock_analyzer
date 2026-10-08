@@ -1,14 +1,10 @@
 # signal_aggregator の components が算出値を保持すること
 #
-# 2026-09-10: calc_signal_score の
-#     if score is not None:
-#         components[cat] = round(score, 1)
-#         ...
-#         components[cat] = None   # データなし   ← else が無く同じブロック内
-# により、値が入った直後に必ず None で上書きされていた（2026-03-30 初版以来）。
+# calc_signal_score で「データなし」の components[cat] = None が else 外に
+# あると、値が入った直後に必ず None で上書きされる。
 # signal_score は weighted_sum から先に算出されるため表向きは正常に見え、
-# components を読む側だけが全滅していた:
-#   ml/dataset_builder  → 「sector_signals=33 / 特徴量あり業種=0」で1行も蓄積されず
+# components を読む側だけが全滅する:
+#   ml/dataset_builder  → 特徴量あり業種=0 で1行も蓄積されない
 #   _pick_geo_alert     → components["geo_signal"] が float にならず未発火
 # 「スコアは出ているのに内訳が空」を検出できるよう固定する。
 import types

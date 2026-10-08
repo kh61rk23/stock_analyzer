@@ -1,9 +1,9 @@
 # ==============================================================
-# tests/test_analysis_thresholds_ssot.py（2026-07-25 バッチ4）
+# tests/test_analysis_thresholds_ssot.py
 # 分析系の閾値が config を正本として読まれること
 # ==============================================================
-# 【背景】いずれも実装側が別名のモジュール定数を持つ（A型）か、
-# 値を直書き（B型）しており、config.py の定数は誰にも読まれていなかった。
+# 【防ぐもの】実装側が別名のモジュール定数を持つ（A型）か値を直書き（B型）して、
+# config.py の定数が誰にも読まれなくなること。対象:
 #   BLOCK A-1  IC_STABLE_MIN_RATE / IC_REVIEW_CONSECUTIVE_NEG
 #   BLOCK 9    SHORT_TERM_DAYS
 #   BLOCK 12   CREDIT_SQUEEZE_THRESH / CREDIT_OVERHEAT_THRESH
@@ -13,7 +13,7 @@
 #   BLOCK M-4  TDNET_MONITOR_CATEGORIES
 #   BLOCK SCORE-CAP SCORE_MIN_COMPOSITE / SCORE_MAX_COMPOSITE
 #   BLOCK D-1  CYCLE_PHASE_HISTORY_FILE
-# 全て実装値を既定値に残したため挙動は不変。
+# config の値は実装側の既定値と一致させてある。
 # ==============================================================
 import sys
 from pathlib import Path
@@ -35,7 +35,7 @@ def _cfg():
 class TestIcTrackerA1:
     """IC_STABLE_MIN_RATE は「直近12週で IC>=0 だった週の比率」の閾値。
 
-    ICの絶対値ではなく“プラスであり続けた頻度”で見る（健太決定・2026-07-25）。
+    ICの絶対値ではなく“プラスであり続けた頻度”で見る。
     """
 
     def test_config_matches_implementation(self):
@@ -150,7 +150,7 @@ class TestTdnetM4:
         class OnlySplit:
             TDNET_MONITOR_CATEGORIES = ["SPLIT"]
 
-        assert tm._classify_event(title, None) is not None      # 従来: 全件検知
+        assert tm._classify_event(title, None) is not None      # cfg 無し: 全件検知
         assert tm._classify_event(title, OnlySplit) is None      # 絞り込みが効く
 
     def test_config_categories_exist_in_patterns(self):

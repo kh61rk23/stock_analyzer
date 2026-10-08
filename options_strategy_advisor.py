@@ -1,5 +1,5 @@
 # ==============================================================
-# options_strategy_advisor.py  v1.0  (Wave OPT-1)
+# options_strategy_advisor.py  v1.0  (OPT-1)
 # オプション戦略アドバイザー — IV環境×シグナル×イベントの統合提案
 # ==============================================================
 # 【役割】
@@ -23,10 +23,9 @@
 #   イベント（決算/FOMC等）が満期前にある場合:
 #     - 「跨ぎ警告」を必ず付与（IVクラッシュ/ギャップリスク）
 #
-# 【2026-09-21: IV を使わない判定へ変更】
+# 【IV を判定に使わない理由】
 #   実行時刻は常に米国市場の時間外で、yfinance の ATM impliedVolatility が
-#   0.0001 等で返るため「IV欠損」で毎日 提案0件だった（9/18 実測 IV欠損5件）。
-#   健太の判断により、実行時刻は変えずヒストリカル・ボラティリティ（HV）の
+#   0.0001 等で返り判定に使えない。そのためヒストリカル・ボラティリティ（HV）の
 #   過去1年分布における位置だけで環境を判定する。
 #
 # 【対象ユニバース（yfinance API節約のため上限あり）】
@@ -97,8 +96,8 @@ def classify_hv_regime(pctl: Optional[float],
                        cheap_pctl: float = 30.0) -> str:
     """HVの分位からボラ環境を分類: rich（高ボラ＝売り手有利）/ cheap / neutral。
 
-    2026-09-21: 従来は IV/HV 比で判定していたが、実行時刻（米国時間外）では
-    ATM の IV が取れず毎回 unknown になっていた。HV 自身の過去分布で代替する。
+    実行時刻（米国時間外）では ATM の IV が取れないため、IV/HV 比ではなく
+    HV 自身の過去分布で判定する。
     """
     if pctl is None:
         return "unknown"
@@ -217,8 +216,7 @@ def _fetch_metrics(cfg, entry: dict, horizon: dict,
                    reasons: Optional[dict] = None) -> Optional[dict]:
     """yfinance からチェーン/HVを取得しメトリクスを組む（失敗はNone）。
 
-    2026-09-17: Actions で「ユニバース10 / 取得成功0」が続いていたが、失敗理由を
-    握り潰していて切り分けられなかった。reasons に理由別の件数を積む。
+    失敗理由を切り分けられるよう、reasons に理由別の件数を積む。
     """
     def _fail(reason: str):
         if reasons is not None:
@@ -254,7 +252,7 @@ def _fetch_metrics(cfg, entry: dict, horizon: dict,
         calls, puts = chain.calls, chain.puts
         atm_c = calls.iloc[(calls["strike"] - spot).abs().argsort()[:1]]
         atm_p = puts.iloc[(puts["strike"] - spot).abs().argsort()[:1]]
-        # 2026-09-21: IV は参考表示のみ（時間外は 0.0001 等で返るため判定には使わない）
+        # IV は参考表示のみ（時間外は 0.0001 等で返るため判定には使わない）
         iv = float((atm_c["impliedVolatility"].iloc[0]
                     + atm_p["impliedVolatility"].iloc[0]) / 2)
         iv = iv if iv >= 0.01 else None

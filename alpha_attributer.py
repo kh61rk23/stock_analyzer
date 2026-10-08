@@ -238,7 +238,7 @@ def record_signal_state(cfg, results: dict) -> None:
 
 def record_category_panel(cfg, results: dict) -> int:
     """
-    [Wave R1-4 / E4] 22カテゴリ×業種の当日スコアパネルを日次で蓄積する。
+    [R1-4 / E4] 22カテゴリ×業種の当日スコアパネルを日次で蓄積する。
 
     signal_aggregator の sector_signals[code]["components"]（カテゴリ別スコア）を
     DATA_DIR/category_panel.jsonl に1日1行で追記する。
@@ -413,10 +413,8 @@ def calc_signal_attribution(cfg) -> dict:
     # 共通する週のみ分析対象
     common_weeks = sorted(set(weekly_alpha.keys()) & set(signal_history.keys()))
 
-    # 2026-07-25 バッチ4: 分析期間と最低発動回数を config.py BLOCK GAP-8 から読む。
-    # 従来はモジュール定数 LOOKBACK_WEEKS=26 / MIN_FIRE_COUNT=3 のみが効いており、
-    # config の ATTRIBUTION_LOOKBACK_W / ATTRIBUTION_MIN_FIRE は同義・同値なのに
-    # 誰にも読まれていなかった（SSOT違反）。既定値は従来値のため挙動不変。
+    # 分析期間と最低発動回数は config.py BLOCK GAP-8（ATTRIBUTION_LOOKBACK_W /
+    # ATTRIBUTION_MIN_FIRE）が正本。モジュール定数は config に無いときの既定値。
     _lookback = int(getattr(cfg, "ATTRIBUTION_LOOKBACK_W", LOOKBACK_WEEKS))
     _min_fire = int(getattr(cfg, "ATTRIBUTION_MIN_FIRE", MIN_FIRE_COUNT))
 
@@ -651,7 +649,7 @@ def run_alpha_attributer(cfg, results: dict | None = None) -> dict:
             print("    ✅ シグナル状態を記録")
         except Exception as e:
             print(f"    ⚠️  シグナル記録エラー: {e}")
-        # [Wave R1-4 / E4] カテゴリ別スコアパネルの日次蓄積
+        # [R1-4 / E4] カテゴリ別スコアパネルの日次蓄積
         try:
             n_panel = record_category_panel(cfg, results)
             if n_panel:
@@ -780,10 +778,8 @@ def update_ic_tracker(cfg, attribution: dict) -> dict:
         weekly_ic_history[sig] = ic_valid
 
     # 安定有効シグナル（直近12週で IC >= 0 だった週の比率が閾値以上）
-    # 2026-07-25 バッチ4: 閾値を config.py BLOCK A-1 から読むよう是正。
-    # 従来は 0.80 と 3 を直書きしており、config の IC_STABLE_MIN_RATE /
-    # IC_REVIEW_CONSECUTIVE_NEG は誰にも読まれていなかった（SSOT違反）。
-    # 既定値は従来の直書き値なので判定結果は変わらない。
+    # 閾値は config.py BLOCK A-1（IC_STABLE_MIN_RATE / IC_REVIEW_CONSECUTIVE_NEG）が正本。
+    # ここに直書きしない（SSOT）。
     _stable_rate = float(getattr(cfg, "IC_STABLE_MIN_RATE", 0.80))
     _neg_weeks   = int(getattr(cfg, "IC_REVIEW_CONSECUTIVE_NEG", 3))
     stable_signals = []

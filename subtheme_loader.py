@@ -1,5 +1,5 @@
 # ==============================================================
-# subtheme_loader.py  v1.0  (Wave 2 - R-1)
+# subtheme_loader.py  v1.0  (R-1)
 # サブテーマ JSON ローダー 共通ユーティリティ
 # ==============================================================
 # 【役割】
@@ -312,7 +312,7 @@ def load_all_subthemes(market: str = "JP", cfg=None) -> dict:
         return {}
 
 # ==============================================================
-# BLOCK 5: BQ照合・同期ロジック（Wave 6 - R-2）
+# BLOCK 5: BQ照合・同期ロジック（R-2）
 # ==============================================================
 
 def sync_json_to_bq(
@@ -427,9 +427,8 @@ def sync_json_to_bq(
                 "master_count":    sync_result.get("master_count",    0),
                 "mapping_count":   sync_result.get("mapping_count",   0),
             })
-            # ★ 旧コードは投入試行件数だけを見て、実書込が0件でも "✅同期完了" と
-            #   表示していた（master/mapping_success=False でも緑表示）。
-            #   実際の成否を反映する。
+            # 投入試行件数ではなく実際の成否（master/mapping_success）で表示を決める
+            #   （試行件数だけ見ると実書込0件でも "✅" になる）。
             _ok   = out["master_success"] and out["mapping_success"]
             _icon = "✅" if _ok else "⚠️"
             print(

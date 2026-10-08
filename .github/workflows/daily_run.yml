@@ -37,6 +37,7 @@
 #   ESTAT_API_KEY         e-Stat API キー（任意）
 #   EDINETDB_API_KEY      EdinetDB API キー（任意）
 #   FUDOSAN_API_KEY       不動産DB API キー（任意）
+#   SEISAKUDB_API_KEY     政策DB API キー（任意・未設定なら取り込みをスキップ）
 #   DEEPL_API_KEY         DeepL API キー（任意）
 #   SEC_USER_AGENT        SEC EDGAR User-Agent（例: MyApp/1.0 your@email.com）
 #                         ※ institutional_13f_monitor.py が参照（任意・未設定時はデフォルト値使用）
@@ -332,6 +333,7 @@ jobs:
           ESTAT_API_KEY:              ${{ secrets.ESTAT_API_KEY }}
           EDINETDB_API_KEY:           ${{ secrets.EDINETDB_API_KEY }}
           FUDOSAN_API_KEY:            ${{ secrets.FUDOSAN_API_KEY }}
+          SEISAKUDB_API_KEY:          ${{ secrets.SEISAKUDB_API_KEY }}
           DEEPL_API_KEY:              ${{ secrets.DEEPL_API_KEY }}
           NOTION_API_KEY:             ${{ secrets.NOTION_API_KEY }}  # 2026-06-10 ハードコード廃止に伴い追加
           CONGRESS_API_KEY:           ${{ secrets.CONGRESS_API_KEY }}  # 2026-06-10 congress_monitor配線復元に伴い追加

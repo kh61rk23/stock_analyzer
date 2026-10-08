@@ -277,7 +277,7 @@ def _build_fetch_queue(cfg, meta: dict, results: dict | None = None) -> list:
         if not last or _days_since(last) >= cache_days:
             _add(t, 2, "screener_pass")
 
-    # ── [Wave 3 - FE-7] 優先度1.5相当: Catalyst 接近銘柄を上位挿入 ──
+    # ── [FE-7] 優先度1.5相当: Catalyst 接近銘柄を上位挿入 ──
     # catalyst_proximity_score ≥ 1.0（14日以内）→ 優先度1へ昇格
     # catalyst_proximity_score ≥ 0.6（30日以内）→ 優先度2に追加
     _cat_tickers = _get_catalyst_priority_tickers(cfg)
@@ -295,7 +295,7 @@ def _build_fetch_queue(cfg, meta: dict, results: dict | None = None) -> list:
              f"catalyst_proximity(score={_prox:.1f})")
         _cat_inserted += 1
 
-    # ── [Wave 4 - S3-4] priority=0: deep_dive_trigger 指定銘柄（最優先）───
+    # ── [S3-4] priority=0: deep_dive_trigger 指定銘柄（最優先）───
     # deep_dive_trigger.run_deep_dive_trigger() が cfg.EDINET_DEEP_DIVE_TICKERS
     # に注入したティッカーを最優先で取得する。
     # priority=0 は既存の priority=1（watchlist）より高優先。
@@ -350,7 +350,7 @@ def _build_fetch_queue(cfg, meta: dict, results: dict | None = None) -> list:
         except Exception as e:
             print(f"    ⚠️ BQからのunfetched取得失敗: {str(e)[:60]}")
 
-    # ── [Wave 3 - FE-7] catalyst_proximity_score で二次ソート ────────
+    # ── [FE-7] catalyst_proximity_score で二次ソート ────────
     # 優先度（priority）が同じ場合は catalyst_proximity_score が高い方を先に配置
     _cat_scores = _get_catalyst_priority_tickers(cfg)
     queue = sorted(
@@ -691,7 +691,7 @@ def run_edinet_rotation(cfg, results: dict | None = None) -> dict:
     screener_candidates = []
     if results:
         # 日本株screenerの上位銘柄（sector agent結果から）
-        # ★ 2026-06-10 バグ修正: main の書き込みキーは "sectors"
+        # main の書き込みキーは "sectors"（"sector_results" はフォールバック）
         for sector_result in results.get("sectors", results.get("sector_results", {})).values():
             top_cos = sector_result.get("top_companies", [])
             for co in top_cos[:2]:

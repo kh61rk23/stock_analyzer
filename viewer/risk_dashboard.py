@@ -1,5 +1,5 @@
 # ==============================================================
-# viewer/risk_dashboard.py — リスク管制ダッシュボード（Wave R1-3 / S9）
+# viewer/risk_dashboard.py — リスク管制ダッシュボード（R1-3 / S9）
 # ==============================================================
 # 起動（ローカルMacのみ・要 `pip install streamlit`）:
 #   streamlit run viewer/risk_dashboard.py

@@ -1,4 +1,4 @@
-# 2026-10-03: 財務三表の細目を edinet.financial_items へ縦持ちで格納する
+# 財務三表の細目を edinet.financial_items へ縦持ちで格納する
 from types import SimpleNamespace
 
 import edinetdb_fields as F
@@ -77,7 +77,7 @@ def test_backfill_uses_leftover_calls_for_already_fetched(tmp_path, monkeypatch)
 
 
 def test_monthly_runner_skips_completed_steps(tmp_path, monkeypatch):
-    """2026-10-03: 月初3日間、成功済みの月次ステップを毎日やり直していた。"""
+    """月初の複数日実行で、成功済みの月次ステップをやり直さないこと。"""
     import json
     import monthly_runner as mr
     st = tmp_path / "monthly_loop_status.json"

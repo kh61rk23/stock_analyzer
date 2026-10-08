@@ -596,10 +596,7 @@ def evaluate_ceo(
 
     # ── quality_score への補正量 ──────────────────────────
     # ceo_score 80以上: +HIGH / 65〜79: +MID / 50〜64: +2pt / 50未満: 0pt
-    # 2026-07-25 バッチ3: 補正量を config.py BLOCK I-3 から読むよう是正。
-    # 従来は 10.0 / 5.0 を直書きしており、config の CEO_QUALITY_BONUS_* を
-    # 編集しても補正量は変わらなかった（SSOT違反）。
-    # 既定値は従来の直書き値なので挙動は不変。
+    # 補正量は config.py BLOCK I-3 の CEO_QUALITY_BONUS_* が正本（直書きしない）。
     _q_high = float(getattr(cfg, "CEO_QUALITY_BONUS_HIGH", 10.0))
     _q_mid  = float(getattr(cfg, "CEO_QUALITY_BONUS_MID",   5.0))
     if ceo_score >= 80:      quality_bonus = _q_high

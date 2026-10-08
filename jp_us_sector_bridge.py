@@ -1,12 +1,12 @@
 # ==============================================================
-# jp_us_sector_bridge.py  v1.0（U-10 責務明確化: 2026-07-28）
+# jp_us_sector_bridge.py  v1.0（U-10 責務明確化）
 # JP業種 × US セクター 横断相関分析 + ローテーション検出
 # ==============================================================
 # 【役割】
 #   JP 33業種と US 11セクターの composite_score の週次相関を計算し、
 #   「XLK(IT)が上昇した翌週に 1016(電気機器)が上昇する」という
 #   パターンをデータから自動発見して業種スコアに先行シグナルを注入する。
-#   加えて、Wave 3〜7 で以下を同一ファイルに集約している:
+#   加えて、以下を同一ファイルに集約している:
 #     ・議員取引シグナルのJP業種波及（apply_politician_signal_to_jp）
 #     ・クロスマーケット潜伏銘柄検出（detect_cross_market_latent）
 #     ・Cross-Size シグナル呼び出し（cross_size_signal 経由）
@@ -49,7 +49,7 @@
 #     "cross_market_latent":  list,     # detect_cross_market_latent() の結果
 #   }
 #
-# 【消費者（grep実測。2026-07-28）】
+# 【消費者（grep実測）】
 #   ・signal_aggregator.py:221 _extract_us_lead_score() — lead_adjustments / rotation_phases を読み、
 #     JP業種の composite_score 補正量に変換する（本モジュールの主目的の実消費経路）
 #   ・alert_notifier.py:1422 — rotation_phases の phase（IMPROVING/LEADING）を Latent Pearl 反転検知に利用
@@ -76,13 +76,10 @@
 #     us_sector_bridge_enhanced.py は「8-K決算×SIC/CIKチェーン」による当日イベント伝播で、
 #     時間軸・データソースとも別物。
 #
-# 【既知の状態（2026-07-28 時点）】
-#   実効出力ゼロが継続している（有意な先行相関 0ペア / 先行補正 0業種。
-#   2026-07-06・2026-07-13 台帳とも同様）。原因は score_history の蓄積不足
-#   （60日ローリング相関を要する設計に対し、当時のデータ日数が不足）。
-#   意思決定 J-04（2026-07-27, 健太承認）= a: score_history が60日蓄積されるまで
-#   存廃判断を保留。本ファイルは今回の U-10 で削除・無効化はしない
-#   （責務明確化と重複洗い出しのみを実施）。
+# 【既知の状態】
+#   score_history の蓄積が60日ローリング相関に足りない間は、有意な先行相関 0ペア /
+#   先行補正 0業種（実効出力ゼロ）になる。
+#   意思決定 J-04 = a: score_history が60日蓄積されるまで存廃判断を保留（削除・無効化しない）。
 #
 # 【依存】score_history.json / config.py
 # ==============================================================
@@ -413,7 +410,7 @@ def detect_rotation_phase(
     return results
 
 # ==============================================================
-# BLOCK 4.5: 議員取引シグナルのJP業種波及（Wave 0 - Policy Ph1）
+# BLOCK 4.5: 議員取引シグナルのJP業種波及（Policy Ph1）
 # ==============================================================
 
 def apply_politician_signal_to_jp(
@@ -423,7 +420,7 @@ def apply_politician_signal_to_jp(
     cfg=None,
 ) -> dict:
     """
-    議員取引シグナルのJP業種波及（Wave 3 - Policy Ph2 Level 4 Override対応版）。
+    議員取引シグナルのJP業種波及（Policy Ph2 Level 4 Override対応版）。
 
     Level 4 Override 発動セクターは通常ブーストの 1.5倍 を適用する。
     boost_L4 = min(SCORE_MAX_POLICY_L4_ADJ, delta x 1.5)
@@ -505,7 +502,7 @@ def apply_politician_signal_to_jp(
         return {}
 
 # ==============================================================
-# BLOCK 4.6: クロスマーケット潜伏銘柄検出（Wave 3 - Independence Ph1/Ph2）
+# BLOCK 4.6: クロスマーケット潜伏銘柄検出（Independence Ph1/Ph2）
 # ==============================================================
 
 def detect_cross_market_latent(
@@ -563,13 +560,9 @@ def detect_cross_market_latent(
         lead_adj  = bridge.get("lead_adjustments", {})
 
         # ── Cross Size シグナルマップ取得 ─────────────────────
-        # ★ 2026-06-10 バグ修正: 旧実装は results["cross_size"]["sector_signals"]
-        #   （業種別）を参照していたが、プロデューサ cross_size_signal.py の
-        #   実出力は results["cross_size_signal"] = {"signals":[...],
-        #   "ticker_signals":{ticker:[signal_id,...]}} で業種別キーは存在せず、
-        #   さらに判定文字列 "small_leading"/"confirmed" も実際の signal_type
-        #   4種（upward_spillover 等）と不一致のため、本チェックは常時素通り
-        #   だった。銘柄単位×direction ベースの判定に修正。
+        # cross_size_signal.py の出力は results["cross_size_signal"] = {"signals":[...],
+        #   "ticker_signals":{ticker:[signal_id,...]}} で、業種別キーは無い。
+        #   signal_type も upward_spillover 等の4種なので、銘柄単位×direction で判定する。
         cross_size   = results.get("cross_size_signal",
                                    results.get("cross_size", {})) or {}
         _cs_by_id    = {
@@ -578,7 +571,7 @@ def detect_cross_market_latent(
         }
         _cs_tk_index = cross_size.get("ticker_signals", {}) or {}
 
-        # ── Wave 7: independence_scores.json からスコアを補強 ──
+        # ── independence_scores.json からスコアを補強 ──
         _independence_lookup: dict = {}
         try:
             import json as _jb
@@ -596,7 +589,7 @@ def detect_cross_market_latent(
         except Exception:
             pass
 
-        # ── Wave 7: size_decay_state.json からTier別有効シグナルを取得 ──
+        # ── size_decay_state.json からTier別有効シグナルを取得 ──
         _decay_lookup: dict = {}
         try:
             import json as _jd
@@ -619,7 +612,7 @@ def detect_cross_market_latent(
         # ── メインループ ──────────────────────────────────────
         for ticker, entry in all_latents.items():
             try:
-                # Wave 7: independence_scores.json 優先、なければ latent_pearl キャッシュ
+                # independence_scores.json 優先、なければ latent_pearl キャッシュ
                 ind_score = float(
                     _independence_lookup.get(ticker)
                     or entry.get("independence_score")
@@ -643,7 +636,7 @@ def detect_cross_market_latent(
                 # ② US 先行補正チェック
                 us_adj = float(lead_adj.get(sc, 0.0))
 
-                # ③ Cross Size シグナルチェック（銘柄単位 / 2026-06-10 修正）
+                # ③ Cross Size シグナルチェック（銘柄単位）
                 _cs_sigs = [
                     _cs_by_id[_sid]
                     for _sid in _cs_tk_index.get(ticker, [])
@@ -780,11 +773,11 @@ def run_jp_us_bridge(cfg, sector_results: dict) -> dict:
         for code, delta in sorted(lead_adj.items(), key=lambda x: abs(x[1]), reverse=True)[:3]:
             print(f"      [{code}]: {delta:+.1f}pt")
 
-    # ── Cross-Size シグナル生成（Wave 3 - Size Ph3）───────────
+    # ── Cross-Size シグナル生成（Size Ph3）───────────
     cross_size_result: dict = {}
     try:
         from cross_size_signal import run_cross_size_signal as _run_css
-        # Wave 7: force_refresh=False でキャッシュ優先（日次実行済みのキャッシュを利用）
+        # force_refresh=False でキャッシュ優先（日次実行済みのキャッシュを利用）
         # results に既存データを渡して cross_size を生成
         cross_size_result = _run_css(cfg=cfg, force_refresh=False)
         print(f"    📐 Cross-Size: シグナル={cross_size_result.get('stats', {}).get('total_signals', 0)}件")
@@ -808,7 +801,7 @@ def run_jp_us_bridge(cfg, sector_results: dict) -> dict:
         names = " / ".join(f"[{c}]" for c in improving[:5])
         lines.append(f"  💡 仕込み候補（IMPROVING）: {names}")
 
-    # ── Wave 7: bridge 用の独立性・減衰スコアを再取得 ────────────
+    # ── bridge 用の独立性・減衰スコアを再取得 ────────────
     # detect_cross_market_latent 内のローカル変数を result に公開するため
     # 同一パスを参照して辞書を構築する。
     _bridge_independence: dict = {}
@@ -842,7 +835,7 @@ def run_jp_us_bridge(cfg, sector_results: dict) -> dict:
     except Exception as _br_e:
         print(f"    ⚠️  Wave 7 Bridge データ取得失敗（スキップ）: {str(_br_e)[:60]}")
 
-    # ── クロスマーケット潜伏銘柄検出（Wave 3 - Independence Ph1/Ph2）──
+    # ── クロスマーケット潜伏銘柄検出（Independence Ph1/Ph2）──
     cross_latent: list[dict] = []
     try:
         _tmp_for_latent = {
@@ -867,10 +860,10 @@ def run_jp_us_bridge(cfg, sector_results: dict) -> dict:
         "summary_text":           "\n".join(lines),
         "timestamp":              datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "politician_adjustments": {},
-        "cross_size":             cross_size_result,       # Wave 3 - Size Ph3
-        "size_decay_bridge":      _bridge_size_decay,      # Wave 7: Tier別有効シグナルマップ
-        "independence_bridge":    _bridge_independence,    # Wave 7: 独立性スコアマップ
-        "cross_market_latent":    cross_latent,            # Wave 3 - Independence Ph1/Ph2
+        "cross_size":             cross_size_result,       # Size Ph3
+        "size_decay_bridge":      _bridge_size_decay,      # Tier別有効シグナルマップ
+        "independence_bridge":    _bridge_independence,    # 独立性スコアマップ
+        "cross_market_latent":    cross_latent,            # Independence Ph1/Ph2
     }
 
     _save_cache(cfg, result)

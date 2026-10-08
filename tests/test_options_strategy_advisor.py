@@ -13,8 +13,8 @@ class TestHV:
 
 
 class TestRegime:
-    # 2026-09-21: 実行時刻（米国時間外）ではATMのIVが取れないため、
-    # IV/HV比ではなく HV の過去1年分位で判定するよう変更した。
+    # 実行時刻（米国時間外）ではATMのIVが取れないため、
+    # IV/HV比ではなく HV の過去1年分位で判定する。
     def test_rich_cheap_neutral(self):
         assert opt.classify_hv_regime(85.0) == "rich"
         assert opt.classify_hv_regime(12.0) == "cheap"

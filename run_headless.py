@@ -55,6 +55,7 @@ def apply_env_overrides(cfg):
         "ALERT_LINE_USER_ID":         "ALERT_LINE_USER_ID",
         "EDINETDB_API_KEY":           "EDINETDB_API_KEY",
         "FUDOSAN_API_KEY":            "FUDOSAN_API_KEY",
+        "SEISAKUDB_API_KEY":          "SEISAKUDB_API_KEY",
         "POLICY_FRED_API_KEY":        "POLICY_FRED_API_KEY",
         "ANTHROPIC_API_KEY":          "ANTHROPIC_API_KEY",
         "SEC_USER_AGENT":             "SEC_USER_AGENT",
@@ -67,8 +68,8 @@ def apply_env_overrides(cfg):
         "GOOGLE_OAUTH_CLIENT_SECRET": "GOOGLE_OAUTH_CLIENT_SECRET",
         "GOOGLE_OAUTH_REFRESH_TOKEN": "GOOGLE_OAUTH_REFRESH_TOKEN",
         "GOOGLE_DRIVE_FOLDER_ID":     "GOOGLE_DRIVE_FOLDER_ID",
-        "NOTION_API_KEY":             "NOTION_API_KEY",  # 2026-06-10 ハードコード廃止に伴い追加
-        "CONGRESS_API_KEY":           "CONGRESS_API_KEY",  # 2026-06-10 congress_monitor配線復元に伴い追加
+        "NOTION_API_KEY":             "NOTION_API_KEY",
+        "CONGRESS_API_KEY":           "CONGRESS_API_KEY",  # congress_monitor 用
     }
     overridden = []
     for attr, env_key in ENV_MAP.items():
@@ -88,11 +89,11 @@ def apply_env_overrides(cfg):
     cfg.SECTOR_DIR  = base / "insights" / "sectors"
     cfg.MACRO_DIR   = base / "insights" / "macro"
     cfg.LOG_DIR     = base / "logs"
-    # ★ DRIVE_BASE 由来で取りこぼしていたパスもここで揃える。
+    # ★ DRIVE_BASE 由来のパスもここで揃える。
     #   特に CACHE_DIR は score_prior / policy_radar 等 10+ モジュールが参照し、
     #   取りこぼすと Colab パス /content に書こうとして Permission denied になる
-    #   （2026-06-25 本番で score_prior が全業種無効化した実害）。
-    #   config.py も STOCK_ANALYZER_BASE を見るようにしたが、env 未設定で
+    #   （score_prior が全業種無効化する）。
+    #   config.py も STOCK_ANALYZER_BASE を見るが、env 未設定で
     #   base が __file__/stock_data に決まるローカル実行でも整合させるため明示する。
     cfg.CACHE_DIR             = base / "cache"
     cfg.SUBTHEME_JSON_PATH_JP = base / "data" / "jp_sector_subtheme.json"
@@ -137,9 +138,8 @@ def _upload_to_gdrive_oauth(client_id, client_secret, refresh_token,
     service = build("drive", "v3", credentials=creds)
 
     # 前回同期時の {相対パス: "md5:size"}。差分だけ送るために使う。
-    # 2026-09-26: 以前は "mtime:size" だったが、Actionsは毎回 checkout で
-    # 全ファイルの mtime が揃って変わるため、差分同期が一度も効かず毎日
-    # 全3,381件（約7分・タイムアウト失敗あり）を送っていた。内容ハッシュにする。
+    # mtime は使わない: Actionsは毎回 checkout で全ファイルの mtime が揃って
+    # 変わるため、差分同期が効かず毎回全件送ることになる。内容ハッシュで比べる。
     # 壊れていても全件送り直すだけなので、読めなければ黙って空で始める。
     prev_state: dict = {}
     if state_path:
@@ -257,8 +257,8 @@ def _upload_to_gdrive_oauth(client_id, client_secret, refresh_token,
             pending.append((key, f, pid))
 
     # ── 送信（並列）────────────────────────────────────────────
-    # 2026-09-09: 逐次送信では初回同期に31分かかっていた。1ファイルあたり
-    # ネットワーク往復が支配的で CPU はほぼ遊ぶため、並列化がそのまま効く。
+    # 1ファイルあたりネットワーク往復が支配的で CPU はほぼ遊ぶため、
+    # 並列化がそのまま効く（逐次だと初回同期に30分超かかる）。
     sent = failed = 0
     if pending:
         print(f"  UPLOAD 送信対象 {len(pending)}件 "

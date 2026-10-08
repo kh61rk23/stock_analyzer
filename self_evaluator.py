@@ -1,5 +1,5 @@
 # ==============================================================
-# self_evaluator.py  v1.1  (Wave 7 - Step 8)
+# self_evaluator.py  v1.1
 # パフォーマンス自己検証 — screener予測精度の継続的測定
 # ==============================================================
 # 【役割】
@@ -77,7 +77,7 @@ FETCH_DELAY      = 0.25
 LOG_FILENAME     = "performance_log.json"
 MAX_LOG_ENTRIES  = 52     # 1年分保持
 
-# ── Wave 7 追加定数（Pearl バックテスト）──────────────────────────
+# ── Pearl バックテスト用定数 ──────────────────────────
 PEARL_BACKTEST_FILENAME  = "pearl_backtest_log.json"
 PEARL_BACKTEST_MAX_ENTRY = 52           # 1年分保持
 
@@ -206,9 +206,9 @@ def build_evaluation_batch(
             continue
 
         for c in candidates:
-            # 2026-09-29: screener_history には通過銘柄しか保存されず、pass_filters 欄は
-            # 9/21 以降しか無い。欄の無い過去行と current_price の無い行を落としていたため
-            # 毎週「有効レコード0件」だった。明示的に False の行だけ除外し、価格は終値で補う。
+            # screener_history には通過銘柄しか保存されず、pass_filters 欄の無い古い行もある。
+            # 欄の無い行や current_price の無い行を落とすと有効レコードが0件になるため、
+            # 明示的に False の行だけ除外し、価格は終値で補う。
             if not isinstance(c, dict) or c.get("pass_filters") is False:
                 continue
             ticker    = c.get("ticker", "")
@@ -230,7 +230,7 @@ def build_evaluation_batch(
                 "value_score":     c.get("value_score", 50) or 50,
                 "quality_score":   c.get("quality_score", 50) or 50,
                 "technical_score": c.get("technical_score", 50) or 50,
-                # ── Wave 7 追加フィールド ────────────────────────
+                # ── Pearl 関連フィールド ────────────────────────
                 "pearl_tier":          c.get("pearl_tier"),
                 "pearl_score":         float(c.get("pearl_score", 0) or 0),
                 "latent_pearl_score":  float(c.get("latent_pearl_score", 0) or 0),
@@ -384,7 +384,7 @@ def build_weekly_summary(
         "component_corrs":   component_corrs,
         "n_high_score_miss": sum(1 for r in evaluated
                                   if r.get("composite_score",0) >= 65 and (r.get("alpha",0) or 0) < -3),
-        # ── Wave 7: Pearl / 潜伏Pearl 別パフォーマンス ──────────
+        # ── Pearl / 潜伏Pearl 別パフォーマンス ──────────
         "pearl_stats":       _calc_pearl_win_stats(evaluated),
         "latent_pearl_stats": _calc_latent_pearl_win_stats(evaluated),
         "timestamp":         datetime.now().isoformat(),
@@ -605,7 +605,7 @@ def format_self_eval_report(log: dict, latest_entry: Optional[dict]) -> str:
             lines.append("")
 
         comp = entry.get("component_corrs", {})
-        # ── Wave 7: Pearl / 潜伏Pearl バックテスト結果 ──────────
+        # ── Pearl / 潜伏Pearl バックテスト結果 ──────────
         pearl_stats  = entry.get("pearl_stats", {})
         latent_stats = entry.get("latent_pearl_stats", {})
 
@@ -731,8 +731,8 @@ def run_self_evaluator(cfg) -> dict:
     bm_rets     = []
     n_success   = 0
 
-    # 2026-09-29: 1件ごとに yfinance を2回呼んでいた（約800件で1,600回）。
-    # 銘柄ごとに期間全体を1回で取り、取得時点・出口・日経平均を同じデータから引く。
+    # 1件ごとに yfinance を呼ぶと件数×2回になるため、銘柄ごとに期間全体を1回で取り、
+    # 取得時点・出口・日経平均を同じデータから引く。
     from backtester import fetch_close_map, fill_prices, _price_window
     _start, _end = _price_window(records)
     _bench_t = BENCHMARK_TICKER
@@ -790,11 +790,11 @@ def run_self_evaluator(cfg) -> dict:
 
     report_md = format_self_eval_report(log, entry)
 
-    # ── Wave 7: Pearl バックテスト本格評価 ──────────────────────
+    # ── Pearl バックテスト本格評価 ──────────────────────
     # Pearl / 潜伏Pearl の的中率を pearl_backtest_log.json に蓄積する
     pearl_bt_result: dict = {}
-    # 2026-09-29: Pearl 条件に当たらないと bt_log が未定義のまま下の戻り値で参照され
-    # UnboundLocalError になっていた（レコード0件で手前で抜けていたため未発覚）
+    # Pearl 条件に当たらない場合も下の戻り値で参照されるため先に初期化する
+    # （未定義だと UnboundLocalError）
     bt_log: dict = {}
     try:
         if getattr(cfg, "ENABLE_LATENT_PEARL_MANAGER", False) or \

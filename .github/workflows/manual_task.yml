@@ -11,6 +11,7 @@ on:
           - geo_exposure_force
           - country_profile
           - monthly_mail_prev_month
+          - seisakudb_probe
 
 permissions:
   contents: write
@@ -39,12 +40,14 @@ jobs:
           ALERT_GMAIL_FROM: ${{ secrets.ALERT_GMAIL_FROM }}
           ALERT_GMAIL_PASSWORD: ${{ secrets.ALERT_GMAIL_PASSWORD }}
           ALERT_GMAIL_TO: ${{ secrets.ALERT_GMAIL_TO }}
+          SEISAKUDB_API_KEY: ${{ secrets.SEISAKUDB_API_KEY }}
           STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
         run: |
           case "${{ inputs.task }}" in
             geo_exposure_force) python -u geo_exposure_runner.py --force ;;
             country_profile) python -u country_profile_builder.py ;;
             monthly_mail_prev_month) python -u monthly_mail.py "$(date -d "$(date +%Y-%m-01) -1 day" +%Y%m)" ;;
+            seisakudb_probe) python -u seisakudb_ingestor.py --probe ;;
           esac
       - name: Commit state
         if: always()

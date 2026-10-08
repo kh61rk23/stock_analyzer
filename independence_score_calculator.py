@@ -1,5 +1,5 @@
 # ==============================================================
-# independence_score_calculator.py  v1.0  (Wave 7 - Step 7)
+# independence_score_calculator.py  v1.0
 # 市場独立性スコア計算モジュール
 # ==============================================================
 # 【役割】
@@ -55,15 +55,15 @@
 #
 # 【依存】
 #   yfinance（価格データ取得）
-#   config.py（Wave 7追加定数）
+#   config.py（INDEPENDENCE_* 定数）
 #   EDINET rotation cache（カタリスト検出用テキスト）
-#   ★ try/except で全ブロックを保護
+#   try/except で全ブロックを保護
 
-# 【Ph1: JP単因子回帰（Wave 3 - Independence Ph1）】
+# 【Ph1: JP単因子回帰（Independence Ph1）】
 #   $R_{stock} = \alpha + \beta_{jp\_sector} \times R_{sector} + \epsilon$
 #   セクター代表銘柄のリターンを単一ファクターとして使用。
 #
-# 【Ph2: 2因子回帰（Wave 3 - Independence Ph2）】
+# 【Ph2: 2因子回帰（Independence Ph2）】
 #   $R_{stock} = \alpha + \beta_{jp} \times R_{jp\_sector} + \beta_{us} \times R_{us\_etf} + \epsilon$
 #   JP_US_AFFINITY の US ETF リターンを第2ファクターとして追加。
 #
@@ -179,7 +179,7 @@ _COMBINED_WEIGHTS = {
 }
 
 # ==============================================================
-# BLOCK 0-B: Wave 3互換アクセサ（stock_screener.py連携用）
+# BLOCK 0-B: 互換アクセサ（stock_screener.py連携用）
 # ==============================================================
 
 def batch_calc_independence_scores(
@@ -187,8 +187,8 @@ def batch_calc_independence_scores(
     cfg=None,
 ) -> dict:
     """
-    Wave 3互換: 複数銘柄の独立性スコアをバッチ計算する。
-    Wave 7版 calc_independence_score_for_ticker を内部で呼び出す。
+    複数銘柄の独立性スコアをバッチ計算する（stock_screener 向け互換I/F）。
+    内部で calc_independence_score_for_ticker を呼び出す。
 
     Args:
         candidates: [{"ticker": str, "sector_code": str, ...}, ...]
@@ -232,7 +232,7 @@ def get_latent_pearl_candidates(
     threshold: float = 65.0,
 ) -> list:
     """
-    Wave 3互換: independence_score が閾値以上の潜伏Pearl候補を返す。
+    independence_score が閾値以上の潜伏Pearl候補を返す（互換I/F）。
 
     Args:
         scores:    batch_calc_independence_scores() の返り値
@@ -255,8 +255,8 @@ def calc_independence_score(
     cfg=None,
 ) -> dict:
     """
-    Wave 3互換シグネチャ: 単一銘柄の独立性スコアを計算して返す。
-    内部では Wave 7版 calc_independence_score_for_ticker を呼び出す。
+    単一銘柄の独立性スコアを計算して返す（互換シグネチャ）。
+    内部では calc_independence_score_for_ticker を呼び出す。
 
     Returns:
         {"independence_score": float, "phase": str, "ticker": str, ...}
@@ -442,9 +442,8 @@ def _calc_independence_score(
 def _judge_independence_tier(score: float, cfg=None) -> str:
     """独立性スコアからティアを判定する。
 
-    2026-07-25 バッチ5: 閾値を config.INDEPENDENCE_TIER_THRESHOLDS から読む。
-    従来はモジュール定数 _INDEPENDENCE_TIERS のみが効いており、config 側
-    （同義・同値）は誰にも読まれていなかった。
+    閾値は config.INDEPENDENCE_TIER_THRESHOLDS を優先し、無ければ
+    モジュール定数 _INDEPENDENCE_TIERS（同義・同値）を使う。
     config 側は HIGH / MID の2キーのみ（LOW は「それ以外」なので不要）。
     """
     tiers = getattr(cfg, "INDEPENDENCE_TIER_THRESHOLDS", None) or _INDEPENDENCE_TIERS
@@ -568,8 +567,7 @@ def calc_independence_score_for_ticker(
     today_str    = datetime.now().strftime("%Y-%m-%d")
 
     # 価格データ取得
-    # 2026-07-25 バッチ5: 観測窓を config.INDEPENDENCE_ROLLING_WINDOW_DAYS から読む
-    # （従来はモジュール定数 _ROLLING_WINDOW_DAYS のみが効いていた）
+    # 観測窓は config.INDEPENDENCE_ROLLING_WINDOW_DAYS を優先（無ければ _ROLLING_WINDOW_DAYS）
     stock_rets, index_rets, data_days = _fetch_price_returns(
         ticker, index_ticker,
         window_days=int(getattr(cfg, "INDEPENDENCE_ROLLING_WINDOW_DAYS",

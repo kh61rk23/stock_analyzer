@@ -1,7 +1,6 @@
 # data_sla_check の検査対象が産出側の実パスと一致していること
 #
-# 2026-09-10: 既定パスが2件とも実在しないファイルを指しており、
-# 2026-07-12 から毎日「SLA違反:2件」を出し続けていた。
+# 既定パスが実在しないファイルを指すと、毎日「SLA違反」を出し続ける。
 #   news       : 実体は news_cache/news_{日付}.json（ディレクトリ）。
 #                `news_cache.json` は生成されない
 #   financials : CACHE_DIR/edinet は退役済み（ENABLE_EDINET_ROTATION=False）

@@ -273,9 +273,7 @@ def calc_conviction_score(candidate: dict, cfg=None) -> dict:
     conviction_score = max(0.0, min(100.0, conviction_score))
 
     # ── 確信度レベル判定 ──────────────────────────────────
-    # 2026-07-25: BLOCK I-4 の ENABLE_CONVICTION_SIZING を配線。
-    # CONVICTION_THRESHOLDS は読まれていたのに、機能そのものの有効フラグだけが
-    # 誰にも読まれず、False にしても確信度別サイジングが効き続けていた。
+    # BLOCK I-4 の ENABLE_CONVICTION_SIZING が False なら確信度別サイジングを止める。
     # 無効時は全銘柄を Level3（中確信・通常扱い）に固定し、確信度による
     # ポジション比率の増減を行わない。
     if cfg is not None and not getattr(cfg, "ENABLE_CONVICTION_SIZING", True):
@@ -357,8 +355,8 @@ def calc_position_size(
     atr_multiplier:  float = ATR_MULTIPLIER,
     lot_size:        int   = LOT_SIZE_JP,
     target_price:    Optional[float] = None,
-    conviction_data: Optional[dict] = None,   # ★ I-4追加
-    regime_multiplier: float = 1.0,           # ★ I-4追加
+    conviction_data: Optional[dict] = None,   # I-4
+    regime_multiplier: float = 1.0,           # I-4
 ) -> dict:
     """
     ATR データからポジションサイズを計算する。
@@ -463,7 +461,7 @@ def calc_position_size(
 
 
 # ==============================================================
-# BLOCK 2b: ポジションサイジング v2（Wave R1-5 / E5）
+# BLOCK 2b: ポジションサイジング v2（R1-5 / E5）
 # ==============================================================
 # 設計正本: 要件定義書_統合改修_20260705.md §R1-5（確定アルゴリズム・変更禁止）
 #   1) 基礎サイズ（v1と同じ）: risk_amount = 総資産×1% ; qty = risk / (2×ATR14)
@@ -472,7 +470,7 @@ def calc_position_size(
 #   4) ポートフォリオボラ制約: σ_p=sqrt(wᵀΣw) > VOL_TARGET_ANNUAL(0.15=D-15)
 #      なら超過分だけ比例縮小
 #   5) 上限: 1銘柄 ≤ 総資産×10% / カジノ枠戦略 ≤ カジノ枠×25%
-# 出力は「推奨qty＋各ステップの調整内訳」（健太が調整根拠を追えること）。
+# 出力は「推奨qty＋各ステップの調整内訳」（調整根拠を追えるようにするため）。
 # 境界: 相関行列が特異/データ欠損時はステップ3,4をスキップし警告。
 # v1（calc_position_size）は残置・既存呼び出しに影響なし。
 # ==============================================================
@@ -754,8 +752,8 @@ def run_position_sizer(
     atr_multiplier:    float = ATR_MULTIPLIER,
     sector_results:    Optional[dict] = None,
     tickers_override:  Optional[list] = None,
-    screener_result:   Optional[dict] = None,   # ★ I-4追加
-    results:           Optional[dict] = None,   # ★ I-4追加（regime取得用）
+    screener_result:   Optional[dict] = None,   # I-4
+    results:           Optional[dict] = None,   # I-4（regime取得用）
 ) -> dict:
     """
     ポートフォリオ全銘柄のポジションサイズを計算する。
@@ -774,8 +772,8 @@ def run_position_sizer(
     sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     # config からの総資産上書き
     total_assets = getattr(cfg, "TOTAL_ASSETS_JPY", total_assets_jpy)
-    # 2026-10-05: 総資産は保有銘柄CSV（投資部）から作る portfolio_summary.json の実額を優先する
-    # （既定値 1,000万円のままだった）。米国株の株価・ATR は為替で円に直してから計算する
+    # 総資産は保有銘柄CSV（投資部）から作る portfolio_summary.json の実額を優先する
+    # （無ければ既定値 1,000万円になる）。米国株の株価・ATR は為替で円に直してから計算する
     usd_jpy = 150.0
     try:
         import json as _json
@@ -849,8 +847,7 @@ def run_position_sizer(
             time.sleep(FETCH_DELAY)
             continue
 
-        # ★ 2026-06-11 バグ修正: 旧実装は未定義変数 _cv_data を参照して
-        #   毎回 NameError。事前構築済みの conviction_map から取得する。
+        # 確信度データは事前構築済みの conviction_map から取得する。
         _cv_data = conviction_map.get(ticker)
         sizing = calc_position_size(
             atr_data       = atr_data,
@@ -858,8 +855,8 @@ def run_position_sizer(
             risk_pct       = risk_pct,
             atr_multiplier = atr_multiplier,
             lot_size       = 100 if h.get("market") == "JP" else 1,
-            conviction_data    = _cv_data,       # ★ I-4追加
-            regime_multiplier  = regime_multiplier, # ★ I-4追加
+            conviction_data    = _cv_data,       # I-4
+            regime_multiplier  = regime_multiplier, # I-4
         )
 
         # セクタースコアを付与

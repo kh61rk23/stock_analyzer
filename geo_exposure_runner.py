@@ -1,5 +1,5 @@
 # ==============================================================
-# geo_exposure_runner.py  v1.0  (2026-07-25 / Wave 6 - G-C 配線復元)
+# geo_exposure_runner.py  v1.0  (G-C)
 # 地政学シグナルの「供給側」3抽出器の定期実行
 # ==============================================================
 # 【役割】
@@ -9,19 +9,15 @@
 #     2) sec_geographic_extractor.py  … SEC 10-K の地域別売上
 #     3) edinet_exposure_extractor.py … EDINET 有報の海外権益テキスト
 #
-# 【背景 — なぜ新設したか】
-#   地政学シグナル（Wave 6 - G-X）は消費側が完成していた:
+# 【位置づけ】
+#   地政学シグナル（G-X）の消費側:
 #     base_agent / us_stock_screener  → calc_geo_impact_bonus_*()
 #     signal_aggregator               → aggregate_geo_signal()（重み4%）
 #     weekly_report_generator         → geo_impact_bonus ランキング
-#   リスク側（country_risk_updater）も日次で配線済み。
-#   ところが「企業がどの国に権益を持つか」を埋める上記3本だけが、
-#   GitHub Actions にも launchd にも run_all_tasks() にも呼び出しが無く、
-#   exposure テーブルが空のままだった。
-#   join 相手が無いので geo_impact_bonus は常に 0 → ENABLE_GEO_SIGNAL=False
-#   という「結果としての停止」になっていた（2026-07-25 の棚卸しで判明）。
-#   config.py のコメントは "run_all_tasks() での jogmec_scraper 実行を
-#   スキップ" と書いており、本来は日次パイプラインに載る設計だった。
+#   リスク側（country_risk_updater）は日次で配線済み。
+#   このランナーは「企業がどの国に権益を持つか」を埋める供給側。
+#   これが動かないと exposure テーブルが空になり、join 相手が無いため
+#   geo_impact_bonus は常に 0 になる。
 #
 #   日次ではなく月次相当（30日）で回すのは config.py が定める間隔に従うため。
 #   SEC/EDINET の有報は年1回しか更新されず、毎日叩く意味が無い。
@@ -33,7 +29,7 @@
 #     --dry-run: 各抽出器に dry_run=True を渡す（BQ書込なし）
 #
 # 【呼ばれ方】monthly_runner.py の geo_exposure ステップ（月初）
-# 【設定】config.py Wave 6 - G-C ブロック
+# 【設定】config.py G-C ブロック
 #   ENABLE_JOGMEC_SCRAPER / JOGMEC_SCRAPER_INTERVAL_DAYS
 #   ENABLE_SEC_GEO_EXTRACTOR / SEC_GEO_EXTRACTOR_INTERVAL_DAYS
 #   ENABLE_EDINET_EXPOSURE_EXTRACTOR / EDINET_EXPOSURE_INTERVAL_DAYS
@@ -164,13 +160,12 @@ def run(cfg=None, dry_run: bool = False, force: bool = False,
             if not dry_run:
                 state[key] = {"last_run": today.isoformat(),
                               "merged": merged, "total": total}
-                # 途中で打ち切られても済んだ抽出器はやり直さない（2026-10-01）
+                # 途中で打ち切られても済んだ抽出器はやり直さない
                 _save_state(cfg, state)
         else:
             # BQ認証なし等。日次分析は止めないので ok は落とさず warn 扱い。
-            # 2026-10-03: ただし「抽出できたのに書き込めなかった」は失敗にする。
-            # MERGE文の構文エラーで全件失敗していたのに、ここが warn のため
-            # 月次台帳は毎月「success」と記録し、テーブルは導入以来0行だった。
+            # ただし「抽出できたのに書き込めなかった」は失敗にする
+            # （warn 扱いだと MERGE 全件失敗でも月次台帳が「success」と記録してしまう）。
             err = str(result.get("error", ""))[:150]
             if int(result.get("total") or 0) > 0 and not dry_run:
                 summary["ok"] = False

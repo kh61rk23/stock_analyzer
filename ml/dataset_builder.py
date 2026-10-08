@@ -1,5 +1,5 @@
 # ==============================================================
-# ml/dataset_builder.py — 特徴量スナップショット蓄積（Wave R5-1 / S7）
+# ml/dataset_builder.py — 特徴量スナップショット蓄積（R5-1 / S7）
 # ==============================================================
 # 【役割】日次バッチで (date, ticker) の特徴量行を features.jsonl へ追記する。
 #   特徴量 = 23カテゴリスコア（signal_aggregator の sector components）＋
@@ -26,9 +26,8 @@ if str(REPO) not in sys.path:
 
 from finance_logic import as_number as _as_number  # noqa: E402
 
-# 2026-09-10: config.JST を追加するまで、この import は常に失敗して
-# JST = None になっており、日付スタンプはランナーのローカル時刻
-# （＝workflow の env TZ 頼み）で打たれていた。現在は config が SSOT。
+# JST は config が SSOT。import に失敗する環境でもランナーのローカル時刻
+# （workflow の env TZ 頼み）に依存しないよう、固定 UTC+9 にフォールバックする。
 try:
     from config import JST  # type: ignore
 except Exception:  # pragma: no cover - config 無し環境（単体テスト）
@@ -62,10 +61,9 @@ def build_feature_rows(cfg, results: dict, today: str) -> list:
             continue
         comps = sig.get("components") or {}
         # 有効なカテゴリ（None でない）が1つも無ければ蓄積しない。
-        # ★ isinstance(v, (int, float)) では numpy.float32 / numpy.int64 が
-        #   False になり、pandas由来のスコアが丸ごと弾かれる。
-        #   2026-09-09: これで「sector_signals=33 / 特徴量あり業種=0」となり
-        #   導入以来1行も蓄積されていなかった。float()変換の成否で判定する。
+        # ⚠️ isinstance(v, (int, float)) では numpy.float32 / numpy.int64 が
+        #   False になり、pandas由来のスコアが丸ごと弾かれる（1行も蓄積されない）。
+        #   float()変換の成否で判定する。
         feat = {}
         for cat, v in comps.items():
             num = _as_number(v)
@@ -133,8 +131,6 @@ def forward_excess_returns(sorted_dates: list, price_by_date: dict,
     sorted_dates: 昇順の取引日リスト（銘柄・ベンチ共通の営業日軸）
     price_by_date / bench_by_date: {date: close}
     horizon: 省略時は config.ML_META_TARGET_HORIZON_D（既定20）
-             ※2026-07-25 バッチ6: 従来は呼び出し側の直書きのみで、
-               config 側の定数は誰にも読まれていなかった
     Returns: {date: 超過リターン}（算出できた日付のみ）
     """
     if horizon is None:

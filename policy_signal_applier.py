@@ -1,5 +1,5 @@
 # ==============================================================
-# policy_signal_applier.py  v1.0  (Wave 3 - Policy Ph2)
+# policy_signal_applier.py  v1.0  (Policy Ph2)
 # 政策シグナル 4層キャッシュ減衰・業種適用・緊急フラグ管理
 # ==============================================================
 # 【役割】
@@ -38,7 +38,7 @@
 # 【依存】
 #   politician_signal_scorer.py
 #   config.py（BLOCK 26/31定数参照）
-#   ★ 全関数を try/except で保護。失敗時は元スコアを維持する。
+#   全関数を try/except で保護。失敗時は元スコアを維持する。
 # ==============================================================
 
 from __future__ import annotations
@@ -459,7 +459,7 @@ def apply_policy_signals_to_screener(
 
             if total_adj == 0.0:
                 continue
-            # 2026-09-29: 銘柄単位では政策系加点の合計を ±SCORE_MAX_POLICY_STOCK_ADJ に抑える
+            # 銘柄単位では政策系加点の合計を ±SCORE_MAX_POLICY_STOCK_ADJ に抑える
             total_adj = _clamp_stock_adj(total_adj, cfg)
             if "policy_signal_adj" in c:
                 c["policy_signal_adj"] = round(total_adj - float(c.get("policy_l4_adj", 0.0)), 2)
@@ -500,8 +500,8 @@ def run_policy_signal_applier(
       2. EMERGENCY_OVERRIDE_FLAG を確認・更新
       3. politician_signal_scorer の結果からシグナルを登録
       4. politician_monitor の JP 波及シグナルを登録
-      5. [Wave 4 Ph3] institutional_13f シグナルを登録
-      6. [Wave 4 Ph3] policy_medium_cache (L3) からシグナルを統合
+      5. [Ph3] institutional_13f シグナルを登録
+      6. [Ph3] policy_medium_cache (L3) からシグナルを統合
       7. 減衰適用後の有効ブーストを計算
       8. screener 通過銘柄に適用
       9. キャッシュを保存して結果を返す
@@ -563,7 +563,7 @@ def run_policy_signal_applier(
             print(f"    ⚠️  L4 Override登録エラー: {str(e)[:60]}")
 
     # ── ④ politician_monitor の JP 波及シグナルを登録 ─────────
-    # ★ 2026-06-10 バグ修正: main の書き込みキーは "politician_monitor"
+    # main の書き込みキーは "politician_monitor"（"politician" はフォールバック）
     pol_result  = results.get("politician_monitor", results.get("politician", {}))
     jp_signals  = pol_result.get("jp_sector_signals", {})
 
@@ -583,7 +583,7 @@ def run_policy_signal_applier(
         except Exception as e:
             print(f"    ⚠️  JP波及シグナル登録エラー: {str(e)[:60]}")
 
-    # ── ⑤ [Wave 4 Ph3] institutional_13f シグナルを登録 ────────
+    # ── ⑤ [Ph3] institutional_13f シグナルを登録 ────────
     # institutional_signal_scorer が policy_short_cache に登録した
     # institutional_13f ソースのシグナルを反映する。
     # ※ institutional_signal_scorer.py 側で既に登録済みのため、
@@ -609,7 +609,7 @@ def run_policy_signal_applier(
         except Exception as e:
             print(f"    ⚠️  institutional_13f 登録エラー: {str(e)[:60]}")
 
-    # ── ⑥ [Wave 4 Ph3] policy_medium_cache (L3) からシグナルを統合 ──
+    # ── ⑥ [Ph3] policy_medium_cache (L3) からシグナルを統合 ──
     # policy_medium_cache.json に登録されたシグナルを
     # policy_short_cache の有効ブーストに統合する。
     # L3 シグナルは decay 計算の対象外（有効期間中は固定値）。
@@ -692,7 +692,7 @@ def run_policy_signal_applier(
     except Exception as e:
         print(f"    ⚠️  screener適用エラー: {str(e)[:60]}")
 
-    # ── [Wave 4 Ph4] congress_monitor シグナルを L4 として統合 ────
+    # ── [Ph4] congress_monitor シグナルを L4 として統合 ────
     # congress_monitor の sector_boosts を
     # policy_structural_cache.json (L4) に登録し、
     # screener 通過銘柄に直接加算する。
@@ -717,8 +717,8 @@ def run_policy_signal_applier(
             _ttl_months = int(getattr(cfg,
                 "POLICY_STRUCTURAL_CACHE_TTL_MONTHS", 12))
 
-            # 2026-09-29: 議会由来の行は毎回の全件取得で丸ごと入れ替える。業種単位の
-            # 上書きだと、消えた業種（RSS の偽法案由来など）が12か月残り続けた
+            # 議会由来の行は毎回の全件取得で丸ごと入れ替える。業種単位の
+            # 上書きだと、消えた業種（RSS の偽法案由来など）が TTL（12か月）残り続けるため
             if congress_result.get("fetched_count"):
                 _structural["signals"] = [
                     s for s in _structural.get("signals", [])
@@ -767,7 +767,7 @@ def run_policy_signal_applier(
                 _cadj_clamped = round(
                     max(-_l4_max, min(_l4_max, _cadj)), 2
                 )
-                # 2026-09-29: 政策加点と合わせて銘柄単位の上限内に収める
+                # 政策加点と合わせて銘柄単位の上限内に収める
                 _prev_total = float(_cand.get("policy_total_adj", 0.0) or 0.0)
                 _cadj_clamped = round(
                     _clamp_stock_adj(_prev_total + _cadj_clamped, cfg) - _prev_total, 2)
@@ -790,7 +790,7 @@ def run_policy_signal_applier(
         except Exception as e:
             print(f"    ⚠️  congress L4 統合エラー: {str(e)[:60]}")
 
-    # ── [Wave 4 Ph4] L5 緊急オーバーライド ──────────────────────
+    # ── [Ph4] L5 緊急オーバーライド ──────────────────────
     # 日次下落率が EMERGENCY_DAILY_DROP_THRESHOLD(-4%) を超えた業種に
     # 緊急フラグを立て、composite_score を強制的にクランプする。
     # 通常の EMERGENCY_OVERRIDE（VIX基準）とは独立して動作する。
@@ -883,8 +883,8 @@ def run_policy_signal_applier(
         "signals_registered":      signals_registered,
         "applied_count":           applied_count,
         "cache_signal_count":      cache_signal_count,
-        "l5_emergency_sectors":    _l5_sectors,       # Wave 4 Ph4
-        "structural_cache_updated": bool(congress_boosts),  # Wave 4 Ph4
+        "l5_emergency_sectors":    _l5_sectors,       # Ph4
+        "structural_cache_updated": bool(congress_boosts),  # Ph4
         "summary":                 summary,
     }
 

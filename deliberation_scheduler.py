@@ -1,9 +1,9 @@
 # ==============================================================
-# deliberation_scheduler.py — B部門隔週自動審議の準備（Wave R3-2 / E3）
+# deliberation_scheduler.py — B部門隔週自動審議の準備（E3）
 # ==============================================================
 # 【役割】隔週日曜のCowork審議を「承認だけで走る」状態にする軽量版
 #   （DR3-1推奨案: 手順書＋プロンプトテンプレ＋packet連携まで。
-#   スケジュール登録＝Coworkの定期実行設定は健太が行う）。
+#   スケジュール登録＝Coworkの定期実行設定は人が手動で行う）。
 # 【処理】
 #   ① 審議対象1銘柄を選定（screener上位×未審議＝40_判断台帳.md 除外）
 #   ② agent_packet_exporter v2 で審議パケット生成（ontology＋E8込み）
@@ -39,11 +39,10 @@ def build_deliberation_queue(candidates: list, already: set,
     """
     composite_score 降順で「未審議」の候補を最大 top_n 件返す（審議キュー）。
 
-    2026-07-28 新設。従来は先頭1件だけを返す select_deliberation_target が
-    あったが、日次・週次メールに「次に審議へ上げる候補」を一覧で出したい
-    ため一般化した。**select_deliberation_target はこの関数の先頭要素を
-    返すだけの薄いラッパーに変更してあるので、メールに出る並びと
-    隔週ジョブが実際に選ぶ銘柄は必ず一致する。**
+    日次・週次メールに「次に審議へ上げる候補」を一覧で出すために使う。
+    **select_deliberation_target はこの関数の先頭要素を返すだけの薄い
+    ラッパーなので、メールに出る並びと隔週ジョブが実際に選ぶ銘柄は
+    必ず一致する。**
 
     Args:
         candidates: [{"ticker","composite_score","sector_code",...}]
@@ -57,7 +56,7 @@ def build_deliberation_queue(candidates: list, already: set,
         (c for c in candidates
          if c.get("ticker") and c.get("composite_score") is not None
          and c["ticker"] not in already),
-        # 2026-09-29: 同点（100点張り付き等）は加点前の点（base_score）で並べる
+        # 同点（100点張り付き等）は加点前の点（base_score）で並べる
         key=lambda c: (-float(c["composite_score"]),
                        -float(c.get("base_score") or c["composite_score"])))
     return ranked[:max(0, int(top_n))]
@@ -71,7 +70,7 @@ def select_deliberation_target(candidates: list, already: set) -> dict | None:
     Returns: 選定候補dict / なければ None
 
     ※ 実体は build_deliberation_queue の先頭。メール表示と選定を
-      同一ロジックに揃えるための委譲（2026-07-28）。
+      同一ロジックに揃えるための委譲。
     """
     queue = build_deliberation_queue(candidates, already, top_n=1)
     return queue[0] if queue else None
@@ -81,10 +80,10 @@ def parse_deliberated_tickers(ledger_text: str) -> set:
     """40_判断台帳.md から既審議 ticker を抽出（wikilink/コード表記の両対応）。"""
     if not ledger_text:
         return set()
-    # 2026-09-29: 以前は本文全体から「4桁数字・大文字1〜5字」を拾っており、
-    # 状態欄の "2026"・"DV-8"・"D-03" の "DEPT" などを審議済みと誤認する一方、
-    # 英字入りの新しい証券コード（543A.T・646A.T）を取りこぼしていた。
-    # 表の ticker 列（見出し行で位置を特定）だけを読む。
+    # 表の ticker 列（見出し行で位置を特定）だけを読む。本文全体から
+    # 「4桁数字・大文字1〜5字」を拾うと、状態欄の "2026"・"DV-8"・"D-03" の
+    # "DEPT" などを審議済みと誤認し、英字入りの証券コード（543A.T・646A.T）を
+    # 取りこぼす。
     out: set = set()
     # 見出し行が無い表（旧形式・テスト）は「2列目＝ticker」とみなす
     col = None if re.search(r"\|\s*ticker\s*\|", ledger_text, re.I) else 1
@@ -178,9 +177,7 @@ def _load_screener_candidates(cfg) -> list:
     try:
         data = json.loads(sh.read_text(encoding="utf-8"))
     except Exception as e:
-        # 2026-07-25: ここは以前 except で全部握り潰しており、形式不一致
-        # （日付の値はlistなのに .get("candidates") を呼んでいた）による
-        # AttributeError が見えず「候補が空」としか分からなかった。
+        # 握り潰さずに出す（形式不一致などの原因が「候補が空」に埋もれないように）。
         print(f"  ⚠️ screener_history 読込失敗: {str(e)[:80]}")
         return []
     from performance_tracker import latest_candidates
@@ -197,7 +194,7 @@ def _load_ledger_tickers(cfg) -> set:
         return set()
 
 
-# ── 審議済みティッカーの解決（2026-07-28 / メール表示用）────────────
+# ── 審議済みティッカーの解決（メール表示用）────────────
 #
 # 【なぜ複数ソースが要るか】
 #   審議済みの正本は Obsidian vault の 40_判断台帳.md だが、これは Mac 上
@@ -314,10 +311,9 @@ def get_queue_for_report(cfg, results: dict = None, top_n: int = 5) -> dict:
 def queue_changes(history: dict, today_queue: list, already: set,
                   top_n: int = 5, today: str | None = None, lookback: int = 14,
                   today_cands: list | None = None) -> dict:
-    """審議キューの前回からの入れ替わりを返す（純関数・2026-09-29）。
+    """審議キューの前回からの入れ替わりを返す（純関数）。
 
-    毎日同じ銘柄が並ぶと「ロジックが動いているのか」が分からないため
-    （健太の指摘）、各銘柄が何日連続で並んでいるかと、前回から外れた銘柄と
+    毎日同じ銘柄が並ぶと「ロジックが動いているのか」が分からないため、各銘柄が何日連続で並んでいるかと、前回から外れた銘柄と
     その理由をメールに出す。過去日のキューは同じ除外集合・同じ並べ方で
     screener_history から再計算する。
 
@@ -367,7 +363,7 @@ def queue_changes(history: dict, today_queue: list, already: set,
 
 def run_prep(cfg, ticker: str = "", dry_run: bool = False) -> dict:
     """メインエントリ。Returns: {"ticker","case_id","packet","prompts_path","skipped"}"""
-    # 2026-07-28: vault が読める環境（Mac）でのみ、審議済みティッカーを
+    # vault が読める環境（Mac）でのみ、審議済みティッカーを
     # リポジトリ側へミラーする。GitHub Actions のメール生成が正しい除外集合を
     # 使えるようにするための橋渡し（Actions からは vault を読めないため）。
     if not dry_run:
@@ -479,7 +475,7 @@ def main():
     except Exception:
         cfg = None
 
-    # 2026-07-25: BLOCK 39 の ENABLE_INVESTMENT_DEPT を配線。
+    # BLOCK 39 の ENABLE_INVESTMENT_DEPT で無効化できる。
     if not getattr(cfg, "ENABLE_INVESTMENT_DEPT", True):
         print("⏩ 審議準備: スキップ（ENABLE_INVESTMENT_DEPT=False）")
         return

@@ -1,4 +1,4 @@
-# 2026-10-03: EdinetDB の会社ページ埋め込みデータから財務を補完する
+# EdinetDB の会社ページ埋め込みデータから財務を補完する処理のテスト
 import json
 
 import edinetdb_web_backfill as w
@@ -46,7 +46,7 @@ def test_infer_fy_month_from_submissions():
 
 
 def test_exposure_merge_query_is_valid_struct():
-    """2026-10-03: STRUCT の「<」欠落で全MERGEが構文エラー（権益テーブルは導入以来0行）。"""
+    """STRUCT の「<」欠落で全MERGEが構文エラーになる（権益テーブルが0行のまま）のを防ぐ。"""
     import re
     import jogmec_scraper as j
     q = j._build_exposure_merge_query("p", [{"ticker": "1605.T", "country_code": "AUS",
@@ -56,7 +56,7 @@ def test_exposure_merge_query_is_valid_struct():
 
 
 def test_country_profile_merge_query_types():
-    """2026-10-03: STRUCT の「<」欠落と、JSON列への文字列リテラルで country_profile は0行だった。"""
+    """STRUCT の「<」欠落と、JSON列への文字列リテラルで country_profile が0行になるのを防ぐ。"""
     import country_profile_builder as c
     q = c._build_merge_query("p", c.COUNTRY_PROFILES[:1])
     assert "STRUCT<" in q and "JSON '[" in q

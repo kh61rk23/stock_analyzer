@@ -2,20 +2,18 @@
 # tests/test_screener_characterization.py — U-0 特性化テスト先行整備
 # ==============================================================
 # 目的（要件定義書_JP-US統合_20260726.md §6 U-0）:
-#   stock_screener.py（JP）/ us_stock_screener.py（US）には回帰テストが
-#   1本も存在しなかった。以後の JP/US 統合作業（U-1〜U-10）で挙動が
-#   変わっていないことを機械的に判定するため、現行実装の出力を
-#   固定入力（外部API接続ゼロ）で凍結する。
+#   stock_screener.py（JP）/ us_stock_screener.py（US）の JP/US 統合作業
+#   （U-1〜U-10）で挙動が変わっていないことを機械的に判定するため、
+#   実装の出力を固定入力（外部API接続ゼロ）で凍結する。
 #
 # ★★★ 期待値の性質（R0-3）★★★
 #   本ファイルの assert 期待値は理論値ではなく、
-#   「2026-07-27 時点の stock_screener.py / us_stock_screener.py の
-#    実装を実際に実行して得た実測値」をそのままハードコードしたものである。
+#   「stock_screener.py / us_stock_screener.py の実装を実際に実行して得た
+#    実測値」をそのままハードコードしたものである。
 #   生成手順:
-#     1. /private/tmp/.../scratchpad/probe_all.py 相当の一時スクリプトを書き、
-#        本ファイルと同じ固定入力 dict で対象関数を直接呼び出した。
-#     2. print() された返り値をそのまま本ファイルの expected へ転記した。
-#     3. 一時スクリプトは作業後に削除した（リポジトリ内には存在しない）。
+#     本ファイルと同じ固定入力 dict で対象関数を一時スクリプトから直接呼び出し、
+#     print() された返り値をそのまま expected へ転記する
+#     （一時スクリプトはリポジトリ内に置かない）。
 #   よって「このテストが通る = 現行実装と一致」であり、
 #   「テストが落ちる = 実装が変わった」ことを意味する
 #   （正しい/正しくないの判定基準ではない。差分検知が目的）。
@@ -112,7 +110,7 @@ def isolated_cache(monkeypatch, tmp_path):
 class TestJpCalcScores:
     """
     3ケース: 全項目あり / EDINET欠損 / 時価総額小
-    実測値は 2026-07-27 に固定入力で _calc_scores() を実行して得た。
+    実測値は固定入力で _calc_scores() を実行して得た。
     """
 
     def test_case_all_fields(self, cfg, isolated_cache):
@@ -125,7 +123,7 @@ class TestJpCalcScores:
             "inventory_turnover": 8.0,
             "earnings_growth": 0.10,
             "earnings_qgrowth": 0.20,
-            # 2026-10-01: 加速度は profit_accel（四半期前年比−通期前年比）から取る
+            # 加速度は profit_accel（四半期前年比−通期前年比）から取る
             "profit_accel": {"accel": 0.7},
             "market_cap": 3_000_000_000_000,
             "market_cap_b": 30000.0,
@@ -155,7 +153,7 @@ class TestJpCalcScores:
             "acc_bonus": 10.0,
             "earnings_acceleration": 0.7,
             "bq_bonus": 1.0,
-            "pearl_score": 26.3,   # 2026-10-05: D5に割安度（PER・PBR）を追加
+            "pearl_score": 26.3,   # D5の割安度（PER・PBR）込み
             "pearl_bonus": 0.0,
             "pearl_tier": None,
             "size_tier": "Large",
@@ -209,7 +207,7 @@ class TestJpCalcScores:
             "acc_bonus": 0.0,
             "earnings_acceleration": None,
             "bq_bonus": 0.0,
-            "pearl_score": 7.2,    # 2026-10-05: D5に割安度を追加
+            "pearl_score": 7.2,    # D5の割安度込み
             "pearl_bonus": 0.0,
             "pearl_tier": None,
             "size_tier": "Large",
@@ -263,7 +261,7 @@ class TestJpCalcScores:
             "acc_bonus": 0.0,
             "earnings_acceleration": None,
             "bq_bonus": 0.0,
-            "pearl_score": 18.0,   # 2026-10-05: D5に割安度を追加
+            "pearl_score": 18.0,   # D5の割安度込み
             "pearl_bonus": 0.0,
             "pearl_tier": None,
             "size_tier": "Nano",

@@ -1,7 +1,7 @@
 # ==============================================================
 # tests/test_technology_mapper_keywords.py
 # technology_mapper の TECH_KEYWORD_MAP 動的構築（seed正本）の純粋ロジック検証。
-# 2026-07-13: TECH_KEYWORD_MAPはSSOT再建で消失（幻キー）→承認済みseedから動的構築へ
+# TECH_KEYWORD_MAP は config に固定で持たず、承認済みseedから動的構築する。
 # ==============================================================
 import json
 

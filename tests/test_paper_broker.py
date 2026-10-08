@@ -1,5 +1,5 @@
 # ==============================================================
-# tests/test_paper_broker.py — S2ペーパートレードの受入テスト（Wave R1-2）
+# tests/test_paper_broker.py — S2ペーパートレードの受入テスト（R1-2）
 # ==============================================================
 # 受入条件（要件定義書 §R1-2）:
 #   - 2営業日分のゴールデンテスト（既知価格で約定・損益が手計算と一致）
@@ -113,10 +113,10 @@ class TestEventSourcing:
 
 
 class TestPlaybookStrategyInclusion:
-    """playbooks/*.yaml 由来の戦略が仮想口座を持つこと（2026-07-25）。
+    """playbooks/*.yaml 由来の戦略が仮想口座を持つこと。
 
     adapter は登録されるのに PAPER_STRATEGIES に id が無く、口座が一切
-    作られないまま空回りしていた回帰を防ぐ。
+    作られないまま空回りする回帰を防ぐ。
     """
 
     def test_playbook_adapters_get_accounts(self, tmp_path):

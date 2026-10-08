@@ -4,7 +4,6 @@ edinet_bq_client.py
 【役割】   BigQuery読み書きの共通ユーティリティ（シングルトン）
 【使用元】 edinet_doc_indexer.py / edinet_direct_fetcher.py（E2）
            segment_mapper.py（E3）/ text_signal.py（E4）/ base_agent.py（E2統合時）
-【更新日】 2026-04-26
 """
 
 from google.cloud import bigquery
@@ -28,7 +27,7 @@ except ImportError:
     BQ_CREDENTIALS_PATH = os.environ.get("BQ_CREDENTIALS_PATH", "")
     BQ_DATASET         = os.environ.get("BQ_DATASET", "edinet")
 
-# 1クエリあたりのスキャン上限（暴走クエリの費用ガード / 2026-07-28）
+# 1クエリあたりのスキャン上限（暴走クエリの費用ガード）
 try:
     from config import BQ_MAX_BYTES_BILLED
 except ImportError:
@@ -48,8 +47,8 @@ _RE_HOLDINGS_CACHE: dict = {}
 _RE_HOLDINGS_LOCK = threading.Lock()
 
 # 最新期 financials の実行内キャッシュ（{company_code: dict}）。
-# get_latest_financials / get_financials_single は同じSQLを銘柄ごとに
-# 撃っており、1実行で 85本 × 2種 が走っていた（2026-09-10 課金実測）。
+# get_latest_financials / get_financials_single は同じSQLを銘柄ごとに撃つため、
+# キャッシュしないと1実行で銘柄数×2本のクエリになる。
 _FIN_LATEST_CACHE: dict = {}
 _FIN_LATEST_LOCK = threading.Lock()
 
@@ -62,8 +61,8 @@ _BUNDLE_LOCK = threading.Lock()
 def _fin_code(securities_code) -> str:
     """証券コードを financials.company_code の表記（4桁）へ揃える。
 
-    2026-09-29: 英字入りの新しい証券コード（624A 等）は数字だけ拾うと「624」になり
-    該当行に当たらなかった。先頭4文字が「数字3桁＋英数字」ならそのまま使う。
+    英字入りの新しい証券コード（624A 等）は数字だけ拾うと「624」になり該当行に
+    当たらない。先頭4文字が「数字3桁＋英数字」ならそのまま使う。
     """
     head = str(securities_code or "").split(".")[0].strip().upper()
     if re.fullmatch(r"\d{3}[0-9A-Z]0?", head):
@@ -83,9 +82,8 @@ _RISK_BOILERPLATE = ("有価証券報告書に記載した", "以下のとおり
 def _extract_risk_points(raw_text: str, limit: int = 5) -> list:
     """有報「事業等のリスク」から個別リスクの見出しを抜き出す。
 
-    2026-09-17: 本文を「。」で区切った先頭文をそのまま出しており、日次メールの
-    主要リスクが「３ 【事業等のリスク】有価証券報告書に記載した事業の状況…」という
-    全社共通の前置きになっていた。本文は見出しと本文が改行なしで連結されているため、
+    「。」で区切った先頭文をそのまま出すと「３ 【事業等のリスク】有価証券報告書に
+    記載した事業の状況…」という全社共通の前置きになる。本文は見出しと本文が改行なしで連結されているため、
     見出し番号の直後から「全角空白」または最後の「リスク」までを見出しとする。
     見出しが取れない書式では、前置きの定型文を除いた文を返す。
     """
@@ -130,7 +128,7 @@ class EDINETBQClient:
     """
 
     _instance = None
-    # 2026-09-09: 業種分析を並列化したため、初回生成が複数スレッドから
+    # 業種分析は並列実行されるため、初回生成が複数スレッドから
     # 同時に走りうる。lock が無いと _init_client()（認証・クライアント生成）が
     # 並列数だけ実行され、片方の初期化途中のインスタンスを掴む恐れがある。
     _init_lock = threading.Lock()
@@ -190,7 +188,7 @@ class EDINETBQClient:
         self.project = project
         self.dataset = f"{project}.{BQ_DATASET}"
 
-        # ── 2026-07-28: 暴走クエリの費用上限（maximum_bytes_billed）──────
+        # ── 暴走クエリの費用上限（maximum_bytes_billed）──────
         # 1クエリでスキャンできるバイト数に上限を設ける。超えるクエリは
         # 実行前に失敗し、課金は 0 になる（BigQuery の仕様）。
         # default_query_job_config に入れておくと、各所の
@@ -359,8 +357,7 @@ class EDINETBQClient:
         as_of_date: str = None
     ) -> list[dict]:
         """
-        企業（または業種）の taxonomy ノード関与度を返す。
-        [Wave R2-4 / T-3] 2026-07-10 空スタブを実装。
+        企業（または業種）の taxonomy ノード関与度を返す。[T-3]
 
         優先順位（同一node_idに複数層がある場合）:
           verified_flag=TRUE > confidence_type='edinet'（T-2A・企業レベル）
@@ -420,8 +417,7 @@ class EDINETBQClient:
         """
         1セグメント1行のリストを返す（全期間・report_period降順）。
 
-        2026-07-19実装: 従来は docstring のみのスタブ（幻のAPI）で、
-        consumer（segment_signal）は常に空リストを受け取っていた。
+        consumer は segment_signal。
         実テーブル edinet.segments（名称マスタ）× edinet.segment_finance（数値）
         を segment_id で結合して返す。
 
@@ -473,12 +469,11 @@ class EDINETBQClient:
 
     def query_to_df(self, sql: str) -> pd.DataFrame:
         """SQL クエリ結果を DataFrame で返す"""
-        # 2026-07-16是正: 2026-07-12にgoogle-cloud-bigquery-storageを導入した結果、
-        # to_dataframe()がStorage Read API経由に切り替わり bigquery.readsessions.create
-        # 権限（roles/bigquery.readSessionUser）を要求→SAに無く edinet_rotation が
-        # 3日連続403で停止した。本システムの読取量ではREST経路で十分なため明示的に
-        # Storage APIを使わない（権限付与に依存しない構成）。将来SAに
-        # readSessionUser を付与すれば True に戻して高速化してよい。
+        # google-cloud-bigquery-storage が入っていると to_dataframe() は Storage Read API
+        # 経由になり bigquery.readsessions.create 権限（roles/bigquery.readSessionUser）を
+        # 要求する。SAにこの権限が無いと403になるため、明示的に Storage API を使わない
+        # （本システムの読取量ではREST経路で十分）。SAに readSessionUser を付与すれば
+        # True にして高速化してよい。
         return self.client.query(sql).to_dataframe(create_bqstorage_client=False)
 
     def get_unfetched_docs(self, limit: int = 33) -> pd.DataFrame:
@@ -518,9 +513,8 @@ class EDINETBQClient:
         証券コードで最新期の財務データを取得する。
         base_agent.py（E2 統合時）から呼び出す想定。
         """
-        # ★ financials 正本スキーマの列は company_code / fiscal_year_end。
-        #   旧コードは securities_code / period_end を参照し
-        #   "Unrecognized name: securities_code" で常時 400 だった。
+        # ★ financials 正本スキーマの列は company_code / fiscal_year_end
+        #   （securities_code / period_end は存在せず 400 になる）。
         return dict(self._latest_financials_cached(securities_code))
 
     def get_company_analysis_bundle(
@@ -539,9 +533,8 @@ class EDINETBQClient:
         if not requested:
             return {}
 
-        # 2026-09-10: 業種ごとに呼ばれるため1実行で33本走り、課金実測では
-        # この形だけで 1.77GB/実行を占めていた（BQは参照テーブル1つにつき
-        # 最低10MB課金＝5テーブル参照で1本あたり50MB）。
+        # 業種ごとに呼ばれるため、毎回クエリすると1実行で業種数ぶん走る
+        # （BQは参照テーブル1つにつき最低10MB課金＝5テーブル参照で1本あたり50MB）。
         # 先読み済みならクエリを撃たず、未取得ぶんだけ引く。
         with _BUNDLE_LOCK:
             missing = [pair for pair in requested if pair[0] not in _BUNDLE_CACHE]
@@ -785,9 +778,8 @@ class EDINETBQClient:
     def get_real_estate_holdings(self, securities_code: str) -> list[dict]:
         """証券コードに対応する最新年度の企業保有不動産を返す。
 
-        2026-09-09: 業種分析から1銘柄ずつ呼ばれるN+1（業種あたり最大5社×
-        33業種＝最大165クエリ）で、そのたびに47,455行のテーブルを
-        スキャンしていた。同一プロセス内では結果をキャッシュし、
+        業種分析から1銘柄ずつ呼ばれる（N+1・最大165クエリ）ため、
+        同一プロセス内では結果をキャッシュし、
         最新年度の抽出は相関サブクエリから QUALIFY へ置き換える
         （サブクエリ側のスキャンが1回分まるごと減る）。
         """
@@ -829,9 +821,6 @@ class EDINETBQClient:
     def prefetch_real_estate_holdings(self, securities_codes) -> int:
         """複数銘柄の保有不動産を1クエリでまとめて取得しキャッシュへ載せる。
 
-        2026-09-10: BigQuery の課金実績（INFORMATION_SCHEMA.JOBS）を見ると
-        1実行あたり 482 クエリ / 6.9GB が課金されており、その内訳は
-        「1銘柄1クエリ」の N+1 が4種で 340 本を占めていた。
         BQ は**参照テーブル1つにつき最低10MB**を課金するため、
         実データが0行でも 2テーブルJOIN なら1本あたり20MB取られる。
         つまりこの経路の費用は**データ量ではなくクエリ本数**で決まる。
@@ -930,9 +919,8 @@ class EDINETBQClient:
     def get_latest_accrual_ratios(self) -> dict:
         """全社の最新期アクルーアル比率 (純利益−営業CF)/総資産 を1クエリで返す。
 
-        2026-09-26: stock_screener の Sloan アクルーアル補正は、廃止済みの
-        edinet_rotation のローカルDBだけを読んでおり、毎日「データなし」で
-        補正0点だった。financials から直接計算する（accrual_ratio 列は
+        stock_screener の Sloan アクルーアル補正用。廃止済みの edinet_rotation の
+        ローカルDBは使わず、financials から直接計算する（accrual_ratio 列は
         取り込み側が埋めるようになるまで空のため、列が空なら計算値を使う）。
 
         Returns: {4桁コード: float}
@@ -964,9 +952,7 @@ class EDINETBQClient:
     def prefetch_latest_financials(self, securities_codes) -> int:
         """複数銘柄の最新期 financials を1クエリで先読みしてキャッシュへ載せる。
 
-        2026-09-10: get_latest_financials / get_financials_single が
-        銘柄ごとに同じSQLを撃っており、課金実測では
-        「PARTITION BY company_code」の形が2日で170本（85本/実行）走っていた。
+        get_latest_financials / get_financials_single は銘柄ごとに同じSQLを撃つ。
         BQ は参照テーブル1つにつき最低10MB課金のため、
         financials が 0.3MB でも1本あたり10MBが課金される。
         該当なしの銘柄も空dictで埋めて、キャッシュミスによる
@@ -1035,9 +1021,8 @@ class EDINETBQClient:
     def get_taxonomy_scores_bulk(self, company_codes: list) -> dict:
         """複数銘柄の taxonomy 関与度を1クエリで返す（{company_code: {node_id: score}}）。
 
-        2026-09-21: taxonomy_hotness が業種コードで company_taxonomy_map を引いており
-        （表は4桁の企業コード・業種擬似IDの行は無い）、毎日フォールバックの均等加重に
-        落ちていた。そのうえ業種ごとに1本ずつ引いており9本のN+1だった。
+        company_taxonomy_map は4桁の企業コードで引く（業種擬似IDの行は無い）。
+        業種コードで引くとフォールバックの均等加重に落ちる。N+1を避けるため1クエリにまとめる。
         """
         codes = [str(c).split(".")[0] for c in (company_codes or []) if c]
         codes = sorted({c for c in codes if c})
@@ -1071,14 +1056,12 @@ class EDINETBQClient:
         return out
 
     def get_tickers_with_financials_by_industry(self, per_industry: int = 25) -> dict:
-        """BQ に財務がある会社を {東証33業種名: [ticker, ...]} で返す（1クエリ・2026-09-29）。
+        """BQ に財務がある会社を {東証33業種名: [ticker, ...]} で返す（1クエリ）。
 
-        スクリーナーの対象を「業種代表の数銘柄」から「財務がBQにある全社（約410社）」へ
-        広げるために使う（健太の判断）。
+        スクリーナーの対象を「業種代表の数銘柄」から「財務がBQにある会社」へ広げるために使う。
         """
-        # 2026-10-05: 全社のWeb補完で「財務がある会社」が約420社→約3,800社に増え、
-        # スクリーナー対象が膨らんで実行時間が延び、例外も出た。業種ごとに直近売上の
-        # 大きい順で per_industry 社に絞る（当初想定の規模に戻す）
+        # Web補完で「財務がある会社」は数千社あり、全部をスクリーナーに回すと実行時間が延び
+        # 例外も出る。業種ごとに直近売上の大きい順で per_industry 社に絞る
         lim = max(1, int(per_industry))
         sql = f"""
         WITH latest AS (
@@ -1107,7 +1090,7 @@ class EDINETBQClient:
         全業種の ticker を1クエリでまとめて返す（{sector_code: [ticker, ...]}）。
 
         業種ごとに get_tickers_for_sector() を呼ぶと33本のクエリが走り、
-        実測で約5分・BQ課金も33回分かかっていた（2026-08-27）。
+        数分・BQ課金33回分かかるため1クエリにまとめる。
         件数を絞る順序は ORDER BY ticker で固定する。元の LIMIT だけの
         SQL は順序が未定義で、日によって選ばれる銘柄が変わりうるため。
         """
@@ -1159,7 +1142,7 @@ class EDINETBQClient:
         code = str(sector_code).replace("'", "''")
         lim = max(1, min(int(limit), 20))
 
-        # Wave 6 R-2: テーブルが存在する環境のみ有効。
+        # R-2: テーブルが存在する環境のみ有効。
         # ★ "SECTOR_<code>" は sub_theme_master 同期時に入る業種レベルの
         #   プレースホルダー（実銘柄ではない）。これを実ティッカーとして
         #   返すと yfinance 等が解決不能になり、かつ Tier2/3 フォールバックを
@@ -1205,11 +1188,10 @@ class EDINETBQClient:
         if not codes:
             return pd.DataFrame()
         in_clause = ", ".join(codes)
-        # ★ 正本スキーマの列名へ是正（旧: securities_code/period_end/num_employees/
+        # ★ 正本スキーマの列名で引き（securities_code/period_end/num_employees/
         #   avg_salary/total_director_remuneration/max_director_remuneration は
-        #   いずれも存在せず 400 になっていた）。出力キーは従来名のままにするため
-        #   AS で別名を付け、消費側（base_agent 等）を変更不要にする。
-        #   併せて、組み立て済みなのに未使用だった対象銘柄フィルタ(in_clause)を適用。
+        #   存在せず 400 になる）、AS で消費側（base_agent 等）が使う出力キー名へ
+        #   別名を付ける。対象銘柄は in_clause で絞る。
         sql = f"""
         WITH latest AS (
             SELECT *,
@@ -1244,12 +1226,12 @@ class EDINETBQClient:
         1銘柄の最新期財務データを dict で返す。
         base_agent.py の個別銘柄スコアリングで使用する。
         """
-        # ★ 正本列名 company_code / fiscal_year_end へ是正（旧 securities_code /
-        #   period_end は存在せず 400 エラーだった）。
+        # ★ 正本列名は company_code / fiscal_year_end（securities_code /
+        #   period_end は存在せず 400 エラーになる）。
         return dict(self._latest_financials_cached(securities_code))
 
     # ----------------------------------------------------------
-    # I-2: NEDO採択情報 / policy_support テーブル（Wave 1）
+    # I-2: NEDO採択情報 / policy_support テーブル
     # ----------------------------------------------------------
 
     def ensure_policy_support_table(self) -> bool:
@@ -1374,7 +1356,7 @@ class EDINETBQClient:
             code = code[:-2]
         if not code:
             return []
-        # 2026-09-16: 業種ごとに上位5社×33業種を1件ずつ引くと BQ が約165本になる
+        # 業種ごとに上位5社×33業種を1件ずつ引くと BQ が約165本になる
         # （1本10MB下限）。policy_support は小さいので初回に1本で全件を読み、
         # 以後はメモリから返す（シングルトンなので実行中は使い回される）。
         key = (int(days_back), float(min_confidence))
@@ -1420,7 +1402,7 @@ class EDINETBQClient:
     ) -> float:
         """
         政策支援採択情報から base_agent.calc_composite_score() への
-        加算ボーナスを計算して返す（Wave 1 - I-2）。
+        加算ボーナスを計算して返す（I-2）。
 
         スコアリング式（採択1件あたり）:
           $bonus\\_per\\_adoption = base\\_pt \times confidence \times recency\\_factor
@@ -1593,7 +1575,7 @@ class EDINETBQClient:
             return []
 
 # ----------------------------------------------------------
-    # Wave 6 - R-2: sub_theme_master / ticker_subtheme_mapping
+    # R-2: sub_theme_master / ticker_subtheme_mapping
     # ----------------------------------------------------------
 
     def get_sub_theme_master(
@@ -1933,7 +1915,7 @@ class EDINETBQClient:
             # streaming insert（insert_rows_json）でバルク書込
             # ★ self.dataset は既に "project.dataset" 形式なので、さらに
             #   self.project を前置すると "proj.proj.dataset.table" の4階層になり
-            #   404（テーブル不在）になっていた。dataset.table の3階層にする。
+            #   404（テーブル不在）になる。dataset.table の3階層にする。
             table_ref = f"{self.dataset}.ticker_subtheme_mapping"
 
             # updated_at を全行に付加
@@ -2094,11 +2076,9 @@ def insert_rows(rows: list = None, table_ref: str = "",
     """
     BQ INSERT のモジュールレベルAPI（dataset 横断対応）。
 
-    ★ 2026-06-11 バグ修正: institutional_13f_monitor.py が
-      insert_rows(project_id=..., table_ref="us.institutional_positions",
-      rows=...) とモジュール関数として呼んでいたが、実体は EDINETBQClient
-      のメソッド（edinet dataset 固定・シグネチャも別物）のみで、
-      AttributeError が握り潰されて 13F の BQ 格納が常時スキップされていた。
+    institutional_13f_monitor.py が insert_rows(project_id=..., table_ref=
+      "us.institutional_positions", rows=...) とモジュール関数として呼ぶ。
+      EDINETBQClient のメソッド（edinet dataset 固定・シグネチャ別物）とは別に必要。
       "dataset.table" / "project.dataset.table" 形式の table_ref を受ける。
     """
     try:
@@ -2123,11 +2103,8 @@ def get_latest_financials(securities_code: str, market: str = "JP") -> dict:
     """
     最新財務実績を返すモジュールレベルAPI。
 
-    ★ 2026-06-10 バグ修正: midterm_plan_tracker.py が
-      `from edinet_bq_client import get_latest_financials` と関数として
-      import していたが、実体は EDINETBQClient のメソッドのみで
-      ImportError が握り潰され中計実績取得が常時欠落していた。
-      シングルトンクライアントへの委譲として実装。
+    midterm_plan_tracker.py が `from edinet_bq_client import get_latest_financials`
+      と関数として import するため、シングルトンクライアントへ委譲する形で提供する。
 
     Args:
         securities_code: 証券コード

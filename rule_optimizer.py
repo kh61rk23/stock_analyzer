@@ -78,7 +78,7 @@ SIGNAL_WEIGHT_EMA_ALPHA = 0.05   # 月次更新・変化を緩やかに
 SIGNAL_WEIGHT_MIN       = 0.05
 SIGNAL_WEIGHT_MAX       = 0.40
 
-# ── [Wave 4 - FE-F / S4-F] ファクターモメンタム定数 ─────────────
+# ── [FE-F / S4-F] ファクターモメンタム定数 ─────────────
 # FACTOR_WEIGHTS_FILE : ファクター重みの保存ファイル名
 # FACTOR_WEIGHT_EMA   : ファクター重み EMA 更新率（週次）
 # FACTOR_LOOKBACK_DEF : ファクターリターン計算のデフォルトルックバック週数
@@ -532,7 +532,7 @@ def apply_weight_to_signal(factor: str, base_pts: float, weights: dict) -> float
     return round(base_pts * w, 2)
 
 # ==============================================================
-# BLOCK 5.5: ファクターモメンタム（Wave 4 - FE-F / S4-F）
+# BLOCK 5.5: ファクターモメンタム（FE-F / S4-F）
 # ==============================================================
 # F-2: 週次ファクターリターン計算（4ファクター対応）
 # F-3: ルックバック期間加重平均
@@ -1037,8 +1037,7 @@ def format_weight_report(old_weights: dict, new_weights: dict) -> str:
 # ==============================================================
 
 # ==============================================================
-# BLOCK 7.5: Wave 6 - 第4セッション
-#            緊急縮退フラグ判定・防御セクター相対維持ロジック
+# BLOCK 7.5: 緊急縮退フラグ判定・防御セクター相対維持ロジック
 # ==============================================================
 # 【設計方針】
 #   G-1: evaluate_contraction_flag()  → results から複合条件を評価してモード判定
@@ -1109,7 +1108,7 @@ def evaluate_contraction_flag(results: dict, cfg) -> dict:
         us10y_now  = bond_res.get("us10y_yield")
         us10y_prev = bond_res.get("us10y_yield_prev")
         detail["us10y_rise"] = None
-        # 2026-10-05: bond_commodity に利回りが入っておらず毎週 N/A だった。
+        # bond_commodity には利回りが入らないため、
         # rates_monitor（FRED DGS10）の前週比（%pt）を使う
         if us10y_now is None or us10y_prev is None:
             try:
@@ -1149,7 +1148,7 @@ def evaluate_contraction_flag(results: dict, cfg) -> dict:
             .get("pcr_data", {})
             .get("pcr_current")
         )
-        # 2026-10-05: 実際の格納先は option_data.spy.pcr_oi（建玉が0なら出来高ベース）
+        # 実際の格納先は option_data.spy.pcr_oi（建玉が0なら出来高ベース）
         if pcr_val is None:
             _spy = (results.get("options_monitor", {}).get("option_data") or {}).get("spy") or {}
             pcr_val = _spy.get("pcr_oi") or _spy.get("pcr_volume")
@@ -1167,7 +1166,7 @@ def evaluate_contraction_flag(results: dict, cfg) -> dict:
         _geo_res = results.get("geo_risk", results.get("country_risk", {}))
         if isinstance(_geo_res, dict):
             geo_score = _geo_res.get("risk_score") or _geo_res.get("geo_risk_score")
-            # 2026-10-05: 実際の結果は国別の risk_scores。監視国のうち最も高い国のスコアを使う
+            # 実際の結果は国別の risk_scores。監視国のうち最も高い国のスコアを使う
             _rs = _geo_res.get("risk_scores") or {}
             if geo_score is None and isinstance(_rs, dict) and _rs:
                 _top = max(_rs.items(), key=lambda kv: float(kv[1] or 0))
@@ -1192,8 +1191,8 @@ def evaluate_contraction_flag(results: dict, cfg) -> dict:
             if isinstance(v, dict)
         ]
         # score_history から前週の上位平均を取得（存在すれば）
-        # 2026-10-05: 前週の値を results（実行中のメモリ）にしか置いておらず、翌週には
-        # 消えていて毎週 N/A だった。ファイルに残して6日以上前の値と比べる
+        # results（実行中のメモリ）は翌週には残らないため、前週の値はファイルに残し
+        # 6日以上前の値と比べる
         from pathlib import Path as _P
         _sp = _P(getattr(cfg, "DATA_DIR", "stock_data/data")) / "contraction_state.json"
         try:
@@ -1500,7 +1499,7 @@ def run_rule_optimizer(cfg, force: bool = False) -> dict:
           "old_weights":  dict,      # 更新前の重み
           "report_md":    str,       # Markdown レポート
           "timestamp":    str,
-          "contraction_flag":   dict,  # 緊急縮退フラグ判定結果（Wave 6 - 第4セッション）
+          "contraction_flag":   dict,  # 緊急縮退フラグ判定結果
           "contraction_mode":   str,   # "Normal" / "Warning" / "Emergency"
           "contraction_detail": dict,  # 各条件の評価値
         }
@@ -1681,7 +1680,7 @@ def run_rule_optimizer(cfg, force: bool = False) -> dict:
 
     report_md = format_weight_report(old_weights, new_weights)
 
-# ── [Wave 6 - 第4セッション] 簡易縮退判定（月末更新時） ──────
+# ── 簡易縮退判定（月末更新時） ──────
     # score_history の最新スナップショットから VIX・市場幅を簡易チェックする。
     # 本格的な縮退評価は run_all_tasks() 内で signal_aggregator 呼び出し直前に
     # evaluate_contraction_flag(results, cfg) が実施するため、ここでは
@@ -1724,7 +1723,7 @@ def run_rule_optimizer(cfg, force: bool = False) -> dict:
     except Exception as _ce_monthly:
         pass   # 縮退判定失敗は最適化全体を止めない
 
-    # ── [Wave 4 - FE-F / S4-F] ファクターモメンタム最適化（F-2〜F-5）──
+    # ── [FE-F / S4-F] ファクターモメンタム最適化（F-2〜F-5）──
     _factor_result: dict = {}
     try:
         _factor_result = run_factor_momentum_optimizer(cfg, score_history)
@@ -1740,8 +1739,8 @@ def run_rule_optimizer(cfg, force: bool = False) -> dict:
         "old_weights":         old_weights,
         "factor_correlations": factor_correlations,
         "report_md":           report_md,
-        "factor_momentum":     _factor_result,           # Wave 4 F-2〜F-5
-        "contraction_flag":    _contraction_result_monthly,  # Wave 6 - 第4セッション
+        "factor_momentum":     _factor_result,           # F-2〜F-5
+        "contraction_flag":    _contraction_result_monthly,
         "contraction_mode":    _contraction_result_monthly.get("mode", "Normal"),
         "contraction_detail":  _contraction_result_monthly.get("detail", {}),
         "timestamp":           datetime.now().strftime("%Y-%m-%d %H:%M:%S"),

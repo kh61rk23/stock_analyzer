@@ -1,4 +1,4 @@
-# news_pipeline — 0件フィードの理由を表示する（2026-09-26）
+# news_pipeline — 0件フィードの理由を表示する
 import types
 
 import news_pipeline as m

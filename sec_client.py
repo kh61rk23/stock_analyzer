@@ -1,5 +1,5 @@
 # ==============================================================
-# sec_client.py  v1.0  (Wave J1 / U-1a)
+# sec_client.py  v1.0  (U-1a)
 # SEC EDGAR 共通アクセス層
 # ==============================================================
 # 【役割】
@@ -7,19 +7,13 @@
 #   User-Agent 解決・CIK マップ（company_tickers.json）・レート制限・
 #   429/5xx リトライ・共通ディスクキャッシュを1箇所に集約する。
 #
-# 【背景】
-#   SEC EDGAR アクセスが insider_monitor / institutional_13f_monitor /
-#   sec_geographic_extractor / sec_summarizer / us_8k_monitor /
-#   us_fundamental_rotator / us_insider_form4_scraper /
-#   us_sector_bridge_enhanced の8ファイルに散在し、User-Agent・CIK解決・
-#   レート制限・リトライ・キャッシュを各自が独自実装していた（D-6/D-7）。
+# 【利用元】
+#   institutional_13f_monitor / sec_geographic_extractor / sec_summarizer /
+#   us_8k_monitor / us_fundamental_rotator / us_insider_form4_scraper /
+#   us_sector_bridge_enhanced（insider_monitor は us_insider_form4_scraper 経由）。
+#   User-Agent・CIK解決・レート制限・リトライを各モジュールで独自実装しないこと（D-6/D-7）。
 #   詳細: 02_Configuration_Management/05_提案_2026-07-26/
 #         要件定義書_JP-US統合_20260726.md §6 U-1
-#
-# 【本バッチ（U-1a）のスコープ】
-#   本ファイルの新設と単体テストのみ。既存8ファイルの移行は行わない
-#   （別バッチ U-1b 以降で実施）。したがって本ファイルは現時点で
-#   どこからも呼ばれていないライブラリである。
 #
 # 【公開 API】
 #   user_agent(cfg=None) -> str

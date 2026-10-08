@@ -57,12 +57,8 @@ _NOT_YUHO_TOKENS = (
 def is_annual_report(raw_type: str) -> bool:
     """開示種別が有価証券報告書かを判定する。
 
-    2026-09-11: ここは「既知の有報語を含まなければ除外」という
-    ホワイトリスト判定だった。しかし呼び出し側は API に
-    `types=yuho` を渡しており**サーバ側で既に絞り込まれている**のに、
-    その上で我々が管理していない語彙を当てにいっていたため、
-    実測で 9社/9社 が全て除外され doc_index が 2026-04-26 から
-    1件も増えていなかった（台帳 2026-09-11: filtered=9）。
+    呼び出し側は API に `types=yuho` を渡しており**サーバ側で既に絞り込まれている**。
+    我々が管理していない語彙のホワイトリストで判定すると全件除外されうるため、
     既知の非有報だけを除外し、未知の語彙はサーバの絞り込みを信じて通す。
     """
     text = str(raw_type or "").lower()
@@ -95,17 +91,14 @@ def build_doc_index_rows(
         doc_id = str(_first(item, "doc_id", "docId", "docID", "document_id",
                             "documentId", "edinet_doc_id") or "").strip()
         if not doc_id:
-            # 2026-09-14: 観測語彙は "yuho"（型フィルタは通過）なのに 9社/9社 が
-            # 除外されていた＝落ちていたのは書類IDの欠落側だった。汎用キーは
+            # 書類IDが専用キーで取れないことがある。汎用キーは
             # EDINET 書類管理番号（S100XXXX 形式）に見えるときだけ採用する。
             _cand = str(_first(item, "id", "doc_code", "code") or "").strip()
             if re.match(r"^S[0-9A-Z]{7}$", _cand):
                 doc_id = _cand
         if not doc_id:
-            # 2026-09-15: 前日追加の診断で、書類IDが取れなかった行のキーは
-            # date / doc_id / fiscal_year / pdf_url / title / type と判明した。
-            # doc_id 列はあるのに**値が空**で、9社/9社がここで落ちていた
-            # （doc_index が 2026-04-26 から1件も増えていない真因）。
+            # 開示エンドポイントの行のキーは date / doc_id / fiscal_year / pdf_url /
+            # title / type で、doc_id 列はあるのに**値が空**で返る。
             # EDINET の PDF URL には書類管理番号（S1xxxxxx）が含まれるので、そこから補う。
             _m = re.search(r"(?<![0-9A-Za-z])(S1[0-9A-Z]{6})(?![0-9A-Za-z])",
                            str(item.get("pdf_url") or ""))
@@ -137,7 +130,7 @@ def build_doc_index_rows(
             "doc_type": "有価証券報告書",
             "fiscal_year_end": _as_date(_first(item, "fiscal_year_end", "period_end")),
             "disclosure_date": _as_date(
-                # 2026-09-15: 実応答の開示日キーは "date"（候補に無く常に NULL になっていた）
+                # 実応答の開示日キーは "date"（候補から外すと常に NULL になる）
                 _first(item, "published_at", "disclosure_date", "submit_date", "filed_at",
                        "date", "submit_date_time")
             ),
@@ -154,7 +147,7 @@ def build_doc_index_rows(
 def _load_doc_ids_from_financials(bq, codes) -> dict:
     """{edinet_code: {fiscal_year: doc_id}} を BQ financials から1クエリで作る。
 
-    2026-09-15: 開示エンドポイントの行は doc_id が空で返る（キー date / doc_id /
+    開示エンドポイントの行は doc_id が空で返る（キー date / doc_id /
     fiscal_year / pdf_url / title / type、doc_id の値だけ空）。同じ企業・年度の
     EDINET 書類IDは財務取込で BQ financials に入っているので、そこから補う。
     """
@@ -203,10 +196,8 @@ def run_doc_indexer(days_back: int = 1, cfg=None) -> dict:
     except (OSError, ValueError, TypeError):
         return {"skipped": True, "reason": "W3 cache unavailable", "inserted": 0}
     by_code = {str(item.get("edinet_code")): item for item in companies}
-    # 2026-07-30: 対象選定を「最近取得した順（reverse=True）」から
-    # 「doc_index をまだ取っていない順」へ変更。
-    # 旧実装は毎回いちばん新しい10社を見に行くため、同じ企業を繰り返し
-    # 叩くだけで対象が広がらなかった（doc_index は 2026-04-26 で停止・193件）。
+    # 対象は「doc_index をまだ取っていない順」に選ぶ。
+    # 「最近取得した順」にすると毎回同じ企業を叩くだけで対象が広がらない。
     doc_meta = rotation.get("_doc_index", {})
     if not isinstance(doc_meta, dict):
         doc_meta = {}
@@ -229,9 +220,9 @@ def run_doc_indexer(days_back: int = 1, cfg=None) -> dict:
         return {"skipped": True, "reason": f"BQ unavailable: {type(exc).__name__}", "inserted": 0}
     doc_ids = _load_doc_ids_from_financials(bq, targets)
 
-    # 2026-07-30: 取得窓を days_back（既定7日）から専用設定へ変更。
+    # 取得窓は days_back（既定7日）ではなく専用設定を使う。
     # 有価証券報告書は**年1回**しか提出されないため、7日窓で types=yuho を
-    # 探しても構造的にほぼ常に0件になっていた（実測: inserted 0 / targets 10）。
+    # 探しても構造的にほぼ常に0件になる。
     # 年次サイクルを跨ぐ既定400日にして、1社1回は必ず拾えるようにする。
     lookback = max(
         int(days_back),
@@ -240,9 +231,8 @@ def run_doc_indexer(days_back: int = 1, cfg=None) -> dict:
     since = (date.today() - timedelta(days=max(1, lookback))).isoformat()
     rows = []
     indexed_today = []
-    # 2026-09-10: なぜ0件なのかがログから分からず、doc_index が
-    # 2026-04-26 で止まっている原因（API側が空か／型フィルタで落ちているか）
-    # を切り分けられなかったため、内訳を数える。
+    # 0件のとき原因（API側が空か／型フィルタで落ちているか）をログから
+    # 切り分けられるよう、内訳を数える。
     stats = {"empty": 0, "filtered": 0, "no_data": 0}
     seen_types: set = set()
     seen_keys: set = set()
@@ -253,10 +243,8 @@ def run_doc_indexer(days_back: int = 1, cfg=None) -> dict:
         )
         if data is None:
             # 予算枯渇・レート制限・一時障害。取得済み扱いにせず次回に回す。
-            # 2026-09-10: edinetdb_ingestor / fudosan_ingestor は
-            # ("budget", "rate_limited") の両方で打ち切るのに、ここだけ
-            # "budget" しか見ておらず、429 のサーキットブレーカ作動時に
-            # 残り全社を空振りしたまま「巡回済み」にせず抜けていた。
+            # edinetdb_ingestor / fudosan_ingestor と同じく ("budget", "rate_limited")
+            # の両方で打ち切る（429 のサーキットブレーカ作動時に残り全社を空振りしない）。
             if getattr(client, "last_error", None) in ("budget", "rate_limited"):
                 break
             stats["no_data"] += 1

@@ -1,5 +1,5 @@
-# paper_broker（2026-09-29）: Actions で口座が stock_data/stock_data/paper に書かれ
-# コミットされず、毎日「新規注文8件・約定0件」だった。
+# paper_broker: 口座が stock_data/stock_data/paper のような二重パスに書かれないこと。
+# 書かれると Actions でコミットされず、毎日「新規注文のみ・約定0件」になる。
 import types
 
 from paper import paper_broker as pb

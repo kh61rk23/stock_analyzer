@@ -212,7 +212,7 @@ def test_ingest_calls_real_individual_contracts_and_merges_all_tables(
     assert requests[-1][1] == {"full": "true", "fiscal_year": 2025}
     assert [table for _dataset, table, _rows, _keys in captured["bq"].merges] == [
         "company", "financials", "segments", "segment_finance", "text_analysis",
-        "financial_items",   # 2026-10-03: 財務三表の細目（最後にまとめてMERGE）
+        "financial_items",   # 財務三表の細目（最後にまとめてMERGE）
     ]
 
 
@@ -258,12 +258,9 @@ def test_ingest_does_not_advance_rotation_when_full_text_fetch_fails(
 
     assert result["success"] == 0
     assert result["failure"] == 1
-    # 2026-09-10: 以前は「台帳に一切書かない」ことで再試行を担保していたが、
-    # それだと毎回失敗する企業が永久に優先度上位へ居座り、11枠のうち8枠を
-    # 同じ失敗の再試行が占め続けていた（2026-09-07/09/10 の3実行とも
-    # 対象の先頭6社が同一だった）。
-    # いまは失敗も記録するが **last_fetched は書かない**。
-    # 「取得済み扱いにしない」という本来の意図はこちらで担保する。
+    # 失敗も台帳に記録する（記録しないと毎回失敗する企業が優先度上位に居座り
+    # 枠を占有する）。ただし **last_fetched は書かない** ことで
+    # 「取得済み扱いにしない」を担保する。
     entry = module._load_json(tmp_path / "rotation.json", {}).get("E02144", {})
     assert "last_fetched" not in entry, "失敗したのに取得済み扱いになっている"
     assert entry.get("last_attempt"), "失敗が記録されず次回も同じ枠を消費する"
@@ -271,11 +268,10 @@ def test_ingest_does_not_advance_rotation_when_full_text_fetch_fails(
     assert result["reasons"]["text_blocks"] == 1
 
 
-# ── BQ照合によるローテ台帳の補完（2026-07-30）────────────────────
+# ── BQ照合によるローテ台帳の補完 ────────────────────
 #
 # 台帳はローカルJSONのキャッシュに過ぎず BQ より遅れることがある。
-# 実測で BQ 114社 vs 台帳 69社の乖離があり、既に取得済みの約45社を
-# 毎日再取得して API 予算を空費していた。BQ を正として補完する。
+# 遅れたままだと取得済みの企業を再取得して API 予算を空費するため、BQ を正として補完する。
 
 from edinetdb_ingestor import reconcile_meta_with_bq  # noqa: E402
 
@@ -320,20 +316,18 @@ def test_reconcile_ignores_unknown_codes():
 
 
 def test_reconcile_noop_when_bq_empty():
-    """BQが使えない環境では台帳をそのまま返すこと（従来動作を維持）。"""
+    """BQが使えない環境では台帳をそのまま返すこと。"""
     original = {"E03006": {"last_fetched": "2026-07-01"}}
     meta, filled = reconcile_meta_with_bq(dict(original), _COMPANIES, {})
     assert filled == 0
     assert meta == original
 
 
-# ── 失敗企業がローテーションを塞がないこと（2026-09-10）────────────
+# ── 失敗企業がローテーションを塞がないこと ────────────
 #
 # last_fetched は成功時にしか書かれないため、毎回失敗する企業は
-# 永久に fresh にならず優先度P1/P2の先頭に居座っていた。実際
-# 2026-09-07 / 09-09 / 09-10 の3実行とも対象の先頭6社
-# （E01719/E36174/E02324/E03693/E04275/E37577）が同一で、
-# 11枠のうち8枠が同じ失敗の再試行に消えていた。
+# 永久に fresh にならず優先度P1/P2の先頭に居座り、枠を同じ失敗の再試行で
+# 消費してしまう。これを防ぐテスト。
 
 from datetime import date, timedelta   # noqa: E402
 
@@ -402,12 +396,10 @@ class TestFailureBackoff:
         assert got == ["E4", "E5"], "失敗中のP1が枠を占有し続けている"
 
 
-# ── データ無しを障害として数えない（2026-09-12）────────────────
+# ── データ無しを障害として数えない ────────────────
 #
-# EdinetDB側にそもそも当該企業のデータが無い（404）のはこちらの障害では
-# ないのに failure に混ぜていたため、実問題が0でも台帳が alert になり
-# （2026-09-12 実測: failure 2 = missing 2 / bq_merge 0）、
-# 本当に直すべき失敗が埋もれていた。
+# EdinetDB側にそもそも当該企業のデータが無い（404）のはこちらの障害ではない。
+# failure に混ぜると実問題が0でも台帳が alert になり、本当に直すべき失敗が埋もれる。
 
 class TestMissingIsNotAFailure:
     def _run(self, tmp_path, monkeypatch, *, error):

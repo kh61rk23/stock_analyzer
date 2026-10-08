@@ -38,10 +38,10 @@
 # 18     top_company_1    str     代表銘柄1（例: "1332.T"）
 # 19     top_company_2    str     代表銘柄2
 # 20     notes            str     備考・メモ・補足（マクロシグナル要約など）
-# 21     discovery_score  float   未発見銘柄スコア（0-100）[S-3追加]
-# 22     accrual_tier     str     EDINETアクルーアルtier（AAA/AA/A/B/C/N/A）[S-2追加]
+# 21     discovery_score  float   未発見銘柄スコア（0-100）[S-3]
+# 22     accrual_tier     str     EDINETアクルーアルtier（AAA/AA/A/B/C/N/A）[S-2]
 # 23     accrual_bonus    float   quality_scoreへの加算点
-# 24     recession_adj    float   イールドカーブ補正量（recession_adjustment）[F-1追加]
+# 24     recession_adj    float   イールドカーブ補正量（recession_adjustment）[F-1]
 # 25  signal_score      float  signal_aggregator 統合スコア（0-100）
 # 26  market_regime     str    "リスクオン" / "中立" / "リスクオフ"
 # 27  comps_bonus       float  同業種内比較ボーナス点
@@ -213,9 +213,8 @@ def _rows_from_us_sectors(us_result: dict, date_str: str) -> list:
             except (TypeError, ValueError):
                 return ""
 
-        # ★ 2026-06-11 バグ修正: 旧実装は signal_score 行で未定義変数
-        #   signal を参照して毎回 NameError（USセクター行のCSV出力が失敗）。
-        #   "signal" キーと同じ判定を事前計算して両方で使う。
+        # "signal" キーと signal_score 行で同じ判定を使うため事前計算する
+        #   （ループ内に signal という変数は無い。直接参照すると NameError）。
         _us_signal = ("tailwind" if sr.get("score", 0) >= 65
                       else ("headwind" if sr.get("score", 0) <= 40
                             else "neutral"))

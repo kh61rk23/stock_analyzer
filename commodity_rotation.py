@@ -1,5 +1,5 @@
 # ==============================================================
-# commodity_rotation.py — コモディティ/マクロ・ローテーション（Wave R4-2 / S6）
+# commodity_rotation.py — コモディティ/マクロ・ローテーション（R4-2 / S6）
 # ==============================================================
 # 【役割】月初に、経済サイクル4象限で許可されたコモディティETFのうち
 #   12-1モメンタムが正のものへ配分提案を出す（合計≤総資産10%）。
@@ -8,7 +8,7 @@
 #   - レジーム（economic_cycle 4象限）→ 象限別の許可カテゴリ（他象限=現金）
 #     A:成長↑インフレ↑→energy/grains  C:成長↓インフレ↑→gold/broad  B,D→現金
 #   - momentum<0 の資産は配分ゼロ（絶対モメンタムフィルタ）
-#   - 出力: 月次配分提案（注文票＋レポート）。発注は健太手動（D-01）。
+#   - 出力: 月次配分提案（注文票＋レポート）。発注は手動（D-01）。
 # 使い方: python3 commodity_rotation.py（月初）/ --dry-run
 # ==============================================================
 
@@ -78,7 +78,7 @@ def select_allocations(momentum_by_ticker: dict, regime: str,
 
 def build_order_tickets(allocations: dict, total_assets: float,
                         prices: dict, today: str) -> list[dict]:
-    """配分%→注文票（共通スキーマ①・qtyは概算・発注は健太手動）。"""
+    """配分%→注文票（共通スキーマ①・qtyは概算・発注は手動）。"""
     tickets, seq = [], 1
     for ticker, pct in allocations.items():
         price = prices.get(ticker)

@@ -107,9 +107,8 @@ SP500_FALLBACK = [
 # ==============================================================
 
 
-# ── config を正本とする定数の対応表（2026-07-25 SSOT移設）──
+# ── config を正本とする定数の対応表 ──
 # config.py BLOCK 59 が正本。run_* の冒頭で一度だけ取り込む。
-# 値は移設時点の実装値と同一のため挙動は変わらない。
 _CFG_CONST_MAP = {
     "MB_SCORE_HEALTHY_THRESH": "SCORE_HEALTHY_THRESH",
     "MB_SCORE_WEAK_THRESH": "SCORE_WEAK_THRESH",
@@ -256,8 +255,7 @@ def _batch_fetch_prices(tickers: list, period: str = HISTORY_PERIOD) -> dict:
             else:
                 # group_by="ticker" の MultiIndex は (Level0=Ticker, Level1=OHLCV)。
                 # df["Close"][t] は level0 に "Close" が無く KeyError になり、
-                # 下の except で全銘柄が黙って捨てられていた
-                # （2026-09-08 修正。anomaly_detector と同型）。
+                # 下の except で全銘柄が黙って捨てられる（anomaly_detector と同型）。
                 for t in batch:
                     try:
                         sub    = df[t]
@@ -687,7 +685,7 @@ def run_market_breadth(cfg, sector_results: Optional[dict] = None,
           "timestamp":        str,
         }
     """
-    # 2026-07-25: 閾値・重みを config.py BLOCK 59 から取り込む
+    # 閾値・重みを config.py BLOCK 59 から取り込む
     sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
 
     print("\n  📊 市場幅指標（マーケットブレス）計算開始...")

@@ -6,7 +6,6 @@ edinet_direct_fetcher.py
 【実行】   edinet_rotation_manager.py から呼び出される（日次）
            初回確認は Colab で run_fetcher(daily_limit=5) を手動実行
 【依存】   edinet_bq_client.py / config.py（XBRL_TAG_MAP / XBRL_SEGMENT_TAGS）
-【更新日】 2026-04-11
 """
 
 import os
@@ -17,7 +16,7 @@ import time
 import xml.etree.ElementTree as ET
 from typing import Optional
 
-# 2026-07-19: BQクライアントは遅延インポート化（google-cloud未導入のローカル環境
+# BQクライアントは失敗を許容してインポートする（google-cloud未導入のローカル環境
 # でも純関数（build_financials_row / build_segment_rows）を利用・テスト可能にする）
 try:
     from edinet_bq_client import EDINETBQClient
@@ -35,7 +34,7 @@ from config import (
 # ============================================================
 # 定数
 # ============================================================
-# 2026-07-12是正: 実在しないホスト disclosure.edinet-api.go.jp → 正ホストへ統一
+# 正ホストは edinet-fsa.go.jp（disclosure.edinet-api.go.jp は実在しない）
 EDINET_BASE   = "https://disclosure.edinet-fsa.go.jp/api/v2"
 from config_sync import sync_module_constants
 
@@ -67,11 +66,9 @@ def download_xbrl_zip(doc_id: str) -> Optional[bytes]:
     url = f"{EDINET_BASE}/documents/{doc_id}"
     params = {"type": XBRL_TYPE}
 
-    # 2026-07-19是正: EDINET API v2 は Subscription-Key 必須。旧コードは
-    # 無認証でリクエストしており、キーがあっても 401 で全滅する構造だった。
-    # 認証方式は既存流儀（edinet_client.py / api_key_health.py と同じ
-    # Ocp-Apim-Subscription-Key ヘッダ）に統一。
-    # 2026-09-12: 政府EDINET APIキーは撤去済み（EdinetDBへ一本化）。
+    # EDINET API v2 は Subscription-Key 必須（無認証だと 401）。認証方式は
+    # edinet_client.py / api_key_health.py と同じ Ocp-Apim-Subscription-Key ヘッダ。
+    # 政府EDINET APIキーは撤去済み（EdinetDBへ一本化）。
     # 本モジュールは ENABLE_EDINET_DIRECT_FETCH=False で退役済みだが、
     # 誤って有効化された場合に無言で動き出さないよう空を返す。
     api_key = ""
@@ -148,9 +145,8 @@ def _get_value_from_element(root: ET.Element, local_name: str) -> Optional[float
     Python 3.8+ の {*}LocalName ワイルドカード構文を使用。
     """
     # 全一致要素を取得（ET の名前空間ワイルドカード構文: .//{*}LocalName）
-    # ★ 2026-06-10 バグ修正: 壊れた f-string（f".//{{{*}}}..."）が残存し
-    #   構文エラーで本モジュール全体が import 不能 → E2-1 が常時スキップ
-    #   されていた。正しい行のみ残す。
+    # f-string にしない（{*} が置換フィールド扱いになり構文エラーで
+    # モジュール全体が import 不能になる）。
     elements = root.findall(".//{*}" + local_name)
 
     if not elements:
@@ -246,13 +242,11 @@ def parse_segments_from_xbrl(xbrl_text: str, segment_tags: dict) -> list[dict]:
 # ============================================================
 # Step 4: BQ 行ビルダー（純関数・実スキーマ準拠）
 # ============================================================
-# 2026-07-19是正: 旧コードは実在しない列（edinet_code/securities_code/
-# period_end/fiscal_year/ifrs_flag/created_at 等）で INSERT しており、
-# 実テーブル（financials: fin_id/company_code/fiscal_year_end/...、
-# segments: segment_id/segment_name/...、segment_finance: sf_id/revenue/...）
-# に対して全行 insert エラーになる構造だった（EDINETキー失効前から
-# financials/segments が 0 行のままだった根本原因の一つ）。
-# 実スキーマは MCP 直query（2026-07-19）で確認済み。
+# 列名は実テーブルのスキーマに合わせる（financials: fin_id/company_code/
+# fiscal_year_end/...、segments: segment_id/segment_name/...、
+# segment_finance: sf_id/revenue/...）。edinet_code/securities_code/period_end/
+# fiscal_year/ifrs_flag/created_at 等は存在せず、使うと全行 insert エラーになる。
+# 実スキーマは MCP 直query で確認済み。
 
 def _ratio(num, den) -> Optional[float]:
     """分子/分母の安全な除算（None・0分母は None）。"""

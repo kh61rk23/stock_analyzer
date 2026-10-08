@@ -1,5 +1,4 @@
 # country_risk_updater — GDELT BigQuery経路＋合成スコア再正規化（純粋ロジック）
-# 2026-07-19追加:
 #   ② 国務省RSSがGitHub Actions IPで恒常403 → 取得失敗時は合成スコアを
 #      残ソースで再正規化する（mofa_available / state_available フラグ）。
 #   ③ GDELT Doc APIが恒常429 → BigQuery公開データセット(gdelt-bq.gdeltv2)
@@ -43,7 +42,7 @@ class TestIso3ToFipsMap:
         assert len(vals) == len(set(vals))
 
     def test_known_tricky_codes(self):
-        # ISO2 と食い違う要注意国（2026-07-19 BQ実データ59/59国で検証済み）
+        # ISO2 と食い違う要注意国（BQ実データ59/59国で検証済み）
         assert cru._ISO3_TO_FIPS["JPN"] == "JA"
         assert cru._ISO3_TO_FIPS["CHN"] == "CH"
         assert cru._ISO3_TO_FIPS["RUS"] == "RS"
@@ -54,7 +53,7 @@ class TestIso3ToFipsMap:
 
 class TestCompositeRenormalization:
     def test_all_sources_available_unchanged(self):
-        # 従来挙動の回帰: gdelt=40, mofa=4(→100), state=2(→50)
+        # 全ソース取得時は再正規化しない: gdelt=40, mofa=4(→100), state=2(→50)
         # composite = 40×0.5 + 100×0.25 + 50×0.25 = 57.5
         assert cru._calc_composite_risk(40.0, 4, 2) == 57.5
 

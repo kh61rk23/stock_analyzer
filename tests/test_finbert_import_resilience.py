@@ -1,12 +1,11 @@
 # transformers のメジャー更新で FinBERT が黙って無効化されないこと
 #
-# 2026-09-11: requirements.txt が `transformers>=4.30.0`（上限なし）だったため
-# CI が 6.0.1 を取得し、v6 でトップレベルの `pipeline` エクスポートが
-# 無くなったことで FinBERT が丸ごと無効化されていた。
+# transformers の上限を切らないと CI が v6 を取得し、v6 ではトップレベルの
+# `pipeline` エクスポートが無いため FinBERT が丸ごと無効化される。
 #   ⚠️ [finbert] analyze_sections: pipeline初期化失敗
 #      → cannot import name 'pipeline' from 'transformers'
-# 実行自体は success のまま進むため、出力が中立値で埋まるだけで
-# 気づけるのはログの警告1行だけだった。
+# 実行自体は success のまま進み、出力が中立値で埋まるだけなので
+# ログの警告1行でしか気づけない。
 import re
 import sys
 import types

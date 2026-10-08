@@ -1,5 +1,5 @@
 # ==============================================================
-# us_insider_form4_scraper.py  v1.0  (Wave 3 - U-3)
+# us_insider_form4_scraper.py  v1.0  (U-3)
 # SEC EDGAR Form 4 インサイダー取引監視・スコアリング
 # ==============================================================
 # 【役割】
@@ -41,7 +41,7 @@
 #       insider_bonus = 0.0
 #
 # 【依存】
-#   sec_client.py（HTTP呼び出し・User-Agent・CIK解決を一本化。Wave J1 / U-1c）
+#   sec_client.py（HTTP呼び出し・User-Agent・CIK解決を一本化。U-1c）
 #   xml.etree.ElementTree（Form 4 XML パース。標準ライブラリ）
 #   yfinance（フォールバック用）
 #   ★ 全関数を try/except で保護。ネットワーク失敗時は bonus=0.0 を返す。
@@ -63,15 +63,15 @@ import sec_client
 # ==============================================================
 
 # SEC EDGAR エンドポイント
-# 2026-07-27是正（Wave J1 / U-1c）: company_tickers.json 取得・submissions API
-# 組み立ては sec_client.cik_map() / sec_client.submissions() に一本化した。
+# U-1c: company_tickers.json 取得・submissions API の
+# 組み立ては sec_client.cik_map() / sec_client.submissions() が担う。
 # 個別 Form 4 XML ドキュメントの取得のみ sec_client に汎用APIが無いため
 # 本ファイルで URL を組み立て、実際の GET は sec_client.get() を使う。
 _EDGAR_ARCHIVE      = ("https://www.sec.gov/Archives/edgar/data/"
                        "{cik}/{acc_no_slash}/{doc_name}")
 
-# 2026-07-13是正（U-2 / F-2）由来の統一フォールバック文字列。
-# 実際の User-Agent 解決は sec_client.user_agent() に委譲済みで本定数は
+# 統一フォールバック文字列（U-2 / F-2）。
+# 実際の User-Agent 解決は sec_client.user_agent() に委譲しており本定数は
 # 直接は使われないが、tests/test_sec_user_agent.py のダミーUA再混入検知
 # （機械検査）の対象文字列のため残す。
 _SEC_UA_FALLBACK = "StockAnalyzer stockanalyzer@example.com"
@@ -119,9 +119,9 @@ _ROLE_WEIGHTS: dict[str, float] = {
 # ==============================================================
 # BLOCK 1: HTTP ユーティリティ
 # ==============================================================
-# 2026-07-27是正（Wave J1 / U-1c）: 旧 _fetch_url / _fetch_json（urllib直叩き）
-# は削除。sec.gov への全アクセスは sec_client.get() / get_json() に一本化した
-# （個別 Form 4 XML ドキュメント取得は BLOCK 5 の _fetch_form4_xml を参照）。
+# U-1c: sec.gov への全アクセスは sec_client.get() / get_json() を使う
+# （urllib を直接使わない。個別 Form 4 XML ドキュメント取得は BLOCK 5 の
+# _fetch_form4_xml を参照）。
 
 
 # ==============================================================
@@ -176,11 +176,9 @@ def _load_cik_map(cfg=None) -> dict[str, str]:
     """
     SEC EDGAR の company_tickers.json から ティッカー→CIK マッピングを返す。
 
-    2026-07-27是正（U-1c）: 実体は sec_client.cik_map() の共通ディスクキャッシュ
-    （TTL: config.py SEC_CIK_MAP_TTL_DAYS＝本ファイルの旧 _TICKER_MAP_TTL と同じ
-    7日）に置き換えた。旧実装はプロセス内メモリのみのキャッシュだったため
-    プロセスを跨ぐたびに毎回 SEC へ再取得していたが、ディスクキャッシュにより
-    プロセスを跨いでも TTL 内は再取得しなくなる。
+    U-1c: 実体は sec_client.cik_map() の共通ディスクキャッシュ
+    （TTL: config.py SEC_CIK_MAP_TTL_DAYS＝7日）。プロセスを跨いでも
+    TTL 内は SEC へ再取得しない。
 
     Returns:
         {"AAPL": "0000320193", "MSFT": "0000789019", ...}

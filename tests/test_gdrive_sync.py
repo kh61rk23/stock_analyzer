@@ -1,7 +1,7 @@
 # run_headless._upload_to_gdrive_oauth — Drive差分同期と並列送信
 #
-# 2026-09-08: 全2,089ファイルを毎回無条件送信していたのを差分同期化。
-# 2026-09-09: 逐次送信で初回31分かかっていたのを並列化。
+# 未変更ファイルを送らない差分同期と、送信の並列化を検証する
+# （全件逐次送信に戻ると同期に長時間かかる）。
 import importlib.util
 import json
 import sys

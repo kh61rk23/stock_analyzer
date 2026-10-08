@@ -273,8 +273,8 @@ def _normalize_to_score(trend_score: float, mom_growth: float, cfg=None) -> tupl
     final_score = round((trend_score * 0.4 + mom_score * 0.6), 1)
 
     # シグナル判定
-    # 2026-07-25 バッチ6: 前月比ブースト閾値を config.TREND_MOM_THRESHOLD から読む
-    # （従来はモジュール定数 TREND_MOM_BOOST_THRESHOLD のみが効いていた）
+    # 前月比ブースト閾値は config.TREND_MOM_THRESHOLD を正本として読む
+    # （モジュール定数 TREND_MOM_BOOST_THRESHOLD は config が無いときの既定値）
     _mom_th = float(getattr(cfg, "TREND_MOM_THRESHOLD", TREND_MOM_BOOST_THRESHOLD))
     if final_score >= TREND_TAILWIND_THRESHOLD or mom_growth >= _mom_th:
         signal  = "tailwind"
@@ -549,7 +549,7 @@ def run_google_trends(cfg, results: dict = None) -> dict:
 
     # ── Step4: 求人倍率シグナル ──────────────────────────────
     results = results or {}
-    # ★ 2026-06-10 バグ修正: main の書き込みキーは "gov"
+    # main の書き込みキーは "gov"
     gov_result = results.get("gov", results.get("gov_data", {}))
     job_offers_signal = _calc_job_offers_signal(gov_result)
 

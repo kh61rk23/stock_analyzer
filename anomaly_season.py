@@ -518,7 +518,7 @@ def run_anomaly_season(cfg, sector_results: Optional[dict] = None) -> dict:
                   f"% p={current_stats.get('p_value','N/A')} adj={adj:+.1f}pt")
         time.sleep(FETCH_DELAY)
 
-# ── [Wave 3 - FE-5] PEAD Adjustment 計算 ──────────────────────
+# ── [FE-5] PEAD Adjustment 計算 ──────────────────────
     # pead_monitor が検出した PEAD 候補セクターに追加補正を加える。
     # 正 PEAD（上昇ドリフト）が季節アノマリーと同方向なら効果を強化。
     # 陰性 PEAD（下落ドリフト）は季節の上昇シグナルを弱める。
@@ -584,8 +584,8 @@ def run_anomaly_season(cfg, sector_results: Optional[dict] = None) -> dict:
         "anomalies":           anomalies,
         "market_anomaly":      market_anomaly,
         "adjustments":         adjustments,           # 季節アノマリー単体
-        "pead_adjustments":    pead_adjustments,      # Wave 3 - FE-5 PEAD補正単体
-        "combined_adjustments": combined_adjustments, # Wave 3: 季節+PEAD合算
+        "pead_adjustments":    pead_adjustments,      # FE-5 PEAD補正単体
+        "combined_adjustments": combined_adjustments, # 季節+PEAD合算
         "lookback_years":      LOOKBACK_YEARS,
         "timestamp":           datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }

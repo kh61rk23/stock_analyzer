@@ -1928,6 +1928,15 @@ def extract_alerts(cfg, results: dict) -> list:
         except Exception as _ree:
             print(f"    ⚠️ 不動産DB節の生成失敗: {str(_ree)[:80]}")
 
+        # 政策DB（公的支出・経済安保）。出典表示は利用規約で必須
+    if getattr(cfg, "ALERT_ON_SEISAKUDB", True):
+        try:
+            _sk = build_seisakudb_alert(results.get("seisakudb") or {})
+            if _sk:
+                alerts.append(_sk)
+        except Exception as _ske:
+            print(f"    ⚠️ 政策DB節の生成失敗: {str(_ske)[:80]}")
+
         # コードだけで出ている所に名前を補う（日本株ティッカー・業種コード）
     try:
         from name_resolver import enrich_text
@@ -2008,8 +2017,7 @@ def build_high_dividend_alert(cfg, results: dict, sector_results: dict | None = 
 def build_real_estate_alert(fudo: dict, sector_results: dict) -> dict | None:
     """不動産DB（fudosandb.jp）の取り込み結果と、業種スコアへの反映をメール1件にまとめる（純関数）。
 
-    2026-10-05: 毎日45社前後・保有不動産3,000件超を取り込み、業種スコアに「不動産ボーナス」
-    （含み益・災害/人口リスクから −2〜+3点）として使っているのに、メールに一切出ていなかった。
+    不動産ボーナス（含み益・災害/人口リスクから −2〜+3点）が付いた業種も出す。
     """
     from name_resolver import edinet_cols, sector_name
     lines = []
@@ -2041,12 +2049,47 @@ def build_real_estate_alert(fudo: dict, sector_results: dict) -> dict | None:
             "body": "\n".join(lines), "severity": "info", "channel": "gmail"}
 
 
+def build_seisakudb_alert(sk: dict) -> dict | None:
+    """政策DB の日次結果（seisakudb_ingestor.run の戻り値）をメール1件にまとめる（純関数）。"""
+    if not isinstance(sk, dict) or not sk or sk.get("skipped"):
+        return None
+    from name_resolver import name_of
+
+    def _yen(v):
+        if not v:
+            return "—"
+        return f"{v / 1e8:,.1f}億円" if v >= 1e8 else f"{v / 1e4:,.0f}万円"
+
+    lines = [f"  【取り込み】直近の公的支出 {sk.get('recent', 0)}件 / 個社 {sk.get('companies_ok', 0)}社"
+             f"（受給記録なし {sk.get('companies_empty', 0)}社）"
+             + (f" / 経済安保認定 {sk['certs']}件" if sk.get("certs") else "")
+             + f" / API {sk.get('calls', 0)}/{sk.get('budget', 0)}回"
+             + (f" / 停止: {sk['stopped']}" if sk.get("stopped") and sk["stopped"] != "budget" else "")]
+    hits = sk.get("company_hits") or []
+    if hits:
+        lines.append("  【個社の公的支出（今回取得・5年合計の多い順）】")
+        for h in hits[:8]:
+            tk = f"{h['code']}.T"
+            lines.append(f"    {tk} {name_of(tk, default='')}: {h.get('n', 0)}件・{_yen(h.get('amount_yen'))}")
+    rec = [r for r in (sk.get("recent_sample") or []) if r.get("company_code")]
+    if rec:
+        lines.append("  【直近の公的支出イベント】")
+        for r in rec[:8]:
+            tk = f"{r['company_code']}.T"
+            nm = r.get("company_name") or name_of(tk, default="")
+            lines.append(f"    {r.get('event_date') or ''} {tk} {nm}: {(r.get('title') or '')[:40]}"
+                         f"（{r.get('kind') or ''}{'・' + r['ministry'] if r.get('ministry') else ''}）"
+                         f" {_yen(r.get('amount_yen'))}")
+    lines.append("    出典: 政策DB（seisakudb.jp）")
+    return {"trigger": "seisakudb", "title": f"🏛️ 政策DB 公的支出 直近{sk.get('recent', 0)}件・個社{sk.get('companies_ok', 0)}社",
+            "body": "\n".join(lines), "severity": "info", "channel": "gmail"}
+
+
 def build_edinetdb_ingest_alert(ing: dict, web: dict | None = None, ledger: dict | None = None,
                                 daily_limit: int = 100) -> dict:
     """EdinetDB の日次結果をメール用アラート1件にまとめる（純関数）。
 
-    2026-10-05: 年次財務は会社ページ（Web）、API は有報本文・セグメント・四半期財務に
-    役割分担を変えたのに、API取込の「財務の期数」を出し続けて「財務0期」と表示していた。
+    年次財務は会社ページ（Web）、API は有報本文・セグメント・四半期財務と役割が分かれているので、
     ① 年次財務（Web）② 有報本文・セグメント（API）③ 四半期財務（API）④ API使用回数 を分けて出す。
     """
     def _row(c: dict) -> str:
@@ -2375,7 +2418,7 @@ def run_alert_notifier(cfg, results: dict) -> dict:
     # ── チャネル指定アラートを分離 ────────────────────────────
     # "channel": "line"  → LINE のみ即時送信
     # "channel": "gmail" → Gmail のみ送信
-    # "channel" なし     → 両方に送信（従来動作）
+    # "channel" なし     → 両方に送信
     _line_only  = [a for a in alerts if a.get("channel") == "line"]
     _gmail_only = [a for a in alerts if a.get("channel") == "gmail"]
     _both       = [a for a in alerts if not a.get("channel")]

@@ -1,5 +1,5 @@
 # ==============================================================
-# industry_standard_tracker.py  v1.0  (Wave 7 - Step 1)
+# industry_standard_tracker.py  v1.0
 # 標準化動向トラッカー（3GPP / ISO / IEC / IEEE 標準）
 # ==============================================================
 # 【役割】
@@ -62,7 +62,7 @@
 #   Level 3: キャッシュ継続使用（取得失敗時）
 #
 # 【依存】
-#   config.py（Wave 7追加定数参照）
+#   config.py（STANDARDS_TRACKING_CONFIG 等の定数参照）
 #   requests, BeautifulSoup（標準外ライブラリ）
 #   ★ try/except で全ブロックを保護。失敗時はキャッシュを返す。
 # ==============================================================
@@ -886,11 +886,9 @@ def run_industry_standard_tracker(cfg=None, force_refresh: bool = False) -> dict
             }
 
     # ── 設定値取得 ────────────────────────────────────────────
-    # 2026-07-28: config.STANDARDS_TRACKING_CONFIG は「本番時は辞書を設定」の
-    # プレースホルダとして None が入っている。getattr の第3引数は
-    # 「属性が存在しないとき」しか効かないため、None がそのまま返り
-    # `"3gpp" in standards_config` で落ちていた（3日連続失敗）。
-    # midterm_plan_tracker と同じく、falsy なら既定値へ倒す。
+    # config.STANDARDS_TRACKING_CONFIG はプレースホルダとして None が入っている。
+    # getattr の第3引数は「属性が存在しないとき」しか効かず None がそのまま返るため、
+    # falsy なら既定値へ倒す（そのままだと `"3gpp" in standards_config` で落ちる）。
     standards_config = getattr(cfg, "STANDARDS_TRACKING_CONFIG",
                                _DEFAULT_STANDARDS_CONFIG)
     if not standards_config:

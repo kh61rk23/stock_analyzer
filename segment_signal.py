@@ -1,5 +1,5 @@
 # ==============================================================
-# segment_signal.py  v1.0  (Wave 4 - E3)
+# segment_signal.py  v1.0  (E3)
 # ==============================================================
 # 【役割】
 #   BigQuery taxonomy.segments_master からセグメント別収益性を取得し、
@@ -80,11 +80,10 @@ def _fetch_segment_data_from_bq(ticker: str, cfg) -> list[dict]:
         ]
         [] : 取得失敗時
     """
-    # 2026-07-19是正: 旧コードは (a) 存在しない bq.get_segment_data / bq.query を
-    # 参照して常に空リストを返し（幻のAPI）、(b) フォールバックSQLも実在しない
-    # テーブル（taxonomy.segments_master / edinet.segment_financials）を参照していた。
-    # 実テーブルは edinet.segments × edinet.segment_finance（MCP直queryで確認済み）。
-    # EDINETBQClient.get_segment_finance（2026-07-19実装）→ build_segment_view で
+    # 実テーブルは edinet.segments × edinet.segment_finance
+    # （bq.get_segment_data / bq.query や taxonomy.segments_master /
+    # edinet.segment_financials は実在しない）。
+    # EDINETBQClient.get_segment_finance → build_segment_view で
     # 本モジュールの期待スキーマへ変換する。
     try:
         import sys as _sys, importlib as _imp, pathlib as _pl

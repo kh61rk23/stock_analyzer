@@ -1,8 +1,8 @@
 # ==============================================================
-# agent_packet_exporter.py  v2.0  (Wave DEPT-1 → R3-1 v2化)
-# v2（2026-07-10）: ⑪ontologyイベント時系列（signal_event直近30日）＋
-#   ⑫E8バリュエーションレンジ（DCF3シナリオ/comps相対/scenario損益・last_updated付）を追加。
-#   既存の best-effort/データなし表示パターンを踏襲（後方互換・欠損で壊れない）。
+# agent_packet_exporter.py  v2.0  (DEPT-1 / R3-1)
+# ⑪ontologyイベント時系列（signal_event直近30日）と
+#   ⑫E8バリュエーションレンジ（DCF3シナリオ/comps相対/scenario損益・last_updated付）を含む。
+#   各セクションは best-effort/データなし表示（欠損で壊れない）。
 # 投資部審議パケット生成 — stock_analyzer → Obsidian vault
 # ==============================================================
 # 【役割】
@@ -106,10 +106,9 @@ def collect_screener(cfg, ticker: str) -> list[str]:
     if data is None:
         return lines + _no_data("screener_history", p)
     try:
-        # 2026-07-25: 正本の形式は {date: [候補, ...]}（リスト）。
-        # 従来は {date: {"candidates": [...]}} の辞書形式だけを見ており、
-        # isinstance(day, dict) が False になって候補を一切走査できず、
-        # パケット①が常に「データなし」になっていた。
+        # 正本の形式は {date: [候補, ...]}（リスト）。旧形式の
+        # {date: {"candidates": [...]}} も来うるため、normalize_history_entry で
+        # 両方を候補リストにそろえてから走査する。
         from performance_tracker import normalize_history_entry
         entry, found_date = None, None
         for d in sorted(data.keys(), reverse=True):
@@ -317,8 +316,8 @@ def collect_freshness(cfg) -> list[str]:
 
 def collect_holdings(cfg, ticker: str) -> list[str]:
     """保有状況（B4の層判定=コア/カジノ・恩株判定の一次情報）
-    ★ 2026-06-12 追加: 健太の実行ガードレール統合（vault README 憲法）に伴い、
-      コア層（NISA・恩株・放置大型株）の審議対象外判定に必要な保有事実を提供する。"""
+    実行ガードレール（vault README 憲法）に従い、コア層（NISA・恩株・放置大型株）の
+    審議対象外判定に必要な保有事実を提供する。"""
     p = REPO_ROOT / "data" / "portfolio_holdings.csv"
     lines = _sec_header("⑧ 保有状況（層判定の一次情報）", _mtime_str(p))
     if not p.exists():
@@ -377,7 +376,7 @@ def collect_existing_notes(cfg, ticker: str) -> list[str]:
 
 def collect_ontology_events(cfg, ticker: str, days: int = 30) -> list[str]:
     """
-    [Wave R3-1 exporter v2] ontology.signal_event から直近N日の
+    [R3-1 exporter v2] ontology.signal_event から直近N日の
     イベント時系列を取得する（SPEC_investment_dept §5の残タスク）。
     BQ未接続・空時は「データなし」表示で壊れない。
     """
@@ -431,7 +430,7 @@ def _valuation_line(label: str, cache_path: Path, ticker: str,
 
 def collect_valuation(cfg, ticker: str) -> list[str]:
     """
-    [Wave R3-1 / E8] ⑫バリュエーションレンジ。
+    [R3-1 / E8] ⑫バリュエーションレンジ。
     ①DCF3シナリオ（弱気/基本/強気＝感応度の min/base/max）
     ②comps相対位置（業種内PER/PBRランク）
     ③scenario_analyzer のシナリオ別想定損益。
@@ -523,8 +522,8 @@ def build_packet(cfg, ticker: str) -> str:
     lines += collect_midterm(cfg, ticker)
     lines += collect_risk_signals(cfg, ticker, sector_code)
     lines += collect_alt_policy(cfg, ticker, sector_code)
-    lines += collect_ontology_events(cfg, ticker)      # Wave R3-1 v2: ⑪イベント時系列
-    lines += collect_valuation(cfg, ticker)            # Wave R3-1 E8: ⑫バリュエーション
+    lines += collect_ontology_events(cfg, ticker)      # R3-1 v2: ⑪イベント時系列
+    lines += collect_valuation(cfg, ticker)            # R3-1 E8: ⑫バリュエーション
     lines += collect_freshness(cfg)
     lines += collect_holdings(cfg, ticker)
     lines += collect_existing_notes(cfg, ticker)
@@ -542,8 +541,7 @@ def build_packet(cfg, ticker: str) -> str:
 
 def export(ticker: str, vault: str = "") -> Path:
     cfg = _load_config()
-    # 2026-07-25: BLOCK 39 の ENABLE_INVESTMENT_DEPT を配線。定義だけあって
-    # 誰も読んでおらず、False にしても投資部連携が止まらない状態だった。
+    # BLOCK 39 の ENABLE_INVESTMENT_DEPT=False で投資部連携を止める。
     if not getattr(cfg, "ENABLE_INVESTMENT_DEPT", True):
         raise SystemExit("⏩ 投資部連携は無効（config.py ENABLE_INVESTMENT_DEPT=False）")
     vault_dir = Path(vault or getattr(cfg, "INVESTMENT_DEPT_VAULT_DIR", ""))

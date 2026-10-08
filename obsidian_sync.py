@@ -92,9 +92,9 @@ def _load_json(p: Path):
 def _git_with_retry(args: list, timeout: int, tries: int = 6, wait: int = 30):
     """ネットワーク未接続（スリープ復帰直後）を待って git を再試行する。
 
-    2026-09-29: launchd はスリープ中に過ぎた 10:30 のジョブを復帰直後に走らせるが、
-    その時点では Wi-Fi が未接続で「Could not resolve host: github.com」になり、
-    30回中28回 pull に失敗していた（同期用cloneは 8/27 のまま）。
+    launchd はスリープ中に過ぎた 10:30 のジョブを復帰直後に走らせるが、
+    その時点では Wi-Fi が未接続で「Could not resolve host: github.com」になり
+    やすい。再試行しないと pull がほぼ毎回失敗し、同期用cloneが古いまま残る。
     """
     import time as _t
     r = None
@@ -169,7 +169,7 @@ def cmd_pull(cfg, repo_url: str) -> bool:
 
 
 # ==============================================================
-# mirror: 審議済みティッカーを GitHub へ（2026-09-29・健太の要望で自動化）
+# mirror: 審議済みティッカーを GitHub へ
 # ==============================================================
 MIRROR_REL = Path("stock_data") / "data" / "deliberated_tickers.json"
 
@@ -179,7 +179,7 @@ def cmd_mirror(cfg) -> bool:
     同期用clone（SYNC_CACHE）でその1ファイルだけコミットして push する。
 
     Actions のメール（審議キュー）は vault を読めないため、このミラーで審議済みを
-    除外している。以前は Mac で書き出したあと手作業でコミットする必要があった。
+    除外している。
     作業中のリポジトリ（01_System）には触れない。
     """
     from deliberation_scheduler import _load_ledger_tickers
@@ -230,11 +230,11 @@ def cmd_mirror(cfg) -> bool:
 
 
 def cmd_holdings(cfg) -> bool:
-    """保有銘柄.csv（投資部・健太が更新）→ data/portfolio_holdings.csv / portfolio_summary.json を
+    """保有銘柄.csv（投資部が手で更新）→ data/portfolio_holdings.csv / portfolio_summary.json を
     同期用clone（SYNC_CACHE）で作り、変わっていればその2ファイルだけ commit & push する。
 
-    2026-10-05: リポジトリの保有銘柄CSVが 2026-03 のまま更新されず、週次の総評価額・
-    ポジションサイジング・ストレステストが古い保有で計算されていた。
+    週次の総評価額・ポジションサイジング・ストレステストはリポジトリ側の
+    保有CSVで計算するため、これが更新されないと古い保有で計算される。
     """
     if not (SYNC_CACHE / ".git").exists():
         print("⏩ holdings: 同期用cloneが無い（先に pull が必要）")
@@ -260,12 +260,9 @@ def _build_queue_rows(cfg) -> list[str]:
     sh = _load_json(Path(cfg.DATA_DIR) / "screener_history.json")
     if sh:
         try:
-            # 2026-07-25: 正本の形式は {date: [候補, ...]}（リスト）。
-            # 従来は .get("candidates") をリストに対して呼んでおり
-            # AttributeError → 下の except で握り潰され、審議キューの
-            # screener 行が常に0件だった。さらに pass_filters で絞っていたが、
-            # append_screener_history は通過銘柄だけを保存し、そのキー自体を
-            # 持たせないため、形式を直しても全件落ちる二重の誤りだった。
+            # 正本の形式は {date: [候補, ...]}（リスト）。.get("candidates") は
+            # 使えない。また append_screener_history は通過銘柄だけを保存し
+            # pass_filters キーを持たせないため、pass_filters で絞ると全件落ちる。
             from performance_tracker import latest_candidates
             latest, cands = latest_candidates(sh)
             cands = sorted(
@@ -344,9 +341,7 @@ def _parse_ledger_rows(text: str) -> list[dict]:
 
 def cmd_journal(cfg) -> None:
     """台帳の「承認」済み Buy 行を investment_journal に記帳（冪等）。"""
-    # 2026-07-25: BLOCK R-3 の ENABLE_INVESTMENT_JOURNAL を配線。
-    # investment_journal.py の実装はあるのに有効フラグが誰にも読まれておらず、
-    # False にしても記帳・成績還流が止まらなかった。
+    # BLOCK R-3 の ENABLE_INVESTMENT_JOURNAL=False で記帳を止める。
     if not getattr(cfg, "ENABLE_INVESTMENT_JOURNAL", True):
         print("⏩ journal スキップ: ENABLE_INVESTMENT_JOURNAL=False")
         return
@@ -394,7 +389,7 @@ def cmd_journal(cfg) -> None:
 
 def cmd_feedback(cfg) -> None:
     """journal の成績を台帳の成績列へ還流。"""
-    # 2026-07-25: ENABLE_INVESTMENT_JOURNAL を配線（cmd_journal と同じ理由）。
+    # ENABLE_INVESTMENT_JOURNAL で止める（cmd_journal と同じフラグ）。
     # feedback は journal の内容を読むため、journal を切ったら道連れで止める。
     if not getattr(cfg, "ENABLE_INVESTMENT_JOURNAL", True):
         print("⏩ feedback スキップ: ENABLE_INVESTMENT_JOURNAL=False")
@@ -454,6 +449,5 @@ if __name__ == "__main__":
         cmd_journal(cfg)
     if args.command in ("feedback", "all"):
         cmd_feedback(cfg)
-    # 2026-09-29: 失敗しても rc=0 で終わっていたため、run_apps.log 上は毎日「成功」に
-    # 見えていた。pull / mirror の失敗は非0で返す。
+    # pull / mirror の失敗は非0で返す（rc=0 だと run_apps.log 上は「成功」に見える）。
     sys.exit(0 if ok else 1)

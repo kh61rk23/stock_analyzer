@@ -1,5 +1,5 @@
 # ==============================================================
-# tax_optimizer.py — 税・NISA最適化エンジン（Wave R3-5 / S10）
+# tax_optimizer.py — 税・NISA最適化エンジン（S10）
 # ==============================================================
 # 【役割】四半期＋11月末に、税務・NISA枠の最適化「レポート」を出す。
 #   ①損出し候補: 特定口座の含み損銘柄 × 当年実現益>0 →
@@ -62,8 +62,7 @@ def calc_tax_harvest(positions: list, realized_gain_ytd: float,
 def nisa_recommendation(order_hold_months: int, nisa_remaining: float,
                         order_value: float, min_months: int = None,
                         cfg=None) -> str:
-    # 2026-07-25 バッチ6: 想定保有下限を config.NISA_LONG_HOLD_MONTHS から読む
-    # （従来は既定引数12の直書きで config 側が未参照だった）。
+    # 想定保有下限は config.NISA_LONG_HOLD_MONTHS から読む。
     # 既定引数に置かず None 判定にしているのは、def 実行時に値が固定されて
     # config の変更が反映されなくなるのを避けるため。
     """新規買い注文への口座区分推奨1行。"""
@@ -200,7 +199,7 @@ def _load_positions(cfg) -> list:
                 price = fetch_price_safe(cfg, ticker).get("close")
             except Exception:
                 price = None
-        price = price_in_jpy(h, price, fx)   # 2026-10-06: 米国株はドル→円（取得単価は円）
+        price = price_in_jpy(h, price, fx)   # 米国株はドル→円（取得単価は円）
         unrealized = (float(price) - avg) * qty if price is not None else 0.0
         out.append({"ticker": ticker, "unrealized_pnl": unrealized,
                     "account_type": (h.get("account_type") or "特定").strip(),

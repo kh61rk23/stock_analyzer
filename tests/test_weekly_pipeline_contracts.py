@@ -1,13 +1,9 @@
 # 週次パイプラインの producer/consumer キー契約
 #
-# 2026-09-10: module_ledger の履歴を遡ったところ、週次実行のたびに
-# 同じ例外で落ち続けているモジュールが2件あった。
-#   ontology_export [error] 'list' object has no attribute 'items'（2026-07-27〜）
-#   weekly_report   [error] 'name'                              （2026-09-07〜）
-# どちらも「読む側が想像したキー／型」と「書く側の実体」がずれていたもので、
-# 例外を握り潰していないぶん発見はできたが、原因が判るまで
-# ontology.signal_event / decision_event が作成以来0行のままだった。
-# 同じ形のズレを二度と入れないよう、実体側の形で固定する。
+# 「読む側が想像したキー／型」と「書く側の実体」がずれると、週次実行のたびに
+# 同じ例外で落ち続ける（例: ontology_export の 'list' object has no attribute 'items'、
+# weekly_report の KeyError 'name'）。その間 ontology.signal_event / decision_event は0行になる。
+# 同じ形のズレを入れないよう、実体側の形で固定する。
 import json
 import types
 

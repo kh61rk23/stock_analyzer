@@ -1,6 +1,6 @@
 # ==============================================================
 # score_calculator.py — JP/US共通composite計算
-#   （Wave R5-2 Phase A / E10 → Phase B / U-9 2026-07-28）
+#   （R5-2 Phase A / E10 → Phase B / U-9）
 # ==============================================================
 # 【役割】SPEC_core §8-2 の統合方針どおり、市場別に別実装だった
 #   composite_score を adapter 経由で共通形式へ統一する。
@@ -12,14 +12,14 @@
 # 【Phase B（U-9）】base に共通成分の調整を載せる:
 #     composite = clamp(base + dcf_adj + tech_adj + geo_adj, 0, 100)
 #   各成分は results を「読むだけ」で取得する（データ源は下表）。
-#   ★ score_calculator は yfinance / BigQuery / 外部APIを一切叩かない。
-#     日次バッチ終盤（run_all_tasks の L5200 付近）で走るため。
+#   ⚠️ score_calculator は yfinance / BigQuery / 外部APIを一切叩かない。
+#     日次バッチ終盤（run_all_tasks の後半）で走るため。
 #   ┌ 成分     │ 一次ソース                                   │ 代替
 #   │ tech_adj │ results["technical_scorer"]["results"][t]["score"] │ 候補の technical_score
 #   │ dcf_adj  │ results["dcf_valuation"]["results"][t]["dcf_bonus"]│ 候補の dcf_bonus
 #   └ geo_adj  │ 候補の geo_impact_bonus                       │ results["sectors"][業種]["geo_impact_bonus"]
 #   取得できない成分は「未算出」として 0 扱い → その銘柄は Phase A と同値。
-#   ★ base に既に含まれている成分は加算しない（二重計上の排除・2026-07-28）。
+#   ⚠️ base に既に含まれている成分は加算しない（二重計上の排除）。
 #     どの成分を加算するかは score_source 単位で _PHASE_B_APPLICABLE が決める:
 #       jp_screener        → なし（tech/dcf/geo とも base に含む＝Phase A と同値）
 #       jp_sector_fallback → tech / dcf（geo は業種 composite に含む）
@@ -100,7 +100,7 @@ class UsSectorAdapter:
 _ADAPTERS = {"JP": JpSectorAdapter(), "US": UsSectorAdapter()}
 
 
-# ── Phase B: 共通成分（U-9 / 2026-07-28） ────────────────────
+# ── Phase B: 共通成分（U-9） ────────────────────
 # 【鉄則】ここは results を「読むだけ」。yfinance / BigQuery / 外部APIを
 #   新たに叩かない（score_calculator は日次バッチ終盤で走るため）。
 #   results に無い成分は None（＝未算出）とし、その銘柄では 0 として扱う。
@@ -112,10 +112,9 @@ def _clamp(v: float, lo: float, hi: float) -> float:
 def _num(v) -> float | None:
     """有限な数値だけを float で返す（bool・NaN・Inf を弾く）。
 
-    ★ isinstance(v, (int, float)) で判定していたが、numpy.float32 /
-      numpy.int64 は Python の int/float のサブクラスではないため
-      pandas 由来の composite_score が弾かれていた（2026-09-09）。
-      判定は finance_logic.as_number（float()変換の成否）に委譲する。
+    isinstance(v, (int, float)) では numpy.float32 / numpy.int64（Python の
+    int/float のサブクラスではない）を弾いてしまうため、判定は
+    finance_logic.as_number（float()変換の成否）に委譲する。
     """
     from finance_logic import as_number
     return as_number(v)
@@ -225,14 +224,14 @@ def calc_geo_adj(ticker: str, market: str, sector_code: str, results: dict,
     return round(_clamp(b, -max_adj, max_adj), 2)
 
 
-# ── Phase B 適用可否テーブル（二重計上の防止・2026-07-28 是正） ──
+# ── Phase B 適用可否テーブル（二重計上の防止） ──
 #
 # 【なぜ要るか】base（＝Phase A の写像元）に既に織り込まれている成分を
 #   Phase B が再加算すると二重計上になり SSOT が割れる。E10 の目的は
 #   「US を JP と同等の粒度に引き上げること」であって JP を膨らませる
 #   ことではないため、base に含まれる成分は score_source 単位で除外する。
 #
-# 【各判定の根拠（2026-07-28 実測確認）】
+# 【各判定の根拠】
 #   jp_screener:
 #     tech / dcf … stock_screener.apply_valuation_to_candidate（L1162-1179）が
 #       candidate["composite_score"] を value_score 差分として再計算しており、

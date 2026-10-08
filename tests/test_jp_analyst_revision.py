@@ -1,12 +1,12 @@
 # ==============================================================
-# tests/test_jp_analyst_revision.py — U-4 JP rec_mean 欠落是正（F-1）
+# tests/test_jp_analyst_revision.py — U-4 JP rec_mean 取得（F-1）
 # ==============================================================
 # 目的（要件定義書_JP-US統合_20260726.md §6 U-4 / J-01=a 承認済み）:
 #   stock_screener._fetch_ticker_data() が yfinance .info から
-#   rec_mean / rec_key / target_price / analyst_upside を取得するように
-#   なったことを検証する（R4-1〜R4-3）。
-#   また、_calc_revision_score() 本体は変更していないこと（R4-4）を
-#   前提に、rec_mean 指定時の実測境界値を凍結する（R4-5）。
+#   rec_mean / rec_key / target_price / analyst_upside を取得することを
+#   検証する（R4-1〜R4-3）。
+#   また、_calc_revision_score() の rec_mean 指定時の境界値を凍結する
+#   （R4-4 / R4-5）。
 #
 #   期待値はすべて本ファイルの assert を実際に実行して得た実測値であり、
 #   （tests/test_screener_characterization.py の
@@ -75,7 +75,7 @@ class TestFetchTickerDataAnalystFields:
         assert data["rec_key"] == "buy"
         assert data["target_price"] == 120.0
         assert data["analyst_upside"] == pytest.approx(0.2)
-        # R4-2: analyst_count は従来どおり numberOfAnalystOpinions 由来・重複取得なし
+        # R4-2: analyst_count は numberOfAnalystOpinions 由来・重複取得なし
         assert data["analyst_count"] == 10
 
     def test_rec_mean_nan_cleaned_to_none(self, monkeypatch):
@@ -184,5 +184,5 @@ def test_calc_revision_score_nonzero_within_cap(rec_mean, expected):
 
 
 def test_calc_revision_score_zero_when_rec_mean_absent():
-    # rec_mean が data に無い場合は従来どおり 0.0（挙動不変の確認）
+    # rec_mean が data に無い場合は 0.0
     assert ss._calc_revision_score("TEST.T", {}, None) == 0.0

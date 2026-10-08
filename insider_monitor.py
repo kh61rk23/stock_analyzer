@@ -1,5 +1,5 @@
 # ==============================================================
-# insider_monitor.py  v2.0  (4-2 / A-3 → Wave J1 / U-6)
+# insider_monitor.py  v2.0  (4-2 / A-3 / U-6)
 # EDINET 大量保有報告書（日本）専用 + SEC Form 4（米国）は委譲
 # インサイダー・大株主の買い動向を screener ボーナスに統合
 # ==============================================================
@@ -8,16 +8,11 @@
 #   「役員が自社株を買っている = 内部者が上昇を確信している」
 #   シグナルを screener の quality_score に反映する。
 #
-# 2026-07-27是正（Wave J1 / U-6・F-3根治）:
-#   旧 v1.0 は米国株を自前の `_parse_form4_simple`（yfinance
-#   insider_transactions の簡易パースのみ）で処理していたが、週次実行の
-#   台帳で2回連続「US:0件」＝US経路が実質死んでいた。一方 Form 4 XML を
-#   正式パースする完全版 `us_insider_form4_scraper.py` は
-#   us_stock_screener.py からのみ呼ばれ本パイプラインに未配線だった
-#   （同一データソースの二重実装・貧弱な方が本番経路に居座っていた）。
-#   本ファイルは JP 大量保有報告専用に縮退し、米国株は
-#   `us_insider_form4_scraper.get_insider_summary()` へ委譲する
-#   （J-02決定=a: 一本化）。
+# 【米国株の扱い（U-6 / F-3 / J-02決定=a: 一本化）】
+#   本ファイルは JP 大量保有報告専用。米国株は Form 4 XML を正式パースする
+#   `us_insider_form4_scraper.get_insider_summary()` へ委譲する。
+#   yfinance insider_transactions の簡易パースを本ファイルに再び持たないこと
+#   （同一データソースの二重実装になり、簡易版では US が0件になる）。
 #
 # 【データソース】
 #   米国株: us_insider_form4_scraper.get_insider_summary() に委譲
@@ -47,10 +42,9 @@
 #   Summary = us_insider_form4_scraper.get_insider_summary() の返り値そのもの
 #     {ticker, insider_bonus, buy_count, sell_count, buyer_roles,
 #      net_buy_value, source, summary, fetched_at}
-#     ※ v1.0 の Filing（{ticker, filer_name, transaction_type, shares,
-#       date, url} のリスト）から形が変わっている（R6-2）。
+#     ※ Filing のリストではなく銘柄別サマリー（R6-2）。
 #       format_insider_alert() / get_insider_bonus() はどちらも
-#       us_filings の値を直接読まないため影響なし（確認済み）。
+#       us_filings の値を直接読まない。
 #   Holding = {ticker, holder_name, ownership_pct, report_date}
 #
 # 【依存】us_insider_form4_scraper.py（米国）/ yfinance（日本）/ config.py

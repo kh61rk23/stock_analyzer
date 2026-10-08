@@ -1,4 +1,4 @@
-# 2026-10-03: 自然言語→SQL 用の DB構造台帳
+# 自然言語→SQL 用の DB構造台帳
 import db_catalog_gen as g
 
 

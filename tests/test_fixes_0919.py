@@ -1,4 +1,4 @@
-# 2026-09-18〜19 の日次メール・Actionsログから見つかった不具合の回帰テスト
+# 日次メール・Actionsログから見つかった不具合の回帰テスト
 import types
 from datetime import datetime, timedelta
 
@@ -63,7 +63,7 @@ class TestNewsFeeds:
             assert dead not in ids
         urls = {f["id"]: f["url"] for f in m.RSS_FEEDS}
         assert urls["mof_press"] == "https://www.mof.go.jp/news.rss"
-        # 2026-09-29: Arabian Business は Actions 環境から HTTP 405 で拒否されるため削除（健太の指示）
+        # Arabian Business は Actions 環境から HTTP 405 で拒否されるため使わない
         assert "arabian_business" not in urls
         assert "globes.co.il/webservice/rss" in urls["globes_en"]
 
@@ -248,7 +248,7 @@ class TestWeeklyWiring:
             {"ticker": "8306.T", "composite_score": 60},                                # 価格なし
         ]}
         got = {r["ticker"] for r in m.extract_backtest_records(history)}
-        # 2026-09-29: 価格なしの行も残す（run_backtester がその日の終値で補う）
+        # 価格なしの行も残す（run_backtester がその日の終値で補う）
         assert got == {"6501.T", "7203.T", "8306.T"}
 
     def test_screener_history_records_entry_price(self, tmp_path):

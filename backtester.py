@@ -131,17 +131,16 @@ def extract_backtest_records(
         for c in candidates:
             if not isinstance(c, dict):
                 continue
-            # 2026-09-21: screener_history には通過銘柄しか保存されない（pass_filters は
-            # 2026-09-21 以降のみ付く）。欄が無い行を落とすと過去分が全滅するため、
+            # screener_history には通過銘柄しか保存されない（pass_filters は
+            # 古い行には無い）。欄が無い行を落とすと過去分が全滅するため、
             # 明示的に False のときだけ除外する。
             if c.get("pass_filters") is False:
                 continue
             ticker = c.get("ticker", "")
             price  = c.get("current_price")
             score  = c.get("composite_score", 0) or 0
-            # 2026-09-29: current_price は 9/21 以降しか保存されておらず、28日保有の
-            # 評価が 10/19 まで毎週「レコード不足(0件)」だった。無い行は None のまま
-            # 残し、run_backtester がその日の終値で補う。
+            # current_price は古い行には無い。無い行を落とすと「レコード不足(0件)」に
+            # なるため None のまま残し、run_backtester がその日の終値で補う。
             if not ticker:
                 continue
 
@@ -164,10 +163,10 @@ def extract_backtest_records(
 # ==============================================================
 
 def fetch_close_map(tickers, start: str, end: str) -> dict:
-    """{ticker: {"YYYY-MM-DD": 終値}} を銘柄ごとに1回の取得で返す（2026-09-29）。
+    """{ticker: {"YYYY-MM-DD": 終値}} を銘柄ごとに1回の取得で返す。
 
-    以前は評価レコード1件ごとに yfinance を呼んでいた（自己評価は1件2回）。
-    同じ銘柄・同じ期間を何百回も取り直さないよう、期間全体を1回で取る。
+    評価レコード1件ごとに yfinance を呼ばず、同じ銘柄・同じ期間を
+    何百回も取り直さないよう、期間全体を1回で取る。
     """
     try:
         import yf_cache as yf  # type: ignore
@@ -419,7 +418,7 @@ def run_backtest_analysis(records: list, exit_prices: dict) -> dict:
         if len(rets) >= 3
     }
 
-    # ── [Wave 6 - B / T-4] クラスターシグナル有無による精度比較 ──────────
+    # ── [B / T-4] クラスターシグナル有無による精度比較 ──────────
     # cluster_phase_bonus が記録されているレコードのみを対象に、
     # ボーナス有（>0）/ ボーナス無（==0）の2群に分けて勝率・アルファを比較する。
     # データ未存在時（cluster_phase_bonus キー欠落）はサイレントスキップ。
@@ -461,7 +460,7 @@ def run_backtest_analysis(records: list, exit_prices: dict) -> dict:
         "avg_benchmark":  round(avg_bm, 3),
         "top_performers": sorted(evaluated, key=lambda x: -x["return_pct"])[:5],
         "worst":          sorted(evaluated, key=lambda x:  x["return_pct"])[:3],
-        "cluster_comparison": cluster_comparison,   # Wave 6 - B / T-4
+        "cluster_comparison": cluster_comparison,   # B / T-4
     }
 
 

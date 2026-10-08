@@ -102,14 +102,14 @@ class _Ctx:
         self.sent_score = self._f(om.get("sentiment", {}).get("score"))
 
         bc = results.get("bond_commodity", {})
-        # ★修正①: "yield_curve" → "curve_analysis"（bond_commodity_pipeline の実際のキー名）
+        # bond_commodity_pipeline の実際のキー名は "curve_analysis"（"yield_curve" ではない）
         yc = bc.get("curve_analysis", {}) if isinstance(bc, dict) else {}
-        # ★修正②: recession_score はトップレベルを優先、curve_analysis をフォールバック
+        # recession_score はトップレベルを優先、curve_analysis をフォールバック
         _rec = bc.get("recession_score") if isinstance(bc, dict) else None
         if _rec is None and isinstance(yc, dict):
             _rec = yc.get("recession_score")
         self.recession_score = self._f(_rec)
-        # ★修正③: "t10y2y" → "spread_2y10y"（curve_analysis の実際のキー名）
+        # curve_analysis の実際のキー名は "spread_2y10y"（"t10y2y" ではない）
         self.t10y2y = self._f(yc.get("spread_2y10y") if isinstance(yc, dict) else None)
 
         mb = results.get("market_breadth", {})
@@ -117,7 +117,7 @@ class _Ctx:
 
         # ETF / ArXiv
         etf = results.get("etf_tracker", {})
-        # ★修正: "top_themes" は上位N件のみ。全テーマから AI 熱量を拾うため "themes" を使う
+        # "top_themes" は上位N件のみ。全テーマから AI 熱量を拾うため "themes" を使う
         themes = etf.get("themes", []) if isinstance(etf, dict) else []
         ai_themes = [t for t in themes if "ai" in t.get("theme_name","").lower()
                      or "semiconductor" in t.get("theme_name","").lower()]
@@ -452,10 +452,8 @@ def run_inference_engine(cfg, results: dict) -> dict:
 
     ctx = _Ctx(results)
     # ── [US-4] term structure による crisis 判定強化 ────────
-    # ★ 2026-06-11 バグ修正: モジュール関数内で未定義の self に代入しており
-    #   毎回 NameError → 推論エンジン全体が常時失敗していた。
-    #   ctx 属性に格納し、crisis_signal 時はフェーズを crisis に
-    #   強制する [US-4] の設計意図をここで実装する。
+    # モジュール関数内なので self ではなく ctx 属性に格納する（self だと NameError で
+    # 推論エンジン全体が落ちる）。crisis_signal 時はフェーズを crisis に強制する。
     options_mon = results.get("options_monitor", {})
     ctx.crisis_override = bool(options_mon.get("crisis_signal"))
     ctx.term_score      = options_mon.get("term_score", 50.0)

@@ -1,5 +1,5 @@
 # ==============================================================
-# executive_transition_tracker.py  v1.0  (Wave 6 - I-3)
+# executive_transition_tracker.py  v1.0  (I-3)
 # ==============================================================
 # 【役割】
 #   EDINET 有報（有価証券報告書）の役員略歴セクションを
@@ -35,7 +35,7 @@
 #              EXECUTIVE_TRANSITION_THRESHOLD /
 #              EXECUTIVE_CACHE_TTL_DAYS /
 #              EXECUTIVE_CACHE_PATH /
-#              EDINET_LOOKBACK_DAYS)※政府EDINET APIは2026-09-12に撤去
+#              EDINET_LOOKBACK_DAYS)※政府EDINET APIは撤去済み（本モジュールは停止中）
 #   requests / re（標準ライブラリ）
 #
 # 【呼び出し方（stock_analyzer_main.py から）】
@@ -577,11 +577,10 @@ def run_executive_transition_tracker(cfg, results: dict) -> dict:
     skill_keywords = getattr(cfg, "EXECUTIVE_SKILL_KEYWORDS", {})
     threshold      = int(getattr(cfg, "EXECUTIVE_TRANSITION_THRESHOLD", 2))
 
-    # 2026-09-12: 政府EDINET APIキーを撤去したため、本モジュールの
-    # 取得経路（/documents.json を日付ごとに最大400回叩いてHTMLの
-    # 役員略歴を解析する実装）はもう動かせない。ENABLE_EXECUTIVE_
-    # TRANSITION は既に False で、BQ us.executive_transitions は
-    # 作成（2026-07-04）以来0行＝一度も稼働していない。
+    # 停止中: 政府EDINET APIキーが無いため、本モジュールの取得経路
+    # （/documents.json を日付ごとに最大400回叩いてHTMLの役員略歴を
+    # 解析する実装）は動かない。ENABLE_EXECUTIVE_TRANSITION は False、
+    # BQ us.executive_transitions は0行。
     # 復活させる場合は EdinetDB の役員一覧（officerName / officialTitle /
     # sharesHeld 等の構造化データ）へ作り直すこと。HTML解析より確実で
     # API呼び出しも1社1回で済む。
@@ -757,7 +756,7 @@ def run_executive_transition_tracker(cfg, results: dict) -> dict:
     }
     _save_cache(cfg, new_cache)
 
-    # ── BQ格納（Wave R0-2 / SPEC_db_schema.md §6-3）─────────────
+    # ── BQ格納（R0-2 / SPEC_db_schema.md §6-3）─────────────
     if bool(getattr(cfg, "ENABLE_US_BQ_EXPORT", True)):
         try:
             from edinet_bq_client import insert_rows

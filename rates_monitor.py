@@ -1,7 +1,6 @@
 # ==============================================================
 # rates_monitor.py — 国債利回り（日米 3/5/10年）と政策金利（米・欧・日）
-# 2026-10-05 新設（健太指示「国債の利回りは10年・5年・3年で、前日・週次との比較も」
-#   「政策金利も欧州・日本・米国を描画」）
+# 国債利回りは10年・5年・3年を前日・週次と比較し、政策金利は欧州・日本・米国を描画する。
 #
 # データ元（すべて無料・APIキー不要）
 #   日本国債: 財務省「国債金利情報」CSV（当月 jgbcm.csv・月初は過去分 jgbcm_all.csv も読む）
@@ -9,7 +8,7 @@
 #   政策金利: 米 FRED DFEDTARU（FF金利誘導目標の上限）/ 欧 FRED ECBDFR（ECB預金ファシリティ金利）
 #             日 FRED IRSTCI01JPM156N（無担保コール翌日物・月次＝日銀政策金利の実効値）
 # FRED は POLICY_FRED_API_KEY があれば API（api.stlouisfed.org）、無ければ fredgraph CSV。
-#   2026-10-06: GitHub Actions から fredgraph CSV が全系列タイムアウトしたため API を主にした。
+#   GitHub Actions からは fredgraph CSV が全系列タイムアウトすることがあるため API を主にしている。
 # 結果は stock_data/cache/rates_<日付>.json に1日1回キャッシュする（取得失敗があれば再取得を許す）。
 # ==============================================================
 from __future__ import annotations

@@ -124,9 +124,8 @@ def build_signal_events(cfg) -> list[dict]:
         try:
             for date in sorted(sh.keys())[-30:]:   # 直近30営業日
                 # screener_history の実体は {日付: [通過銘柄, ...]} のリスト。
-                # 旧実装は {"candidates": [...]} を期待して list に .get() を
-                # 呼び、AttributeError を except で握り潰して常に0件だった
-                # （BQ ontology.signal_event が作成以来ずっと0行だった原因）。
+                # list に .get() を呼ぶと AttributeError が except で握り潰され、
+                # 常に0件になる（BQ ontology.signal_event が空になる）。
                 _day = sh.get(date)
                 if isinstance(_day, dict):
                     _rows = _day.get("candidates") or []
@@ -202,14 +201,12 @@ def build_theme_entities(cfg) -> list[dict]:
                 "heat_score": None,
                 "updated_at": _NOW,
             })
-    # 2026-09-10: ここは cluster_phase_cache["clusters"] を dict とみなして
-    # .items() を呼んでいたが、technology_cluster_engine が書き出す実体は
-    # **list**（build_cluster_phase_cache の docstring 参照）。
-    # そのため週次実行のたびに 'list' object has no attribute 'items' で
-    # ontology_export 全体が落ち、ontology.signal_event / decision_event が
-    # テーブル作成（2026-06-23）以来ずっと0行だった。
-    # 参照キー（name / tickers / phase_score）も実体に存在しないため、
-    # 実際の列（cluster_id / sectors / avg_score）に合わせる。
+    # technology_cluster_engine が書き出す cluster_phase_cache["clusters"] の実体は
+    # **list**（build_cluster_phase_cache の docstring 参照）。dict とみなして
+    # .items() を呼ぶと ontology_export 全体が落ち、ontology.signal_event /
+    # decision_event が0行になる。
+    # 参照キーも実体の列（cluster_id / sectors / avg_score）に合わせる
+    # （name / tickers / phase_score は存在しない）。
     cl = _load_json(Path(cfg.CACHE_DIR) / "cluster_phase_cache.json")
     clusters = cl.get("clusters") if isinstance(cl, dict) else None
     if isinstance(clusters, dict):        # 将来 dict 形式に戻っても壊さない

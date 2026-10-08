@@ -1,5 +1,5 @@
 # ==============================================================
-# country_profile_builder.py  v1.0  (Wave 6 - G-N1)
+# country_profile_builder.py  v1.0  (G-N1)
 # ==============================================================
 # 【役割】
 #   geopolitics.country_profile テーブルに対して
@@ -19,7 +19,7 @@
 #   - 日本との貿易依存度: 財務省貿易統計ベース（静的値）
 #
 # 【対象国】
-#   Wave 6 Phase G の対象とする80カ国（主要資源国・地政学関与国）
+#   Phase G（地政学）の対象とする80カ国（主要資源国・地政学関与国）
 #   - エネルギー資源国: SAU/ARE/IRN/IRQ/KWT/QAT/RUS/NOR/CAN/USA/BRA/NGA/LBY/DZA
 #   - 鉱物資源国:      AUS/CHL/PER/ZAF/COD/PNG/IDN/PHL/KAZ/UZB/MNG/GIN/BWA
 #   - 農業輸出国:      BRA/ARG/USA/CAN/AUS/UKR/THA/VNM/IND
@@ -1099,7 +1099,7 @@ def _build_merge_query(project_id: str, rows: list[dict]) -> str:
             """list/dict → JSON文字列としてSQL表現"""
             if v is None:
                 return "NULL"
-            # 2026-10-03: JSON 列へ文字列リテラルは入らない（型不一致）。JSON リテラルにする
+            # JSON 列へ文字列リテラルは入らない（型不一致）。JSON リテラルにする
             return "JSON '" + json.dumps(v, ensure_ascii=False).replace("'", "\\'") + "'"
 
         value_rows.append(

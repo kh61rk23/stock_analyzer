@@ -311,12 +311,12 @@ def _fetch_ticker_data(ticker: str) -> Optional[dict]:
     """
     1銘柄の財務データを yfinance で取得する。
 
-    v3.0変更: numberOfAnalystOpinions（アナリスト数）を追加取得
-    [U-5] 取得と正規化は market_data.fetch_quote() に一本化した。
-          本関数は「fetch_quote の返り値を JP 従来のキー名・従来の単位へ
-          写像するだけの薄い層」であり、返り値のキー集合・値は U-5 以前と同一。
-          （副作用として US 側のリトライ＝429 指数バックオフが JP にも効く。
-            要件定義書_JP-US統合_20260726.md §7-2 に記載済みの意図的改善）
+    numberOfAnalystOpinions（アナリスト数）も取得する。
+    [U-5] 取得と正規化は market_data.fetch_quote() に一本化している。
+          本関数は「fetch_quote の返り値を JP 側の既存のキー名・単位へ
+          写像するだけの薄い層」であり、返り値のキー集合・値の形を変えないこと。
+          （US 側のリトライ＝429 指数バックオフが JP にも効く。
+            要件定義書_JP-US統合_20260726.md §7-2 に記載の意図的な挙動）
 
     Returns:
         {ticker, name, per, pbr, roe, market_cap_b, avg_volume, analyst_count}
@@ -332,7 +332,7 @@ def _fetch_ticker_data(ticker: str) -> Optional[dict]:
             return None
 
         # [F-4] market_cap_b は JP=億円 / US=十億USD で **同名だが単位が違う**。
-        # 互換性維持のため単位の是正はここでは行わない（要件定義書 §3-3(a)）。
+        # 互換性維持のため単位の統一はここでは行わない（要件定義書 §3-3(a)）。
         # 消費側で市場をまたいで比較する場合は、必ず生値
         # market_data.fetch_quote()["market_cap_raw"] を使うこと。
         market_cap_raw = q["market_cap_raw"]
@@ -592,18 +592,14 @@ def _calc_longterm_hold_flag(
 
     EDINET の連続増益データがあれば③を3期連続増益で補強する。
 
-    ★ 2026-07-25 バッチ1: 閾値を config.py BLOCK P-3 から読むよう是正。
-      従来は 0.60 / 10.0 / 3 を直書きしており、config 側の
-      LONGTERM_HOLD_* を編集しても何も変わらなかった（SSOT違反）。
-      config の値（0.45 / 0.08）は実装と食い違っていたため、
-      健太の指示により「実装側の値を正」として config を 0.60 / 0.10 へ
-      書き換えたうえで参照する。したがって判定結果は変わらない。
+    閾値は config.py BLOCK P-3 の LONGTERM_HOLD_* から読む（SSOT）。
+    ここに数値を直書きしないこと（config を編集しても効かなくなる）。
 
     Returns:
         (is_longterm_hold: bool, confidence: float, flags: list[str])
         confidence: 0.0〜1.0（条件充足率）
     """
-    # 既定値は従来の直書き値。config が読めない環境でも挙動を変えない。
+    # 既定値は config と同じ値。config が読めない環境でも挙動を変えない。
     _eq_min = float(getattr(cfg, "LONGTERM_HOLD_EQUITY_RATIO_MIN", 0.60))
     # config は比率（0.10）で持ち、比較はパーセントで行うため100倍する。
     _roe_min_pct = float(getattr(cfg, "LONGTERM_HOLD_ROE_MIN", 0.10)) * 100.0
@@ -1122,17 +1118,17 @@ def _calc_scores(
         "pearl_bonus":        round(pearl_bonus, 1),
         "pearl_tier":         pearl_tier,
                 # ── FE・規模の追加フィールド ──────────────────────────────
-        "size_tier":          _size_tier,              # Wave 2 - Size Ph2
+        "size_tier":          _size_tier,              # Size Ph2
                 # ── 独立性・D3 の追加フィールド ──────────────────────────────
         "edinet_segment_text":  data.get("edinet_segment_text", ""),
         "catalyst_score":       float(data.get("catalyst_score", 0.0)),
         "midterm_overall_score": float(data.get("midterm_overall_score", 0.0)),
         "midterm_trajectory":   data.get("midterm_trajectory", "on_track"),
-        "size_weights":       _size_weights,           # Wave 2 - Size Ph2
-        "bm_bonus":           round(_bm_bonus, 2),    # Wave 2 - BM Ph2
-        "bm_norm_type":       _bm_norm_type,           # Wave 2 - BM Ph2
-        "revision_score":     round(_revision_score, 2), # Wave 2 - FE-2
-        "risk_adjusted_score": _risk_adj_score,        # Wave 2 - FE-1
+        "size_weights":       _size_weights,           # Size Ph2
+        "bm_bonus":           round(_bm_bonus, 2),    # BM Ph2
+        "bm_norm_type":       _bm_norm_type,           # BM Ph2
+        "revision_score":     round(_revision_score, 2), # FE-2
+        "risk_adjusted_score": _risk_adj_score,        # FE-1
     }
 
 
@@ -1662,9 +1658,9 @@ def _screen_sector(sector_code: str, sector_name: str,
             "comps_bonus": scores.get("comps_bonus", 0.0),
             "dcf_bonus": scores.get("dcf_bonus", 0.0),
                         # ── PEAD・カタリストの追加フィールド ──────────────────────────────
-            "catalyst_bonus":     _catalyst_bonus,    # Wave 3 - FE-7
-            "independence_score": 0.0,                # Wave 3 - Independence Ph1（後段で更新）
-            "is_latent_pearl":    False,              # Wave 3 - Independence Ph1（後段で更新）
+            "catalyst_bonus":     _catalyst_bonus,    # FE-7
+            "independence_score": 0.0,                # Independence Ph1（後段で更新）
+            "is_latent_pearl":    False,              # Independence Ph1（後段で更新）
             "acc_bonus": scores.get("acc_bonus", 0.0),
             "earnings_acceleration": scores.get("earnings_acceleration"),
             # [I-2] 保守度スコアと複合フラグ

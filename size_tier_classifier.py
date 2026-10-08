@@ -1,5 +1,5 @@
 # ==============================================================
-# size_tier_classifier.py  v1.1  (Wave 7 - Step 4)
+# size_tier_classifier.py  v1.1
 # 銘柄規模分類マスター生成モジュール
 # ==============================================================
 # 【役割】
@@ -39,7 +39,7 @@
 #   config.py（BLOCK 25 定数）
 #   stock_data: results["screener"] / results["us_screener"]（JP/US候補）
 #   ※ 上記2つが入力のため、main では stock_screener / us_stock_screener の
-#     **実行後**に呼ぶこと（2026-07-27 X-1 で sector 直後から移設）。
+#     **実行後**に呼ぶこと（前に置くと results が空で毎回0銘柄になる）。
 # ==============================================================
 
 from __future__ import annotations
@@ -83,7 +83,7 @@ _TIER_ORDER = ["Large", "Mid", "Small", "Micro", "Nano"]
 CACHE_FILENAME = "size_tier_master.json"
 
 # ==============================================================
-# BLOCK 0-B: taxonomy×size 交差評価定数（Wave 7 追加）
+# BLOCK 0-B: taxonomy×size 交差評価定数
 # ==============================================================
 
 # セクターコード → taxonomy_node_id マッピング
@@ -387,7 +387,7 @@ def is_empty_master(data: Optional[dict]) -> bool:
     """
     マスターが実質的に空（JP/US いずれにも銘柄が無い）かを判定する。
 
-    ★ 2026-07-27 X-1: TTL 内であっても中身が空のマスターを返すと、
+    TTL 内であっても中身が空のマスターを返すと、
       次回更新までの最大 SIZE_TIER_CACHE_TTL_DAYS 日間、全下流
       （size_decay_manager / independence_score_calculator /
         signal_aggregator / us_stock_screener）が
@@ -431,7 +431,7 @@ def _load_master(cfg) -> Optional[dict]:
 def _save_master(cfg, data: dict) -> None:
     """
     マスターを保存する。空マスターは保存しない
-    （★ 2026-07-27 X-1: 既存の有効なマスターを空で上書きさせないため）。
+    （既存の有効なマスターを空で上書きさせないため）。
     """
     try:
         if is_empty_master(data):
@@ -468,11 +468,9 @@ def _collect_jp_candidates(results: dict) -> list[dict]:
                     "ticker":       str(c.get("ticker", c.get("code", ""))),
                     "name":         str(c.get("name", "")),
                     "market_cap_b": _safe_float(c.get("market_cap_b")),
-                    # ★ 2026-07-27 X-1: stock_screener が出すのは
-                    #   "current_price"（stock_screener.py:1765）であり
-                    #   "last_price"/"price" は存在しない。従来は常に None となり
-                    #   penny_flag が恒常 False、liquidity_rank も時価総額
-                    #   フォールバックにしか入らなかった。
+                    # stock_screener が出すのは "current_price"（stock_screener.py:1765）で、
+                    #   "last_price"/"price" は存在しない。current_price を拾わないと常に None になり、
+                    #   penny_flag が常に False、liquidity_rank も時価総額フォールバックになる。
                     "last_price":   _safe_float(
                         c.get("last_price",
                               c.get("current_price", c.get("price")))),
@@ -508,11 +506,9 @@ def _collect_us_candidates(results: dict) -> list[dict]:
         for c in passed:
             try:
                 # US: market_cap は raw USD → 億USD（1e8）へ換算する。
-                # ★ 2026-07-27 X-1: 従来は 1e9（十億USD）で割っていたため、
-                #   SSOT の SIZE_TIER_THRESHOLDS_US（単位=億USD, config BLOCK 25）
-                #   と 10 倍ずれ、US 銘柄が一律 1 ティア以上小さく分類されていた。
-                #   size_decay_manager.classify_size_tier() も raw/1e8 で
-                #   同じ閾値を引いており、そちらが正。
+                #   SSOT の SIZE_TIER_THRESHOLDS_US は単位=億USD（config BLOCK 25）。
+                #   1e9 で割ると10倍ずれて US 銘柄が1ティア以上小さく分類される。
+                #   size_decay_manager.classify_size_tier() も raw/1e8 で同じ閾値を引く。
                 mcap_raw = _safe_float(c.get("market_cap"))
                 mcap_b   = round(mcap_raw / 1e8, 2) if mcap_raw else None
 
@@ -656,7 +652,7 @@ def build_size_tier_master(
                 except Exception:
                     pass
 
-            # ── taxonomy × size 交差評価（Wave 7 追加）──────────
+            # ── taxonomy × size 交差評価 ──────────
             taxonomy_nodes = get_taxonomy_nodes_for_sector(
                 c.get("sector_code", "")
             )
@@ -734,7 +730,7 @@ def build_size_tier_master(
                 except Exception:
                     pass
 
-            # ── taxonomy × size 交差評価（Wave 7 追加）──────────
+            # ── taxonomy × size 交差評価 ──────────
             taxonomy_nodes_us = get_taxonomy_nodes_for_sector(
                 c.get("sector_code", "")
             )
@@ -814,12 +810,11 @@ def run_size_tier_classifier(cfg, results: dict = None) -> dict:
     """
     stock_analyzer_main.py の WEEKLY_MODULES から呼ばれるエントリポイント。
 
-    ★ 実行位置の制約（2026-07-27 X-1）:
+    実行位置の制約（X-1）:
       本モジュールは results["screener"]（stock_screener）と
       results["us_screener"]（us_stock_screener）を入力とするため、
       **両スクリーナーの実行後**に呼ぶこと。
-      2026-07-27 以前は sector 直後（両スクリーナーより前）に配線されており、
-      results が空のまま毎回 0 銘柄で終了していた。
+      両スクリーナーより前に置くと results が空のまま毎回 0 銘柄で終了する。
 
     処理フロー:
       1. キャッシュ有効（TTL内かつ非空） → キャッシュ返却
@@ -868,7 +863,7 @@ def run_size_tier_classifier(cfg, results: dict = None) -> dict:
     )
 
     if not candidates_jp and not candidates_us:
-        # ★ 2026-07-27 X-1: ここは「成功」ではない。
+        # ここは「成功」ではない。
         #   results["screener"] / results["us_screener"] が未生成のまま
         #   呼ばれると必ずこの経路に落ちるため、呼び出し側（main）が
         #   台帳へ skipped として記録できるようフラグを返す。

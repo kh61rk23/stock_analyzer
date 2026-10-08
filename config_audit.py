@@ -155,26 +155,25 @@ def check_d_missing_cfg_attrs(cfg_names: set, env_injected: set) -> list:
 UNREFERENCED_ALLOWLIST = {
     # 旧名を残すための明示エイリアス。実体は ENABLE_FUDOSAN_INGEST 側が読まれる。
     "ENABLE_FUDOSANDB_INGEST",
-    # ↓ 実装が存在せずフラグだけ先行しているもの（2026-07-25 確認）。
+    # ↓ 実装が存在せずフラグだけ先行しているもの。
     #   config.py 側に「未実装」と明記済み。実装したら本リストから外すこと。
     "ENABLE_TREASURY_DATA",      # treasury_debt の取得処理が無い（読み手だけ）
     "ENABLE_GEO_SCORE_PERSIST",  # analytics.company_scores への書込処理が無い
-    # 退役機能の墓標。2026-07-22 のDB統合で legacy 業種別REST取得を廃止し、
-    # 実装ごと削除した。False 固定であることを
+    # 退役機能の墓標。legacy 業種別REST取得は廃止済みで実装も無い。False 固定であることを
     # tests/test_db_integration_refit.py が保証している（復活防止）。
     "ENABLE_EDINET",
-    # ↓ 消費者が .py ではないため検査Eの走査に掛からないもの（2026-07-25）
+    # ↓ 消費者が .py ではないため検査Eの走査に掛からないもの
     #   Streamlit のポートは起動時 --server.port で渡すしかないため、
     #   setup/権益レビューUI起動.command が唯一の消費者。
     "EXPOSURE_REVIEW_UI_PORT",
-    # ↓ 実装が存在しないフラグ（config 側に「未実装」と明記済み・2026-07-25）
+    # ↓ 実装が存在しないフラグ（config 側に「未実装」と明記済み）
     "GARCH_ENABLED",                # GARCH ボラ推定は未実装（ARCH未導入）
     "IGNITION_CATEGORY_D_ENABLED",  # ignition_detector にカテゴリD抽出が無い
 }
 
 # 走査から外すディレクトリ
 # tests/ を外すのは、テストからの参照で「本番で使われている」ように
-# 見えてしまうのを防ぐため（2026-07-25）。テストだけが読む定数は
+# 見えてしまうのを防ぐため。テストだけが読む定数は
 # 本番未使用であり、検査Eはそれを検出できなければ意味がない。
 _SKIP_DIRS = {"__pycache__", ".git", ".pytest_cache", "pytest_cache",
               "03_bk", "tests"}
@@ -191,11 +190,10 @@ def _iter_py_files():
 def check_e_unreferenced_constants(tree: ast.Module, src: str) -> list:
     """E: config.py で定義されたが、どこからも読まれていない定数の検出。
 
-    【なぜ要るか】2026-07-25 の棚卸しで、config.py の752定数のうち104個が
-    実装から一度も参照されていないことが判明した。とくに ENABLE_* は
-    「True にしたのに動かない」「False にしたのに止まらない」を生む。
-    実害例: ENABLE_MIDTERM_TRACKER=True と ENABLE_MIDTERM_PLAN_TRACKER=False
-    が同居し、実装が読むのは後者だけだった（二重フラグの罠）。
+    【なぜ要るか】config.py の定数は実装から一度も参照されないまま残りやすい。
+    とくに ENABLE_* は「True にしたのに動かない」「False にしたのに止まらない」を生む。
+    例: ENABLE_MIDTERM_TRACKER と ENABLE_MIDTERM_PLAN_TRACKER が同居し、
+    実装が後者だけを読むと前者を変えても効かない（二重フラグの罠）。
 
     【検出方法】定数名を単語境界で全 .py から探す。文字列リテラルも拾うので
     getattr(cfg, "NAME") 形式も参照済みとみなす。

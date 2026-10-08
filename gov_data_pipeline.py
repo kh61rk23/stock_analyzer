@@ -37,7 +37,7 @@ STAT_DEFINITIONS = [
         "statsCode":    "00550300",
         "searchWord":   "鉱工業",
         "unit":         "（前年比%）",
-        # 2026-09-29: e-Stat の統計表IDは改定のたびに変わり追いきれない（健太の判断）。
+        # e-Stat の統計表IDは改定のたびに変わり追いきれないため、
         # 系列IDが固定の FRED（OECD経由の公式統計）から取る。
         "fred":         {"series": "JPNPRINTO01GYSAM", "kind": "yoy"},
         "direction":    "higher_is_good",
@@ -204,17 +204,16 @@ def _get_all_candidate_ids(app_id, stats_code, search_word) -> list:
     def _open_date(t):
         return t.get("OPEN_DATE", t.get("@updated", "0"))
 
-    # ★ 修正C: OPEN_DATE降順のみ（0003prefix優先を廃止）
-    # 理由: 0004-prefixの正しいIDが0003-prefixの古いIDに負けてしまう
+    # OPEN_DATE降順のみで並べる（ID prefix で優先しない）。
+    # 理由: prefix 優先にすると 0004-prefixの正しいIDが0003-prefixの古いIDに負ける
     ordered = sorted(all_tables, key=_open_date, reverse=True)
     return [t.get("@id","") for t in ordered if t.get("@id","")]
 
 
 def _parse_time_code(time_code: str) -> str:
-    # 2026-09-26: e-Statの標準時間コードは10桁 "YYYY00MMMM"（月次）/
-    # "YYYY000000"（年次）/ "YYYY100000"（年度）。旧実装は[4:6]="00"を月と
-    # 読んで月次データを全て年だけ（"2026"）にしていたため、前年比が
-    # 「2026年7月 vs 2025年12月」の比較になり建設着工-87%等の異常値を出していた。
+    # e-Statの標準時間コードは10桁 "YYYY00MMMM"（月次）/
+    # "YYYY000000"（年次）/ "YYYY100000"（年度）。[4:6]="00"を月と読むと
+    # 月次データが年だけになり、前年比が別の月どうしの比較になって異常値が出る。
     if len(time_code) == 10 and time_code[:4].isdigit() and time_code[4:6] in ("00", "10"):
         year, month = time_code[:4], time_code[8:10]
         return f"{year}-{month}" if month not in ("00",) else year
@@ -259,8 +258,8 @@ def fetch_estat_data_by_id(stats_data_id, app_id, limit=24):
     try:
         resp   = requests.get(ESTAT_DATA_URL, params=params, timeout=30)
         if resp.status_code != 200:
-            # BUG-02 診断強化（2026-07-05）: 失敗の握り潰しをやめ、
-            # HTTPステータスとIDを必ずログに残す（実行台帳/Actionsログで追跡可能に）
+            # BUG-02: 失敗を握り潰さず、
+            # HTTPステータスとIDを必ずログに残す（実行台帳/Actionsログで追跡するため）
             print(f"    ⚠️  [gov_data] e-Stat HTTP {resp.status_code}: "
                   f"statsDataId={stats_data_id}")
             return None, False
@@ -288,7 +287,7 @@ def fetch_estat_data_by_id(stats_data_id, app_id, limit=24):
             if not value_str or value_str in ["-", "***", "…", "x", "X", ""]:
                 continue
             try:
-                # ★ 2026-07-12: カテゴリ属性（@cat01/@area/@tab等）を保持。
+                # カテゴリ属性（@cat01/@area/@tab等）を保持する。
                 #   e-Stat応答は複数カテゴリの行が混在するため、時系列比較は
                 #   同一カテゴリ内で行う必要がある（下の系列選択で使用）。
                 cat_key = tuple(sorted(
@@ -307,10 +306,9 @@ def fetch_estat_data_by_id(stats_data_id, app_id, limit=24):
         if not records:
             return None, False
 
-        # ★ 2026-07-12 カテゴリ混在の是正（建設着工「前年比-83.5%」等の異常値と
-        #   貿易統計「変化率計算不可」の根本原因）: 異種カテゴリの値を1本の時系列と
-        #   して前年比計算していた。最新時点を含むカテゴリ系列のうち最も行数の多い
-        #   1系列だけを採用する（「総数・計」に相当する系列が最長になるのが通例）。
+        # 異種カテゴリの値を1本の時系列として前年比計算すると異常値になるため、
+        #   最新時点を含むカテゴリ系列のうち最も行数の多い1系列だけを採用する
+        #   （「総数・計」に相当する系列が最長になるのが通例）。
         by_cat = {}
         for r in records:
             by_cat.setdefault(r["_cat"], []).append(r)
@@ -363,9 +361,8 @@ def fetch_estat_with_failover(stats_data_id, app_id, stats_code,
     # 最初の試行
     records, is_invalid = fetch_estat_data_by_id(stats_data_id, app_id, limit)
 
-    # 2026-09-26: 以前はここで records があれば即 return していたため、下の
-    # 陳腐化判定（_is_stale）は records=None でしか評価されず常にFalse＝
-    # 「古いデータのときのフェイルオーバー」が一度も発動しないデッドコードだった。
+    # records があっても陳腐化していれば return しない。ここで即 return すると
+    # 下の陳腐化フェイルオーバーが一度も発動しなくなる。
     if records and not _is_stale(records):
         if data_cache:
             try:
@@ -377,22 +374,22 @@ def fetch_estat_with_failover(stats_data_id, app_id, stats_code,
                 pass
         return records, stats_data_id
 
-    # ★ 古いデータ（2年以上前）もフェイルオーバー対象
+    # 古いデータ（2年以上前）もフェイルオーバー対象
     is_stale = _is_stale(records)
     if is_stale and records:
         print(f"    ⚡ フェイルオーバー発動: {stats_data_id} は古いデータ（最新: {records[0].get('time','?')}）")
 
     exhausted = (data_dir / f"failover_exhausted_{stats_code}_{month}.txt"
                  if data_dir else None)
-    # 2026-09-26: 応答はあるが値が空（家計調査 0002070001 が毎日「データなし」）の
-    # ときも代替を探す。以前は無効ID・陳腐化のときしか探さず、空のまま放置されていた。
+    # 応答はあるが値が空（例: 家計調査 0002070001 が毎日「データなし」）の
+    # ときも、無効ID・陳腐化と同様に代替を探す。
     is_empty = records is None and not is_invalid
     if (is_stale or is_empty) and not is_invalid and exhausted and exhausted.exists():
         # 今月すでに全候補を試して新しい表が無かった → 毎日の再探索を省く
         return records, stats_data_id
 
     if is_invalid or is_stale or is_empty:
-        # ★ フェイルオーバー発動: キャッシュを削除して再検索
+        # フェイルオーバー発動: キャッシュを削除して再検索
         if is_invalid:
             print(f"    ⚡ フェイルオーバー発動: {stats_data_id} は無効")
         elif is_empty:
@@ -404,7 +401,7 @@ def fetch_estat_with_failover(stats_data_id, app_id, stats_code,
 
         # 全候補IDを取得
         candidates = _get_all_candidate_ids(app_id, stats_code, search_word)
-        # ★ 修正D: hardcoded_idを先頭に挿入（最優先で試行）
+        # hardcoded_idを先頭に挿入（最優先で試行）
         # 理由: hardcoded_idは人間が確認済みの正しいID。末尾より先頭に置く
         if hardcoded_id and hardcoded_id not in candidates:
             candidates.insert(0, hardcoded_id)
@@ -504,7 +501,7 @@ def calculate_changes(records):
         if prev and prev != 0:
             result["mom_change"] = round(
                 (latest["value"] - prev) / abs(prev) * 100, 2)
-    # ★ 修正A: records[12]固定→時刻文字列で1年前を特定
+    # 1年前は時刻文字列で特定する（records[12] 固定にしない）
     # 理由: データが月次でない場合records[12]が12年前等になり異常値
     try:
         latest_time = latest.get("time", "")
@@ -534,9 +531,8 @@ def calculate_changes(records):
 def judge_sector_impact(stat_def, changes):
     if not changes:
         return {"signal": "neutral", "score": 0, "reason": "データ取得失敗"}
-    # ★ 2026-07-12 鮮度ガード: フェイルオーバーを尽くしても最新が2年以上前なら
-    #   シグナル化しない。毎月勤労統計(2009年)・労働力調査(2005年)の前年比が
-    #   MACRO_RULESへ流入していた実害の遮断（e-Statの旧固定表を掴んだケース）。
+    # 鮮度ガード: フェイルオーバーを尽くしても最新が2年以上前ならシグナル化しない。
+    #   e-Statの旧固定表を掴むと何年も前の前年比が MACRO_RULES へ流入するため。
     latest_time = str(changes.get("latest_time", ""))
     try:
         _yr = int(latest_time[:4])
@@ -550,7 +546,7 @@ def judge_sector_impact(stat_def, changes):
                 else changes.get("mom_change")
     if change is None:
         return {"signal": "neutral", "score": 0, "reason": "変化率計算不可"}
-    # ★ 2026-07-12 異常値クランプ: マクロ統計の前年比が±50%を超えることは
+    # 異常値クランプ: マクロ統計の前年比が±50%を超えることは
     #   通常なく、カテゴリ混在・単位揺れ等のデータ品質問題を示す → 無効化。
     if abs(change) > 50:
         return {"signal": "neutral", "score": 0,
@@ -637,12 +633,11 @@ def build_report(stat_results, sector_signals):
     lines += ["---", f"*出典: e-Stat / 取得日: {now}*", ""]
     return "\n".join(lines)
 
-# A-1 貿易品目別シグナル・A-2 職種別求人倍率シグナルは 2026-09-29 に廃止
-# （A-1 は e-Stat で毎日「変化率計算不可」、A-2 は統計ID未設定の仮実装だった）
+# A-1 貿易品目別シグナル・A-2 職種別求人倍率シグナルは廃止済み
 
 
 # ==============================================================
-# FRED 取得（2026-09-29）
+# FRED 取得
 # ==============================================================
 FRED_API_URL = "https://api.stlouisfed.org/fred/series/observations"
 FRED_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
@@ -734,7 +729,7 @@ def run_gov_pipeline(cfg) -> dict:
     for stat_def in STAT_DEFINITIONS:
         print(f"\n  📥 {stat_def['name']} 取得中...")
 
-        # 2026-09-29: fred を持つ統計は e-Stat を使わず FRED から取る
+        # fred を持つ統計は e-Stat を使わず FRED から取る
         if stat_def.get("fred"):
             sid, kind = stat_def["fred"]["series"], stat_def["fred"].get("kind", "level")
             records, err = fetch_fred_series(sid, fred_key)
@@ -788,7 +783,7 @@ def run_gov_pipeline(cfg) -> dict:
 
         print(f"    🔍 statsDataId: {stats_id}")
 
-        # ★ フェイルオーバー付きデータ取得
+        # フェイルオーバー付きデータ取得
         records, used_id = fetch_estat_with_failover(
             stats_data_id = stats_id,
             app_id        = app_id,

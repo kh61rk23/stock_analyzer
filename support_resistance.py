@@ -83,9 +83,9 @@ CACHE_HOURS    = 24
 # ==============================================================
 
 
-# ── config を正本とする定数の対応表（2026-07-25 SSOT移設）──
+# ── config を正本とする定数の対応表 ──
 # config.py BLOCK 59 が正本。run_* の冒頭で一度だけ取り込む。
-# 値は移設時点の実装値と同一のため挙動は変わらない。
+# モジュール側の値は config が無い時のフォールバック（config と同値）。
 _CFG_CONST_MAP = {
     "SR_LOOKBACK_52W": "LOOKBACK_52W",
     "SR_LOOKBACK_VWAP": "LOOKBACK_VWAP",
@@ -408,7 +408,7 @@ def run_support_resistance(cfg, tickers: list) -> dict:
     Returns:
         {"results": {ticker: sr_result}, "top_breakout": [...], "timestamp": str}
     """
-    # 2026-07-25: 閾値・重みを config.py BLOCK 59 から取り込む
+    # 閾値・重みを config.py BLOCK 59 から取り込む
     sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
 
     print(f"\n  📐 サポート・レジスタンス分析開始（{len(tickers)}銘柄）...")

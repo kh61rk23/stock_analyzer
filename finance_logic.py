@@ -81,10 +81,8 @@ def as_number(v) -> Optional[float]:
     ★ isinstance(v, (int, float)) で判定してはいけない。
       numpy.float32 / numpy.int64 / numpy.int32 は Python の int/float の
       サブクラスではないため isinstance が False になり、pandas 由来の値
-      （.sum() / .mean() の戻り値など）が丸ごと弾かれる。
-      2026-09-09: これが原因で ml/dataset_builder が
-      「sector_signals=33 なのに特徴量あり業種=0」となり、
-      ML特徴量が導入以来1行も蓄積されていなかった。
+      （.sum() / .mean() の戻り値など）が丸ごと弾かれ、ml/dataset_builder の
+      特徴量が0行になる。
       float() での変換は numpy 型も通るため、判定は変換の成否で行う。
 
     bool を弾くのは、True/False が int のサブクラスであり
@@ -235,7 +233,7 @@ def fix_div_yield(raw) -> Optional[float]:
 def _yf_yield_ratio(info: dict) -> Optional[float]:
     """yfinance の info から配当利回りを比率（0.04 = 4%）で返す。
 
-    2026-09-15: yfinance の dividendYield は常に「%値」（0.19 = 0.19%）で返る。
+    yfinance の dividendYield は常に「%値」（0.19 = 0.19%）で返る。
     比率で返る trailingAnnualDividendYield を優先し、無ければ %値として 1/100 する。
     """
     ttm = _safe_float(info.get("trailingAnnualDividendYield"))
@@ -258,12 +256,10 @@ def compute_div_yield(info: dict, is_jp: bool, price) -> Optional[float]:
            dividendRate から算出するほうが正確
         ② フォールバック: _yf_yield_ratio()（trailingAnnualDividendYield 優先）
     日本株:
-        _yf_yield_ratio()（2026-09-15 に fix_div_yield から切替）
+        _yf_yield_ratio()
     """
-    # 2026-09-15: fix_div_yield() の「1.0 以下なら比率」判定では、%値で返る
-    # 1% 未満の銘柄が100倍に誤読され、SoftBank Group（0.19%）が「19.0%」、
-    # Recruit（0.16%）が「16.0%」の高配当として日次メールに載っていた
-    # （9/14 の base_agent 側の修正は、先に通る data_bridge 経路に効いていなかった）。
+    # 日本株に fix_div_yield() は使わない。「1.0 以下なら比率」判定だと、%値で返る
+    # 1% 未満の銘柄が100倍に誤読される（0.19% → 19.0%）。
     # fix_div_yield は Alpha Vantage の比率値にも使うため関数自体は変えない。
     if is_jp:
         return _yf_yield_ratio(info)
@@ -405,7 +401,7 @@ def get_yahoo_finance_url(ticker: str) -> str:
 
 
 # ==============================================================
-# SECTION 8: 統計ユーティリティ（U-7 / Batch 10 共通化）
+# SECTION 8: 統計ユーティリティ（U-7 共通化）
 # ==============================================================
 
 def pearson(
@@ -464,8 +460,8 @@ def linear_slope(
     """等間隔の値列を最小二乗回帰し、1ステップ当たりの傾きを返す。
 
     sector_rotation_detector._calc_slope と
-    jp_us_sector_correlation._calc_trend に完全重複していた実装を
-    Batch 10で集約した。データ不足・分母0は従来どおり0.0を返す。
+    jp_us_sector_correlation._calc_trend の共通実装。
+    データ不足・分母0は0.0を返す。
     """
     n = len(values)
     if n < min_n:

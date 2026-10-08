@@ -1,5 +1,5 @@
 # ==============================================================
-# edinet_exposure_extractor.py  v1.0  (Wave 6 - G-C2)
+# edinet_exposure_extractor.py  v1.0  (G-C2)
 # ==============================================================
 # 【役割】
 #   EDINET 有価証券報告書のテキストから海外権益・海外事業情報を
@@ -186,8 +186,8 @@ _INTEREST_PATTERN = re.compile(
     r"(?P<region>チリ|ペルー|オーストラリア|豪州|カザフスタン|モンゴル|"
     r"インドネシア|フィリピン|コンゴ民主共和国|ギニア|ザンビア|モザンビーク|"
     r"ブラジル|カナダ|サウジアラビア|UAE|中東|ロシア|アルゼンチン)"
-    # 2026-10-01: 旧 (?:\S+){0,8} は空白の無い日本語の長文で破滅的バックトラックを起こし、
-    # 月次の geo_exposure が15分で打ち切られていた（60字でも返らない）。文字数で上限を切る。
+    # (?:\S+){0,8} のような繰り返しは空白の無い日本語の長文で破滅的バックトラックを
+    # 起こすため、文字数で上限を切る。
     r"(?:の|で)?\S{0,40}?"
     r"(?P<action>権益|出資|持分|プロジェクト参加|開発参加|鉱山|採掘|oil|LNG)",
     re.MULTILINE,
@@ -493,16 +493,13 @@ def _get_edinet_text_sections(
             return from_bq
 
         # text_analysis が空の場合 → text_extractor 経由でセクション取得を試みる
-        # ★ 2026-06-11 バグ修正: 旧実装は存在しない edinet_client.EDINETClient
-        #   クラスと get_section_text メソッドを参照しており（幻の契約）、
-        #   フォールバックが一度も機能していなかった。EDINET HTML セクション
-        #   抽出の実装を持つ text_extractor.extract_sections() [E4-1] への
-        #   委譲に修正。
+        #   EDINET HTML セクション抽出の実装を持つ text_extractor.extract_sections()
+        #   [E4-1] に委譲する（edinet_client.EDINETClient / get_section_text は存在しない）。
         try:
             _te_mod = importlib.import_module("text_extractor")
-            # 2026-09-26: extract_sections() の戻り値は {"securities_code", "company_name",
-            # ..., "sections": {business, risk, ...}} で、旧コードは外側の辞書を読んで
-            # 証券コード・会社名などのメタ情報を「本文」として返していた。
+            # extract_sections() の戻り値は {"securities_code", "company_name",
+            # ..., "sections": {business, risk, ...}}。本文は "sections" の中だけで、
+            # 外側の辞書を読むとメタ情報を本文として扱ってしまう。
             _sections = (_te_mod.extract_sections(cfg, str(code)) or {}).get("sections") or {}
             result = {
                 k: v for k, v in _sections.items()
@@ -699,9 +696,8 @@ def run_edinet_exposure_extractor(
         _js     = importlib.import_module("jogmec_scraper")
         _bq_mod = importlib.import_module("edinet_bq_client")
         raw_bq  = _bq_mod.EDINETBQClient().client
-    # 2026-07-25: 一次経路（edinet_bq_client＝Actions の BQ_CREDENTIALS 経路）の
-    # 失敗理由を握り潰し、Colabフォールバックの「No module named 'google.colab'」
-    # だけが報告されていた。真因が隠れるため両方を返す。
+    # 一次経路（edinet_bq_client＝Actions の BQ_CREDENTIALS 経路）の失敗理由と
+    # Colabフォールバックの失敗理由の両方を返す（後者だけだと真因が隠れる）。
     except Exception as _primary_err:
         try:
             from google.cloud import bigquery as _bq_lib

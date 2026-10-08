@@ -1,5 +1,5 @@
 # ==============================================================
-# paper/monthly_report.py — 戦略別月次成績レポート（Wave R1-2 / S2）
+# paper/monthly_report.py — 戦略別月次成績レポート（R1-2 / S2）
 # ==============================================================
 # 使い方（月初にローカルMacで・launchd週次ループと同居可）:
 #   python3 paper/monthly_report.py [YYYYMM]
@@ -21,16 +21,13 @@ from paper.paper_broker import load_accounts   # noqa: E402
 
 
 def judge_promotion(acc: dict, cfg=None) -> dict:
-    """実弾昇格M2基準の判定（2026-07-25 バッチ6で実装）。
+    """実弾昇格M2基準の判定。
 
     基準（config.py BLOCK 45）:
       取引数 >= PROMOTION_MIN_TRADES（既定30）
       PF     >= PROMOTION_MIN_PF（既定1.3）
       bootstrap p < PROMOTION_MAX_P（既定0.10）
-    3つを全て満たしたときのみ「昇格候補」。最終判断は健太（D-01）。
-
-    従来この3定数は誰にも読まれず、レポートに基準を文言で書くだけで
-    判定が実装されていなかった。
+    3つを全て満たしたときのみ「昇格候補」。最終判断は人が行う（D-01）。
 
     Returns:
         {"eligible": bool, "trades": int, "pf": float|None,
@@ -102,7 +99,7 @@ def build_report(accounts: dict, yyyymm: str, cfg=None) -> str:
         ret = pnl / start if start > 0 else 0.0
         lines.append(f"| {sid} | {start:,.0f} | {end:,.0f} | {pnl:+,.0f} | "
                      f"{ret:+.2%} | {len(hist)} |")
-    # ── 実弾昇格M2判定（2026-07-25 バッチ6で実装）─────────────
+    # ── 実弾昇格M2判定 ─────────────
     lines += ["", "## 実弾昇格M2判定",
               "", "> 3基準を全て満たすと「昇格候補」。**最終判断は健太**（D-01）。",
               "", "| 戦略 | 取引数 | PF | bootstrap p | 判定 | 未達項目 |",

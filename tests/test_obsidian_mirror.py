@@ -1,6 +1,6 @@
-# obsidian_sync.cmd_mirror — 審議済みミラーの自動 push（2026-09-29）
-#   Mac で審議したあと deliberated_tickers.json を手でコミットしないと、
-#   Actions のメールの審議キューに反映されなかった。
+# obsidian_sync.cmd_mirror — 審議済みミラーの自動 push
+#   Mac で審議した deliberated_tickers.json を push しないと、
+#   Actions のメールの審議キューに反映されない。
 import json
 import subprocess
 import types

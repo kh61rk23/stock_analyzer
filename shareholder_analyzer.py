@@ -193,9 +193,8 @@ def _axis2_foreign_trend(
         if prev_foreign is not None:
             yoy_change = foreign_pct - prev_foreign
 
-    # 2026-07-25 バッチ4: 発見フェーズの閾値を config.py BLOCK P-4 の
-    # FOREIGN_INVESTOR_SPIKE_PCT から読む。従来はモジュール定数
-    # FOREIGN_SPIKE_PCT=3.0 のみが効き、config 側（同義・同値）は未参照だった。
+    # 発見フェーズの閾値は config.py BLOCK P-4 の FOREIGN_INVESTOR_SPIKE_PCT が正本。
+    # モジュール定数 FOREIGN_SPIKE_PCT は config に無いときの既定値。
     _spike_pct = float(getattr(cfg, "FOREIGN_INVESTOR_SPIKE_PCT",
                                FOREIGN_SPIKE_PCT))
     if yoy_change is not None:
@@ -528,11 +527,9 @@ def run_shareholder_analyzer(cfg, edinet_db: dict, tickers: list = None) -> dict
           f"| 情報優位{len(info_advantage)}"
           + (f" | ⚡アクティビスト{len(activist_entries)}!" if activist_entries else ""))
 
-    # [P-4] shareholder_score 上位N（2026-07-25 バッチ4で追加）
-    # config.SHAREHOLDER_SCORE_TOP_N は「上位N件を出す」ための定数として
-    # 定義されていたのに、スコア順のランキング自体が実装されておらず
-    # 誰にも読まれていなかった。既存3リスト（外国人急増／アクティビスト／
-    # 情報優位）はフラグでの分類で、スコア順の一覧は別物のため追加する。
+    # [P-4] shareholder_score 上位N（件数は config.SHAREHOLDER_SCORE_TOP_N）。
+    # 既存3リスト（外国人急増／アクティビスト／情報優位）はフラグでの分類で、
+    # スコア順の一覧はそれとは別物。
     _top_n = int(getattr(cfg, "SHAREHOLDER_SCORE_TOP_N", 10))
     top_scored = [
         {"ticker": t,

@@ -131,7 +131,7 @@ def _section_jp_sectors(results: dict) -> list:
 
 def _section_geo_country_risk(results: dict, cfg=None) -> list:
     """
-    国別リスク要約セクションを生成する（Wave 6 - G-N）。
+    国別リスク要約セクションを生成する（G-N）。
 
     results["geo_risk"] から以下の情報を取得:
       - composite_risk_score が高い国のランキング
@@ -346,7 +346,7 @@ def _section_geo_country_risk(results: dict, cfg=None) -> list:
 
 def _section_geo_exposure(results: dict, cfg=None) -> list:
     """
-    企業×海外権益マッピングと地政学影響セクションを生成する（Wave 6 - G-X）。
+    企業×海外権益マッピングと地政学影響セクションを生成する（G-X）。
 
     表示内容:
       ① geo_impact_bonus 上位・下位銘柄ランキング
@@ -524,7 +524,7 @@ def _section_geo_exposure(results: dict, cfg=None) -> list:
 
 def _section_geo_signal_detail(results: dict, cfg=None) -> list:
     """
-    signal_aggregator の geo_signal スコアを業種別に表示する（Wave 6 - G-X）。
+    signal_aggregator の geo_signal スコアを業種別に表示する（G-X）。
 
     signal_aggregator の結果から geo_signal コンポーネントを抽出し、
     業種別の地政学シグナル強度をランキング表示する。
@@ -685,7 +685,7 @@ def _section_etf(results: dict) -> list:
 # ==============================================================
 
 def _section_deliberation_queue(results: dict, cfg) -> list:
-    """B部門審議（E3）へ次に上げる候補の一覧（2026-07-28 新設）。
+    """B部門審議（E3）へ次に上げる候補の一覧。
 
     並び順は deliberation_scheduler.build_deliberation_queue と同一。
     先頭が隔週ジョブで実際に選定される銘柄になる。
@@ -1352,7 +1352,7 @@ def _section_jp_us_bridge(results: dict) -> list:
 
 def _section_rule_optimizer_alert(results: dict, cfg=None) -> list:
     """
-    Wave 6 - 第4セッション: 緊急縮退アラートセクション。
+    緊急縮退アラートセクション。
 
     出力内容:
       1. 現在の縮退モード（Normal / Warning / Emergency）とバッジ表示
@@ -1794,7 +1794,7 @@ def _section_dcf(results: dict) -> list:
 # ==============================================================
 
 def _section_politician_highlight(results: dict) -> list:
-    """[Wave0 Policy Ph1] 今週の議員取引ハイライト & JP波及シグナル"""
+    """[Policy Ph1] 今週の議員取引ハイライト & JP波及シグナル"""
     pm = results.get("politician_monitor", {})
     if not pm or pm.get("skipped"):
         return []
@@ -1845,7 +1845,7 @@ def _section_politician_highlight(results: dict) -> list:
 
 
 def _section_jp_us_correlation(results: dict) -> list:
-    """[Wave0 Idea2-A] JP×US相関マトリクス（直近60日）"""
+    """[Idea2-A] JP×US相関マトリクス（直近60日）"""
     corr = results.get("jp_us_sector_correlation", {})
     if not corr or corr.get("stats", {}).get("insufficient_data"):
         return []
@@ -1900,7 +1900,7 @@ def _fmt(v) -> str:
 def _format_pearl_row_detail(c: dict) -> str:
     """
     Tier SS 銘柄の1行サマリを生成する。
-    Wave 7: EDINETセグメント文脈・カタリストフラグ・潜伏Pearlスコアを追加表示。
+    EDINETセグメント文脈・カタリストフラグ・潜伏Pearlスコアも表示する。
     """
     ticker = c.get("ticker", c.get("code", ""))
     ps     = c.get("pearl_score", 0)
@@ -1952,7 +1952,7 @@ def _format_pearl_row_detail(c: dict) -> str:
 
 def _section_pearl_ranking(results: dict, cfg=None) -> list:
     """
-    [Wave0 Pearl Ph1] 光る原石ランキング
+    [Pearl Ph1] 光る原石ランキング
     pearl_candidates.json（キャッシュ）を優先参照し、
     未生成の場合は results["screener"]["passed"] から pearl_tier のある銘柄を抽出する。
     """
@@ -2097,7 +2097,7 @@ def _section_pearl_ranking(results: dict, cfg=None) -> list:
 
 def _section_analyst_revision(results: dict, cfg=None) -> list:
     """
-    [Wave 2 - FE-2] アナリスト注目度変化セクション。
+    [FE-2] アナリスト注目度変化セクション。
 
     screener 通過銘柄の revision_score を集計し、
     セクター別の注目度変化をランキング表示する。
@@ -2196,7 +2196,7 @@ def _section_analyst_revision(results: dict, cfg=None) -> list:
 
 def _section_ignition_alert(results: dict, cfg=None) -> list:
     """
-    [Wave 2 - FE-4] 今週の収束シグナル（Ignition Alert）セクション。
+    [FE-4] 今週の収束シグナル（Ignition Alert）セクション。
 
     results["ignition"] または ignition_alerts.json から
     アラートを読み込み、収束スコアとカテゴリ別内訳を表示する。
@@ -2284,8 +2284,8 @@ def _section_ignition_alert(results: dict, cfg=None) -> list:
 
 def _section_latent_pearl_promotion(results: dict, cfg=None) -> list:
     """
-    [Wave 3/7 - Independence] 潜伏銘柄プロモーションセクション。
-    Wave 7: latent_pearl_cache.json を直接参照し、
+    [Independence] 潜伏銘柄プロモーションセクション。
+    latent_pearl_cache.json を直接参照し、
     潜伏Pearlスコア・カタリストフラグ・EDINETセグメント文脈を詳細表示する。
     """
     try:
@@ -2426,7 +2426,7 @@ def _section_latent_pearl_promotion(results: dict, cfg=None) -> list:
 
 def _section_wave7_premarket_signals(results: dict, cfg=None) -> list:
     """
-    [Wave 7] 市場形成前シグナルセクション。
+    市場形成前シグナルセクション。
     学術発表・標準化動向・中計達成率の3インプット層を統合表示する。
     """
     try:
@@ -2499,7 +2499,7 @@ def _section_wave7_premarket_signals(results: dict, cfg=None) -> list:
 
 def _section_wave7_size_taxonomy(results: dict, cfg=None) -> list:
     """
-    [Wave 7 / Size Ph4] size × taxonomy 比較セクション。
+    [Size Ph4] size × taxonomy 比較セクション。
     各規模帯の taxonomy 別補正係数と有効シグナルを表示する。
     """
     try:
@@ -2575,7 +2575,7 @@ def _section_wave7_size_taxonomy(results: dict, cfg=None) -> list:
 
 def _section_wave7_independence(results: dict, cfg=None) -> list:
     """
-    [Wave 7] 市場独立性スコアセクション。
+    市場独立性スコアセクション。
     independence_scores.json から HIGH/MID 銘柄を表示する。
     """
     try:
@@ -2639,7 +2639,7 @@ def _section_wave7_independence(results: dict, cfg=None) -> list:
 
 def _section_wave7_pearl_backtest(results: dict, cfg=None) -> list:
     """
-    [Wave 7] Pearl / 潜伏Pearl バックテスト結果セクション。
+    Pearl / 潜伏Pearl バックテスト結果セクション。
     self_evaluator.py が生成した pearl_backtest_log.json を参照して表示する。
     """
     try:
@@ -2747,7 +2747,7 @@ def _section_wave7_pearl_backtest(results: dict, cfg=None) -> list:
 
 def _section_pead_drift_candidates(results: dict, cfg=None) -> list:
     """
-    [Wave 3 - FE-5] 決算後ドリフト候補セクション。
+    [FE-5] 決算後ドリフト候補セクション。
 
     PEAD Monitor の alert_candidates（正方向）と
     negative_candidates（陰性・回避候補）を表示する。
@@ -2821,7 +2821,7 @@ def _section_pead_drift_candidates(results: dict, cfg=None) -> list:
 
 def _section_portfolio_concentration(results: dict, cfg=None) -> list:
     """
-    [Wave 3 - FE-6] ポートフォリオ集中警告セクション。
+    [FE-6] ポートフォリオ集中警告セクション。
 
     HHI・高相関ペア・Ignition 抑制状況を表示する。
     HHI が WARNING 未満かつ高相関ペアが少ない場合は省略表示。
@@ -2932,7 +2932,7 @@ def _section_portfolio_concentration(results: dict, cfg=None) -> list:
 
 def _section_catalyst_upcoming(results: dict, cfg=None) -> list:
     """
-    [Wave 3 - FE-7] 今後2週間のカタリスト予定セクション。
+    [FE-7] 今後2週間のカタリスト予定セクション。
 
     global_events（中央銀行・経済指標）と
     Triple Catalyst 銘柄を2週間以内に絞って表示する。
@@ -3164,7 +3164,7 @@ def _section_risk_constraints(results: dict) -> list:
 
 def _section_technology_cluster(results: dict, cfg=None) -> list:
     """
-    [Wave 6 - B] 技術クラスター × 萌芽テーマセクションを生成する。
+    [B] 技術クラスター × 萌芽テーマセクションを生成する。
 
     cluster_phase_cache / emerging_technology_cache の内容を表示する。
     データ未存在時・エラー時は空リストを返す（レポート全体を止めない）。
@@ -3350,7 +3350,7 @@ def _section_technology_cluster(results: dict, cfg=None) -> list:
 
 def _section_hiring_signal(results: dict, cfg=None) -> list:
     """
-    Wave 6 - I-1: 人材投資急増セクション。
+    I-1: 人材投資急増セクション。
     job_posting_monitor の結果を Markdown 表形式で出力する。
 
     出力形式:
@@ -3432,7 +3432,7 @@ def _section_hiring_signal(results: dict, cfg=None) -> list:
 
 def _section_executive_transition(results: dict, cfg=None) -> list:
     """
-    Wave 6 - I-3: 役員体制転換セクション。
+    I-3: 役員体制転換セクション。
     executive_transition_tracker の結果を Markdown で出力する。
 
     出力形式:
@@ -3524,7 +3524,7 @@ def _section_executive_transition(results: dict, cfg=None) -> list:
 
 def _section_facility_expansion(results: dict, cfg=None) -> list:
     """
-    Wave 6 - I-4: 施設着工シグナルセクション。
+    I-4: 施設着工シグナルセクション。
     facility_expansion_monitor の結果を Markdown で出力する。
 
     出力形式:
@@ -3635,28 +3635,28 @@ def generate_weekly_report(cfg, results: dict) -> dict:
     ])
     sections.append(_section_inference(results))
     sections.append(_section_signal_aggregator(results))
-    sections.append(_section_module_ledger(cfg))                  # Wave OBS-1: 実行台帳（健全性）
-    sections.append(_section_rule_optimizer_alert(results, cfg))  # Wave 6 - 第4セッション: 縮退アラート
+    sections.append(_section_module_ledger(cfg))                  # OBS-1: 実行台帳（健全性）
+    sections.append(_section_rule_optimizer_alert(results, cfg))  # 縮退アラート
     sections.append(_section_macro(results))
     sections.append(_section_us_macro(results))
     sections.append(_section_anomaly_season(results))
     sections.append(_section_market_breadth(results))
     sections.append(_section_jp_sectors(results))
-    sections.append(_section_geo_country_risk(results, cfg))# Wave 6 - G-N: 国別リスクセクション追加(G-Xで作成)
+    sections.append(_section_geo_country_risk(results, cfg))# G-N: 国別リスク
     sections.append(_section_us_sectors(results))
     sections.append(_section_etf(results))
     sections.append(_section_risk_constraints(results))
     sections.append(_section_screener(results))
     sections.append(_section_deliberation_queue(results, cfg))
-    sections.append(_section_analyst_revision(results, cfg))        # Wave 2 - FE-2
-    sections.append(_section_ignition_alert(results, cfg))          # Wave 2 - FE-4
-    sections.append(_section_pead_drift_candidates(results, cfg))   # Wave 3 - FE-5
-    sections.append(_section_portfolio_concentration(results, cfg)) # Wave 3 - FE-6
-    sections.append(_section_pearl_ranking(results, cfg))           # Wave0 Pearl Ph1
-    sections.append(_section_latent_pearl_promotion(results, cfg))  # Wave 3 - Independence Ph1
-    sections.append(_section_wave7_premarket_signals(results, cfg))  # Wave 7: 市場形成前シグナル
-    sections.append(_section_wave7_size_taxonomy(results, cfg))      # Wave 7: size×taxonomy比較
-    sections.append(_section_wave7_independence(results, cfg))       # Wave 7: 市場独立性スコア
+    sections.append(_section_analyst_revision(results, cfg))        # FE-2
+    sections.append(_section_ignition_alert(results, cfg))          # FE-4
+    sections.append(_section_pead_drift_candidates(results, cfg))   # FE-5
+    sections.append(_section_portfolio_concentration(results, cfg)) # FE-6
+    sections.append(_section_pearl_ranking(results, cfg))           # Pearl Ph1
+    sections.append(_section_latent_pearl_promotion(results, cfg))  # Independence Ph1
+    sections.append(_section_wave7_premarket_signals(results, cfg))  # 市場形成前シグナル
+    sections.append(_section_wave7_size_taxonomy(results, cfg))      # size×taxonomy比較
+    sections.append(_section_wave7_independence(results, cfg))       # 市場独立性スコア
     sections.append(_section_strategy_breakdown(results))
     sections.append(_section_earnings_watchlist(results))
     sections.append(_section_midterm_tracker(results))
@@ -3667,25 +3667,25 @@ def generate_weekly_report(cfg, results: dict) -> dict:
     sections.append(_section_biz_summaries(results))
     sections.append(_section_news(results))
     sections.append(_section_policy_radar(results))
-    sections.append(_section_catalyst_upcoming(results, cfg)) # Wave 3 - FE-7
-    sections.append(_section_politician_highlight(results))   # Wave0 Policy Ph1
+    sections.append(_section_catalyst_upcoming(results, cfg)) # FE-7
+    sections.append(_section_politician_highlight(results))   # Policy Ph1
     sections.append(_section_finbert_sentiment(results))
-    sections.append(_section_technology_cluster(results, cfg))  # Wave 6 - B: 技術クラスター
+    sections.append(_section_technology_cluster(results, cfg))  # B: 技術クラスター
         # 人材投資（求人票）・役員体制転換・施設着工は廃止済みなので節を出さない
     sections.append(_section_action_guide(results))
     sections.append(_section_stress_test(results))
     sections.append(_section_dividend_calendar(results))
     sections.append(_section_options_monitor(results))
-    sections.append(_section_options_advisor(results))   # Wave OPT-1
+    sections.append(_section_options_advisor(results))   # OPT-1
     sections.append(_section_sr_vp(results))
     sections.append(_section_jp_us_bridge(results))
-    sections.append(_section_jp_us_correlation(results))      # Wave0 Idea2-A
+    sections.append(_section_jp_us_correlation(results))      # Idea2-A
     sections.append(_section_rule_optimizer(results))
     sections.append(_section_alpha_attribution(results))
     sections.append(_section_backtest(results))
     sections.append(_section_comps(results))
     sections.append(_section_self_evaluator(results))
-    sections.append(_section_wave7_pearl_backtest(results, cfg))  # Wave 7: Pearl BT
+    sections.append(_section_wave7_pearl_backtest(results, cfg))  # Pearl BT
     sections.append(_section_screener_heatmap(results))
     sections.append(_section_portfolio_optimizer(results))
     sections.append(_section_dcf(results))

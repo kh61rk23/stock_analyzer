@@ -330,9 +330,8 @@ def calc_portfolio_impact(
         mkt   = h.get("market", "JP")
 
         # 評価額（円）
-        # 2026-10-05: 株価が取れない米国株で「取得単価（円）」を代わりに使い、それにも
-        # 為替を掛けて約150倍になっていた（週次で総評価額 35,577万円）。
-        # 株価（現地通貨）があれば×為替、無ければ保有銘柄CSVの円評価額→取得額の順で使う
+        # 株価（現地通貨）があれば×為替、無ければ保有銘柄CSVの円評価額→取得額の順で使う。
+        # 円建ての取得単価に為替を掛けると約150倍になるので注意。
         from sync_holdings import holding_value_jpy
         value_jpy = holding_value_jpy(h, price, usdjpy)
         cost_jpy = qty * cost

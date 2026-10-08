@@ -1,5 +1,5 @@
 # ==============================================================
-# business_model_normalizer.py  v1.0  (Wave 2 - BM Ph2)
+# business_model_normalizer.py  v1.0  (BM Ph2)
 # 業態別スコア正規化・bm_bonus算出
 # ==============================================================
 # 【役割】
@@ -7,7 +7,7 @@
 #   通常スコアリングでは過小/過大評価される業態固有メトリクスを
 #   正規化・補正して bm_bonus を返す。
 #
-# 【Wave 2 BM正規化タイプ（本ファイル独自の分類）】
+# 【BM正規化タイプ（本ファイル独自の分類）】
 #   NORM_SHOSHA   : 商社型  → 利益/純資産（ROE超過分）でボーナス
 #   NORM_BANK     : 銀行型  → ROA×レバレッジ調整でボーナス
 #   NORM_INSURANCE: 保険型  → ROE + 配当利回りでボーナス
@@ -35,7 +35,6 @@
 #   config.py (BLOCK 25: BM_ROE_BENCHMARKS, BM_SECTOR_MAP 参照)
 #   subtheme_loader.py (get_bm_type() 参照)
 #   追加ライブラリなし（標準ライブラリのみ）
-#   ★ 全関数を try/except で保護。失敗時は安全なデフォルト値を返す。
 # ==============================================================
 
 from __future__ import annotations
@@ -50,7 +49,7 @@ NORM_SHOSHA    = "NORM_SHOSHA"     # 商社型
 NORM_BANK      = "NORM_BANK"       # 銀行型
 NORM_INSURANCE = "NORM_INSURANCE"  # 保険型
 NORM_STANDARD  = "NORM_STANDARD"   # 標準型（正規化なし）
-NORM_SAAS      = "NORM_SAAS"       # SaaS型（ARR/NRR基準・Wave 3 BM Ph3）
+NORM_SAAS      = "NORM_SAAS"       # SaaS型（ARR/NRR基準・BM Ph3）
 
 # JP セクターコード → BM 正規化タイプ の直接マッピング
 _SECTOR_TO_NORM_JP: dict[str, str] = {
@@ -362,7 +361,7 @@ def _calc_saas_bonus(
     cfg=None,
 ) -> float:
     """
-    SaaS型 (NORM_SAAS) のボーナスを算出する（Wave 3 - BM Ph3）。
+    SaaS型 (NORM_SAAS) のボーナスを算出する（BM Ph3）。
 
     【SaaS固有指標の proxy 計算】
     yfinance から直接 ARR / NRR を取得できないため、
@@ -478,7 +477,7 @@ def calc_bm_bonus(
         elif bm_type == NORM_INSURANCE:
             bonus = _calc_insurance_bonus(data, cfg)
         elif bm_type == NORM_SAAS:
-            bonus = _calc_saas_bonus(data, cfg)    # Wave 3 - BM Ph3
+            bonus = _calc_saas_bonus(data, cfg)    # BM Ph3
         else:
             bonus = 0.0
 
@@ -559,7 +558,7 @@ def get_bm_norm_label(bm_norm_type: str) -> str:
         NORM_SHOSHA:    "商社型",
         NORM_BANK:      "銀行型",
         NORM_INSURANCE: "保険型",
-        NORM_SAAS:      "SaaS型",   # Wave 3 - BM Ph3
+        NORM_SAAS:      "SaaS型",   # BM Ph3
         NORM_STANDARD:  "標準型",
     }
     return _labels.get(bm_norm_type, "標準型")
