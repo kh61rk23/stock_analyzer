@@ -93,3 +93,11 @@ def test_linkify_only_known_files(tmp_path):
 
 def test_drive_search_url_quotes_name():
     assert file_links.drive_search_url("a b.md").endswith("%22a%20b.md%22")
+
+
+def test_fund_names_are_excluded_from_13f_changes():
+    assert m13.is_fund_name("ISHARES TR") and m13.is_fund_name("SELECT SECTOR SPDR TR")
+    assert not m13.is_fund_name("VORNADO RLTY TR") and not m13.is_fund_name("APPLE INC")
+    prev = [{"cusip": "X", "shares": 1, "value_usd": 1, "name": "APPLE INC"}]
+    curr = prev + [{"cusip": "E", "shares": 9, "value_usd": 9, "name": "ISHARES TR"}]
+    assert m13.diff_holdings(curr, prev, {"name": "x", "tier": 2}) == []

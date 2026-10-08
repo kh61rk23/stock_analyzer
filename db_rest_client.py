@@ -225,8 +225,18 @@ class DBRestClient:
             try:
                 getter = self.session.get if self.session is not None else requests.get
                 response = getter(
-                    url, headers=self._headers(), params=params, timeout=self.timeout
+                    url, headers=self._headers(), params=params,
+                    timeout=self.timeout * (2 ** attempt),
                 )
+            except requests.Timeout as exc:
+                # 重い応答（segments 等）は20秒を超えることがある。待ち時間を倍にして取り直す
+                self._last_request_at = time.monotonic()
+                if attempt < MAX_RETRIES:
+                    time.sleep(2 ** attempt)
+                    continue
+                self._log_once("net", f"⚠️ {self.source_name} GET失敗 ({path}): {type(exc).__name__}")
+                self.last_error = "network"
+                return None
             except requests.RequestException as exc:
                 self._last_request_at = time.monotonic()
                 self._log_once(

@@ -129,8 +129,15 @@ def rebuild_accounts_from_events(events: list) -> dict:
 # ── 日次処理 ─────────────────────────────────────────────────
 
 def _default_price_getter(cfg):
-    """本番用: yfinance→data_reliability フォールバックで {open, close} を返す。"""
+    """本番用: yfinance→data_reliability フォールバックで {open, close} を返す（同じ実行内は1銘柄1回）。"""
+    memo: dict = {}
+
     def get(ticker: str):
+        if ticker not in memo:
+            memo[ticker] = _get(ticker)
+        return memo[ticker]
+
+    def _get(ticker: str):
         try:
             # 実行内キャッシュ経由。日次パイプラインから保有銘柄ごとに呼ばれるため、
             # 素の yfinance だと他モジュールが取得済みの日足を取り直してしまう。
@@ -139,6 +146,9 @@ def _default_price_getter(cfg):
             except ImportError:  # pragma: no cover - 単体実行時のみ
                 import yfinance as yf
             h = yf.Ticker(ticker).history(period="5d", auto_adjust=True)
+            if h is None or len(h) == 0:
+                # 売買の少ない銘柄は直近5日に約定が無く空になる。1か月分の最後の約定日を使う
+                h = yf.Ticker(ticker).history(period="1mo", auto_adjust=True)
             if h is not None and len(h) > 0:
                 last = h.iloc[-1]
                 return {"open": float(last["Open"]), "close": float(last["Close"])}
@@ -147,7 +157,7 @@ def _default_price_getter(cfg):
         try:
             from data_reliability import fetch_price_safe
             r = fetch_price_safe(cfg, ticker)
-            px = r.get("price") if isinstance(r, dict) else None
+            px = (r.get("close") or r.get("price")) if isinstance(r, dict) else None   # 返り値のキーは close
             if px:
                 return {"open": float(px), "close": float(px)}
         except Exception:

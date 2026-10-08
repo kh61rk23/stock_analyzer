@@ -378,7 +378,7 @@ def _get_latest_13f_accession(submissions: dict) -> Optional[str]:
     return None
 
 
-HISTORY_VERSION = 2   # 前回提出との差分方式（version 1 の履歴は使わずに取り直す）
+HISTORY_VERSION = 3   # 前回提出との差分方式・ETF除外（古い版の履歴は使わずに取り直す）
 
 
 def _get_13f_filings(submissions: dict, n: int = 2) -> list[tuple[str, str]]:
@@ -408,6 +408,20 @@ def _period_to_quarter(report_date: str) -> str:
         return ""
 
 
+_FUND_RE = None
+
+
+def is_fund_name(name: str) -> bool:
+    """13F の nameOfIssuer が ETF・投資信託か（例 ISHARES TR / SELECT SECTOR SPDR TR / VANECK ETF TRUST）（純関数）。"""
+    import re
+    global _FUND_RE
+    if _FUND_RE is None:
+        _FUND_RE = re.compile(r"\b(ETF|ISHARES|SPDR|INVESCO QQQ|VANGUARD (?:INDEX|WORLD|SPECIALIZED|BD)|"
+                              r"PROSHARES|DIREXION|WISDOMTREE|GLOBAL X|ARK ETF|SELECT SECTOR|FD TR|INDEX FD|VANECK)\b",
+                              re.I)   # 「… RLTY TR」の REIT は株式なので「TR で終わる」では判定しない
+    return bool(_FUND_RE.search(name or ""))
+
+
 def diff_holdings(curr: list[dict], prev: list[dict], cik_info: dict) -> list[dict]:
     """同じ機関の今回と前回の13F保有明細（CUSIP単位）を比べて変化を返す（純関数）。
 
@@ -420,6 +434,8 @@ def diff_holdings(curr: list[dict], prev: list[dict], cik_info: dict) -> list[di
     out = []
     for cu in set(cm) | set(pm):
         c, p = cm.get(cu), pm.get(cu)
+        if is_fund_name((c or p).get("name", "")):
+            continue          # ETF・投資信託は銘柄選択のシグナルにならない（L3・新規取得通知の対象外）
         if c and not p:
             ct = "new_position"
         elif p and not c:

@@ -28,6 +28,12 @@ python3 maintenance_packet.py   # 全監査+台帳+直近変更を MAINTENANCE_P
   開発ログ（`devlog.py add`）とコミットメッセージに書く。過去分は G-dev `41_stock_analyzer_コード内修正履歴.md` に移設済み。
 - コメントだけを直したときは `python3 tools/history_comments.py same-code <rev>` でコード（AST）が変わっていないことを確かめる。
 
+## 役割分担（2026-10-08 健太方針）
+
+複数タスクにまたがる開発は「構想・実装・レビュー」に分け、上位モデルから下位へ移譲する。
+- 構想（仕様・判断）: Opus 5.5 ／ 実装: Sonnet 5.5 ／ レビュー: Haiku 5.5（重い判断だけ構想役が最終確認）
+- Workflow を使う場合は agent の model に 'sonnet' / 'haiku' を指定し、1エージェントの担当は小さく切る（長いと止まる）。
+
 ## 改修ループ（診断 → 修正 → 監査 → ドキュメント同期）
 
 | 変更対象 | 変更後に必ず実行 |
