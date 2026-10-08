@@ -68,7 +68,7 @@ def _save_cache(path: Path, data: dict):
 # BLOCK 2: DeepL 翻訳
 # ==============================================================
 
-# 2026-07-13: 403/456はキー無効・quota超過であり同一実行内でリトライしても
+# 403/456はキー無効・quota超過であり同一実行内でリトライしても
 # 回復しない。1社ごとにHTTPエラーを繰り返さないよう実行内フラグでfail-fastする。
 _deepl_disabled_this_run = False
 
@@ -375,7 +375,7 @@ if __name__ == "__main__":
     for p in ["/content/config.py", str(Path(__file__).parent / "config.py")]:
         if Path(p).exists():
             spec = importlib.util.spec_from_file_location("config", p)
-            # ★ spec と loader の存在を確定させる
+            # spec と loader の存在を確定させる
             if spec is None or spec.loader is None:
                 continue
                 

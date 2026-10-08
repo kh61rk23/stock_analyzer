@@ -64,7 +64,7 @@
 # 【依存】
 #   config.py（STANDARDS_TRACKING_CONFIG 等の定数参照）
 #   requests, BeautifulSoup（標準外ライブラリ）
-#   ★ try/except で全ブロックを保護。失敗時はキャッシュを返す。
+#   try/except で全ブロックを保護。失敗時はキャッシュを返す。
 # ==============================================================
 
 from __future__ import annotations

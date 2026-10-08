@@ -1,5 +1,5 @@
 # ==============================================================
-# paper/paper_broker.py — 仮想口座ブローカー（Wave R1-2 / S2）
+# paper/paper_broker.py — 仮想口座ブローカー（S2）
 # ==============================================================
 # 日次処理（stock_analyzer_main の日次末尾ステージから呼ばれる）:
 #   1) 前日注文を当日始値で仮想約定（共通スキーマ② = backtest/cost_model 共用）
@@ -30,10 +30,10 @@ def _paper_dir(cfg) -> Path:
     d = Path(p)
     if not d.is_absolute():
         base = Path(getattr(cfg, "DRIVE_BASE", "."))
-        # 2026-09-29: Actions では DRIVE_BASE 自体が <workspace>/stock_data のため、
-        # base / "stock_data/paper" が stock_data/stock_data/paper になり、
-        # コミット対象（git add stock_data/paper/）の外に書いていた。口座と注文が
-        # 毎回消え、毎日「新規注文8件・約定0件」を繰り返していた。
+        # Actions では DRIVE_BASE 自体が <workspace>/stock_data のため、
+        # base / "stock_data/paper" だと stock_data/stock_data/paper になり、
+        # コミット対象（git add stock_data/paper/）の外に書いてしまう
+        # （口座と注文が毎回消える）。
         rel = d.parts[1:] if (d.parts and d.parts[0] == "stock_data"
                               and base.name == "stock_data") else d.parts
         cand = base.joinpath(*rel)
@@ -132,9 +132,8 @@ def _default_price_getter(cfg):
     """本番用: yfinance→data_reliability フォールバックで {open, close} を返す。"""
     def get(ticker: str):
         try:
-            # 2026-09-10: 実行内キャッシュ経由。日次パイプラインから
-            # 保有銘柄ごとに呼ばれるため、素の yfinance だと他モジュールが
-            # 既に取得済みの日足を取り直していた。
+            # 実行内キャッシュ経由。日次パイプラインから保有銘柄ごとに呼ばれるため、
+            # 素の yfinance だと他モジュールが取得済みの日足を取り直してしまう。
             try:
                 import yf_cache as yf
             except ImportError:  # pragma: no cover - 単体実行時のみ
@@ -188,10 +187,10 @@ def run_paper_trading(cfg, results: dict, price_getter=None,
     else:
         adapters = adapters_override
 
-    # ── 2026-07-25: playbook 戦略の自動編入 ────────────────────
+    # ── playbook 戦略の自動編入 ────────────────────
     # get_all_adapters() は playbooks/*.yaml（status=paper かつ side=BUY）を
     # adapter として登録するが、PAPER_STRATEGIES に id が無いと下のループに
-    # 入らず、登録されただけで口座が一切作られない状態だった。
+    # 入らず、口座が作られない。
     # プレイブックは「YAMLを置けば増える」のが設計意図なので、config への
     # 追記を都度要求せず、登録済み adapter を自動で対象に加える。
     # 明示的に外したい場合は PAPER_INCLUDE_PLAYBOOK_STRATEGIES=False にする。

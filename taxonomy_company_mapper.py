@@ -1,5 +1,5 @@
 # ==============================================================
-# taxonomy_company_mapper.py — T-2A: EDINETセグメント上書き（Wave R2-3）
+# taxonomy_company_mapper.py — T-2A: EDINETセグメント上書き（R2-3）
 # ==============================================================
 # 【役割】edinet.segments（＋segment_finance の売上比率）を segment_mapper
 #   （sentence-transformers→Gemini fallback）で33業種に写像し、
@@ -175,7 +175,7 @@ def main():
     except Exception:
         cfg = None
 
-    # 2026-07-25: 定期実行（週次）に載せたのに合わせて有効フラグを配線。
+    # 定期実行（週次）用の有効フラグ。
     if not dry and not getattr(cfg, "ENABLE_TAXONOMY_COMPANY_MAPPER", True):
         print("⏩ taxonomy_company_mapper: スキップ"
               "（ENABLE_TAXONOMY_COMPANY_MAPPER=False）")

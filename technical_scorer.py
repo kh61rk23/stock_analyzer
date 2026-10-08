@@ -39,9 +39,8 @@ WEIGHT_TECHNICAL = 0.20
 # ==============================================================
 
 
-# ── config を正本とする定数の対応表（2026-07-25 SSOT移設）──
+# ── config を正本とする定数の対応表──
 # config.py BLOCK 59 が正本。run_* の冒頭で一度だけ取り込む。
-# 値は移設時点の実装値と同一のため挙動は変わらない。
 _CFG_CONST_MAP = {
     "TS_RSI_PERIOD": "RSI_PERIOD",
     "TS_BB_PERIOD": "BB_PERIOD",
@@ -363,7 +362,7 @@ def get_technical_bonus(ticker: str, tech_cache: dict) -> float:
 # ==============================================================
 
 def run_technical_scorer(cfg, tickers: list) -> dict:
-    # 2026-07-25: 閾値・重みを config.py BLOCK 59 から取り込む
+    # 閾値・重みを config.py BLOCK 59 から取り込む
     sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print(f"\n  📈 テクニカルスコア計算中（{len(tickers)}銘柄）...")
     cached   = _load_cache(cfg)

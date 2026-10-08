@@ -1,13 +1,13 @@
 # ==============================================================
-# event_strategy_runner.py — イベントドリブン短期戦略（Wave R4-1 / S5）
+# event_strategy_runner.py — イベントドリブン短期戦略（R4-1 / S5）
 # ==============================================================
 # 【役割】playbooks/*.yaml を読み、各イベントソース（PEAD/決算/TDnet/8-K）の
 #   当日候補に entry 条件を当てて注文を生成する。S2ペーパー（paper/）の
 #   adapter として動く（Strategy契約と同じ dict注文を返す）。
 # 【設計正本】要件定義書_統合改修_20260705.md §R4-1。
 #   - condition は eval不使用の構造化評価（field/op/value の連言）。
-#   - status=paper のみ稼働（live昇格はM2判定＝取引数>=30・PF>=1.3・p<0.10・健太承認）。
-#   - side=WATCH は監視のみ（注文なし）。発注は常に健太手動（D-01）。
+#   - status=paper のみ稼働（live昇格はM2判定＝取引数>=30・PF>=1.3・p<0.10・ユーザー承認）。
+#   - side=WATCH は監視のみ（注文なし）。発注は常にユーザー手動（D-01）。
 # 使い方: paper/strategy_adapters に自動登録（register_playbook_adapters）。
 #   単体確認: python3 event_strategy_runner.py --validate
 # ==============================================================

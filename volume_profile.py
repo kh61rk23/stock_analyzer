@@ -74,9 +74,8 @@ CACHE_HOURS    = 24
 # ==============================================================
 
 
-# ── config を正本とする定数の対応表（2026-07-25 SSOT移設）──
+# ── config を正本とする定数の対応表（SSOT）──
 # config.py BLOCK 59 が正本。run_* の冒頭で一度だけ取り込む。
-# 値は移設時点の実装値と同一のため挙動は変わらない。
 _CFG_CONST_MAP = {
     "VP_LOOKBACK_DAYS": "VP_LOOKBACK_DAYS",
     "VP_HVN_MULTIPLIER": "HVN_MULTIPLIER",
@@ -356,7 +355,7 @@ def run_volume_profile(cfg, tickers: list) -> dict:
     Returns:
         {"results": {ticker: vp_result}, "top_poc_cheap": [...], "timestamp": str}
     """
-    # 2026-07-25: 閾値・重みを config.py BLOCK 59 から取り込む
+    # 閾値・重みを config.py BLOCK 59 から取り込む
     sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
 
     print(f"\n  📊 出来高プロファイル分析開始（{len(tickers)}銘柄）...")

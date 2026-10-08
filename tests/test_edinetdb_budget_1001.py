@@ -1,6 +1,6 @@
-# 2026-10-01: EdinetDB の呼び出しが1日50回前後で止まっていた件
-#   ・日次予算46は「月1,450回」という誤った前提（実際は1日100回・月100×日数）
-#   ・計画は1社3回で見積もるが text-blocks は2回に1回なので枠が余っていた
+# EdinetDB の日次呼び出し予算のテスト
+#   ・上限は1日100回・月100×日数（月1,450回ではない）
+#   ・計画は1社3回で見積もるが text-blocks は2回に1回なので枠が余る
 from types import SimpleNamespace
 
 import config
@@ -60,7 +60,7 @@ def test_leftover_calls_are_used_for_more_companies(tmp_path, monkeypatch):
 
 
 def test_interest_pattern_has_no_catastrophic_backtracking():
-    # 2026-10-01: 月次 geo_exposure が15分で打ち切られた原因
+    # 月次 geo_exposure が時間切れにならないよう、正規表現の破滅的バックトラックを防ぐ
     import time
     import edinet_exposure_extractor as ex
     text = ("当社はチリ" + "あ" * 60 + "。") * 300 + "当社はチリの銅鉱山の権益を保有。"

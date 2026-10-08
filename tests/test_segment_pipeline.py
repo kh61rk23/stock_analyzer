@@ -1,10 +1,7 @@
-# segment パイプライン実スキーマ是正（純粋ロジック）
-# 2026-07-19追加:
-#   ④ segment_signal が「幻のAPI」（存在しない bq.get_segment_data / bq.query）と
-#      実在しないテーブル（taxonomy.segments_master / edinet.segment_financials）を
-#      参照して常に0件だった問題の是正。
+# segment パイプラインの実スキーマ整合（純粋ロジック）
+# segment_signal が存在しないAPI・テーブルを参照して常に0件になるのを防ぐ。
 #   - 書込側: edinet_direct_fetcher.build_financials_row / build_segment_rows が
-#     実スキーマ（MCP直queryで2026-07-19確認）の列名で行を組むこと
+#     実スキーマの列名で行を組むこと
 #   - 読取側: segment_signal.build_segment_view が最新期抽出＋growth_rate計算を
 #     正しく行うこと
 #   ネットワーク・BQ接続には依存しない。
@@ -77,7 +74,7 @@ class TestBuildSegmentView:
 # 書込側: build_financials_row / build_segment_rows
 # ==============================================================
 
-# edinet.financials 実スキーマ（stock-analyzer-edinet・2026-07-19 MCP確認）
+# edinet.financials 実スキーマ（stock-analyzer-edinet）
 _FINANCIALS_COLUMNS = {
     "fin_id", "doc_id", "company_code", "fiscal_year_end", "report_period",
     "net_sales", "operating_income", "ordinary_income", "net_income",

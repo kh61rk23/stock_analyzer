@@ -1,6 +1,6 @@
 # 予算枯渇・レート制限で取得ループを打ち切る契約
-# 2026-08-27: 打ち切りが無く（edinetdb）／last_error が立たず（fudosan）、
-# 予算切れ後も全社を空振りで回して failure だけを積み上げていた。
+# 打ち切りが無い（edinetdb）／last_error が立たない（fudosan）と、
+# 予算切れ後も全社を空振りで回して failure だけが積み上がる。
 import edinetdb_ingestor as ei
 import fudosan_ingestor as fi
 

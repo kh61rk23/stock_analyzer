@@ -108,10 +108,9 @@ def fetch_financials(tickers: list, max_retries: int = 2) -> list:
                 def _div_yield():
                     """配当利回りを比率（0.04 = 4%）で返す。
 
-                    2026-09-14: yfinance の dividendYield は「%値」（2.62 = 2.62%）で
-                    返るようになっており、比率前提の 0.0〜0.30 判定をそのまま通すと
-                    0.17%（SoftBank Group）が 0.17 → 17% の高配当として日次メールに
-                    載り、逆に 2.62%（MUFG）は 2.62 > 0.30 で欠損扱いになっていた。
+                    yfinance の dividendYield は「%値」（2.62 = 2.62%）で返る。
+                    比率前提の 0.0〜0.30 判定をそのまま通すと、0.17% が 17% の高配当に
+                    見え、2.62% は 0.30 超で欠損扱いになる。
                     比率で返る trailingAnnualDividendYield を優先し、無ければ
                     dividendYield を %値として 1/100 する。
                     """
@@ -309,12 +308,12 @@ def calc_composite_score(
     companies:                list,
     macro_signals:            list,
     edinet_credit_bonus:      float = 0.0,
-    policy_support_bonus:     float = 0.0,   # Wave 1 - I-2: NEDO政策支援ボーナス
-    bm_bonus:                 float = 0.0,   # Wave 2 - BM Ph2: 業態別正規化ボーナス
-    edinet_segment_bonus:     float = 0.0,   # Wave 4 - E3: セグメント収益性ボーナス
-    edinet_text_risk_bonus:   float = 0.0,   # Wave 5 - E4: テキストリスクボーナス
-    geo_impact_bonus:         float = 0.0,   # Wave 6 - G-X: 地政学×権益統合シグナル
-    cluster_phase_bonus:      float = 0.0,   # Wave 6 - B: 技術クラスターフェーズボーナス
+    policy_support_bonus:     float = 0.0,   # I-2: NEDO政策支援ボーナス
+    bm_bonus:                 float = 0.0,   # BM Ph2: 業態別正規化ボーナス
+    edinet_segment_bonus:     float = 0.0,   # E3: セグメント収益性ボーナス
+    edinet_text_risk_bonus:   float = 0.0,   # E4: テキストリスクボーナス
+    geo_impact_bonus:         float = 0.0,   # G-X: 地政学×権益統合シグナル
+    cluster_phase_bonus:      float = 0.0,   # B: 技術クラスターフェーズボーナス
     real_estate_bonus:        float = 0.0,   # D-②-2: corporate property enrichment
 ) -> tuple:
     """
@@ -370,16 +369,15 @@ def calc_composite_score(
         elif s["signal"] == "headwind": macro_score -= 10
 
     total = fin_score + macro_score + analyst_score + edinet_credit_bonus + bm_bonus
-    # Wave 2 - BM Ph2: bm_bonus が非ゼロの場合にログ出力
+    # BM Ph2: bm_bonus が非ゼロの場合にログ出力
     if bm_bonus != 0.0:
         try:
             print(f"    🏦 BM Ph2ボーナス加算: {bm_bonus:+.2f}pt")
         except Exception:
             pass
     # ---- EDINET 直接DB ボーナス（E2追加）----
-    # ★ 2026-06-11 バグ修正: 旧実装は未定義変数 ticker を参照して毎回
-    #   NameError（業種単位の本関数に単一 ticker は存在しない）。
-    #   geo_impact_bonus と同じ方式で fetch_ok 企業の平均ボーナスとして算出。
+    # 業種単位の本関数に単一 ticker は存在しないため、
+    # geo_impact_bonus と同じ方式で fetch_ok 企業の平均ボーナスとして算出する。
     edinet_hr_bonus = 0.0
     try:
         _hr_vals = []
@@ -403,7 +401,7 @@ def calc_composite_score(
             )
     except Exception:
         pass   # 失敗時は 0.0 のまま継続
-    # ── [Wave 4 - E3] セグメント収益性ボーナスを加算 ─────────────────
+    # ── [E3] セグメント収益性ボーナスを加算 ─────────────────
     # try/except 保護: segment_signal 取得失敗時はシステム全停止を防ぎ 0.0 のまま継続
     # $edinet\_segment\_bonus \in [SEGMENT\_BONUS\_MIN(-5), SEGMENT\_BONUS\_MAX(+7)]$
     try:
@@ -415,7 +413,7 @@ def calc_composite_score(
             )
     except Exception:
         pass   # 失敗時は 0.0 のまま継続
-    # ── [Wave 5 - E4] テキストリスクボーナスを加算 ───────────────────
+    # ── [E4] テキストリスクボーナスを加算 ───────────────────
     # try/except 保護: text_signal 取得失敗時はシステム全停止を防ぎ 0.0 のまま継続
     # $edinet\_text\_risk\_bonus \in [TEXT\_SIGNAL\_SCORE\_MIN(-10), 0]$
     try:
@@ -427,7 +425,7 @@ def calc_composite_score(
             )
     except Exception:
         pass   # 失敗時は 0.0 のまま継続
-    # ── [Wave 6 - G-X] 地政学×権益統合シグナルを加算 ─────────────────
+    # ── [G-X] 地政学×権益統合シグナルを加算 ─────────────────
     # try/except 保護: geo_signal 取得失敗時はシステム全停止を防ぎ 0.0 のまま継続
     # $geo\_impact\_bonus \in [GEO\_IMPACT\_MIN(-15), GEO\_IMPACT\_MAX(+15)]$
     try:
@@ -439,7 +437,7 @@ def calc_composite_score(
             )
     except Exception:
         pass
-    # ── [Wave 6 - B] 技術クラスターフェーズボーナスを加算 ──────────────
+    # ── [B] 技術クラスターフェーズボーナスを加算 ──────────────
     # try/except 保護: cluster_phase_cache 未生成・読込失敗時もシステム停止させない
     # $cluster\_phase\_bonus \in [CLUSTER\_BONUS\_MIN(-3), CLUSTER\_BONUS\_MAX(+8)]$
     try:
@@ -458,7 +456,7 @@ def calc_composite_score(
             print(f"    🏢 不動産ボーナス（D-②）: {_re_bonus:+.2f}pt")
     except Exception:
         pass
-    total = max(-30.0, min(100.0, total))   # ★追い風多数/逆風多数時の異常値防止
+    total = max(-30.0, min(100.0, total))   # 追い風多数/逆風多数時の異常値防止
 
     headwinds = sum(1 for s in macro_signals if s["signal"] == "headwind")
     if headwinds >= 2 or total < 10:    risk_level = "high"
@@ -586,7 +584,7 @@ def build_insight_text(
                     oi_str = " → ".join(
                         f"{int(v/1e8):,}億" if v else "N/A" for v in oi[-3:]
                     )
-                    # 2026-09-15: 年が3件未満だと「売上高(〜)」と空欄になっていた
+                    # 年が3件未満でも「売上高(〜)」の起点が空欄にならないよう先頭年で代替
                     _from = years[-3] if len(years) >= 3 else (years[0] if years else "")
                     lines.append(f"📈 売上高({_from}〜): {rev_str}")
                     lines.append(f"📊 営業利益: {oi_str}")
@@ -617,7 +615,7 @@ def build_result(
     companies:      list,
     macro_signals:  list,
     cfg,
-    macro_snapshot: dict = None,   # ★追加: score_explainer に渡すライブ相場値
+    macro_snapshot: dict = None,   # score_explainer に渡すライブ相場値
 ) -> dict:
     """
 #    SECTOR_AGENT_RESULT_SCHEMA に準拠した辞書を組み立てる。
@@ -686,7 +684,7 @@ def build_result(
     #   2. get_policy_support_bonus() で採択情報を照合
     #   3. 業種内採択率（採択社数 / 全社数）でスケーリング
     #   4. 上限: max_bonus=15pt（get_policy_support_bonus 側でクリップ済み）
-    # ★ try/except 厳重保護: BQ接続失敗時も 0.0 で継続しシステム全停止を防ぐ
+    # try/except 厳重保護: BQ接続失敗時も 0.0 で継続しシステム全停止を防ぐ
     _policy_support_bonus = 0.0
     if getattr(cfg, "ENABLE_NEDO_POLICY_BONUS", True):
         try:
@@ -725,8 +723,8 @@ def build_result(
             )
 
 # ==============================================================
-    # [Wave 2 - BM Ph2] 業態別 bm_bonus 計算（BM-01商社・BM-02銀行から着手）
-    # ★ try/except 厳重保護: import失敗・計算エラー時も 0.0 で継続
+    # [BM Ph2] 業態別 bm_bonus 計算（BM-01商社・BM-02銀行から着手）
+    # try/except 厳重保護: import失敗・計算エラー時も 0.0 で継続
     # ==============================================================
     _bm_bonus = 0.0
     try:
@@ -759,8 +757,8 @@ def build_result(
         )
 
     # ==============================================================
-    # [Wave 2 - R-1] supply_chain_position をJSONから参照
-    # ★ try/except 厳重保護: JSON未存在・import失敗時は "unknown" で継続
+    # [R-1] supply_chain_position をJSONから参照
+    # try/except 厳重保護: JSON未存在・import失敗時は "unknown" で継続
     # ==============================================================
     _supply_chain_pos = "unknown"
     try:
@@ -782,9 +780,9 @@ def build_result(
         )
 
     # ==============================================================
-    # [Wave 4 - E3] edinet_segment_bonus 計算
+    # [E3] edinet_segment_bonus 計算
     # segment_signal.calc_sector_segment_bonus() で業種平均を計算して渡す。
-    # ★ try/except 厳重保護: BQ未接続・segment_signal未配置時も 0.0 で継続
+    # try/except 厳重保護: BQ未接続・segment_signal未配置時も 0.0 で継続
     # ==============================================================
     _segment_bonus = 0.0
     if getattr(cfg, "ENABLE_EDINET_ROTATION", False):
@@ -807,11 +805,11 @@ def build_result(
             )
 
 # ==============================================================
-    # [Wave 5 - E4] edinet_text_risk_bonus 計算
+    # [E4] edinet_text_risk_bonus 計算
     # text_extractor → finbert_analyzer → text_signal の順で処理し、
     # リスク検出ボーナス（ペナルティ）を取得する。
     # $edinet\_text\_risk\_bonus \in [TEXT\_SIGNAL\_SCORE\_MIN(-10), 0]$
-    # ★ try/except 厳重保護: 全モジュール未配置時も 0.0 で継続しシステム全停止を防ぐ
+    # try/except 厳重保護: 全モジュール未配置時も 0.0 で継続しシステム全停止を防ぐ
     # ==============================================================
     _edinet_text_risk_bonus = 0.0
     if (getattr(cfg, "ENABLE_TEXT_SIGNAL", False)
@@ -874,10 +872,10 @@ def build_result(
             print(f"    ⚠️  edinet_text_risk_bonus取得エラー（スキップ）: {str(_tse)[:80]}")
 
     # ==============================================================
-    # [Wave 6 - B] cluster_phase_bonus 計算
+    # [B] cluster_phase_bonus 計算
     # cluster_phase_cache.json から sector_code に対応する
     # クラスターフェーズボーナスを取得する。
-    # ★ try/except 厳重保護: cluster_engine 未実行・キャッシュ未存在時も 0.0 で継続
+    # try/except 厳重保護: cluster_engine 未実行・キャッシュ未存在時も 0.0 で継続
     # ==============================================================
     _cluster_phase_bonus = 0.0
     if getattr(cfg, "ENABLE_CLUSTER_ENGINE", True):
@@ -906,9 +904,9 @@ def build_result(
             )
 
     # ==============================================================
-    # [Wave 6 - G-X] geo_impact_bonus 計算
+    # [G-X] geo_impact_bonus 計算
     # geo_signal.calc_geo_impact_bonus_jp() で業種内銘柄の地政学影響を集計。
-    # ★ try/except 厳重保護: geo_signal 未配置・BQ未接続時も 0.0 で継続
+    # try/except 厳重保護: geo_signal 未配置・BQ未接続時も 0.0 で継続
     # ==============================================================
     _geo_impact_bonus = 0.0
     if getattr(cfg, "ENABLE_GEO_SIGNAL", False):
@@ -981,12 +979,12 @@ def build_result(
         companies,
         macro_signals,
         edinet_credit_bonus,
-        _policy_support_bonus,        # Wave 1 - I-2: NEDO政策支援ボーナス
-        _bm_bonus,                    # Wave 2 - BM Ph2: 業態別正規化ボーナス
-        _segment_bonus,               # Wave 4 - E3: セグメント収益性ボーナス
-        _edinet_text_risk_bonus,      # Wave 5 - E4: テキストリスクボーナス
-        _geo_impact_bonus,            # Wave 6 - G-X: 地政学×権益統合シグナル
-        _cluster_phase_bonus,         # Wave 6 - B: 技術クラスターフェーズボーナス
+        _policy_support_bonus,        # I-2: NEDO政策支援ボーナス
+        _bm_bonus,                    # BM Ph2: 業態別正規化ボーナス
+        _segment_bonus,               # E3: セグメント収益性ボーナス
+        _edinet_text_risk_bonus,      # E4: テキストリスクボーナス
+        _geo_impact_bonus,            # G-X: 地政学×権益統合シグナル
+        _cluster_phase_bonus,         # B: 技術クラスターフェーズボーナス
         _real_estate_bonus,
     )
 
@@ -1045,17 +1043,17 @@ def build_result(
         "insight_text":    insight_text,
         "risk_level":      risk_level,
         "reason_text":     "",
-        # ── Wave 2 追加フィールド ──────────────────────────────
-        "supply_chain_position": _supply_chain_pos,  # Wave 2 - R-1
-        "bm_bonus":              _bm_bonus,           # Wave 2 - BM Ph2
-        # ── Wave 4 - E3 追加フィールド ────────────────────────
-        "edinet_segment_bonus":  _segment_bonus,      # Wave 4 - E3: セグメント収益性
-        # ── Wave 5 - E4 追加フィールド ────────────────────────
-        "edinet_text_risk_bonus": _edinet_text_risk_bonus,  # Wave 5 - E4: テキストリスク
-        # ── Wave 6 - G-X 追加フィールド ───────────────────────
-        "geo_impact_bonus":      _geo_impact_bonus,   # Wave 6 - G-X: 地政学×権益
-        # ── Wave 6 - B 追加フィールド ────────────────────────
-        "cluster_phase_bonus":   _cluster_phase_bonus, # Wave 6 - B: 技術クラスターフェーズボーナス
+        # ── BM Ph2 / R-1 フィールド ──────────────────────────────
+        "supply_chain_position": _supply_chain_pos,  # R-1
+        "bm_bonus":              _bm_bonus,           # BM Ph2
+        # ── E3 フィールド ────────────────────────
+        "edinet_segment_bonus":  _segment_bonus,      # E3: セグメント収益性
+        # ── E4 フィールド ────────────────────────
+        "edinet_text_risk_bonus": _edinet_text_risk_bonus,  # E4: テキストリスク
+        # ── G-X フィールド ───────────────────────
+        "geo_impact_bonus":      _geo_impact_bonus,   # G-X: 地政学×権益
+        # ── B フィールド ────────────────────────
+        "cluster_phase_bonus":   _cluster_phase_bonus, # B: 技術クラスターフェーズボーナス
         "real_estate_bonus":     _real_estate_bonus,
     }
 
@@ -1318,8 +1316,7 @@ def resolve_sector_tickers(sector_code: str, cfg, limit: int = 5) -> list[str]:
                 # 銘柄を全部知っている場所。以降の銘柄別BQ参照は
                 # ここでまとめて先読みしておく（N+1の解消）。
                 # BQは参照テーブル1つにつき最低10MB課金のため、費用は
-                # データ量ではなくクエリ本数で決まる（2026-09-10 実測:
-                # 482クエリ/実行・6.9GB課金のうち340本がこのN+1）。
+                # データ量ではなくクエリ本数で決まる。
                 _prefetch_ticker_scoped_bq(_SECTOR_TICKER_CACHE, cfg, bq)
             _cache = _SECTOR_TICKER_CACHE
         from_bq = list(_cache.get(sector_code, []))[:limit]
@@ -1350,9 +1347,8 @@ def resolve_sector_tickers(sector_code: str, cfg, limit: int = 5) -> list[str]:
         print(f"    ⚠️  tickers[{sector_code}] meta失敗: {str(e)[:60]}")
 
     # 3) config 固定リスト（移行期フォールバック）
-    #   ★ 旧コードは存在しないキー SECTOR_TARGET_TICKERS を参照しており、
-    #     Tier3 が常に空＝全業種「解決不可」だった（producer/consumer 不整合）。
-    #     正本は SECTOR_REPRESENTATIVE_TICKERS（config.py）。
+    #   正本は SECTOR_REPRESENTATIVE_TICKERS（config.py）。
+    #   存在しないキー（SECTOR_TARGET_TICKERS 等）を参照すると Tier3 が常に空になる。
     fallback = getattr(cfg, "SECTOR_REPRESENTATIVE_TICKERS", {}) or {}
     static = [_normalize_ticker(t) for t in fallback.get(sector_code, [])]
     static = [t for t in static if t]

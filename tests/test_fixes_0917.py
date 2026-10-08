@@ -1,4 +1,4 @@
-# 2026-09-17 の日次メール・Actionsログから見つかった不具合の回帰テスト
+# 日次メール・Actionsログから見つかった不具合の回帰テスト
 import sys
 import types
 from datetime import date, datetime, timezone
@@ -29,7 +29,7 @@ class TestEarningsSurpriseOrder:
         history = m._fetch_earnings_history("6674.T")
         assert [h["quarter"] for h in history] == [
             "2026-06-30", "2026-03-31", "2025-12-31", "2025-09-30"]
-        # 直近3四半期が上振れ → +5pt（従来は最古の下振れで -2pt）
+        # 直近3四半期が上振れ → +5pt（最古の下振れで -2pt にならないこと）
         pos, neg = m._calc_consecutive(history)
         assert (pos, neg) == (3, 0)
         assert m._calc_screener_bonus(pos, neg) == m.BONUS_CONSEC_POS2
@@ -278,5 +278,5 @@ class TestShareholderAnalyzerDisabled:
         import config
         assert config.ENABLE_SHAREHOLDER_ANALYZER is False
         src = (pathlib.Path(__file__).resolve().parent.parent / "stock_analyzer_main.py").read_text(encoding="utf-8")
-        # 2026-09-29: 停止していたブロック自体を削除した（呼び出しが残っていないこと）
+        # 停止していたブロック自体が削除済みで、呼び出しが残っていないこと
         assert "run_shareholder_analyzer(" not in src

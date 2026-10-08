@@ -1,7 +1,7 @@
-# congress_monitor（2026-09-29）
-#   ・キー未設定時に RSS のニュース見出しを「法案」として扱い業種加点を出していた
-#   ・逆風法案（base_score がマイナス定義）が二重反転で追い風になっていた
-#   ・同じ種別の法案を本数分足し、業種加点が上限に張り付いていた
+# congress_monitor
+#   ・キー未設定時に RSS のニュース見出しを「法案」として扱わない
+#   ・逆風法案（base_score がマイナス定義）を二重反転して追い風にしない
+#   ・同じ種別の法案を本数分足して業種加点を上限に張り付かせない
 import json
 import types
 
@@ -57,7 +57,7 @@ def test_uses_official_api_with_demo_key_and_drops_rss_cache(tmp_path, monkeypat
 
 
 def test_job_surge_needs_baseline():
-    """求人票: 前回件数が無いのに『急増』扱いしていた（2026-09-29）"""
+    """求人票: 前回件数が無いのに『急増』扱いしない"""
     import job_posting_monitor as jp
     cfg = types.SimpleNamespace(JOB_SURGE_THRESHOLD_RATIO=1.5, JOB_SURGE_SCORE_BONUS=5.0,
                                 JOB_SURGE_SECTOR_MAP={"ai_ml": ["1025"]})

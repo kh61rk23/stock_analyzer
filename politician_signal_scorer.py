@@ -36,7 +36,7 @@
 # 【依存】
 #   politician_monitor.py（スコアリング関数を拡張して再利用）
 #   config.py（BLOCK 26/31定数参照）
-#   ★ 全関数を try/except で保護。失敗時は score=0.0 / override=False を返す。
+#   全関数を try/except で保護。失敗時は score=0.0 / override=False を返す。
 # ==============================================================
 
 from __future__ import annotations

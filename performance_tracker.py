@@ -127,7 +127,7 @@ def load_screener_history(cfg) -> dict:
 
 
 def normalize_history_entry(entry) -> list:
-    """screener_history の1日分を候補リストへ正規化する（2026-07-25 追加）。
+    """screener_history の1日分を候補リストへ正規化する。
 
     正本の形式は append_screener_history が書く {"YYYY-MM-DD": [候補, ...]}
     ＝日付の値は「リスト」。
@@ -213,11 +213,10 @@ def append_screener_history(cfg, screener_result: dict) -> None:
                 "roe":             c.get("roe"),
                 "market_cap_b":    c.get("market_cap_b"),
                 "avg_volume":      c.get("avg_volume"),
-                # 2026-09-21: backtester はエントリー価格と通過フラグを見るが
-                # どちらも保存しておらず、バックテスト・自己評価が常に0件だった
+                # backtester はエントリー価格と通過フラグを見るため、両方を保存する必要がある
                 "current_price":   c.get("current_price"),
                 "pass_filters":    True,
-                # 2026-09-29: 点数の経路（どのモジュールで何点動いたか）と加点前の点
+                # 点数の経路（どのモジュールで何点動いたか）と加点前の点
                 "base_score":      c.get("base_score"),
                 "score_trail":     _slim_trail(c),
                 "kpi":             c.get("kpi"),
@@ -226,7 +225,7 @@ def append_screener_history(cfg, screener_result: dict) -> None:
             if c.get("pass_filters")
         ]
 
-        # 2026-09-29: 対象拡大で通過が200件超になりうるため、総合点の上位だけ残す
+        # 通過が200件超になりうるため、総合点の上位だけ残す
         # （90日保持×全件だとリポジトリが膨らむ。バックテスト・審議キューは上位で足りる）
         cap = int(getattr(cfg, "SCREENER_HISTORY_MAX_ROWS", 80))
         passed.sort(key=lambda c: (-(c.get("composite_score") or 0), -(c.get("base_score") or 0)))

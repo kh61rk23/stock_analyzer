@@ -23,7 +23,7 @@
 #  3     category         str     業種コード（JP: "1001"〜"1033" / US: セクター名）
 #  4     name_ja          str     業種・セクター日本語名
 #  5     name_en          str     業種・セクター英語名
-#  6     composite_score  float   総合スコア（0〜100）★現在 0.0 の問題あり
+#  6     composite_score  float   総合スコア（0〜100）。0.0 になる既知の問題あり
 #  7     risk_level       str     "HIGH" / "MEDIUM" / "LOW" / "N/A"
 #  8     risk_score       int     リスクスコア（数値化）
 #  9     ret_1m           float   1ヶ月リターン（%）

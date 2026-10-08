@@ -34,7 +34,7 @@
 # 【依存】
 #   yfinance（60日株価取得）、標準ライブラリのみ（相関計算は純粋実装）
 #   config.py（BLOCK 33定数参照）
-#   ★ 全関数を try/except で保護。失敗時は empty結果を返す。
+#   ※ 全関数を try/except で保護。失敗時は empty結果を返す。
 # ==============================================================
 
 from __future__ import annotations

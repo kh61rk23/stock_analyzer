@@ -1,16 +1,12 @@
 # ==============================================================
-# tests/test_longterm_hold_flag.py（2026-07-25 バッチ1）
+# tests/test_longterm_hold_flag.py
 # [P-3] 長期保有候補フラグ — 閾値が config から読まれること
 # ==============================================================
-# 【背景】判定ロジック（片山晃モデル「10年持てる銘柄」）は
-# stock_screener._calc_longterm_hold_flag() に実装され稼働していたが、
-# 閾値 0.60 / 10.0 / 3 を直書きしており、config.py BLOCK P-3 の
-# LONGTERM_HOLD_* は誰にも読まれていなかった（SSOT違反）。
-# さらに config 側の値（0.45 / 0.08）は実装と食い違っており、
-# 「config を直したのに判定が変わらない」状態だった。
-#
-# 2026-07-25 に config 参照へ是正。健太の方針「実装時の値を正」に従い
-# config を 0.60 / 0.10 へ書き換えたため、判定結果は従来どおり。
+# 【防ぐこと】判定ロジック（片山晃モデル「10年持てる銘柄」）は
+# stock_screener._calc_longterm_hold_flag() が担う。閾値 0.60 / 10.0 / 3 は
+# config.py BLOCK P-3 の LONGTERM_HOLD_* から読む（直書きしない）。
+# config と実装の値がズレると「config を直しても判定が変わらない」ため、
+# 値の一致と config 参照を固定する。
 # ==============================================================
 import sys
 from pathlib import Path
@@ -36,7 +32,7 @@ def _data(equity_pct, roe, growth=0.12):
 
 class TestConfigIsSourceOfTruth:
     def test_config_values_match_implementation_defaults(self):
-        """config の値が実装の既定値（従来の直書き値）と一致すること。
+        """config の値が実装の既定値と一致すること。
 
         ここがズレると「config を直したのに判定が変わらない」に逆戻りする。
         """
@@ -75,7 +71,7 @@ class TestConfigIsSourceOfTruth:
 
 
 class TestRetiredBlocksAreGone:
-    """バッチ1で削除した定数が復活していないこと。"""
+    """廃止済みの定数が復活していないこと。"""
 
     def test_viewer_spreadsheet_constants_removed(self):
         cfg = _cfg()

@@ -89,7 +89,7 @@ def apply_env_overrides(cfg):
     cfg.SECTOR_DIR  = base / "insights" / "sectors"
     cfg.MACRO_DIR   = base / "insights" / "macro"
     cfg.LOG_DIR     = base / "logs"
-    # ★ DRIVE_BASE 由来のパスもここで揃える。
+    # DRIVE_BASE 由来のパスもここで揃える。
     #   特に CACHE_DIR は score_prior / policy_radar 等 10+ モジュールが参照し、
     #   取りこぼすと Colab パス /content に書こうとして Permission denied になる
     #   （score_prior が全業種無効化する）。

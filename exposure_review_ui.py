@@ -1,5 +1,5 @@
 # ==============================================================
-# exposure_review_ui.py  v1.0  (Wave 6 - G-C3)
+# exposure_review_ui.py  v1.0  (G-C3)
 # ==============================================================
 # 【役割】
 #   jogmec_scraper / sec_geographic_extractor /

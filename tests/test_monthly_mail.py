@@ -1,4 +1,4 @@
-# 2026-10-05: 月次メール
+# 月次メール
 from pathlib import Path
 
 import monthly_mail as mm

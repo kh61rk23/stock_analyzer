@@ -4,13 +4,12 @@
 # ==============================================================
 # 【役割】
 #   run_all_tasks() の results dict は全モジュール間の唯一のデータ受け渡し
-#   契約だが、これまで暗黙だった（2026-06 のバグ掃討で producer/consumer
-#   キー不整合5件のサイレント機能死が発覚した経緯がある）。
+#   契約であり、producer/consumer のキー不整合はサイレントに機能が死ぬ。
 #   本モジュールはその契約を明文化し、乖離を検出する。
 #
 # 【SCHEMA の構造】
 #   { results_key: [産出モジュール名, ...] }
-#   ※ 2026-06-12 時点の全コードベース AST スキャンから自動生成。
+#   ※ 全コードベースの AST スキャンから自動生成したもの。
 #     以後の追加キーは本スキーマに追記すること（--audit が乖離を検出）。
 #
 # 【使い方】
@@ -23,7 +22,7 @@
 
 from __future__ import annotations
 
-# 自動生成: 2026-06-12 時点の writer 全数スキャン
+# 自動生成: writer 全数スキャンの結果
 SCHEMA: dict[str, list[str]] = {
     "_cfg": ["stock_analyzer_main"],
     "_macro_weights": ["stock_analyzer_main"],
@@ -106,8 +105,8 @@ SCHEMA: dict[str, list[str]] = {
     "market_breadth": ["stock_analyzer_main"],
     "midterm_tracker": ["stock_analyzer_main"],
     "ml_correction": ["stock_analyzer_main"],
-    "ml_meta_correction": ["stock_analyzer_main"],   # Wave R5-1: ML補正適用結果
-    "ml_meta_dataset": ["stock_analyzer_main"],      # Wave R5-1: 特徴量スナップショット結果
+    "ml_meta_correction": ["stock_analyzer_main"],   # R5-1: ML補正適用結果
+    "ml_meta_dataset": ["stock_analyzer_main"],      # R5-1: 特徴量スナップショット結果
     "module_ledger": ["stock_analyzer_main"],
     "momentum": ["stock_analyzer_main"],
     "multi_currency": ["stock_analyzer_main"],
@@ -159,7 +158,7 @@ SCHEMA: dict[str, list[str]] = {
     "technology_mapper": ["stock_analyzer_main"],
     "timeline": ["stock_analyzer_main"],
     "total_signal_score": ["stock_analyzer_main"],
-    "unified_scores": ["stock_analyzer_main"],       # Wave R5-2 Phase A: JP/US共通スコア
+    "unified_scores": ["stock_analyzer_main"],       # R5-2 Phase A: JP/US共通スコア
     "us_8k": ["stock_analyzer_main"],
     "us_fundamentals": ["stock_analyzer_main"],
     "us_macro": ["stock_analyzer_main"],

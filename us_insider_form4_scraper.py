@@ -44,7 +44,7 @@
 #   sec_client.py（HTTP呼び出し・User-Agent・CIK解決を一本化。U-1c）
 #   xml.etree.ElementTree（Form 4 XML パース。標準ライブラリ）
 #   yfinance（フォールバック用）
-#   ★ 全関数を try/except で保護。ネットワーク失敗時は bonus=0.0 を返す。
+#   全関数を try/except で保護。ネットワーク失敗時は bonus=0.0 を返す。
 # ==============================================================
 
 from __future__ import annotations

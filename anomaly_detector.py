@@ -442,9 +442,8 @@ def detect_volume_anomaly(ticker: str, hist: dict) -> Optional[dict]:
     avg_vol   = sum(baseline_vols) / len(baseline_vols)
     ratio     = latest_vol / avg_vol if avg_vol > 0 else 0.0
 
-    # 2026-09-17: 実行は取引時間中（JST 9〜14時台）なので当日足の出来高は途中経過。
-    # 9/17 は 3401.T が 0.3倍「急減」HIGH と出たが引け後の確定値は 0.8倍、
-    # 原油・金先物も 0.1〜0.2倍と出ていた。確定前の足での「急減」は判定しない
+    # 実行は取引時間中（JST 9〜14時台）なので当日足の出来高は途中経過。
+    # 引け前の出来高は少なく出て誤って「急減」になるため、確定前の足での「急減」は判定しない
     # （途中経過で既に平均を大きく上回る「急増」は本物なので残す）。
     if ratio < 1.0 and dates and _session_incomplete(ticker, dates[-1]):
         return None
@@ -480,8 +479,7 @@ def detect_volume_anomaly(ticker: str, hist: dict) -> Optional[dict]:
         "latest_volume": round(latest_vol, 0),
         "date":         latest_date,
         "methods":      method,
-        # 2026-09-14: Z の絶対値で検出するため 0.3倍（減少）もここに来るのに、
-        # 常に「出来高急増」と書いていた。
+        # Z の絶対値で検出するため減少（0.3倍など）もここに来る。ratio で急増/急減を書き分ける。
         "summary":      f"出来高{'急増' if ratio >= 1 else '急減'} {ratio:.1f}倍 (Z={last_z:.2f})",
     }
 
@@ -559,9 +557,8 @@ def detect_score_anomalies(results: dict) -> list:
         direction = None
         reason   = []
 
-        # 2026-09-19: スコアの「水準」だけで HIGH を付けており、構造的に低い業種
-        # （繊維 0点・食料品 1.4点など、Z=-1.2〜-1.3）が毎日 HIGH の「スコア急変」として
-        # 異常検知の上位を占めていた。水準だけなら low、業種間の外れ値（|Z|≥2）を
+        # スコアの「水準」だけでは HIGH にしない（構造的に低い業種が毎日上位を占めるため）。
+        # 水準だけなら low、業種間の外れ値（|Z|≥2）を
         # 伴うときに medium、極端な水準かつ外れ値のときだけ high にする。
         # （前日比の急変は detect_score_jumps が別に判定している）
         is_outlier = abs(z) >= Z_THRESHOLD_MEDIUM
@@ -1121,7 +1118,7 @@ def run_anomaly_detector(cfg, results: dict, logger=None) -> dict:
         tc = len(scan_result.get("targets", {}))
         # 対象があるのに1銘柄も価格を取れていない場合、価格・出来高の
         # 異常検知は成立していない。success で埋めるとスコア由来の
-        # アラートだけが根拠不明のまま通知される（2026-08-27 実害）。
+        # アラートだけが根拠不明のまま通知される。
         _status = "alert" if (tc > 0 and sc == 0) else "success"
         _prefix = "価格取得0件（価格/出来高判定は無効） " if _status == "alert" else ""
         logger.add(

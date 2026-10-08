@@ -65,12 +65,9 @@ SIGNIFICANT_WEIGHT_DELTA = 0.15
 # IC がこれ未満のルールを「underperforming」とみなす
 IC_UNDERPERFORM_THRESHOLD = 0.05
 
-# IC_STABLE_THRESHOLD は削除（2026-07-25 バッチ4）。
-# 「IC がこれ以上なら stable」という定義だったが、このモジュールは
-# 安定判定を自前で行わず alpha_attributer が算出済みの stable_signals を
-# 読むだけで、この定数を参照するコードは存在しなかった。
-# 安定判定の正本は config.IC_STABLE_MIN_RATE（IC>=0 だった週の比率 0.80）で、
-# 意味も基準も別物のため、紛らわしい残骸として削除する。
+# 安定判定はこのモジュールでは行わず、alpha_attributer が算出済みの
+# stable_signals を読むだけ。判定基準の正本は config.IC_STABLE_MIN_RATE
+# （IC>=0 だった週の比率 0.80）。IC の閾値定数はここに置かない。
 
 # 見直し推奨の閾値（underperforming が何件以上で manual_review_needed=True）
 MANUAL_REVIEW_TRIGGER = 2
@@ -125,9 +122,7 @@ def save_audit(cfg, period: str, audit: dict) -> None:
 # ==============================================================
 
 def _load_ic_tracker(cfg) -> dict:
-    # 2026-07-25: BLOCK A-1 の ENABLE_IC_TRACKER を配線。
-    # ic_tracker.json の読み込みと IC 分析の実装はあるのに、有効フラグだけが
-    # 誰にも読まれず、False にしても IC ベースの見直し推奨が出続けていた。
+    # BLOCK A-1 の ENABLE_IC_TRACKER で有効/無効を切り替える。
     # 無効時は空dictを返す（_analyze_ic は空入力で空結果を返すため安全）。
     if not getattr(cfg, "ENABLE_IC_TRACKER", True):
         return {}

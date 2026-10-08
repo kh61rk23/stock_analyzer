@@ -240,9 +240,9 @@ def _fetch_one(entry: dict, max_retries: int = 3) -> Optional[dict]:
     429エラー時は指数バックオフでリトライ。
 
     [U-5] 取得・正規化・リトライは market_data.fetch_quote() へ移した。
-          本関数は「fetch_quote の返り値を US 従来のキー名へ写像し、
+          本関数は「fetch_quote の返り値を US 既存のキー名へ写像し、
           entry 由来のフィールドと XBRL 補完を足すだけの薄い層」であり、
-          返り値のキー集合・値は U-5 以前と同一。
+          返り値のキー集合・値は変えない（互換維持）。
 
     Returns:
         dict（取得成功） or None（失敗）
@@ -262,7 +262,7 @@ def _fetch_one(entry: dict, max_retries: int = 3) -> Optional[dict]:
         raw = q["_raw_info"]
 
         # [F-4] market_cap_b は JP=億円 / US=十億USD で **同名だが単位が違う**。
-        # 互換性維持のため単位の是正はここでは行わない（要件定義書 §3-3(a)）。
+        # 互換性維持のため単位の変換はここでは行わない（要件定義書 §3-3(a)）。
         # 消費側で市場をまたいで比較する場合は、必ず生値
         # market_data.fetch_quote()["market_cap_raw"] を使うこと。
         market_cap = q["market_cap_raw"]
@@ -323,9 +323,9 @@ def _fetch_one(entry: dict, max_retries: int = 3) -> Optional[dict]:
 
             # アナリスト
             "rec_mean":         q["rec_mean"],
-            # rec_key / analyst_count は従来値を1ビットも変えないために生 info
+            # rec_key / analyst_count は既存値を1ビットも変えないために生 info
             # から取る（q["rec_key"] は None を "" へ、q["analyst_count"] は
-            # int へ正規化しており、US 従来挙動＝素通しと食い違うため）。
+            # int へ正規化しており、US の既存挙動＝素通しと食い違うため）。
             "rec_key":          raw.get("recommendationKey", ""),
             "analyst_upside":   q["analyst_upside"],
             "analyst_count":    raw.get("numberOfAnalystOpinions"),

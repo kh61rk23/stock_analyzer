@@ -1,5 +1,5 @@
 # ==============================================================
-# cross_size_signal.py  v2.0  (Wave 3 & Wave 7 統合版)
+# cross_size_signal.py  v2.0
 # JP/US 規模帯横断・業種連動シグナル生成モジュール
 # ==============================================================
 # 【役割】
@@ -52,15 +52,15 @@
 # 【依存】
 #   size_decay_manager.py（get_active_tickers_by_tier / get_nano_queue）
 #   size_tier_classifier.py（get_taxonomy_nodes / get_taxonomy_size_correction）
-#   config.py（Wave 7追加定数参照）
+#   config.py（BLOCK Wave7 の定数を参照）
 #
-# 【シグナル種別 (Wave 7準拠)】
+# 【シグナル種別（BLOCK Wave7 準拠）】
 #   (1) downward_cascade:  Large下落 → Small/Micro への売り先行シグナル
 #   (2) upward_spillover:  Large上昇 → Small/Micro への先行買いシグナル
 #   (3) contrarian_nano:   Nano高スコア → 流動性リスク考慮の逆張りシグナル
 #   (4) jp_us_cross:       US Large上昇 → JP Small への先行シグナル
 #
-# 【業種連動 (Wave 3統合)】
+# 【業種連動】
 #   生成された横断シグナルを _SECTOR_SIZE_AFFINITY に基づき、
 #   各業種（セクター）が恩恵・悪影響を受けるかスコア化する。
 # ==============================================================
@@ -81,7 +81,7 @@ from typing import Optional
 _CACHE_FILENAME   = "cross_size_signal_cache.json"
 _DEFAULT_TTL_DAYS = 3
 
-# ── 規模帯遷移ルール（Wave 7） ──
+# ── 規模帯遷移ルール ──
 _SPILLOVER_RULES: list = [
     ("Large", "Mid",   14, 0.90),
     ("Large", "Small", 30, 0.75),
@@ -106,7 +106,7 @@ _JP_US_CROSS_DECAY = 0.70
 _NANO_CONTRARIAN_CONFIDENCE_MAX = 0.55
 _MIN_SOURCE_TICKERS = 2
 
-# ── 業種アフィニティマッピング（Wave 3） ──
+# ── 業種アフィニティマッピング ──
 _SECTOR_SIZE_AFFINITY: dict[str, str] = {
     "1028": "large", "1030": "large", "1017": "large", "1016": "large",
     "1026": "large", "1009": "large", "1012": "large", "1020": "large",
@@ -350,7 +350,7 @@ def _gen_jp_us_cross_signals(tier_data: dict, cfg) -> list:
 
 
 # ==============================================================
-# BLOCK 4: 外部参照用アクセサ & セクター集計 (Wave 3連携用)
+# BLOCK 4: 外部参照用アクセサ & セクター集計
 # ==============================================================
 
 def _build_ticker_signals_index(signals: list) -> dict:
@@ -408,7 +408,7 @@ def get_signals_by_type(signal_type: str, cfg=None) -> list:
 
 def aggregate_cross_size_score(sector_code: str, cfg=None) -> float:
     """
-    (Wave 3 統合) セクターごとの影響スコアを算出して返す(0〜100)。
+    セクターごとの影響スコアを算出して返す(0〜100)。
     signal_aggregator等から呼ばれることを想定。
     """
     try:

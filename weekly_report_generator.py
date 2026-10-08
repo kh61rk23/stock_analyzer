@@ -3354,7 +3354,7 @@ def _section_hiring_signal(results: dict, cfg=None) -> list:
     job_posting_monitor の結果を Markdown 表形式で出力する。
 
     出力形式:
-      ## 👥 人材投資シグナル（Wave 6 - I-1）
+      ## 👥 人材投資シグナル（I-1）
       急増カテゴリ一覧 + sector_boost 表
     """
     lines = ["## 👥 人材投資シグナル（Wave 6 - I-1）", ""]
@@ -3436,7 +3436,7 @@ def _section_executive_transition(results: dict, cfg=None) -> list:
     executive_transition_tracker の結果を Markdown で出力する。
 
     出力形式:
-      ## 👔 役員体制転換シグナル（Wave 6 - I-3）
+      ## 👔 役員体制転換シグナル（I-3）
       転換シグナル企業一覧 + スキルカテゴリ表
     """
     lines = ["## 👔 役員体制転換シグナル（Wave 6 - I-3）", ""]
@@ -3528,7 +3528,7 @@ def _section_facility_expansion(results: dict, cfg=None) -> list:
     facility_expansion_monitor の結果を Markdown で出力する。
 
     出力形式:
-      ## 🏭 施設着工シグナル（Wave 6 - I-4）
+      ## 🏭 施設着工シグナル（I-4）
       大規模着工案件一覧 + sector_boost 表
     """
     lines = ["## 🏭 施設着工シグナル（Wave 6 - I-4）", ""]

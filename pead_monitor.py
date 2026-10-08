@@ -45,7 +45,7 @@
 # 【依存】
 #   yfinance（出来高・株価取得）
 #   config.py（BLOCK 32 定数参照）
-#   ★ 全関数を try/except で保護。失敗時は空dict/0.0を返す。
+#   全関数を try/except で保護。失敗時は空dict/0.0を返す。
 # ==============================================================
 
 from __future__ import annotations

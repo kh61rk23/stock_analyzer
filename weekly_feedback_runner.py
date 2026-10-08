@@ -1,5 +1,5 @@
 # ==============================================================
-# weekly_feedback_runner.py  v1.0  (Wave R0-5 / E2)
+# weekly_feedback_runner.py  v1.0  (E2)
 # 審議→成績→デビル校正 クローズドループの週次自動実行
 # ==============================================================
 # 【役割】
@@ -13,7 +13,7 @@
 # 【実行】python3 weekly_feedback_runner.py [--dry-run] [--if-stale]
 #   --if-stale: 前回「成功」から7日未満なら何もしない（追いつき用ガード）
 #
-# 【二重の起動経路】2026-07-25 追加
+# 【二重の起動経路】
 #   本線     : launchd com.kenta.invest-weekly（毎週日曜21:00）
 #              → 司令塔シェル run_apps.sh invest-weekly → 無条件実行
 #   バックアップ: Claude予定タスク（毎週月曜10:00）→ --if-stale で実行
@@ -85,7 +85,7 @@ def main(dry_run: bool = False, if_stale: bool = False) -> int:
     sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     base = Path(__file__).resolve().parent
 
-    # 2026-07-25: バックアップ経路（Claude予定タスク等）から頻繁に呼ばれても
+    # バックアップ経路（Claude予定タスク等）から頻繁に呼ばれても
     # 二重実行しないためのガード。本線の launchd は無条件で走る。
     if if_stale and not dry_run:
         run, why = is_stale(base=base)

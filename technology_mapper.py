@@ -1,5 +1,5 @@
 # ==============================================================
-# technology_mapper.py  v1.0  (Wave 6 - B)
+# technology_mapper.py  v1.0  (B)
 # 企業×技術分類 基礎マッピングモジュール
 # ==============================================================
 # 【役割】
@@ -46,7 +46,7 @@ _SEED_DIR = _REPO / "data" / "taxonomy_seed"
 # ==============================================================
 # BLOCK 0b: TECH_KEYWORD_MAP の動的構築（seed正本）
 # ==============================================================
-# 2026-07-13: TECH_KEYWORD_MAPはSSOT再建で消失（幻キー）→承認済みseedから動的構築へ
+# config.TECH_KEYWORD_MAP は存在しない（幻キー）ため、承認済みseedから動的に構築する
 
 def build_keyword_map_from_seeds(seed_dir: Path = _SEED_DIR) -> dict:
     """

@@ -1,5 +1,5 @@
 # ==============================================================
-# backtest/data_feed.py — 日足OHLCV・シグナル履歴リプレイ（Wave R1-1 / S1）
+# backtest/data_feed.py — 日足OHLCV・シグナル履歴リプレイ（R1-1 / S1）
 # ==============================================================
 # 2系統のフィード:
 #   InMemoryFeed : テスト/合成データ用（ネットワーク不要・pytestで使用）
@@ -102,8 +102,8 @@ class YFinanceFeed(InMemoryFeed):
         cache = cache_dir / f"{ticker.replace('.', '_')}.csv"
         rows, divs = [], {}
         try:
-            # 2026-09-10: 実行内キャッシュ経由。バックテストは同じ銘柄を
-            # 戦略ごとに読み直すため、重複取得が実行時間に直結していた。
+            # 実行内キャッシュ経由。バックテストは同じ銘柄を
+            # 戦略ごとに読み直すため、重複取得が実行時間に直結する。
             try:
                 import yf_cache as yf
             except ImportError:  # pragma: no cover - 単体実行時のみ

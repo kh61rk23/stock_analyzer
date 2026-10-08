@@ -4,7 +4,6 @@ edinet_bq_schema_new_20260601.py
 【役割】   BigQueryのデータセット・全テーブルを構造的に定義し作成する
 【実行】   初回のみ Colab で手動実行
 【注意】   IF NOT EXISTS のため、既存テーブルへの影響なし（再実行しても安全）
-【更新日】 2026-06-01
 """
 
 import os
@@ -161,9 +160,9 @@ TABLE_DEFINITIONS = {
             updated_at TIMESTAMP              -- レコード最終更新日時
         ) PARTITION BY fiscal_year_end""",
 
-        # ── Wave 6 - R-2: 業種サブテーマ・銘柄マッピング（2026-06-26 追加）──
-        #   この2テーブル欠落で get_tickers_for_sector / get_sub_theme_master が
-        #   404 になり、セクター銘柄解決が常時失敗していた。
+        # ── R-2: 業種サブテーマ・銘柄マッピング ──
+        #   この2テーブルが無いと get_tickers_for_sector / get_sub_theme_master が
+        #   404 になり、セクター銘柄解決が失敗する。
         "sub_theme_master": """(
             sector_code STRING NOT NULL,              -- 業種コード (JP: "1016" / US: "US_45")
             market STRING,                            -- "JP" | "US"

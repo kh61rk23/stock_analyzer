@@ -1,5 +1,5 @@
 # ==============================================================
-# congress_monitor.py  v1.0  (Wave 4 - Policy Ph4)
+# congress_monitor.py  v1.0  (Policy Ph4)
 # ==============================================================
 # 【役割】
 #   米国議会における重要法案の進行状況を追跡し、
@@ -125,7 +125,7 @@ def _load_bill_cache(cfg) -> dict:
         bills = data.get("bills", {})
         cleaned = {
             bid: b for bid, b in bills.items()
-            # 2026-09-29: RSS フォールバックはニュース見出しを「法案」として保存していた
+            # 過去キャッシュに残った RSS 由来（ニュース見出し）のエントリを除去する
             if b.get("source") != "rss_fallback" and not str(bid).startswith("RSS_")
             and not (b.get("stage") == "signed"
                     and _safe_parse_date(b.get("last_updated", ""))
@@ -174,7 +174,7 @@ def _fetch_recent_bills(
         [{"bill_id": str, "title": str, "latest_action": str,
           "stage": str, "sponsor": str, "introduced_date": str}, ...]
     """
-    # 2026-09-29: キーが無くても api.data.gov の試用キー（DEMO_KEY・1時間30回/1日50回）
+    # キーが無くても api.data.gov の試用キー（DEMO_KEY・1時間30回/1日50回）
     # で公式APIを呼べる。週1回・1リクエストなので十分。
     api_key = api_key or "DEMO_KEY"
 
@@ -296,7 +296,7 @@ def _classify_bill_type(title: str, action: str, cfg) -> list[str]:
     for bill_type, keywords in _BILL_KEYWORDS.items():
         if bill_type not in impact_map:
             continue
-        # 2026-09-29: 部分一致だと "green"（Greenville）・"fab"（fabric）・
+        # 部分一致だと "green"（Greenville）・"fab"（fabric）・
         # "wind"（window）等で誤爆する。単語として一致した場合だけ数える
         if any(re.search(r"\b" + re.escape(kw) + r"s?\b", text) for kw in keywords):
             matched.append(bill_type)
@@ -308,7 +308,7 @@ def _classify_bill_type(title: str, action: str, cfg) -> list[str]:
 # BLOCK 5: フォールバック RSS 検索
 # ==============================================================
 
-# （RSS フォールバックは 2026-09-29 に廃止。ニュース見出しを法案として扱っていた）
+# （RSS フォールバックは廃止。ニュース見出しは法案ではないため使わない）
 
 
 def _detect_stage_changes(
@@ -369,11 +369,10 @@ def _calc_sector_boosts(
     impact_map       = _get_impact_map(cfg)
     stage_multiplier = _get_stage_multiplier(cfg)
     l4_max           = _get_l4_max(cfg)
-    # 2026-09-29 修正:
-    #  ① 逆風の base_score は config でマイナス定義（例: tariff_steel=-10）なのに、
-    #     さらに headwind で符号反転しており、逆風法案が追い風（プラス）になっていた
-    #  ② 同じ種別の法案を本数分足していたため、委員会段階の小さな法案が20本あると
-    #     業種加点が上限25点に張り付いた。種別ごとに「最も進んだ1本」の効果だけを使う
+    #  ① 逆風の base_score は config でマイナス定義済み（例: tariff_steel=-10）。
+    #     headwind で符号を反転しない（反転すると追い風になる）
+    #  ② 同じ種別の法案を本数分足さない（小さな法案が多数あると業種加点が上限に張り付く）。
+    #     種別ごとに「最も進んだ1本」の効果だけを使う
     strongest: dict = {}   # (sector, bill_type) -> adj
     for bill in bills:
         stage      = bill.get("stage", "introduced")
@@ -425,9 +424,8 @@ def run_congress_monitor(cfg, results: Optional[dict] = None) -> dict:
     # ── 法案取得 ─────────────────────────────────────────────
     raw_bills: list[dict] = []
 
-    # 2026-09-29: キー未設定時は RSS（Reuters=401 で死亡・Bloomberg=政治ニュース）を
-    # 「法案」として扱い、台湾の防衛予算やモロッコの道路命名の見出しから業種加点を
-    # 出していた。常に公式APIを使う（キーが無ければ試用キー）。
+    # 常に公式APIを使う（キーが無ければ試用キー）。
+    # ニュースRSSの見出しは法案ではないため、業種加点の入力にしない。
     print(f"    🔑 [congress] Congress.gov API で取得中"
           f"（{'登録キー' if api_key else '試用キー DEMO_KEY'}）...")
     fetched = _fetch_recent_bills(

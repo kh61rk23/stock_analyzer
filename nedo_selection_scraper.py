@@ -38,7 +38,7 @@
 #   requests, beautifulsoup4（pip install requests beautifulsoup4）
 #   config.py（NEDO_ADOPTION_URLS / CACHE_DIR）
 #   edinet_bq_client.py（BQ書き込み）
-#   ★ すべての外部呼び出しを try/except で保護。失敗時は空リストを返す。
+#   すべての外部呼び出しを try/except で保護。失敗時は空リストを返す。
 # ==============================================================
 
 from __future__ import annotations
@@ -224,7 +224,7 @@ def _build_company_name_map(
 
     Returns:
         {normalized_company_name: securities_code, ...}
-        ★ キーは normalized_company_name（名寄せの比較対象として使用）
+        キーは normalized_company_name（名寄せの比較対象として使用）
     """
     name_map: dict[str, str] = {}
 

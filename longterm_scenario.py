@@ -618,7 +618,7 @@ def run_longterm_scenario(cfg, results: dict = None) -> dict:
     dominant_scenario = max(weights.items(), key=lambda x: x[1])[0]
 
     # ── Step6: 投資スタンス判定（短期スコアと統合）──────────
-    # ★ is_longterm_hold（[P-3] 片山晃モデル）は screener が **銘柄単位** に
+    # is_longterm_hold（[P-3] 片山晃モデル）は screener が **銘柄単位** に
     #   付けるもので、業種の dict（sector_results[code]）には存在しない
     #   （そこから読むと常に False）。
     #   業種単位では「その業種に長期保有候補が何社いるか」で表現する。

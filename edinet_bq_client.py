@@ -513,7 +513,7 @@ class EDINETBQClient:
         証券コードで最新期の財務データを取得する。
         base_agent.py（E2 統合時）から呼び出す想定。
         """
-        # ★ financials 正本スキーマの列は company_code / fiscal_year_end
+        # financials 正本スキーマの列は company_code / fiscal_year_end
         #   （securities_code / period_end は存在せず 400 になる）。
         return dict(self._latest_financials_cached(securities_code))
 
@@ -1143,7 +1143,7 @@ class EDINETBQClient:
         lim = max(1, min(int(limit), 20))
 
         # R-2: テーブルが存在する環境のみ有効。
-        # ★ "SECTOR_<code>" は sub_theme_master 同期時に入る業種レベルの
+        # "SECTOR_<code>" は sub_theme_master 同期時に入る業種レベルの
         #   プレースホルダー（実銘柄ではない）。これを実ティッカーとして
         #   返すと yfinance 等が解決不能になり、かつ Tier2/3 フォールバックを
         #   塞いでしまうため SQL とループの両方で除外する。
@@ -1188,7 +1188,7 @@ class EDINETBQClient:
         if not codes:
             return pd.DataFrame()
         in_clause = ", ".join(codes)
-        # ★ 正本スキーマの列名で引き（securities_code/period_end/num_employees/
+        # 正本スキーマの列名で引き（securities_code/period_end/num_employees/
         #   avg_salary/total_director_remuneration/max_director_remuneration は
         #   存在せず 400 になる）、AS で消費側（base_agent 等）が使う出力キー名へ
         #   別名を付ける。対象銘柄は in_clause で絞る。
@@ -1226,7 +1226,7 @@ class EDINETBQClient:
         1銘柄の最新期財務データを dict で返す。
         base_agent.py の個別銘柄スコアリングで使用する。
         """
-        # ★ 正本列名は company_code / fiscal_year_end（securities_code /
+        # 正本列名は company_code / fiscal_year_end（securities_code /
         #   period_end は存在せず 400 エラーになる）。
         return dict(self._latest_financials_cached(securities_code))
 
@@ -1719,7 +1719,7 @@ class EDINETBQClient:
                     dt_stg  = str(row.get("digital_transformation_stage", "")).replace("'", "''")
                     esg_pri = str(row.get("esg_priority", "")).replace("'", "''")
                     bm_type_val = row.get("bm_type")
-                    # ★ bm_type が None のとき素の NULL を書くと BQ は USING 句で
+                    # bm_type が None のとき素の NULL を書くと BQ は USING 句で
                     #   INT64 NULL と推論し「INT64 cannot be assigned to bm_type
                     #   (STRING)」で全行失敗する。明示的に STRING 型の NULL を渡す。
                     #   値ありの場合は文字列化して引用（JSON 側が int でも STRING 化）。
@@ -1913,7 +1913,7 @@ class EDINETBQClient:
         try:
             now_ts = self.now_iso()
             # streaming insert（insert_rows_json）でバルク書込
-            # ★ self.dataset は既に "project.dataset" 形式なので、さらに
+            # self.dataset は既に "project.dataset" 形式なので、さらに
             #   self.project を前置すると "proj.proj.dataset.table" の4階層になり
             #   404（テーブル不在）になる。dataset.table の3階層にする。
             table_ref = f"{self.dataset}.ticker_subtheme_mapping"

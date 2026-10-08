@@ -72,10 +72,8 @@ CACHE_HOURS         = 24 * 7  # 週次データなので7日キャッシュ
 CACHE_FILENAME      = "credit_data_cache.json"
 
 # JPX「銘柄別信用取引週末残高」（毎週火曜 16:30 目安）
-# 2026-09-21: 従来の CSV（.../margin/tvdivq0000001mf0-att/data_j.csv）は配信終了で
-# 全URLが404になっていた（毎週 yfinance の代理値へフォールバック）。現在は
-# 一覧ページに PDF（syumatsuYYYYMMDD00.pdf）として掲載されるため、
-# 一覧から最新のURLを見つけて読む。
+# 旧CSV配信は終了しており、一覧ページに PDF（syumatsuYYYYMMDD00.pdf）として
+# 掲載される。一覧から最新のURLを見つけて読む。
 JPX_WEEKLY_PAGE_URL = "https://www.jpx.co.jp/markets/statistics-equities/margin/05.html"
 JPX_BASE_URL        = "https://www.jpx.co.jp"
 JPX_MAX_WEEKS_BACK  = 3      # 最新が未掲載のときに遡る週数
@@ -180,11 +178,10 @@ def _flag_for_ratio(margin_ratio: float) -> str:
 def assign_relative_flags(records: list, cfg=None) -> list:
     """信用倍率の**その週の分布**で squeeze / caution / overheated を付け直す。
 
-    2026-09-21: 絶対値の閾値（<1倍=踏み上げ / >10倍=過熱）は、売残がほぼ無い
-    小型株が多い市場全体データでは 4,194銘柄中 2,905銘柄が「過熱」になり、
-    大半の銘柄に -5pt が付いてしまう（中央値56.7倍）。健太の判断により、
-    その週の分位（既定: 下位10% / 上位10%・注意は上位25%）で判定する。
-    銘柄数が少ないとき（フォールバック経由など）は従来の絶対値で判定する。
+    絶対値の閾値（<1倍=踏み上げ / >10倍=過熱）は、売残がほぼ無い小型株が多い
+    市場全体データでは大半が「過熱」になり -5pt が付いてしまう（中央値56.7倍）。
+    そのため、その週の分位（既定: 下位10% / 上位10%・注意は上位25%）で判定する。
+    銘柄数が少ないとき（フォールバック経由など）は絶対値で判定する。
     """
     # 売残ゼロ（倍率は番人値 99.99）は「倍率が高い」のではなく売り手が居ないだけなので、
     # 分位の母集団からも判定対象からも外す（上位10%が番人値の同値で埋まるのを防ぐ）

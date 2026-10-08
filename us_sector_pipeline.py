@@ -701,13 +701,9 @@ def run_us_sector_pipeline(cfg, macro_snapshot: Optional[dict] = None) -> dict:
     print(f"  ⚠️  ボトム3:  {' < '.join(bottom3[::-1])}")
 
     # US セクタースコアを日次ファイルに保存（jp_us_bridge が参照）
-    # ★ 2026-06-11 バグ修正: 本ブロックは return 文の後に置かれた到達不能
-    #   コードで一度も実行されず、jp_us_bridge の US スコア履歴
-    #   （us_sector_scores_*.json）が永続的に空だった。さらに未定義変数
-    #   result と存在しないキー composite_score を参照していたため、
-    #   sectors_dict（キーは "score"）から正しく出力するよう修正して
-    #   return の前に移設。保存先は report/csv と同じ us_dir
-    #   （= INSIGHT_DIR/us_sectors = ブリッジの探索先）。
+    # return より前に置くこと（後ろだと到達不能になり、jp_us_bridge の US スコア履歴
+    #   us_sector_scores_*.json が空になる）。sectors_dict のキーは "score"。
+    #   保存先は report/csv と同じ us_dir（= INSIGHT_DIR/us_sectors = ブリッジの探索先）。
     try:
         out_path = us_dir / f"us_sector_scores_{today_str}.json"
         out_path.write_text(

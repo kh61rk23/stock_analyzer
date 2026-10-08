@@ -1,5 +1,5 @@
 # ==============================================================
-# policy_radar.py  v1.0  (Wave 3 / Wave 4 - Idea3-P2)
+# policy_radar.py  v1.0  (Idea3-P2)
 # 政府答弁・官僚PDF先回り予測システム
 # ==============================================================
 # 【役割】
@@ -38,7 +38,7 @@
 #   CACHE_DIR/pdf_url_cache.json       TTL: PDF_URL_CACHE_TTL_DAYS (30日)
 #   CACHE_DIR/policy_radar_cumulative.json  累積スコア（恒久保持・上位件で削除）
 #
-# 【Wave 4 - Idea3-P2 連携】
+# 【Idea3-P2 連携】
 #   3ソース以上の裏付けがあると policy_short_cache から
 #   policy_medium_cache（L3）へ自動昇格する累積スコア判定ロジックを含む。
 #
@@ -239,7 +239,7 @@ _DEFAULT_KEYWORD_MAP: dict = {
     },
 }
 
-# デフォルト官庁RSSフィード（URLは2026-10-07に実取得で確認。外務省はアクセス拒否・AMEDはRSS廃止のため外した）
+# デフォルト官庁RSSフィード（外務省はアクセス拒否・AMEDはRSS廃止のため含めない）
 _DEFAULT_RSS_FEEDS: list[dict] = [
     {
         "name":     "経産省プレスリリース",
@@ -282,7 +282,7 @@ _DEFAULT_RSS_FEEDS: list[dict] = [
     },
 ]
 
-# 累積スコアが閾値以上で policy_medium_cache (L3) に自動昇格（Wave 4 Idea3-P2）
+# 累積スコアが閾値以上で policy_medium_cache (L3) に自動昇格（Idea3-P2）
 _CUMULATIVE_THRESHOLD_FOR_L3 = 3   # 3ソース以上の裏付けで L3 昇格
 
 
@@ -410,9 +410,8 @@ def _fetch_rss_items(feeds: list[dict], max_feeds: int, timeout: int = 10) -> li
         if not url:
             continue
         try:
-            # ★ feedparser.parse(url) は timeout を一切適用せず、応答停止サーバで
-            #   無限ハングする（実害: 2026-06-25 本番が官庁RSSで約2h23mハングし、
-            #   180分ジョブtimeoutで全体強制終了＝当日解析が未完）。
+            # feedparser.parse(url) は timeout を適用せず、応答停止サーバで
+            #   無限ハングする。
             #   必ず urllib で timeout 付き取得し、取得済みバイト列を渡す
             #   （_fetch_kokkai_items / _fetch_pdf と同じ流儀）。
             req = urllib.request.Request(
@@ -623,7 +622,7 @@ def _calc_lag_weeks(text: str, kw_meta: dict) -> int:
     return min(lags) if lags else default_lag
 
 # ==============================================================
-# BLOCK 4-B: FinBERT 文意3分類（Wave 5 - Idea3-P3）
+# BLOCK 4-B: FinBERT 文意3分類（Idea3-P3）
 # ==============================================================
 
 def _classify_intent_with_finbert(text: str, cfg) -> dict:
@@ -801,7 +800,7 @@ def _score_items(
                 cumulative[cum_key]["lag_weeks"], lag
             )
 
-            # ── Wave 5 - Idea3-P3: FinBERT文意3分類 ──────────────
+            # ── Idea3-P3: FinBERT文意3分類 ──────────────
             # try/except 保護: 分類失敗時は multiplier=0.5（検討中）で継続
             _intent_result = {"intent": "considering", "intent_label": "検討中",
                               "multiplier": 0.50, "method": "rule", "confidence": 0.50}
@@ -826,7 +825,7 @@ def _score_items(
                 "published":            item.get("published", ""),
                 "hit_count":            cumulative[cum_key]["count"],
                 "speaker_pos":          item.get("speaker_pos", ""),
-                "intent_classification": _intent_result,   # Wave 5 - Idea3-P3
+                "intent_classification": _intent_result,   # Idea3-P3
             })
 
     # 重複排除（同キーワード × 同ソース の最高スコアのみ保持）
@@ -1012,7 +1011,7 @@ def _detect_events_30d(items: list[dict]) -> list[dict]:
 
 
 # ==============================================================
-# BLOCK 7: Wave 4 Idea3-P2 — L3 自動昇格判定
+# BLOCK 7: Idea3-P2 — L3 自動昇格判定
 # ==============================================================
 
 def _promote_to_medium_cache(
@@ -1202,7 +1201,7 @@ def run_policy_radar(cfg, results: Optional[dict] = None) -> dict:
     # ── イベントカレンダー ────────────────────────────────────
     events_30d = _detect_events_30d(all_items)
 
-    # ── Wave 4 Idea3-P2: L3 自動昇格 ─────────────────────────
+    # ── Idea3-P2: L3 自動昇格 ─────────────────────────
     promoted = _promote_to_medium_cache(cumulative, scored_items, cfg)
 
     # ── policy_signal_applier へのシグナル登録 ────────────────
@@ -1250,7 +1249,7 @@ def run_policy_radar(cfg, results: Optional[dict] = None) -> dict:
         "promoted_to_l3":  promoted,
         "cached":          False,
         "timestamp":       now_str,
-        # ── Wave 5 - Idea3-P3: 文意判定サマリー ──────────────
+        # ── Idea3-P3: 文意判定サマリー ──────────────
         "intent_summary": {
             s["keyword"]: {
                 "intent":       s.get("intent_classification", {}).get("intent", "considering"),

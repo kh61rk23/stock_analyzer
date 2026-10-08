@@ -1,5 +1,5 @@
 # ==============================================================
-# facility_expansion_monitor.py  v1.0  (Wave 6 - I-4)
+# facility_expansion_monitor.py  v1.0  (I-4)
 # ==============================================================
 # 【役割】
 #   主要自治体の建設許可情報・環境省の環境影響評価データ・
@@ -667,7 +667,7 @@ def run_facility_expansion_monitor(cfg, results: dict) -> dict:
     }
     _save_cache(cfg, new_cache)
 
-    # ── BQ格納（Wave R0-2 / SPEC_db_schema.md §6-4）─────────────
+    # ── BQ格納（SPEC_db_schema.md §6-4）─────────────
     if bool(getattr(cfg, "ENABLE_US_BQ_EXPORT", True)):
         try:
             from edinet_bq_client import insert_rows

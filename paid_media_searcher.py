@@ -43,10 +43,8 @@ GCSE_ENDPOINT = "https://www.googleapis.com/customsearch/v1"
 # queries: 追加で発行するキーワード（業種テーマ別）
 # dateRestrict: d1=過去1日, d2=過去2日
 PAID_MEDIA_SOURCES = [
-    # 2026-09-12: Bloomberg を対象から削除した。
-    # CSE 経由で bloomberg.com の記事が取れたことが一度もなく
-    # （2026-07-14 以降の全実行で「CSE HTTP 403: bloomberg.com」）、
-    # 先頭に置いていたため _CSE_DEAD_LIMIT(3) の消費だけを担っていた。
+    # Bloomberg は対象外: CSE 経由で bloomberg.com の記事が取れず（HTTP 403）、
+    # 先頭に置くと _CSE_DEAD_LIMIT(3) の消費だけを担ってしまう。
     # 復活させる場合は、まず CSE キーの403を解消してから戻すこと。
     {
         "id":          "nikkei_jp",
@@ -107,8 +105,8 @@ _CFG_CONST_MAP = {
 _CSE_DEAD_LIMIT = 3
 
 # この実行内の CSE 呼出数。Google CSE の無料枠は100クエリ/日で、
-# 超過分から課金される。従来は呼出回数の上限がなく、quota が尽きて
-# 403 が返るまで撃ち続けていた（2026-08-27 実測で403到達）。
+# 超過分から課金される。上限を設けないと quota が尽きて
+# 403 が返るまで撃ち続けるため、呼出回数を数えて打ち切る。
 # 日次1実行のため、実行内カウンタがそのまま日次上限として働く。
 _CSE_CALL_COUNT = 0
 _CSE_CALL_LIMIT = 90
@@ -129,8 +127,8 @@ def _search_gcse(api_key: str, cse_id: str, site: str,
     except ImportError:
         return []
 
-    # ★ 2026-07-12: 403/429 はキー無効・quota枯渇で同一実行内では回復しない。
-    #   3回検出したら以降のCSE呼び出しを打ち切る（本番で12回連続403の実害）。
+    # 403/429 はキー無効・quota枯渇で同一実行内では回復しない。
+    #   3回検出したら以降のCSE呼び出しを打ち切る。
     global _CSE_DEAD_COUNT, _CSE_CALL_COUNT
     if _CSE_DEAD_COUNT >= _CSE_DEAD_LIMIT:
         return []

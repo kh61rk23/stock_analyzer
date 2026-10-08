@@ -1,7 +1,7 @@
 # us_fundamental_rotator — 連続失敗銘柄の再試行バックオフ
 #
-# 2026-09-26: 財務XBRLを持たない MANA（Grayscale信託）が last_fetched 無し＝
-# 999日経過扱いで毎日キュー先頭に入り、31回連続で1枠を潰していた。
+# 財務XBRLを持たない銘柄（例: Grayscale信託）は last_fetched 無し＝
+# 999日経過扱いで毎日キュー先頭に入り、1枠を潰し続けるため、バックオフで抑える。
 import types
 from datetime import date, timedelta
 

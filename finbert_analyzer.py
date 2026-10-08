@@ -122,11 +122,10 @@ def _model_cache_dir(cfg) -> Path:
 def _try_import_transformers():
     """transformers の pipeline を取得する。失敗時は None。
 
-    2026-09-11: トップレベルの `from transformers import pipeline` だけを
-    見ており、transformers 6.0.1 でこのエクスポートが無くなった際に
-    「未インストール」と誤って報告していた（実際にはインストール済みで、
-    シンボルの置き場所が変わっただけ）。配置換えに耐えるよう副モジュール
-    も試し、失敗時は本当の理由を残す。
+    トップレベルの `from transformers import pipeline` だけに頼ると、
+    バージョンによりエクスポート位置が変わった際に「未インストール」と
+    誤認する。配置換えに耐えるよう副モジュールも試し、失敗時は本当の
+    理由を残す。
     """
     global _IMPORT_ERROR
     try:
@@ -291,7 +290,7 @@ def enrich_articles_with_sentiment(
     return articles
 
 # ==============================================================
-# BLOCK 2-B: セクション別テキスト分析（Wave 5 - E4対応）
+# BLOCK 2-B: セクション別テキスト分析（E4対応）
 # ==============================================================
 
 def analyze_sections(
@@ -367,9 +366,9 @@ def analyze_sections(
 
         try:
             # 文字数で切ってもトークン数の上限は守れない（日本語は1文字が
-            # 複数トークンになりうる）。2026-08-27 に text[:512] が
-            # 514トークンとなり tensor size mismatch で全滅していたため、
-            # BLOCK 2 と同じくトークナイザ側に切らせる。
+            # 複数トークンになりうる）。text[:512] が514トークンになると
+            # tensor size mismatch になるため、BLOCK 2 と同じく
+            # トークナイザ側に切らせる。
             result = _nlp(text[:MAX_TEXT_LEN * 4],
                           truncation=True, max_length=MAX_TEXT_LEN)[0]
 
@@ -416,11 +415,9 @@ def _get_or_init_pipeline():
     if _FINBERT_PIPELINE is not None:
         return _FINBERT_PIPELINE
 
-    # 2026-09-14: ここだけ `from transformers import pipeline` を直書きしており、
-    # 9/11 に import 経路を _try_import_transformers() へ集約した修正が
-    # 効いていなかった。9/14 の実行では本体の FinBERT（load_finbert_pipeline）は
-    # 同じ transformers 5.17 でロードに成功したのに、有報セクション分析
-    # （analyze_sections）だけ「cannot import name 'pipeline'」で落ちていた。
+    # import 経路は _try_import_transformers() に集約している。ここで
+    # `from transformers import pipeline` を直書きすると、エクスポート位置が
+    # 変わった環境でセクション分析だけ「cannot import name 'pipeline'」で落ちる。
     hf_pipeline = _try_import_transformers()
     if hf_pipeline is None:
         raise ImportError(_IMPORT_ERROR or "transformers の pipeline を取得できません")

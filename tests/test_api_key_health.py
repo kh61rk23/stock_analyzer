@@ -117,9 +117,9 @@ def test_ledger_status():
 
 # ── 前営業日（土日スキップ）─────────────────────────────────
 def test_prev_business_day_skips_weekend():
-    # 2026-07-20 は月曜 → 前営業日は 2026-07-17（金）
+    # 月曜 → 前営業日は直前の金曜
     assert kh.prev_business_day(_dt.date(2026, 7, 20)) == _dt.date(2026, 7, 17)
-    # 2026-07-17 は金曜 → 前営業日は 2026-07-16（木）
+    # 金曜 → 前営業日は直前の木曜
     assert kh.prev_business_day(_dt.date(2026, 7, 17)) == _dt.date(2026, 7, 16)
 
 
@@ -130,7 +130,7 @@ def test_run_key_health_unset_keys_do_not_crash():
 
     result = kh.run_key_health(_Cfg())
     entries = result["entries"]
-    # 2026-09-12: EDINET_API_KEY は撤去済み（EdinetDBへ一本化）。
+    # EDINET_API_KEY は撤去済み（EdinetDBへ一本化）。
     assert "EDINET_API_KEY" not in entries, "撤去したキーが監視に残っている"
     assert entries["EDINETDB_API_KEY"]["state"] == kh.STATE_UNSET
     assert entries["FUDOSAN_API_KEY"]["state"] == kh.STATE_UNSET

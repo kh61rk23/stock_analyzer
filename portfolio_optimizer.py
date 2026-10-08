@@ -87,9 +87,8 @@ def load_portfolio(cfg) -> list:
         [{"ticker", "name", "quantity": int, "avg_cost_jpy": float,
           "sector_code", "market"}, ...]
     """
-    # 2026-09-21: 実ファイルはリポジトリ直下の data/portfolio_holdings.csv にあり
-    # （exit_rule_engine / scenario_analysis は cfg.PORTFOLIO_HOLDINGS_PATH 経由で読めている）、
-    # ここだけ候補に無く毎週「portfolio_holdings.csv なし」でスキップしていた。
+    # 実ファイルはリポジトリ直下の data/portfolio_holdings.csv にある
+    # （exit_rule_engine / scenario_analysis は cfg.PORTFOLIO_HOLDINGS_PATH 経由で読む）。候補パスに含めること。
     base_dir = Path(__file__).parent
     candidates = [
         Path(getattr(cfg, "PORTFOLIO_HOLDINGS_PATH", base_dir / "data" / "portfolio_holdings.csv")),
@@ -104,7 +103,7 @@ def load_portfolio(cfg) -> list:
             holdings = []
             with open(p, encoding="utf-8-sig") as f:
                 for row in csv.DictReader(f):
-                    # 2026-10-05: 持株会の株数は小数（740.955株）で、int() で例外→読み込み全体が失敗していた
+                    # 持株会の株数は小数（740.955株）のため float で読む（int() だと例外で読み込み全体が失敗する）
                     qty  = float(row.get("quantity", 0) or 0)
                     cost = float(row.get("avg_cost_jpy", 0) or 0)
                     if row.get("ticker") and qty > 0:
@@ -381,7 +380,7 @@ def evaluate_current_portfolio(
     positions = []
     total_value = 0.0
 
-    # 2026-10-05: 米国株のドル株価を円の取得単価と比べて評価損益が−99%になっていた。
+    # 米国株のドル株価を円の取得単価と直接比べない（評価損益が約−99%になる）。
     # 株価は円に直してから比べる（為替は保有銘柄CSVの実勢値）
     try:
         import json as _json

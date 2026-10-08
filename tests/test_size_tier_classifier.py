@@ -1,8 +1,7 @@
-# size_tier_classifier.py — 規模分類マスター（2026-07-27 X-1 の回帰固定）
+# size_tier_classifier.py — 規模分類マスター（X-1 の回帰固定）
 #
-# X-1: module_ledger 2026-07-06 / 07-13 が2回連続で
-#      "JP:0 / US:0 / Large:0 Mid:0 Small:0 Micro:0 Nano:0" を success 記録。
-#      真因は実行順序（screener/us_screener より前に配線されていた）。
+# X-1: 規模分類が全件0のまま success 記録されるのを防ぐ。
+#      原因になりうるのは実行順序（screener/us_screener より前に配線すると空になる）。
 #      本ファイルは「空マスターを有効キャッシュとして扱わない」「候補ゼロを
 #      成功として返さない」「US の単位換算」を固定する。
 import json

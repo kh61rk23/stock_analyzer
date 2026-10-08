@@ -37,8 +37,6 @@
 #   外部API接続ゼロ・副作用ゼロの原則を守るため、_calc_scores を呼ぶ
 #   全テストで `monkeypatch.setattr(config, "CACHE_DIR", tmp_path)` を行い、
 #   実運用の stock_data/cache/ を一切読み書きしない状態に隔離している。
-#   （隔離してもキャッシュファイルは元々存在しないキーのみで、
-#    出力値は隔離前と同一であることを実測確認済み）。
 #
 # 対象関数（凍結件数は各テストの docstring 参照）:
 #   JP: _calc_scores / _apply_filters / _calc_risk_adjusted_score /

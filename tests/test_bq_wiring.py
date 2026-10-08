@@ -1,5 +1,5 @@
 # BQへ書くはずのモジュールが実際に実行されるかの配線契約
-# 2026-09-09: BQの空テーブル調査で判明した3系統の配線漏れを固定する。
+# 3系統の配線漏れ（空テーブルになる原因）を固定する。
 import json
 from pathlib import Path
 
@@ -32,7 +32,7 @@ class TestWeeklyGateKeys:
 
     def test_main_never_gates_on_a_mode_name(self):
         src = (REPO / "stock_analyzer_main.py").read_text(encoding="utf-8")
-        # 2026-10-03: "all" も追加（13F・deep_dive_trigger が _in_mode("all") で導入以来未実行だった）
+        # "all" も許可キー（13F・deep_dive_trigger が _in_mode("all") で使う）
         code = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
         for name in ("weekly", "daily", "all"):
             assert f'_in_mode("{name}")' not in code, (
@@ -41,7 +41,7 @@ class TestWeeklyGateKeys:
             )
 
     def test_every_gate_key_is_registered_or_retired(self):
-        """_in_mode に渡すキーは DAILY/WEEKLY_MODULES のどちらかにあること（2026-10-03）。
+        """_in_mode に渡すキーは DAILY/WEEKLY_MODULES のどちらかにあること。
 
         どちらにも無いキーは日次・週次とも常に False＝一度も動かない。
         意図して止めている（廃止済み）ものだけを下に列挙する。
@@ -50,16 +50,16 @@ class TestWeeklyGateKeys:
         src = (REPO / "stock_analyzer_main.py").read_text(encoding="utf-8")
         code = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
         keys = set(re.findall(r'_in_mode\("([^"]+)"\)', code))
-        retired = {"deep_dive_trigger",          # 受け手の EDINET ローテ廃止（2026-09）
+        retired = {"deep_dive_trigger",          # 受け手の EDINET ローテ廃止
                    "facility_expansion", "job_posting",
-                   "jp_us_sector_correlation"}   # 2026-09-29 廃止（健太の判断）
+                   "jp_us_sector_correlation"}   # 廃止済み
         registered = set(config.DAILY_MODULES) | set(config.WEEKLY_MODULES)
         assert sorted(keys - registered - retired) == []
 
     def test_bq_writing_monitors_run_in_weekly(self):
         # BQ us.job_signal_cache / executive_transitions / facility_signals の
         # 唯一の書き込み経路。weekly で通らなければ永久に0行になる。
-        # 2026-09-29: job_posting / facility_expansion は健太の判断で廃止（一覧から除外）
+        # job_posting / facility_expansion は廃止済み（一覧から除外）
         for key in ("executive_transition",):
             assert _in_mode(key, "weekly") is True, f"{key} が週次で実行されない"
             assert _in_mode(key, "daily") is False, f"{key} は日次では走らない想定"

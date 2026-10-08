@@ -1,13 +1,10 @@
 # ==============================================================
-# tests/test_geo_exposure_runner.py（2026-07-25）
+# tests/test_geo_exposure_runner.py
 # 地政学シグナル供給側ランナーの実行間隔判定
 # ==============================================================
-# 【背景】geopolitics.company_country_exposure を埋める3抽出器
-# （jogmec / sec_geo / edinet_exposure）は、ENABLE_* と INTERVAL_DAYS が
-# config.py に定義されているのに呼び出しが1つも無く、テーブルが空のまま
-# geo_impact_bonus が常に0 → ENABLE_GEO_SIGNAL=False という
-# 「結果としての停止」になっていた。
-# 配線後は間隔判定が正しく効くこと（＝毎日叩かないこと）を保証する。
+# 【目的】geopolitics.company_country_exposure を埋める3抽出器
+# （jogmec / sec_geo / edinet_exposure）を ENABLE_* と INTERVAL_DAYS に従って
+# 呼び、間隔判定が正しく効くこと（＝毎日叩かないこと）を保証する。
 # ==============================================================
 import sys
 from datetime import date

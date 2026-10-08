@@ -108,7 +108,7 @@
 # 【依存】
 #   independence_score_calculator.py（候補リスト受取）
 #   追加ライブラリなし（標準ライブラリのみ）
-#   ★ 全関数を try/except で保護。失敗時は空dict/listを返す。
+#   全関数を try/except で保護。失敗時は空dict/listを返す。
 # ==============================================================
 
 from __future__ import annotations
