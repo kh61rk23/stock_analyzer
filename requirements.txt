@@ -65,3 +65,5 @@ google-cloud-bigquery
 db-dtypes  # BigQuery query_to_df() のDATE/JSON型変換に必要（ローカルCLI含む）
 google-cloud-bigquery-storage  # 2026-07-12: 未導入だとBQ読取のたびUserWarning＋低速なREST経路になる
 google-auth
+pyarrow>=14.0.0  # bi_export.py の parquet 書き出し
+duckdb>=1.0.0      # tests/test_bi_templates.py（BIテンプレのSQL検査）

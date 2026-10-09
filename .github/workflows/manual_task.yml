@@ -12,6 +12,7 @@ on:
           - country_profile
           - monthly_mail_prev_month
           - seisakudb_probe
+          - bi_export
 
 permissions:
   contents: write
@@ -48,6 +49,7 @@ jobs:
             country_profile) python -u country_profile_builder.py ;;
             monthly_mail_prev_month) python -u monthly_mail.py "$(date -d "$(date +%Y-%m-01) -1 day" +%Y%m)" ;;
             seisakudb_probe) python -u seisakudb_ingestor.py --probe ;;
+            bi_export) python -u bi_export.py ;;
           esac
       - name: Commit state
         if: always()
@@ -55,6 +57,7 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add stock_data/data/ 2>/dev/null || true
+          git add stock_data/bi/ 2>/dev/null || true
           git diff --cached --quiet && exit 0
           git commit -m "auto: manual task ${{ inputs.task }}"
           for i in 1 2 3; do git pull --rebase origin main && git push && exit 0; sleep 10; done

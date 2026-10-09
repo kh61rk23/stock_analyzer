@@ -386,6 +386,19 @@ jobs:
           ALERT_GMAIL_TO:       ${{ secrets.ALERT_GMAIL_TO }}
         run: python -u monthly_runner.py 2>&1
 
+      # BI基盤のマート（bi/marts/*.sql）を parquet にして stock_data/bi/ へ書き出す。
+      # 1マート1クエリ。内容が前回と同じなら parquet は書き換えない（git肥大の防止）。
+      # 失敗しても日次本体は止めないが、終了コード非0はログに ❌ で残す。
+      - name: 📦 BI export (marts to parquet)
+        if: steps.set-mode.outputs.mode != 'single'
+        continue-on-error: true
+        env:
+          STOCK_ANALYZER_BASE:  ${{ github.workspace }}/stock_data
+          BQ_PROJECT_ID:        ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS:       ${{ secrets.BQ_CREDENTIALS }}
+        run: |
+          python -u bi_export.py 2>&1 || { echo "❌ bi_export が失敗しました（日次本体は継続・stock_data/bi は前回のまま）"; exit 1; }
+
       # ── 5-B. 状態ファイル・キャッシュをリポジトリにコミット ───────
       # 2026-07-12 BUG-03対応: .iqy生成（Excel Webクエリ）は廃止（ENABLE_EXCEL_EXPORT=False）。
       # あわせて「ダッシュボードCSVが存在する時だけコミット」というゲートを撤去した。
@@ -422,6 +435,7 @@ jobs:
             git add stock_data/orders/ 2>/dev/null || true
             git add stock_data/paper/ 2>/dev/null || true
             git add stock_data/ontology/ 2>/dev/null || true
+            git add stock_data/bi/ 2>/dev/null || true
             git add stock_data/*.json 2>/dev/null || true
             git diff --cached --quiet || git commit -m "auto: daily update $(date '+%Y-%m-%d')"
             # 2026-07-16是正: 未ステージ変更が残ると pull --rebase が

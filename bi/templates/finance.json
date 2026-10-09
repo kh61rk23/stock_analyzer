@@ -1,0 +1,670 @@
+[
+  {
+    "id": "fin_company_10y",
+    "domain": "finance",
+    "title": "会社の10年推移",
+    "question": "この会社の売上・営業利益・純利益は直近10年でどう動いたか",
+    "mart": "m_fin_annual",
+    "sql": "SELECT fiscal_year, name, net_sales, operating_income, net_income,\n       ROUND(operating_margin * 100, 2) AS operating_margin_pct\nFROM m_fin_annual\nWHERE sec_code4 = {{sec_code4}}\n  AND fiscal_year > (SELECT MAX(fiscal_year) FROM m_fin_annual WHERE sec_code4 = {{sec_code4}} AND net_sales IS NOT NULL) - {{years}}\nORDER BY fiscal_year",
+    "params": [
+      {
+        "name": "sec_code4",
+        "label": "証券コード（4桁）",
+        "type": "string",
+        "default": "7203"
+      },
+      {
+        "name": "years",
+        "label": "遡る年数",
+        "type": "int",
+        "default": 10,
+        "min": 1,
+        "max": 15
+      }
+    ],
+    "chart": {
+      "type": "line",
+      "x": "fiscal_year",
+      "y": [
+        "net_sales",
+        "operating_income",
+        "net_income"
+      ],
+      "series": null
+    },
+    "note": "金額は円。最新期は決算発表前だと空欄になることがある。"
+  },
+  {
+    "id": "fin_industry_opm",
+    "domain": "finance",
+    "title": "業種別の営業利益率",
+    "question": "どの業種が儲かっているか（営業利益率の業種平均と社数）",
+    "mart": "m_fin_annual",
+    "sql": "WITH d AS (\n  SELECT COALESCE(industry, '(不明)') AS industry_name, operating_margin\n  FROM m_fin_annual\n  WHERE fiscal_year = {{fiscal_year}} AND operating_margin BETWEEN -1 AND 1\n)\nSELECT industry_name, ROUND(AVG(operating_margin) * 100, 2) AS avg_operating_margin_pct, COUNT(*) AS companies\nFROM d\nGROUP BY industry_name\nHAVING COUNT(*) >= {{min_companies}}\nORDER BY avg_operating_margin_pct DESC",
+    "params": [
+      {
+        "name": "fiscal_year",
+        "label": "決算年（期末の年）",
+        "type": "int",
+        "default": 2025,
+        "min": 2016,
+        "max": 2030
+      },
+      {
+        "name": "min_companies",
+        "label": "最低社数",
+        "type": "int",
+        "default": 5,
+        "min": 1,
+        "max": 1000
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "industry_name",
+      "y": "avg_operating_margin_pct",
+      "series": null
+    },
+    "note": "単純平均（社の大きさは加味しない）。営業利益率が±100%を超える外れ値は除く。"
+  },
+  {
+    "id": "fin_rnd_ranking",
+    "domain": "finance",
+    "title": "研究開発費率ランキング",
+    "question": "売上に対する研究開発費の割合が高い会社は",
+    "mart": "m_fin_annual",
+    "sql": "SELECT sec_code4, name, industry, ROUND(rnd_ratio * 100, 2) AS rnd_ratio_pct, rnd_expenses, net_sales\nFROM m_fin_annual\nWHERE fiscal_year = {{fiscal_year}} AND rnd_ratio IS NOT NULL AND rnd_ratio <= 1 AND net_sales >= {{min_sales}}\nORDER BY rnd_ratio DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "fiscal_year",
+        "label": "決算年（期末の年）",
+        "type": "int",
+        "default": 2025,
+        "min": 2016,
+        "max": 2030
+      },
+      {
+        "name": "min_sales",
+        "label": "売上高の下限（円）",
+        "type": "number",
+        "default": 10000000000,
+        "min": 0
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 500
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "name",
+      "y": "rnd_ratio_pct",
+      "series": null
+    },
+    "note": "売上100億円未満は研究開発費率が極端に出やすいので既定で除外。"
+  },
+  {
+    "id": "fin_sales_growth_3y",
+    "domain": "finance",
+    "title": "売上3年成長率の上位",
+    "question": "3年前から売上を最も伸ばした会社は",
+    "mart": "m_fin_annual",
+    "sql": "WITH w AS (\n  SELECT edinet_code, sec_code4, name, industry, fiscal_year, net_sales,\n         LAG(net_sales, 3) OVER (PARTITION BY edinet_code ORDER BY fiscal_year) AS sales_3y_ago,\n         LAG(fiscal_year, 3) OVER (PARTITION BY edinet_code ORDER BY fiscal_year) AS year_3y_ago\n  FROM m_fin_annual\n  WHERE net_sales IS NOT NULL\n)\nSELECT sec_code4, name, industry, sales_3y_ago, net_sales,\n       ROUND((net_sales / NULLIF(sales_3y_ago, 0) - 1) * 100, 1) AS growth_3y_pct\nFROM w\nWHERE fiscal_year = {{fiscal_year}} AND year_3y_ago = fiscal_year - 3 AND sales_3y_ago >= {{min_sales}}\nORDER BY growth_3y_pct DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "fiscal_year",
+        "label": "決算年（期末の年）",
+        "type": "int",
+        "default": 2025,
+        "min": 2016,
+        "max": 2030
+      },
+      {
+        "name": "min_sales",
+        "label": "3年前の売上高の下限（円）",
+        "type": "number",
+        "default": 10000000000,
+        "min": 0
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 500
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "name",
+      "y": "growth_3y_pct",
+      "series": null
+    },
+    "note": "3年前の決算が欠けている会社は対象外（行の並びではなく年で3年前を確認している）。合併・買収による増加も含む。"
+  },
+  {
+    "id": "fin_up_up_trend",
+    "domain": "finance",
+    "title": "増収増益企業数の年次推移",
+    "question": "売上も営業利益も前年より増えた会社は毎年どれだけあるか",
+    "mart": "m_fin_annual",
+    "sql": "WITH w AS (\n  SELECT edinet_code, fiscal_year, net_sales, operating_income,\n         LAG(net_sales) OVER (PARTITION BY edinet_code ORDER BY fiscal_year) AS prev_sales,\n         LAG(operating_income) OVER (PARTITION BY edinet_code ORDER BY fiscal_year) AS prev_op,\n         LAG(fiscal_year) OVER (PARTITION BY edinet_code ORDER BY fiscal_year) AS prev_year\n  FROM m_fin_annual\n  WHERE net_sales IS NOT NULL AND operating_income IS NOT NULL\n)\nSELECT fiscal_year,\n       COUNT(*) AS companies,\n       SUM(CASE WHEN net_sales > prev_sales AND operating_income > prev_op THEN 1 ELSE 0 END) AS up_up_companies,\n       ROUND(SUM(CASE WHEN net_sales > prev_sales AND operating_income > prev_op THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS up_up_pct\nFROM w\nWHERE prev_year = fiscal_year - 1 AND fiscal_year BETWEEN {{from_year}} AND {{to_year}}\nGROUP BY fiscal_year\nORDER BY fiscal_year",
+    "params": [
+      {
+        "name": "from_year",
+        "label": "開始年",
+        "type": "int",
+        "default": 2017,
+        "min": 2016,
+        "max": 2030
+      },
+      {
+        "name": "to_year",
+        "label": "終了年",
+        "type": "int",
+        "default": 2025,
+        "min": 2016,
+        "max": 2030
+      }
+    ],
+    "chart": {
+      "type": "line",
+      "x": "fiscal_year",
+      "y": [
+        "up_up_companies",
+        "up_up_pct"
+      ],
+      "series": null
+    },
+    "note": "前年の決算が両方そろう会社だけが母数。母数は年によって変わるので割合も併記。"
+  },
+  {
+    "id": "fin_industry_salary",
+    "domain": "finance",
+    "title": "業種別の平均年収",
+    "question": "業種ごとの平均年間給与（万円）",
+    "mart": "m_fin_annual",
+    "sql": "WITH d AS (\n  SELECT COALESCE(industry, '(不明)') AS industry_name, avg_annual_salary\n  FROM m_fin_annual\n  WHERE fiscal_year = {{fiscal_year}} AND avg_annual_salary > 0\n)\nSELECT industry_name, ROUND(AVG(avg_annual_salary) / 10000, 0) AS avg_salary_man_yen, COUNT(*) AS companies\nFROM d\nGROUP BY industry_name\nHAVING COUNT(*) >= {{min_companies}}\nORDER BY avg_salary_man_yen DESC",
+    "params": [
+      {
+        "name": "fiscal_year",
+        "label": "決算年（期末の年）",
+        "type": "int",
+        "default": 2025,
+        "min": 2016,
+        "max": 2030
+      },
+      {
+        "name": "min_companies",
+        "label": "最低社数",
+        "type": "int",
+        "default": 5,
+        "min": 1,
+        "max": 1000
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "industry_name",
+      "y": "avg_salary_man_yen",
+      "series": null
+    },
+    "note": "有報の「平均年間給与」（提出会社単体・持株会社は社員が少なく高く出ることがある）。"
+  },
+  {
+    "id": "fin_sales_per_employee",
+    "domain": "finance",
+    "title": "1人当たり売上ランキング",
+    "question": "従業員1人当たりの売上が大きい会社は",
+    "mart": "m_fin_annual",
+    "sql": "SELECT sec_code4, name, industry, employee_count, net_sales,\n       ROUND(net_sales / NULLIF(employee_count, 0) / 1000000, 1) AS sales_per_employee_m_yen\nFROM m_fin_annual\nWHERE fiscal_year = {{fiscal_year}} AND net_sales > 0 AND employee_count >= {{min_employees}}\nORDER BY sales_per_employee_m_yen DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "fiscal_year",
+        "label": "決算年（期末の年）",
+        "type": "int",
+        "default": 2025,
+        "min": 2016,
+        "max": 2030
+      },
+      {
+        "name": "min_employees",
+        "label": "従業員数の下限",
+        "type": "int",
+        "default": 100,
+        "min": 1,
+        "max": 1000000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 500
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "name",
+      "y": "sales_per_employee_m_yen",
+      "series": null
+    },
+    "note": "単位は百万円/人。売上は連結、従業員数は連結の人数（employee_count）。商社・持株会社が上位に出やすい。"
+  },
+  {
+    "id": "fin_fcf_positive_share",
+    "domain": "finance",
+    "title": "フリーCF黒字企業の割合",
+    "question": "フリーキャッシュフローが黒字の会社は毎年どれだけあるか",
+    "mart": "m_fin_annual",
+    "sql": "SELECT fiscal_year,\n       COUNT(*) AS companies,\n       SUM(CASE WHEN free_cf > 0 THEN 1 ELSE 0 END) AS fcf_positive,\n       ROUND(SUM(CASE WHEN free_cf > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS fcf_positive_pct\nFROM m_fin_annual\nWHERE free_cf IS NOT NULL AND fiscal_year BETWEEN {{from_year}} AND {{to_year}}\nGROUP BY fiscal_year\nORDER BY fiscal_year",
+    "params": [
+      {
+        "name": "from_year",
+        "label": "開始年",
+        "type": "int",
+        "default": 2017,
+        "min": 2016,
+        "max": 2030
+      },
+      {
+        "name": "to_year",
+        "label": "終了年",
+        "type": "int",
+        "default": 2025,
+        "min": 2016,
+        "max": 2030
+      }
+    ],
+    "chart": {
+      "type": "line",
+      "x": "fiscal_year",
+      "y": "fcf_positive_pct",
+      "series": null
+    },
+    "note": "フリーCF＝営業CF＋投資CF（財務データの定義）。"
+  },
+  {
+    "id": "fin_equity_ratio_dist",
+    "domain": "finance",
+    "title": "自己資本比率の分布",
+    "question": "自己資本比率はどの区間に何社いるか",
+    "mart": "m_fin_annual",
+    "sql": "WITH d AS (\n  SELECT CASE WHEN equity_ratio < 0 THEN 0\n              WHEN equity_ratio < 0.2 THEN 1\n              WHEN equity_ratio < 0.4 THEN 2\n              WHEN equity_ratio < 0.6 THEN 3\n              WHEN equity_ratio < 0.8 THEN 4\n              ELSE 5 END AS bucket_no,\n         CASE WHEN equity_ratio < 0 THEN '債務超過'\n              WHEN equity_ratio < 0.2 THEN '0〜20%'\n              WHEN equity_ratio < 0.4 THEN '20〜40%'\n              WHEN equity_ratio < 0.6 THEN '40〜60%'\n              WHEN equity_ratio < 0.8 THEN '60〜80%'\n              ELSE '80%以上' END AS bucket\n  FROM m_fin_annual\n  WHERE fiscal_year = {{fiscal_year}} AND equity_ratio IS NOT NULL\n)\nSELECT bucket_no, bucket, COUNT(*) AS companies\nFROM d\nGROUP BY bucket_no, bucket\nORDER BY bucket_no",
+    "params": [
+      {
+        "name": "fiscal_year",
+        "label": "決算年（期末の年）",
+        "type": "int",
+        "default": 2025,
+        "min": 2016,
+        "max": 2030
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "bucket",
+      "y": "companies",
+      "series": null
+    },
+    "note": "自己資本比率＝純資産(equity)÷総資産。銀行・保険は構造上低く出る。"
+  },
+  {
+    "id": "fin_goodwill_heavy",
+    "domain": "finance",
+    "title": "のれんが純資産に占める割合が大きい会社",
+    "question": "買収で積んだのれんが純資産に比べて重い会社は",
+    "mart": "m_fin_annual",
+    "sql": "SELECT sec_code4, name, industry, goodwill, net_assets,\n       ROUND(goodwill / NULLIF(net_assets, 0) * 100, 1) AS goodwill_to_net_assets_pct\nFROM m_fin_annual\nWHERE fiscal_year = {{fiscal_year}} AND goodwill > 0 AND net_assets > {{min_net_assets}}\nORDER BY goodwill_to_net_assets_pct DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "fiscal_year",
+        "label": "決算年（期末の年）",
+        "type": "int",
+        "default": 2025,
+        "min": 2016,
+        "max": 2030
+      },
+      {
+        "name": "min_net_assets",
+        "label": "純資産の下限（円）",
+        "type": "number",
+        "default": 1000000000,
+        "min": 0
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 500
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "name",
+      "y": "goodwill_to_net_assets_pct",
+      "series": null
+    },
+    "note": "のれん/純資産が100%超は、のれんが減損されると債務超過に近づく目安。IFRS採用会社はのれんの扱いが違う。"
+  },
+  {
+    "id": "fin_payout_dist",
+    "domain": "finance",
+    "title": "配当性向の分布",
+    "question": "配当性向はどの区間に何社いるか",
+    "mart": "m_fin_annual",
+    "sql": "WITH d AS (\n  SELECT CASE WHEN payout_ratio <= 0 THEN 0\n              WHEN payout_ratio < 0.2 THEN 1\n              WHEN payout_ratio < 0.4 THEN 2\n              WHEN payout_ratio < 0.6 THEN 3\n              WHEN payout_ratio < 1 THEN 4\n              ELSE 5 END AS bucket_no,\n         CASE WHEN payout_ratio <= 0 THEN '無配・0%'\n              WHEN payout_ratio < 0.2 THEN '0〜20%'\n              WHEN payout_ratio < 0.4 THEN '20〜40%'\n              WHEN payout_ratio < 0.6 THEN '40〜60%'\n              WHEN payout_ratio < 1 THEN '60〜100%'\n              ELSE '100%以上' END AS bucket\n  FROM m_fin_annual\n  WHERE fiscal_year = {{fiscal_year}} AND payout_ratio IS NOT NULL\n)\nSELECT bucket_no, bucket, COUNT(*) AS companies\nFROM d\nGROUP BY bucket_no, bucket\nORDER BY bucket_no",
+    "params": [
+      {
+        "name": "fiscal_year",
+        "label": "決算年（期末の年）",
+        "type": "int",
+        "default": 2025,
+        "min": 2016,
+        "max": 2030
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "bucket",
+      "y": "companies",
+      "series": null
+    },
+    "note": "配当性向は連結ベースの自前計算値（小数）。赤字で配当を出す会社は100%以上に入る。"
+  },
+  {
+    "id": "fin_roe_pbr_scatter",
+    "domain": "finance",
+    "title": "ROE × PBR 散布図",
+    "question": "ROEが高い会社ほどPBRも高いか",
+    "mart": "m_fin_annual",
+    "sql": "SELECT sec_code4, name, COALESCE(industry, '(不明)') AS industry_name,\n       ROUND(roe * 100, 2) AS roe_pct, ROUND(pbr, 2) AS pbr\nFROM m_fin_annual\nWHERE fiscal_year = {{fiscal_year}} AND roe BETWEEN -0.5 AND 0.6 AND pbr > 0 AND pbr <= {{max_pbr}}",
+    "params": [
+      {
+        "name": "fiscal_year",
+        "label": "決算年（期末の年）",
+        "type": "int",
+        "default": 2025,
+        "min": 2016,
+        "max": 2030
+      },
+      {
+        "name": "max_pbr",
+        "label": "PBRの上限（外れ値除去）",
+        "type": "number",
+        "default": 10,
+        "min": 1,
+        "max": 300
+      }
+    ],
+    "chart": {
+      "type": "scatter",
+      "x": "roe_pct",
+      "y": "pbr",
+      "series": "industry_name"
+    },
+    "note": "PBRは有報記載の期末ベース。ROEが-50%〜60%の範囲だけを描く。"
+  },
+  {
+    "id": "fin_gross_vs_sga",
+    "domain": "finance",
+    "title": "粗利率と販管費率の業種比較",
+    "question": "業種ごとの粗利率と販管費率の違い",
+    "mart": "m_fin_annual",
+    "sql": "WITH d AS (\n  SELECT COALESCE(industry, '(不明)') AS industry_name, gross_margin, sga_ratio\n  FROM m_fin_annual\n  WHERE fiscal_year = {{fiscal_year}} AND gross_margin BETWEEN 0 AND 1 AND sga_ratio BETWEEN 0 AND 1\n)\nSELECT industry_name,\n       ROUND(AVG(gross_margin) * 100, 1) AS avg_gross_margin_pct,\n       ROUND(AVG(sga_ratio) * 100, 1) AS avg_sga_ratio_pct,\n       COUNT(*) AS companies\nFROM d\nGROUP BY industry_name\nHAVING COUNT(*) >= {{min_companies}}\nORDER BY avg_gross_margin_pct DESC",
+    "params": [
+      {
+        "name": "fiscal_year",
+        "label": "決算年（期末の年）",
+        "type": "int",
+        "default": 2025,
+        "min": 2016,
+        "max": 2030
+      },
+      {
+        "name": "min_companies",
+        "label": "最低社数",
+        "type": "int",
+        "default": 5,
+        "min": 1,
+        "max": 1000
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "industry_name",
+      "y": [
+        "avg_gross_margin_pct",
+        "avg_sga_ratio_pct"
+      ],
+      "series": null
+    },
+    "note": "粗利と販管費の両方を開示している会社だけ。粗利を開示しない業種（銀行・一部サービス）は出ない。"
+  },
+  {
+    "id": "fin_loss_companies",
+    "domain": "finance",
+    "title": "赤字企業数の推移",
+    "question": "純損失の会社は毎年どれだけあるか",
+    "mart": "m_fin_annual",
+    "sql": "SELECT fiscal_year,\n       COUNT(*) AS companies,\n       SUM(CASE WHEN net_income < 0 THEN 1 ELSE 0 END) AS loss_companies,\n       ROUND(SUM(CASE WHEN net_income < 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS loss_pct\nFROM m_fin_annual\nWHERE net_income IS NOT NULL AND fiscal_year BETWEEN {{from_year}} AND {{to_year}}\nGROUP BY fiscal_year\nORDER BY fiscal_year",
+    "params": [
+      {
+        "name": "from_year",
+        "label": "開始年",
+        "type": "int",
+        "default": 2017,
+        "min": 2016,
+        "max": 2030
+      },
+      {
+        "name": "to_year",
+        "label": "終了年",
+        "type": "int",
+        "default": 2025,
+        "min": 2016,
+        "max": 2030
+      }
+    ],
+    "chart": {
+      "type": "line",
+      "x": "fiscal_year",
+      "y": [
+        "loss_companies",
+        "loss_pct"
+      ],
+      "series": null
+    },
+    "note": "純利益＝親会社株主に帰属する当期純利益で判定。"
+  },
+  {
+    "id": "fin_employee_change",
+    "domain": "finance",
+    "title": "従業員数の増減ランキング",
+    "question": "前年から従業員が最も増えた（減った）会社は",
+    "mart": "m_fin_annual",
+    "sql": "WITH w AS (\n  SELECT edinet_code, sec_code4, name, industry, fiscal_year, employee_count,\n         LAG(employee_count) OVER (PARTITION BY edinet_code ORDER BY fiscal_year) AS prev_count,\n         LAG(fiscal_year) OVER (PARTITION BY edinet_code ORDER BY fiscal_year) AS prev_year\n  FROM m_fin_annual\n  WHERE employee_count > 0\n)\nSELECT sec_code4, name, industry, prev_count, employee_count,\n       employee_count - prev_count AS change_count,\n       ROUND((employee_count * 1.0 / prev_count - 1) * 100, 1) AS change_pct\nFROM w\nWHERE fiscal_year = {{fiscal_year}} AND prev_year = fiscal_year - 1 AND prev_count >= {{min_employees}}\nORDER BY change_count DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "fiscal_year",
+        "label": "決算年（期末の年）",
+        "type": "int",
+        "default": 2025,
+        "min": 2016,
+        "max": 2030
+      },
+      {
+        "name": "min_employees",
+        "label": "前年の従業員数の下限",
+        "type": "int",
+        "default": 500,
+        "min": 1,
+        "max": 1000000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 500
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "name",
+      "y": "change_count",
+      "series": null
+    },
+    "note": "連結従業員数。M&Aや連結範囲の変更でも大きく動く。減少上位は並びを昇順にして見る。"
+  },
+  {
+    "id": "fin_industry_roe_trend",
+    "domain": "finance",
+    "title": "業種のROE推移",
+    "question": "この業種のROEの平均は年ごとにどう動いたか",
+    "mart": "m_fin_annual",
+    "sql": "SELECT fiscal_year,\n       ROUND(AVG(roe) * 100, 2) AS avg_roe_pct,\n       COUNT(*) AS companies\nFROM m_fin_annual\nWHERE industry = {{industry}} AND roe BETWEEN -1 AND 1\nGROUP BY fiscal_year\nHAVING COUNT(*) >= {{min_companies}}\nORDER BY fiscal_year",
+    "params": [
+      {
+        "name": "industry",
+        "label": "業種名",
+        "type": "string",
+        "default": "電気機器"
+      },
+      {
+        "name": "min_companies",
+        "label": "最低社数",
+        "type": "int",
+        "default": 5,
+        "min": 1,
+        "max": 1000
+      }
+    ],
+    "chart": {
+      "type": "line",
+      "x": "fiscal_year",
+      "y": "avg_roe_pct",
+      "series": null
+    },
+    "note": "業種名は東証33業種に近い表記（m_company.industry と同じ値）。ROEが±100%を超える外れ値は除く。"
+  },
+  {
+    "id": "fin_net_cash_rich",
+    "domain": "finance",
+    "title": "ネットキャッシュが厚い会社",
+    "question": "現預金から有利子負債を引いた手元資金が総資産に比べて厚い会社は",
+    "mart": "m_fin_annual",
+    "sql": "SELECT sec_code4, name, industry, cash_and_equiv, interest_bearing_debt, total_assets,\n       ROUND((cash_and_equiv - COALESCE(interest_bearing_debt, 0)) / NULLIF(total_assets, 0) * 100, 1) AS net_cash_to_assets_pct\nFROM m_fin_annual\nWHERE fiscal_year = {{fiscal_year}} AND cash_and_equiv > 0 AND total_assets >= {{min_assets}}\nORDER BY net_cash_to_assets_pct DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "fiscal_year",
+        "label": "決算年（期末の年）",
+        "type": "int",
+        "default": 2025,
+        "min": 2016,
+        "max": 2030
+      },
+      {
+        "name": "min_assets",
+        "label": "総資産の下限（円）",
+        "type": "number",
+        "default": 10000000000,
+        "min": 0
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 500
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "name",
+      "y": "net_cash_to_assets_pct",
+      "series": null
+    },
+    "note": "有利子負債が未開示の会社は負債0として扱う（過大に出る可能性）。銀行・証券は対象外にしたい場合は業種で絞る。"
+  },
+  {
+    "id": "fin_female_manager_by_industry",
+    "domain": "finance",
+    "title": "業種別の女性管理職比率",
+    "question": "女性管理職の比率が高い業種は",
+    "mart": "m_fin_annual",
+    "sql": "WITH d AS (\n  SELECT COALESCE(industry, '(不明)') AS industry_name, female_manager_ratio\n  FROM m_fin_annual\n  WHERE fiscal_year = {{fiscal_year}} AND female_manager_ratio BETWEEN 0 AND 1\n)\nSELECT industry_name, ROUND(AVG(female_manager_ratio) * 100, 1) AS avg_female_manager_pct, COUNT(*) AS companies\nFROM d\nGROUP BY industry_name\nHAVING COUNT(*) >= {{min_companies}}\nORDER BY avg_female_manager_pct DESC",
+    "params": [
+      {
+        "name": "fiscal_year",
+        "label": "決算年（期末の年）",
+        "type": "int",
+        "default": 2025,
+        "min": 2016,
+        "max": 2030
+      },
+      {
+        "name": "min_companies",
+        "label": "最低社数",
+        "type": "int",
+        "default": 5,
+        "min": 1,
+        "max": 1000
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "industry_name",
+      "y": "avg_female_manager_pct",
+      "series": null
+    },
+    "note": "開示が義務化された2023年3月期以降が中心。それ以前は母数が少ない。"
+  },
+  {
+    "id": "fin_sales_ranking",
+    "domain": "finance",
+    "title": "売上高ランキング",
+    "question": "売上が大きい会社の一覧（営業利益率つき）",
+    "mart": "m_fin_annual",
+    "sql": "SELECT sec_code4, name, industry, net_sales, operating_income,\n       ROUND(operating_margin * 100, 2) AS operating_margin_pct\nFROM m_fin_annual\nWHERE fiscal_year = {{fiscal_year}} AND net_sales IS NOT NULL\nORDER BY net_sales DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "fiscal_year",
+        "label": "決算年（期末の年）",
+        "type": "int",
+        "default": 2025,
+        "min": 2016,
+        "max": 2030
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 500
+      }
+    ],
+    "chart": {
+      "type": "table",
+      "x": "name",
+      "y": [
+        "net_sales",
+        "operating_income",
+        "operating_margin_pct"
+      ],
+      "series": null
+    },
+    "note": "単位は円。"
+  }
+]
