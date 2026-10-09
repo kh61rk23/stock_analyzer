@@ -126,7 +126,7 @@
         "name": "sec_code4",
         "label": "証券コード（4桁）",
         "type": "string",
-        "default": "7203"
+        "default": "8267"
       },
       {
         "name": "top_n",
@@ -160,7 +160,7 @@
         "name": "sec_code4",
         "label": "証券コード（4桁）",
         "type": "string",
-        "default": "7203"
+        "default": "8267"
       }
     ],
     "chart": {
@@ -292,7 +292,7 @@
         "name": "sec_code4",
         "label": "証券コード（4桁）",
         "type": "string",
-        "default": "7203"
+        "default": "8267"
       }
     ],
     "chart": {
