@@ -389,7 +389,9 @@ jobs:
       # BI基盤のマート（bi/marts/*.sql）を parquet にして stock_data/bi/ へ書き出す。
       # 1マート1クエリ。内容が前回と同じなら parquet は書き換えない（git肥大の防止）。
       # 失敗しても日次本体は止めないが、終了コード非0はログに ❌ で残す。
+      # 書き出しは「全部成功か、全部なし」。失敗した回は stock_data/bi を commit しない（下の Commit state files）。
       - name: 📦 BI export (marts to parquet)
+        id: bi-export
         if: steps.set-mode.outputs.mode != 'single'
         continue-on-error: true
         env:
@@ -409,6 +411,13 @@ jobs:
         run: |
             git config user.name  "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
+            # bi_export が失敗した回は stock_data/bi を前回のコミットへ戻す（途中まで書かれた成功分を commit しない）。
+            # continue-on-error なので conclusion は success になる。失敗の判定は outcome を使う。
+            if [ "${{ steps.bi-export.outcome }}" = "failure" ]; then
+              git checkout -- stock_data/bi 2>/dev/null || true
+              git clean -fdq -- stock_data/bi 2>/dev/null || true
+              echo "↩️ bi_export 失敗のため stock_data/bi は commit しない（前回のまま）"
+            fi
             # ── 2026-09-10: 個別列挙（git add 126行）をディレクトリ単位へ集約 ──
             # 列挙方式は「新しい成果物を足したら1行追記する」運用が前提だが、
             # 実際には追記漏れと実態とのズレが溜まっていた（棚卸し時点で

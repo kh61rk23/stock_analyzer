@@ -35,6 +35,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Run task
+        id: run
         env:
           BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
           BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
@@ -56,6 +57,11 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # タスクが失敗した回は stock_data/bi を前回のコミットへ戻す（bi_export は全部成功か全部なし）
+          if [ "${{ steps.run.outcome }}" != "success" ]; then
+            git checkout -- stock_data/bi 2>/dev/null || true
+            git clean -fdq -- stock_data/bi 2>/dev/null || true
+          fi
           git add stock_data/data/ 2>/dev/null || true
           git add stock_data/bi/ 2>/dev/null || true
           git diff --cached --quiet && exit 0

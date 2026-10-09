@@ -10,18 +10,22 @@ bi_export.py — BI基盤のマートを BigQuery から書き出す
         python3 bi_export.py --dry-run         … 構文とスキャン量の確認だけ（ファイルは書かない）
         python3 bi_export.py --templates-only  … テンプレートのコピーだけ（BQ不要）
 【認証】edinet_bq_client.EDINETBQClient（GitHub Actions は BQ_CREDENTIALS、ローカルは BQ_CREDENTIALS_PATH）
-【終了コード】どれか1つでも失敗したら 1。成功したマートの書き出しは残す。
+【終了コード】どれか1つでも失敗したら 1。書き出しは「全部成功か、全部なし」：失敗したマートが1つでもあれば、
+        本番表 bi.<mart>・parquet・manifest.json・templates のどれも変えない（ログに失敗したマート名を出す）。
 
 内容が前回と同じマートは parquet を書き換えない。parquet は同じ内容でも書き出しのたびにバイト列が
 変わりうるため、行を主キーで並べ替えた Arrow 表のハッシュ（content_sha）で同一性を判定する。
 これを怠ると毎日 parquet がコミットされて git が肥大する。
 
-実体化の手順（1マートあたり重いクエリは1本だけ）:
-  1. `CREATE OR REPLACE TABLE bi.<mart>__next AS <マートSQL>` … 元表を読むのはここだけ
-  2. 行数を検査（0行・前回の半分未満は失敗。ダッシュボードが読む本番表はまだ触らない）
-  3. `list_rows` で表の中身を読む … tabledata.list は課金されない（クエリではない）
-  4. コピージョブ（無料）で `bi.<mart>` に差し替え、ステージ表を消す
-権限不足などで実体化できないときは握り潰さず失敗（終了コード1）にする。
+実行は4段階（1回の bi_export で全マートを一斉に進める）:
+  0. テンプレートを検査（NGなら何もせず失敗）。location が違う元表（US の ontology.signal_event）は
+     `list_rows`（無料）→ load job（無料）で asia-northeast1 の `bi.src_*` へ写す
+  1. 全マートについて `CREATE OR REPLACE TABLE bi.<mart>__next AS <マートSQL>` … 元表を読むのはここだけ
+  2. 全マートの行数検査（0行・前回の半分未満は失敗）と `list_rows` での中身の読み出し（tabledata.list は課金されない）
+  3. 1・2 が全マートで通った時だけ、コピージョブ（無料）で全マートの `bi.<mart>` を続けて差し替える
+  4. parquet・manifest.json・templates を書き出す（一時ファイルにそろえてから置き換える）
+ステージ表は成否にかかわらず最後に消す。権限不足などで実体化できないときは握り潰さず失敗（終了コード1）にする。
+`bi.src_*` は元表の写しで、ダッシュボードも board も読まない（マートSQLの入力）。
 """
 from __future__ import annotations
 
@@ -58,6 +62,9 @@ MART_KEYS = {
     "m_re_holdings_pref": ["edinet_code", "fiscal_year", "prefecture"],
     "m_tax_node": ["node_id"],
     "m_company_tax": ["company_id", "node_id"],
+    "m_theme": ["theme_name", "ticker"],
+    "m_theme_def": ["theme_name", "sector_code", "market"],
+    "m_theme_signal": ["theme_name", "sector_code", "fired_at", "signal_category", "direction"],
     "m_screener": ["edinet_code"],
 }
 # 前回の行数のこの割合を下回ったら、壊れた結果とみなして上書きしない
@@ -67,6 +74,15 @@ PROJECT = "stock-analyzer-edinet"
 DATASET = "bi"
 LOCATION = "asia-northeast1"  # マートの元表（edinet・geopolitics・real_estate）と同じ。違うと JOIN できない
 STAGE_SUFFIX = "__next"
+# location が asia-northeast1 と違う元表。クエリを使わず list_rows（無料）→ load job（無料）で bi.<dest> へ写す。
+# 同じクエリで JOIN できない US の表を、費用を増やさずマートSQLから読めるようにするため。
+SOURCES = [
+    {
+        "source": "stock-analyzer-edinet.ontology.signal_event",
+        "dest": "src_signal_event",
+        "columns": ["event_id", "fired_at", "ticker", "sector_code", "signal_category", "signal_value", "direction", "source_module"],
+    },
+]
 
 
 def sha256_text(text: str) -> str:
@@ -190,8 +206,9 @@ def check_rows(mart: str, rows: int, prev: dict | None) -> None:
             f"{mart}: 行数が前回 {prev['rows']} から {rows} に急減（壊れた結果とみなし上書きしない）")
 
 
-def export_mart(client, mart: str, prev: dict | None) -> tuple[dict | None, bool]:
-    """1マートを実体化して書き出す。(manifestエントリ, parquetを書いたか) を返す。失敗は例外。"""
+def prepare_mart(client, mart: str, prev: dict | None) -> dict:
+    """1マートをステージ表に実体化して検査し、書き出す内容をメモリ上に用意する。本番表・ファイルは触らない。
+    失敗は例外（ステージ表はここで消す）。成功時のステージ表は呼び出し側が最後に消す。"""
     sql = (MART_DIR / f"{mart}.sql").read_text(encoding="utf-8")
     sql_sha = sha256_text(sql)
     staged = stage_mart(client, mart, sql)
@@ -199,36 +216,92 @@ def export_mart(client, mart: str, prev: dict | None) -> tuple[dict | None, bool
         check_rows(mart, staged["rows"], prev)
         table = canonical_table(read_stage(client, staged["stage"]), mart)
         check_rows(mart, table.num_rows, prev)
-        info = promote_mart(client, mart, staged["stage"])
-    finally:
+        sha = content_sha(table)
+        path = OUT_DIR / f"{mart}.parquet"
+        unchanged = bool(prev and prev.get("content_sha") == sha and path.exists())
+        parquet = None
+        if not unchanged:
+            buf = pa.BufferOutputStream()
+            pq.write_table(table, buf, compression="snappy")
+            parquet = buf.getvalue().to_pybytes()
+    except BaseException:
         drop_stage(client, staged["stage"])
+        raise
+    return {
+        "mart": mart, "stage": staged["stage"], "table": table, "sha": sha, "sql_sha": sql_sha,
+        "path": path, "parquet": parquet, "prev": prev,
+        "columns": [{"name": f.name, "type": friendly_type(f.type)} for f in table.schema],
+    }
+
+
+def finalize_entry(plan: dict, info: dict) -> dict:
+    """本番表の差し替え結果（info）を足して manifest の項目を作る。"""
     bq = {"table": info["table"], "table_bytes": info["table_bytes"]}
-    sha = content_sha(table)
-    path = OUT_DIR / f"{mart}.parquet"
-    columns = [{"name": f.name, "type": friendly_type(f.type)} for f in table.schema]
-    if prev and prev.get("content_sha") == sha and path.exists():
+    if plan["parquet"] is None:
         # 内容が同じなら parquet もマニフェスト項目も触らない（generated_at＝内容が変わった日時）
-        entry = dict(prev)
-        entry["sql_sha"] = sql_sha
+        entry = dict(plan["prev"])
+        entry["sql_sha"] = plan["sql_sha"]
         entry.update(bq)
-        return entry, False
-    buf = pa.BufferOutputStream()
-    pq.write_table(table, buf, compression="snappy")
-    write_atomic(path, buf.getvalue().to_pybytes())
-    entry = {
-        "mart": mart,
-        "rows": table.num_rows,
-        "columns": columns,
+        return entry
+    return {
+        "mart": plan["mart"],
+        "rows": plan["table"].num_rows,
+        "columns": plan["columns"],
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "sql_sha": sql_sha,
-        "content_sha": sha,
+        "sql_sha": plan["sql_sha"],
+        "content_sha": plan["sha"],
         **bq,
     }
-    return entry, True
 
 
-def copy_templates() -> list[str]:
-    """検査に通ったテンプレートだけを stock_data/bi/templates/ へ同期する。不合格があれば例外。"""
+def refresh_source(client, src: dict) -> int:
+    """location が違う元表を bi.<dest> へ写す（list_rows と load job はどちらも無料）。0行は失敗。"""
+    from google.cloud import bigquery
+
+    table = client.list_rows(src["source"]).to_arrow(create_bqstorage_client=False).select(src["columns"])
+    if table.num_rows == 0:
+        raise RuntimeError(f"{src['source']}: 0行（元表が空。写しを更新しない）")
+    buf = pa.BufferOutputStream()
+    pq.write_table(table, buf, compression="snappy")
+    cfg = bigquery.LoadJobConfig(source_format=bigquery.SourceFormat.PARQUET,
+                                 write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE)
+    import io
+    client.load_table_from_file(io.BytesIO(buf.getvalue().to_pybytes()), table_ref(src["dest"]),
+                                job_config=cfg, location=LOCATION).result()
+    return table.num_rows
+
+
+def sources_for(names: list[str]) -> list[dict]:
+    """選んだマートのSQLが読む写し（bi.src_*）に対応する元表。"""
+    sqls = [(MART_DIR / f"{n}.sql").read_text(encoding="utf-8") for n in names]
+    return [s for s in SOURCES if any(f"{DATASET}.{s['dest']}" in q for q in sqls)]
+
+
+def write_outputs(plans: list[dict], entries: dict[str, dict]) -> bool:
+    """parquet と manifest を一時ファイルにそろえてから置き換える。manifest を書いたら True。"""
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    pending: list[tuple[Path, Path]] = []
+    try:
+        for plan in plans:
+            if plan["parquet"] is not None:
+                tmp = plan["path"].with_name(plan["path"].name + ".tmp")
+                tmp.write_bytes(plan["parquet"])
+                pending.append((tmp, plan["path"]))
+        manifest = {"version": 1, "marts": [entries[k] for k in sorted(entries)]}
+        mtmp = MANIFEST.with_name(MANIFEST.name + ".tmp")
+        mtmp.write_bytes((json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+        pending.append((mtmp, MANIFEST))
+    except BaseException:
+        for tmp, _ in pending:
+            tmp.unlink(missing_ok=True)
+        raise
+    for tmp, dst in pending:
+        os.replace(tmp, dst)
+    return True
+
+
+def check_templates() -> list[str]:
+    """bi/templates/*.json を検査する。不合格があれば例外。合格したファイル名を返す。"""
     marts = set(mart_names())
     templates = bi_templates.load_templates(TEMPLATE_DIR)
     problems = []
@@ -241,6 +314,11 @@ def copy_templates() -> list[str]:
         seen.add(t.get("id"))
     if problems:
         raise RuntimeError("テンプレート検査NG:\n  " + "\n  ".join(problems))
+    return sorted(p.name for p in TEMPLATE_DIR.glob("*.json"))
+
+
+def sync_templates() -> list[str]:
+    """検査済みのテンプレートを stock_data/bi/templates/ へ同期する（消えたJSONは削除）。"""
     dest = OUT_DIR / "templates"
     dest.mkdir(parents=True, exist_ok=True)
     names = set()
@@ -255,6 +333,11 @@ def copy_templates() -> list[str]:
     return sorted(names)
 
 
+def copy_templates() -> list[str]:
+    check_templates()
+    return sync_templates()
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("--only", action="append", help="このマートだけ（複数指定可）")
@@ -263,16 +346,24 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     failures: list[str] = []
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
 
+    # 0. テンプレート検査（NGなら BigQuery に触れる前に止める。書き出しは最後まで行わない）
+    templates_ok = True
     if not args.dry_run:
         try:
-            print(f"✅ テンプレートを同期: {', '.join(copy_templates())}")
+            print(f"✅ テンプレートを検査: {', '.join(check_templates())}")
         except Exception as e:  # noqa: BLE001 失敗は握り潰さず終了コードで返す
             print(f"❌ {e}")
             failures.append("templates")
+            templates_ok = False
     if args.templates_only:
+        if templates_ok:
+            OUT_DIR.mkdir(parents=True, exist_ok=True)
+            print(f"✅ テンプレートを同期: {', '.join(sync_templates())}")
         return 1 if failures else 0
+    if not templates_ok:
+        print(f"❌ bi_export 失敗: {failures}（本番表・parquet・manifest・templates は変更していない）")
+        return 1
 
     names = mart_names()
     if args.only:
@@ -285,42 +376,73 @@ def main(argv: list[str] | None = None) -> int:
     from edinet_bq_client import EDINETBQClient
     client = EDINETBQClient().client
 
-    if not args.dry_run:
-        try:
-            ensure_dataset(client)
-        except Exception as e:  # noqa: BLE001 実体化できないなら parquet も更新しない（表と食い違うため）
-            print(f"❌ {e}")
-            return 1
+    if args.dry_run:
+        for mart in names:
+            try:
+                sql = (MART_DIR / f"{mart}.sql").read_text(encoding="utf-8")
+                print(f"🧪 {mart}: dry-run OK  スキャン {dry_run_bytes(client, sql):,} bytes")
+            except Exception as e:  # noqa: BLE001
+                print(f"❌ {mart}: {type(e).__name__}: {e}")
+                failures.append(mart)
+        if failures:
+            print(f"❌ bi_export 失敗: {failures}")
+        return 1 if failures else 0
+
+    try:
+        ensure_dataset(client)  # 実体化できないなら parquet も更新しない（表と食い違うため）
+        for src in sources_for(names):
+            rows = refresh_source(client, src)
+            print(f"✅ 元表の写し {src['source']} → {DATASET}.{src['dest']}: {rows:,}行")
+    except Exception as e:  # noqa: BLE001
+        print(f"❌ {type(e).__name__}: {e}")
+        print("❌ bi_export 失敗: 本番表・parquet・manifest・templates は変更していない")
+        return 1
 
     manifest = load_manifest()
     by_name = {e["mart"]: e for e in manifest["marts"]}
-    changed = False
-    for mart in names:
-        try:
-            if args.dry_run:
-                sql = (MART_DIR / f"{mart}.sql").read_text(encoding="utf-8")
-                print(f"🧪 {mart}: dry-run OK  スキャン {dry_run_bytes(client, sql):,} bytes")
-                continue
-            entry, wrote = export_mart(client, mart, by_name.get(mart))
-            if entry != by_name.get(mart):
-                by_name[mart] = entry
-                changed = True
-            state = "更新" if wrote else "変更なし（parquet据え置き）"
-            print(f"✅ {mart}: {entry['rows']:,}行 {len(entry['columns'])}列 表 {entry['table']} "
-                  f"{entry['table_bytes']:,}bytes {state}")
-        except Exception as e:  # noqa: BLE001 マート単位で続行し、最後に非0で返す
-            print(f"❌ {mart}: {type(e).__name__}: {e}")
-            failures.append(mart)
+    plans: list[dict] = []
+    try:
+        # 1・2. 全マートのステージ表を作って検査する（本番表・ファイルはまだ触らない）
+        for mart in names:
+            try:
+                plans.append(prepare_mart(client, mart, by_name.get(mart)))
+                print(f"🧪 {mart}: ステージ表OK {plans[-1]['table'].num_rows:,}行")
+            except Exception as e:  # noqa: BLE001 失敗したマート名をすべて出すため最後まで検査する
+                print(f"❌ {mart}: {type(e).__name__}: {e}")
+                failures.append(mart)
+        if failures:
+            print(f"❌ bi_export 失敗マート: {failures}（本番表・parquet・manifest・templates は変更していない）")
+            return 1
 
-    if changed:
-        manifest = {"version": 1, "marts": [by_name[k] for k in sorted(by_name)]}
-        write_atomic(MANIFEST, (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
-        total = sum(e.get("table_bytes", 0) for e in manifest["marts"])
-        print(f"✅ manifest.json を更新（{len(manifest['marts'])}マート・実体化した表の合計 {total:,}bytes）")
-    if failures:
-        print(f"❌ bi_export 失敗: {failures}")
-        return 1
-    return 0
+        # 3. 全部通ったので本番表を続けて差し替える
+        entries = dict(by_name)
+        promoted: list[str] = []
+        for plan in plans:
+            try:
+                info = promote_mart(client, plan["mart"], plan["stage"])
+            except Exception as e:  # noqa: BLE001
+                print(f"❌ {plan['mart']}: 本番表の差し替えに失敗 {type(e).__name__}: {e}")
+                if promoted:
+                    print(f"❌ 差し替え済み（次回の実行で parquet と揃う）: {promoted}")
+                print("❌ bi_export 失敗: parquet・manifest・templates は変更していない")
+                return 1
+            promoted.append(plan["mart"])
+            entries[plan["mart"]] = finalize_entry(plan, info)
+
+        # 4. ファイルを書き出す
+        write_outputs(plans, entries)
+        for plan in plans:
+            e = entries[plan["mart"]]
+            state = "更新" if plan["parquet"] is not None else "変更なし（parquet据え置き）"
+            print(f"✅ {plan['mart']}: {e['rows']:,}行 {len(e['columns'])}列 表 {e['table']} "
+                  f"{e['table_bytes']:,}bytes {state}")
+        total = sum(e.get("table_bytes", 0) for e in entries.values())
+        print(f"✅ manifest.json を更新（{len(entries)}マート・実体化した表の合計 {total:,}bytes）")
+        print(f"✅ テンプレートを同期: {', '.join(sync_templates())}")
+        return 0
+    finally:
+        for plan in plans:
+            drop_stage(client, plan["stage"])
 
 
 if __name__ == "__main__":
