@@ -20,6 +20,8 @@ PROJECT = "stock-analyzer-edinet"
 DOMAINS = {"finance": "財務・業績", "geo": "地政学", "realestate": "不動産", "taxonomy": "技術分類",
            "theme": "テーマ株", "market": "株価・スクリーニング", "us": "米国株"}
 MART_DESC = {
+    "m_tax_node": "技術分類ツリー。1ノード1行（階層・領域・紐づく企業数）",
+    "m_company_tax": "企業×技術分類。1社1ノード1行＋直近年度の財務（紐づくのは一部の会社のみ・自動推定）",
     "m_company": "上場会社マスタ。1社1行",
     "m_fin_annual": "年次財務。1社1年度1行（fiscal_year＝決算期末の年）",
     "m_country_profile": "国プロファイル。1か国1行（民主主義・汚職・法の支配・GDP・制裁など）",
@@ -30,6 +32,20 @@ MART_DESC = {
     "m_re_holdings_pref": "企業の保有不動産の都道府県別集約。1社×都道府県×年度1行",
 }
 LABELS = {
+    "node_id": "技術分類ID", "parent_id": "親ノードID", "node_name_ja": "技術分類名", "node_name_en": "技術分類名（英）",
+    "node_level": "階層", "node_type": "ノード種別", "supply_chain_pos": "サプライチェーン上の位置", "domain_id": "領域ID",
+    "domain_name_ja": "技術領域", "path_name": "分類パス", "child_count": "子ノード数", "company_count": "企業数",
+    "company_count_rollup": "企業数（下位含む）", "company_id": "企業ID", "entity_type": "主体の種別",
+    "relevance_score": "関連度", "confidence": "確からしさ", "confidence_type": "確からしさの種別",
+    "auto_derived": "自動推定", "verified_flag": "確認済み",
+    "country_code": "国コード", "country_name_ja": "国名", "region": "地域", "risk_date": "日付",
+    "composite_risk_score": "総合リスク", "gdelt_instability": "GDELT不安定度", "foreign_ministry_level": "外務省危険レベル",
+    "state_dept_level": "米国務省レベル", "sanction_flag": "制裁対象", "exposure_type": "権益の種類",
+    "exposure_strength": "依存度", "revenue_share_est": "売上依存の推定", "risk_weighted_score": "リスク加重スコア",
+    "municipality_name": "市区町村", "prefecture": "都道府県", "prefecture_name": "都道府県",
+    "land_price_yoy_change": "地価の前年比", "flood_risk_area_pct": "洪水リスク面積率", "facility_count": "施設数",
+    "land_area_m2": "土地面積(m2)", "book_value_land_m_yen": "土地簿価(百万円)", "land_value_est_m_yen": "土地時価目安(百万円)",
+    "unrealized_gain_est_m_yen": "含み益目安(百万円)", "population_change_pct": "人口増減率(2050)",
     "edinet_code": "EDINETコード", "sec_code4": "証券コード", "name": "社名", "industry": "業種",
     "fiscal_year": "年度", "fiscal_year_end": "決算期末", "net_sales": "売上高", "operating_income": "営業利益",
     "ordinary_income": "経常利益", "net_income": "純利益", "total_assets": "総資産", "equity": "自己資本",
