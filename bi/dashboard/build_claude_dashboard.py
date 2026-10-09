@@ -20,6 +20,10 @@ PROJECT = "stock-analyzer-edinet"
 DOMAINS = {"finance": "財務・業績", "geo": "地政学", "realestate": "不動産", "taxonomy": "技術分類",
            "theme": "テーマ株", "market": "株価・スクリーニング", "us": "米国株"}
 MART_DESC = {
+    "m_theme": "テーマ×銘柄。業種ごとの代表銘柄にその業種のテーマが付く（同じ業種のテーマは同じ銘柄集合）",
+    "m_theme_def": "テーマ定義。業種サブテーマの一覧（米国を含む）",
+    "m_theme_signal": "テーマ×日×シグナル種別。days_before_latest で直近N日に絞れる",
+    "m_screener": "企業スクリーナー。1社1行（最新の決算期×最新の株価）。株価系の列は約700社のみ",
     "m_tax_node": "技術分類ツリー。1ノード1行（階層・領域・紐づく企業数）",
     "m_company_tax": "企業×技術分類。1社1ノード1行＋直近年度の財務（紐づくのは一部の会社のみ・自動推定）",
     "m_company": "上場会社マスタ。1社1行",
@@ -32,6 +36,13 @@ MART_DESC = {
     "m_re_holdings_pref": "企業の保有不動産の都道府県別集約。1社×都道府県×年度1行",
 }
 LABELS = {
+    "ticker": "ティッカー", "employees": "従業員数", "interest_bearing_debt_basis": "有利子負債の算出方法",
+    "net_cash": "ネットキャッシュ", "de_ratio": "D/Eレシオ", "sales_growth_1y": "売上成長率(1年)",
+    "op_income_growth_1y": "営業利益成長率(1年)", "net_income_growth_1y": "純利益成長率(1年)", "sales_cagr_3y": "売上CAGR(3年)",
+    "shares_issued": "発行済株式数", "price_source": "株価の出所", "current_price": "株価", "price_date": "株価の日付",
+    "market_cap": "時価総額", "market_cap_b": "時価総額(億円)", "dividend_yield": "配当利回り", "net_cash_to_mcap": "ネットキャッシュ÷時価総額",
+    "composite_score": "総合スコア", "value_score": "割安スコア", "quality_score": "質スコア", "snapshot_date": "スナップショット日",
+    "rsi14": "RSI(14)", "week52_position_pct": "52週レンジ内の位置", "above_ma200": "200日線より上", "technical_date": "テクニカルの日付",
     "node_id": "技術分類ID", "parent_id": "親ノードID", "node_name_ja": "技術分類名", "node_name_en": "技術分類名（英）",
     "node_level": "階層", "node_type": "ノード種別", "supply_chain_pos": "サプライチェーン上の位置", "domain_id": "領域ID",
     "domain_name_ja": "技術領域", "path_name": "分類パス", "child_count": "子ノード数", "company_count": "企業数",

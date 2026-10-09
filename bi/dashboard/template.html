@@ -84,7 +84,9 @@ details.sql{margin-top:10px} details.sql pre{font-family:var(--f-mono);font-size
       <button role="tab" id="t-tpl" aria-selected="true" data-tab="tpl">テンプレ</button>
       <button role="tab" id="t-free" aria-selected="false" data-tab="free">自由分析</button>
       <button role="tab" id="t-ask" aria-selected="false" data-tab="ask">Claudeに聞く</button>
+      <button role="tab" id="t-scr" aria-selected="false" data-tab="scr">スクリーナー</button>
       <button role="tab" id="t-sql" aria-selected="false" data-tab="sql">SQL</button>
+      <button role="tab" id="t-slot" aria-selected="false" data-tab="slot">スロット</button>
     </div>
     <div id="p-tpl"></div>
     <div id="p-free" hidden></div>
@@ -95,10 +97,14 @@ details.sql{margin-top:10px} details.sql pre{font-family:var(--f-mono);font-size
       <div class="row" style="margin-top:8px"><button class="go" id="askGo">質問する</button><button class="ghost" id="askStop" hidden>止める</button></div>
       <div id="askOut"></div>
     </div>
+    <div id="p-scr" hidden></div>
+    <div id="p-slot" hidden></div>
     <div id="p-sql" hidden>
-      <p class="note">マート名（例 m_fin_annual）をそのまま FROM に書けます。読み取りのみ・最大1,000行。</p>
+      <p class="note">マート名（例 m_fin_annual）をそのまま FROM に書けます。読み取りのみ・最大1,000行。下のボタンで組み立てることもできます。</p>
+      <details class="sql" id="builder" open><summary>ボタンで SQL を組み立てる</summary><div id="bld"></div></details>
       <textarea id="sqlText"></textarea>
-      <div class="row" style="margin-top:8px"><button class="go" id="sqlGo">実行</button></div>
+      <div class="row" style="margin-top:8px"><button class="go" id="sqlGo">実行</button>
+        <label class="f">スロット名<input id="slotName" placeholder="例：高ROE割安"></label><button class="ghost" id="slotSave">SQLをスロットに保存</button><span class="note" id="slotMsg"></span></div>
       <div id="sqlOut"></div>
     </div>
     <div id="result"></div>
@@ -124,8 +130,11 @@ function wrapSql(sql){
   // 実体化済みのマートは小さな表（bi データセット）を直接読む。未実体化のものだけ元の表から組み立てる（読む量が大きい）
   const tables = used.filter(m => BI.marts[m].table), ctes = used.filter(m => !BI.marts[m].table);
   tables.forEach(m => { body = body.replace(new RegExp("\\b"+m+"\\b","g"), "`"+BI.marts[m].table+"`"); });
-  const head = ctes.length ? "WITH " + ctes.map(m => m + " AS (\n" + BI.marts[m].sql.trim().replace(/;\s*$/,"") + "\n)").join(",\n") + "\n" : "";
-  return head + "SELECT * FROM (\n" + body + "\n) LIMIT 1000";
+  // 外側で SELECT * FROM (...) に包むと ORDER BY の順が保証されないため、本文はそのまま使い LIMIT が無ければ足す
+  if(!/\blimit\s+\d+(\s+offset\s+\d+)?\s*$/i.test(body)) body += "\nLIMIT 1000";
+  if(!ctes.length) return body;
+  const defs = ctes.map(m => m + " AS (\n" + BI.marts[m].sql.trim().replace(/;\s*$/,"") + "\n)").join(",\n");
+  return /^with\b/i.test(body) ? "WITH " + defs + ",\n" + body.replace(/^with\s+/i, "") : "WITH " + defs + "\n" + body;
 }
 function bindParams(sql, params, values){
   return sql.replace(/\{\{(\w+)\}\}/g, (_, name) => {
@@ -133,9 +142,12 @@ function bindParams(sql, params, values){
     if(!p) throw new Error("未定義のパラメータ: "+name);
     const v = values[name] ?? p.default ?? "";
     if(p.type === "number" || p.type === "int"){
-      const n = Number(v); if(!Number.isFinite(n)) throw new Error(p.label+" は数値で入れてください");
-      return String(p.type === "int" ? Math.trunc(n) : n);
+      const n = Number(v); if(String(v).trim()==="" || !Number.isFinite(n)) throw new Error((p.label||p.name)+" は数値で入れてください");
+      if(p.type === "int" && !Number.isInteger(n)) throw new Error((p.label||p.name)+" は整数で入れてください");
+      if(p.min != null && n < p.min || p.max != null && n > p.max) throw new Error(`${p.label||p.name} は ${p.min ?? "−∞"}〜${p.max ?? "∞"} の範囲で入れてください`);
+      return String(n);
     }
+    // BigQuery（GoogleSQL）の文字列はバックスラッシュでエスケープする（'' の二重化は受け付けない）
     return "'" + String(v).replace(/\\/g,"\\\\").replace(/'/g,"\\'") + "'";
   });
 }
@@ -232,7 +244,7 @@ async function runTpl(){
   let sql;
   try{ sql = wrapSql(bindParams(CUR.sql, CUR.params, vals)); }catch(e){ $("result").innerHTML = `<div class="msg err">${esc(e.message)}</div>`; return; }
   $("result").innerHTML = `<div class="msg">BigQuery で集計中…</div>`;
-  try{ const res = await runBQ(sql); render(res, CUR.chart||{type:"table"}); showSql(sql, $("result")); }
+  try{ const res = await runBQ(sql); render(res, CUR.chart||{type:"table"}); showSql(sql, $("result")); logRun("テンプレ", CUR.title, bindParams(CUR.sql, CUR.params, vals)); }
   catch(e){ $("result").innerHTML = `<div class="msg err">${esc(errText(e))}</div>`; showSql(sql, $("result")); }
 }
 
@@ -298,7 +310,7 @@ async function runFree(){
       if(FREE.dims.length) FREE.dims = FREE.dims.length > 1 ? FREE.dims.slice(1) : FREE.dims;
       buildFree(); runFree();
     });
-    showSql(sql, $("result"));
+    showSql(sql, $("result")); logRun("自由分析", FREE.mart+"："+FREE.dims.join("×"), freeSql());
   }catch(e){ $("result").innerHTML = `<div class="msg err">${esc(errText(e))}</div>`; showSql(sql, $("result")); }
 }
 
@@ -327,7 +339,7 @@ ${schemaText()}
     $("askOut").innerHTML = `<p class="answer">${esc(a.explain||"")}</p>`;
     const sql = wrapSql(a.sql);
     $("result").innerHTML = `<div class="msg">BigQuery で集計中…</div>`;
-    try{ const res = await runBQ(sql); render(res, a.chart||{type:"table"}); showSql(sql, $("result")); $("sqlText").value = a.sql; }
+    try{ const res = await runBQ(sql); render(res, a.chart||{type:"table"}); showSql(sql, $("result")); $("sqlText").value = a.sql; logRun("Claudeに聞く", q, a.sql); }
     catch(e){ $("result").innerHTML = `<div class="msg err">${esc(errText(e))}</div>`; showSql(sql, $("result")); }
   }catch(e){
     const m = {not_granted:"Claude への質問が許可されていません。", rate_limited:"質問が多すぎます。少し時間をおいてください。", invalid_json:"SQLをうまく組めませんでした。質問を具体的にしてもう一度どうぞ。", cancelled:"止めました。", refused:"この質問には答えられませんでした。言い方を変えてください。"}[e && e.code] || (e && e.message) || "質問できませんでした";
@@ -335,25 +347,208 @@ ${schemaText()}
   }finally{ $("askGo").disabled = false; $("askStop").hidden = true; }
 }
 
+
+/* ── スロット（名前付き保存）と履歴：自分だけが読める data/users/<id>/ に保存する ── */
+let db = null, me = null, SLOTS = [], HIST = [];
+function ucol(name){ return db && me ? db.collection(`data/users/${me}/${name}`) : null; }
+async function loadSlots(){
+  const s = ucol("slots"), h = ucol("history"); if(!s) return;
+  try{ SLOTS = (await s.orderBy("order").get()).docs.map(d => ({id:d.id, ...d.data()})); }catch(e){ SLOTS = []; }
+  try{ HIST = (await h.orderBy("at","desc").limit(50).get()).docs.map(d => ({id:d.id, ...d.data()})); }catch(e){ HIST = []; }
+}
+let LASTLOG = "";
+async function logRun(kind, title, sql){
+  const h = ucol("history"); if(!h || !sql) return;
+  const key = kind + "\u0000" + sql; if(key === LASTLOG) return; LASTLOG = key;   // 同じ実行の連打は1件に
+  try{ await h.add({kind, title: String(title||"").slice(0,80), sql: String(sql).slice(0,20000), at: new Date().toISOString()}); }catch(e){}
+}
+async function saveSlot(name, sql){
+  const s = ucol("slots"), msg = $("slotMsg");
+  if(!s){ msg.textContent = "このページでは保存できません（Claude の画面で開くと使えます）"; return; }
+  name = String(name||"").trim(); if(!name){ msg.textContent = "スロット名を入れてください"; return; }
+  if(!String(sql||"").trim()){ msg.textContent = "保存する SQL がありません"; return; }
+  const order = SLOTS.length ? Math.max(...SLOTS.map(x=>x.order||0)) + 1 : 1;
+  try{ await s.add({name: name.slice(0,60), sql: String(sql).slice(0,20000), order, at: new Date().toISOString()}); msg.textContent = "保存しました"; await loadSlots(); }
+  catch(e){ msg.textContent = "保存できませんでした（" + (e && e.code || "error") + "）"; }
+}
+async function renderSlots(){
+  const el = $("p-slot");
+  if(!db || !me){ el.innerHTML = `<div class="msg warn">スロットは Claude の画面で開いたときに使えます（自分だけが見える場所に保存します）。</div>`; return; }
+  el.innerHTML = `<div class="msg">読み込み中…</div>`; await loadSlots();
+  const row = (x, kind) => `<tr><td>${esc(kind==="slot"? x.name : x.title)}</td><td class="note">${esc(kind==="slot"? "" : x.kind)}</td><td class="note">${esc((x.at||"").slice(0,16).replace("T"," "))}</td>
+    <td><button class="ghost" data-run="${kind}:${esc(x.id)}">実行</button> <button class="ghost" data-load="${kind}:${esc(x.id)}">SQL欄へ</button>
+    ${kind==="slot"? `<button class="ghost" data-up="${esc(x.id)}" aria-label="上へ">↑</button> <button class="ghost" data-del="${esc(x.id)}">削除</button>` : `<button class="ghost" data-keep="${esc(x.id)}">スロットに保存</button>`}</td></tr>`;
+  el.innerHTML = `<p class="q">スロット</p><p class="note">よく使う SQL に名前を付けて保存したもの。SQL タブの「SQLをスロットに保存」か、下の履歴から保存できます。</p>
+    <div class="tablebox"><table><tbody>${SLOTS.map(x=>row(x,"slot")).join("") || `<tr><td class="note">まだありません</td></tr>`}</tbody></table></div>
+    <p class="q" style="margin-top:16px">最近の実行（50件）</p>
+    <div class="tablebox"><table><tbody>${HIST.map(x=>row(x,"hist")).join("") || `<tr><td class="note">まだありません</td></tr>`}</tbody></table></div>`;
+  const find = k => { const [kind,id] = k.split(":"); return (kind==="slot"? SLOTS : HIST).find(x=>x.id===id); };
+  el.querySelectorAll("[data-run]").forEach(b => b.onclick = () => { const x = find(b.dataset.run); if(x){ $("sqlText").value = x.sql; tab("sql"); $("sqlGo").click(); } });
+  el.querySelectorAll("[data-load]").forEach(b => b.onclick = () => { const x = find(b.dataset.load); if(x){ $("sqlText").value = x.sql; tab("sql"); } });
+  el.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => { try{ await ucol("slots").doc(b.dataset.del).delete(); }catch(e){} renderSlots(); });
+  el.querySelectorAll("[data-keep]").forEach(b => b.onclick = async () => { const x = HIST.find(h=>h.id===b.dataset.keep); if(x){ await saveSlot(x.title || x.kind, x.sql); renderSlots(); } });
+  el.querySelectorAll("[data-up]").forEach(b => b.onclick = async () => {
+    const i = SLOTS.findIndex(x=>x.id===b.dataset.up); if(i<=0) return;
+    const a = SLOTS[i], p = SLOTS[i-1];
+    try{ await ucol("slots").doc(a.id).update({order: p.order}); await ucol("slots").doc(p.id).update({order: a.order}); }catch(e){}
+    renderSlots();
+  });
+}
+
+/* ── ボタンで SQL を組み立てる ─────────────────── */
+let BLD = {mart:"", cols:[], aggs:{}, conds:[], order:"", dir:"DESC", limit:100};
+function buildBuilder(){
+  const marts = Object.keys(BI.marts); if(!BLD.mart) BLD.mart = marts.includes("m_screener") ? "m_screener" : marts[0];
+  const cols = martCols(BLD.mart);
+  const lab = c => esc(c.label ? `${c.label}（${c.name}）` : c.name);
+  $("bld").innerHTML = `
+    <div class="row"><label class="f">マート<select id="bMart">${marts.map(m=>`<option ${m===BLD.mart?"selected":""}>${esc(m)}</option>`).join("")}</select></label>
+      <label class="f">件数<input id="bLimit" value="${BLD.limit}" inputmode="numeric" style="width:6em"></label>
+      <label class="f">並べ替え<select id="bOrder"><option value="">（なし）</option>${cols.map(c=>`<option value="${esc(c.name)}" ${c.name===BLD.order?"selected":""}>${lab(c)}</option>`).join("")}</select></label>
+      <label class="f">向き<select id="bDir"><option ${BLD.dir==="DESC"?"selected":""}>DESC</option><option ${BLD.dir==="ASC"?"selected":""}>ASC</option></select></label></div>
+    <p class="note" style="margin:8px 0 4px">列（押すと選択。数値の列は集計も選べる。集計を付けると他の列でまとめる）</p>
+    <div class="chips">${cols.map(c=>`<button class="ghost" data-col="${esc(c.name)}" aria-pressed="${BLD.cols.includes(c.name)}" style="${BLD.cols.includes(c.name)?"background:var(--accent-soft)":""}">${lab(c)}</button>`).join("")}</div>
+    <div class="mlist">${BLD.cols.filter(n=>isNum(cols.find(c=>c.name===n)||{})).map(n=>`<div class="mrow"><span class="note">${esc(n)} の集計</span><select data-agg="${esc(n)}">${["","SUM","AVG","MIN","MAX","COUNT"].map(a=>`<option ${a===(BLD.aggs[n]||"")?"selected":""} value="${a}">${a||"そのまま"}</option>`).join("")}</select></div>`).join("")}</div>
+    <p class="note" style="margin:8px 0 4px">条件</p>
+    <div class="mlist">${BLD.conds.map((k,i)=>`<div class="mrow"><select data-ccol="${i}">${cols.map(c=>`<option value="${esc(c.name)}" ${c.name===k.col?"selected":""}>${lab(c)}</option>`).join("")}</select>
+      <select data-cop="${i}">${["=","<>",">=","<=",">","<","LIKE","IS NULL","IS NOT NULL"].map(o=>`<option ${o===k.op?"selected":""}>${o}</option>`).join("")}</select>
+      <input data-cval="${i}" value="${esc(k.val??"")}" placeholder="値"><button class="ghost" data-cdel="${i}" aria-label="条件を外す">×</button></div>`).join("")}</div>
+    <div class="row" style="margin-top:6px"><button class="ghost" id="bAddCond">＋ 条件</button><button class="go" id="bMake">SQL を組み立てる</button></div>`;
+  const re = () => buildBuilder();
+  $("bMart").onchange = e => { BLD = {mart:e.target.value, cols:[], aggs:{}, conds:[], order:"", dir:"DESC", limit:BLD.limit}; re(); };
+  $("bLimit").onchange = e => BLD.limit = e.target.value; $("bOrder").onchange = e => BLD.order = e.target.value; $("bDir").onchange = e => BLD.dir = e.target.value;
+  $("bld").querySelectorAll("[data-col]").forEach(b => b.onclick = () => { const n=b.dataset.col; BLD.cols = BLD.cols.includes(n) ? BLD.cols.filter(x=>x!==n) : [...BLD.cols, n]; re(); });
+  $("bld").querySelectorAll("[data-agg]").forEach(s => s.onchange = () => { BLD.aggs[s.dataset.agg] = s.value; });
+  $("bld").querySelectorAll("[data-ccol]").forEach(s => s.onchange = () => BLD.conds[+s.dataset.ccol].col = s.value);
+  $("bld").querySelectorAll("[data-cop]").forEach(s => s.onchange = () => BLD.conds[+s.dataset.cop].op = s.value);
+  $("bld").querySelectorAll("[data-cval]").forEach(s => s.oninput = () => BLD.conds[+s.dataset.cval].val = s.value);
+  $("bld").querySelectorAll("[data-cdel]").forEach(b => b.onclick = () => { BLD.conds.splice(+b.dataset.cdel,1); re(); });
+  $("bAddCond").onclick = () => { BLD.conds.push({col: cols[0] && cols[0].name, op: ">=", val: ""}); re(); };
+  $("bMake").onclick = () => { try{ $("sqlText").value = builderSql(); }catch(e){ $("slotMsg").textContent = e.message; } };
+}
+function builderSql(){
+  const cols = martCols(BLD.mart), names = cols.map(c=>c.name);
+  const ok = n => { if(!names.includes(n)) throw new Error("列がありません: "+n); return qid(n); };
+  if(!BLD.cols.length) throw new Error("列を1つ以上選んでください");
+  const agg = BLD.cols.filter(n => BLD.aggs[n]), plain = BLD.cols.filter(n => !BLD.aggs[n]);
+  const sel = [...plain.map(ok), ...agg.map(n => `${BLD.aggs[n]}(${ok(n)}) AS ${BLD.aggs[n].toLowerCase()}_${n}`)];
+  const num = n => isNum(cols.find(c=>c.name===n)||{});
+  const where = BLD.conds.filter(k=>k.col).map(k => /NULL/.test(k.op) ? `${ok(k.col)} ${k.op}` :
+    `${ok(k.col)} ${k.op} ${num(k.col) && k.op!=="LIKE" ? (Number.isFinite(Number(k.val)) && String(k.val).trim()!=="" ? Number(k.val) : (()=>{throw new Error(k.col+" は数値で入れてください")})()) : lit(k.op==="LIKE" && !/%/.test(k.val) ? "%"+k.val+"%" : k.val)}`);
+  const lim = Math.min(1000, Math.max(1, parseInt(BLD.limit,10) || 100));
+  let q = `SELECT ${sel.join(", ")}\nFROM ${BLD.mart}`;
+  if(where.length) q += `\nWHERE ${where.join("\n  AND ")}`;
+  if(agg.length && plain.length) q += `\nGROUP BY ${plain.map(ok).join(", ")}`;
+  if(BLD.order) q += `\nORDER BY ${agg.includes(BLD.order) ? BLD.aggs[BLD.order].toLowerCase()+"_"+BLD.order : ok(BLD.order)} ${BLD.dir}`;
+  return q + `\nLIMIT ${lim}`;
+}
+
+/* ── スクリーナー（1社1行の m_screener を条件で絞り込む） ── */
+const SCR_SETS = {
+  "概要": ["sec_code4","name","industry","market_cap","per","pbr","dividend_yield","roe","operating_margin","sales_growth_1y"],
+  "バリュエーション": ["sec_code4","name","current_price","market_cap","per","pbr","dividend_yield","eps","bps","net_cash"],
+  "収益性": ["sec_code4","name","industry","net_sales","operating_income","operating_margin","net_margin","gross_margin","roe","roa","rnd_ratio"],
+  "成長": ["sec_code4","name","industry","net_sales","sales_growth_1y","sales_cagr_3y","op_income_growth_1y","net_income_growth_1y"],
+  "財務健全性": ["sec_code4","name","equity_ratio","de_ratio","interest_bearing_debt","cash_and_equiv","net_cash","free_cf"],
+  "配当": ["sec_code4","name","dividend_yield","dividend_per_share","payout_ratio","eps"],
+  "株価": ["sec_code4","name","current_price","return_1m","return_3m","return_1y","week52_position_pct","rsi14","above_ma200","snapshot_date"],
+};
+const SCR_PRESETS = {
+  "割安高配当": [["pbr","<=",1],["dividend_yield",">=",0.03]],
+  "高ROE×低PER": [["roe",">=",0.15],["per","<=",15],["per",">",0]],
+  "増収増益": [["sales_growth_1y",">=",0.05],["op_income_growth_1y",">=",0.05]],
+  "ネットキャッシュ": [["net_cash",">",0],["pbr","<=",1.2]],
+  "高成長": [["sales_cagr_3y",">=",0.15]],
+  "高配当": [["dividend_yield",">=",0.04]],
+};
+let SCR = {filters:[], set:"概要", sort:"market_cap", dir:"DESC", page:0, industries:[]};
+function scrCols(){ return martCols("m_screener"); }
+function buildScreener(){
+  const el = $("p-scr");
+  if(!BI.marts.m_screener){ el.innerHTML = `<div class="msg warn">スクリーナー用の表（m_screener）はまだ書き出されていません。次の書き出しのあとに再公開します。</div>`; return; }
+  const cols = scrCols(), names = cols.map(c=>c.name), lab = n => { const c = cols.find(x=>x.name===n); return esc(c && c.label || n); };
+  const numCols = cols.filter(isNum);
+  el.innerHTML = `
+    <p class="q">企業スクリーナー</p><p class="note">全上場企業（最新の決算期×最新の株価）を条件で絞り込みます。比率は % で入れてください（例 ROE 15 → 15%）。</p>
+    <div class="chips">${Object.keys(SCR_PRESETS).map(k=>`<button class="ghost" data-pre="${esc(k)}">${esc(k)}</button>`).join("")}<button class="ghost" id="scrClear">条件をすべて外す</button></div>
+    <div class="chips" id="scrChips">${SCR.filters.map((f,i)=>`<span class="chip">${lab(f[0])} ${esc(f[1])} ${esc(fmtIn(f[0],f[2]))}<button data-fdel="${i}" aria-label="条件を外す">×</button></span>`).join("") || `<span class="note" style="margin:0">条件なし（全社）</span>`}</div>
+    <div class="row">
+      <label class="f">列<select id="scrCol">${numCols.map(c=>`<option value="${esc(c.name)}">${lab(c.name)}</option>`).join("")}</select></label>
+      <label class="f">比較<select id="scrOp"><option>&gt;=</option><option>&lt;=</option><option>&gt;</option><option>&lt;</option></select></label>
+      <label class="f">値<input id="scrVal" inputmode="decimal" style="width:7em" placeholder="例 10"></label>
+      <button class="ghost" id="scrAdd">＋ 条件</button>
+      ${names.includes("industry") ? `<label class="f">業種（含む）<input id="scrInd" placeholder="例 情報・通信" value="${esc(SCR.industries.join(","))}"></label>` : ""}
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label class="f">列セット<select id="scrSet">${Object.keys(SCR_SETS).map(k=>`<option ${k===SCR.set?"selected":""}>${esc(k)}</option>`).join("")}</select></label>
+      <label class="f">並べ替え<select id="scrSort">${numCols.map(c=>`<option value="${esc(c.name)}" ${c.name===SCR.sort?"selected":""}>${lab(c.name)}</option>`).join("")}</select></label>
+      <label class="f">向き<select id="scrDir"><option ${SCR.dir==="DESC"?"selected":""} value="DESC">大きい順</option><option ${SCR.dir==="ASC"?"selected":""} value="ASC">小さい順</option></select></label>
+      <button class="go" id="scrGo">検索</button>
+      <label class="f">保存名<input id="scrName" placeholder="例：自分の割安株"></label><button class="ghost" id="scrSave">条件をスロットに保存</button><span class="note" id="scrMsg"></span>
+    </div>`;
+  el.querySelectorAll("[data-pre]").forEach(b => b.onclick = () => { SCR.filters = SCR_PRESETS[b.dataset.pre].filter(f=>names.includes(f[0])).map(f=>f.slice()); SCR.page = 0; buildScreener(); runScreener(); });
+  el.querySelectorAll("[data-fdel]").forEach(b => b.onclick = () => { SCR.filters.splice(+b.dataset.fdel,1); SCR.page=0; buildScreener(); runScreener(); });
+  $("scrClear").onclick = () => { SCR.filters = []; SCR.industries = []; SCR.page = 0; buildScreener(); runScreener(); };
+  $("scrAdd").onclick = () => { const c=$("scrCol").value, raw=$("scrVal").value.trim(); const n = Number(raw);
+    if(raw==="" || !Number.isFinite(n)){ $("scrMsg").textContent = "値は数値で入れてください"; return; }
+    SCR.filters.push([c, $("scrOp").value, isRatio(c) ? n/100 : n]); SCR.page=0; buildScreener(); runScreener(); };
+  if($("scrInd")) $("scrInd").onchange = e => { SCR.industries = e.target.value.split(/[,、]/).map(x=>x.trim()).filter(Boolean); SCR.page=0; runScreener(); };
+  $("scrSet").onchange = e => { SCR.set = e.target.value; runScreener(); };
+  $("scrSort").onchange = e => { SCR.sort = e.target.value; SCR.page=0; runScreener(); };
+  $("scrDir").onchange = e => { SCR.dir = e.target.value; SCR.page=0; runScreener(); };
+  $("scrGo").onclick = () => { SCR.page=0; runScreener(); };
+  $("scrSave").onclick = async () => { try{ const q = screenerSql(); $("slotMsg").textContent=""; await saveSlot($("scrName").value, q); $("scrMsg").textContent = $("slotMsg").textContent || "保存しました"; }catch(e){ $("scrMsg").textContent = e.message; } };
+}
+function isRatio(n){ return /margin|ratio|roe|roa|yield|growth|cagr|return_|payout|to_mcap/.test(n) && !/de_ratio/.test(n); }
+function fmtIn(n, v){ return isRatio(n) ? (v*100).toFixed(1).replace(/\.0$/,"")+"%" : Number(v).toLocaleString("ja-JP"); }
+function screenerSql(){
+  const names = scrCols().map(c=>c.name);
+  const ok = n => { if(!names.includes(n)) throw new Error("列がありません: "+n); return qid(n); };
+  const show = [...new Set([...(SCR_SETS[SCR.set]||SCR_SETS["概要"]), ...SCR.filters.map(f=>f[0])])].filter(n=>names.includes(n));
+  const where = SCR.filters.map(f => { if(![">=","<=",">","<"].includes(f[1]) || !Number.isFinite(Number(f[2]))) throw new Error("条件が不正です"); return `${ok(f[0])} ${f[1]} ${Number(f[2])}`; });
+  if(SCR.industries.length && names.includes("industry")) where.push("(" + SCR.industries.map(x => `industry LIKE ${lit("%"+x+"%")}`).join(" OR ") + ")");
+  return `SELECT ${show.map(ok).join(", ")}, COUNT(*) OVER() AS total_hits\nFROM m_screener` + (where.length ? `\nWHERE ${where.join("\n  AND ")}` : "")
+    + `\nORDER BY ${ok(SCR.sort)} ${SCR.dir === "ASC" ? "ASC" : "DESC"} NULLS LAST\nLIMIT 100 OFFSET ${SCR.page*100}`;
+}
+async function runScreener(){
+  let q, sql; try{ q = screenerSql(); sql = wrapSql(q); }catch(e){ $("result").innerHTML = `<div class="msg err">${esc(e.message)}</div>`; return; }
+  $("result").innerHTML = `<div class="msg">BigQuery で検索中…</div>`;
+  try{
+    const res = await runBQ(sql);
+    const ti = res.columns.indexOf("total_hits"), total = res.rows.length ? res.rows[0][ti] : 0;
+    res.columns.splice(ti,1); res.num.splice(ti,1); res.rows.forEach(r=>r.splice(ti,1));
+    const labs = scrCols(); res.columns = res.columns.map(n => (labs.find(c=>c.name===n)||{}).label || n);
+    render(res, {type:"table"}, row => { const code = row[0]; const t = BI.templates.find(x=>x.id==="fin_company_10y"); if(t && code){ tab("tpl"); openTpl(t.id); const inp = $("pp-sec_code4"); if(inp){ inp.value = code; runTpl(); } } });
+    const pages = Math.max(1, Math.ceil(total/100));
+    $("result").insertAdjacentHTML("afterbegin", `<div class="row" style="margin:6px 0"><b>${Number(total).toLocaleString()} 社</b><span class="note">行をクリックで「会社の10年推移」</span>
+      <button class="ghost" id="scrPrev" ${SCR.page<=0?"disabled":""}>前の100社</button><span class="note">${SCR.page+1} / ${pages}</span><button class="ghost" id="scrNext" ${SCR.page+1>=pages?"disabled":""}>次の100社</button></div>`);
+    $("scrPrev").onclick = () => { SCR.page--; runScreener(); }; $("scrNext").onclick = () => { SCR.page++; runScreener(); };
+    showSql(sql, $("result")); logRun("スクリーナー", SCR.filters.map(f=>f[0]+f[1]+f[2]).join(" ") || "全社", q);
+  }catch(e){ $("result").innerHTML = `<div class="msg err">${esc(errText(e))}</div>`; showSql(sql, $("result")); }
+}
+
 /* ── タブと起動 ─────────────────────────────────── */
 function tab(name){
   document.querySelectorAll(".tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab===name));
-  ["tpl","free","ask","sql"].forEach(n => $("p-"+n).hidden = n !== name);
+  ["tpl","free","ask","scr","sql","slot"].forEach(n => $("p-"+n).hidden = n !== name);
+  if(name==="slot") renderSlots(); if(name==="scr") buildScreener(); if(name==="sql") buildBuilder();
 }
 document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => { tab(b.dataset.tab); if(b.dataset.tab==="free"){ buildFree(); } });
 $("askGo").onclick = ask; $("askStop").onclick = () => askCtl && askCtl.abort();
 $("sqlGo").onclick = async () => {
   let sql; try{ sql = wrapSql($("sqlText").value); }catch(e){ $("result").innerHTML = `<div class="msg err">${esc(e.message)}</div>`; return; }
   $("result").innerHTML = `<div class="msg">BigQuery で集計中…</div>`;
-  try{ const res = await runBQ(sql); render(res, {type:"table"}); showSql(sql, $("result")); }
+  try{ const res = await runBQ(sql); render(res, {type:"table"}); showSql(sql, $("result")); logRun("SQL", $("sqlText").value.trim().split("\n")[0].slice(0,60), $("sqlText").value); }
   catch(e){ $("result").innerHTML = `<div class="msg err">${esc(errText(e))}</div>`; showSql(sql, $("result")); }
 };
+$("slotSave").onclick = () => saveSlot($("slotName").value, $("sqlText").value);
 $("sqlText").value = "SELECT industry, COUNT(*) AS n_companies, AVG(operating_margin) AS avg_op_margin\nFROM m_fin_annual\nWHERE fiscal_year = 2025\nGROUP BY industry\nORDER BY n_companies DESC";
 buildShelf();
 $("p-tpl").innerHTML = `<p class="q">左の棚からテンプレを選んでください</p><p class="note">テンプレ ${BI.templates.length} 本・マート ${Object.keys(BI.marts).length} 本（${esc(BI.built_at)} 時点の定義）。結果のクリックで「自由分析」に入ると、その値で絞り込んだまま深掘りできます。</p>`;
 (async () => {
   try{ mcp = window.claude ? await window.claude.use("mcp") : null; }catch(e){ mcp = null; }
   try{ sample = window.claude ? await window.claude.use("sample") : null; }catch(e){ sample = null; }
+  try{ db = window.claude ? await window.claude.use("db") : null; const u = window.claude ? await window.claude.use("user") : null; me = u ? await u.id() : null; }catch(e){ db = null; me = null; }
   const st = $("status");
   if(!mcp){ st.textContent = "BigQuery 未接続（Claude の画面で開くと使えます）"; st.className = "status bad"; return; }
   st.textContent = "BigQuery 接続可"; st.className = "status ok";
