@@ -1,0 +1,359 @@
+<title>株式DWH 分析室</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+/* layout: 左＝テンプレの棚（有価証券報告書の目次のように領域→問い）、右＝作業台（パラメータ→グラフ→表→SQL）。自由分析と「Claudeに聞く」は作業台のタブ */
+:root{
+  --bg:#f3f5f4; --panel:#ffffff; --ink:#18221f; --sub:#5b6964; --line:#d9e0dd;
+  --accent:#1d6b5a; --accent-soft:#e2efeb; --warn:#a15c07; --bad:#b3261e; --good:#2f7d32;
+  --chip:#eef2f0;
+  --f-body:"IBM Plex Sans JP","Hiragino Sans","Noto Sans JP",system-ui,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#111715; --panel:#18201d; --ink:#e4ebe8; --sub:#93a39d; --line:#2b3632;
+  --accent:#5cc2a7; --accent-soft:#1d3029; --warn:#e0a24a; --bad:#f08a80; --good:#7bc77e; --chip:#212b27; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#111715; --panel:#18201d; --ink:#e4ebe8; --sub:#93a39d; --line:#2b3632;
+  --accent:#5cc2a7; --accent-soft:#1d3029; --warn:#e0a24a; --bad:#f08a80; --good:#7bc77e; --chip:#212b27; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:14px;line-height:1.6}
+.wrap{padding-inline:16px;padding-block:16px 40px;max-width:1400px;margin:0 auto}
+header{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 16px;margin-bottom:14px}
+h1{font-size:20px;margin:0;font-weight:700;letter-spacing:.02em}
+.meta{color:var(--sub);font-size:12px}
+.status{font-size:12px;padding:2px 10px;border-radius:99px;background:var(--chip);color:var(--sub)}
+.status.ok{color:var(--good)} .status.bad{color:var(--bad)}
+.grid{display:grid;grid-template-columns:300px 1fr;gap:16px;align-items:start}
+@media (max-width:860px){.grid{grid-template-columns:1fr}}
+.shelf,.bench{background:var(--panel);border:1px solid var(--line);border-radius:10px;min-width:0}
+.shelf{padding:12px;max-height:calc(100vh - 120px);overflow:auto;position:sticky;top:env(safe-area-inset-top,0px)}
+@media (max-width:860px){.shelf{position:static;max-height:none}}
+.shelf h2{font-size:11px;letter-spacing:.12em;color:var(--sub);margin:14px 4px 6px;text-transform:uppercase;font-weight:500}
+.shelf h2:first-child{margin-top:4px}
+.tpl{display:block;width:100%;text-align:left;background:none;border:0;border-radius:6px;padding:7px 8px;color:var(--ink);font:inherit;cursor:pointer}
+.tpl:hover{background:var(--chip)} .tpl.on{background:var(--accent-soft)}
+.tpl b{display:block;font-weight:500;font-size:13.5px}
+.tpl span{display:block;font-size:12px;color:var(--sub)}
+.bench{padding:14px 16px}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:-4px -4px 14px;flex-wrap:wrap}
+.tabs button{background:none;border:0;border-bottom:2px solid transparent;padding:8px 12px;font:inherit;color:var(--sub);cursor:pointer}
+.tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent);font-weight:500}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
+label.f{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--sub)}
+input,select,textarea{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:6px 8px}
+textarea{width:100%;font-family:var(--f-mono);font-size:12.5px;min-height:110px}
+button.go{background:var(--accent);color:var(--panel);border:0;border-radius:6px;padding:7px 16px;font:inherit;font-weight:500;cursor:pointer}
+button.ghost{background:none;border:1px solid var(--line);border-radius:6px;padding:6px 12px;font:inherit;color:var(--ink);cursor:pointer}
+button:disabled{opacity:.5;cursor:default}
+button:focus-visible,.tpl:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.q{font-size:16px;font-weight:500;margin:0 0 2px;text-wrap:balance}
+.note{color:var(--sub);font-size:12.5px;margin:2px 0 10px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.chip{display:inline-flex;gap:6px;align-items:center;background:var(--accent-soft);border-radius:99px;padding:2px 4px 2px 10px;font-size:12px}
+.chip button{background:none;border:0;color:var(--sub);cursor:pointer;font-size:14px;line-height:1;padding:0 6px}
+.chartbox{position:relative;height:340px;margin:12px 0}
+.tablebox{overflow-x:auto;border:1px solid var(--line);border-radius:6px;max-height:420px}
+table{border-collapse:collapse;width:100%;font-size:12.5px;font-variant-numeric:tabular-nums}
+th,td{padding:5px 8px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+th{position:sticky;top:0;background:var(--panel);color:var(--sub);font-weight:500}
+td.n{text-align:right}
+tr.click{cursor:pointer} tr.click:hover td{background:var(--chip)}
+details.sql{margin-top:10px} details.sql pre{font-family:var(--f-mono);font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:10px;overflow-x:auto;white-space:pre-wrap}
+.msg{padding:8px 10px;border-radius:6px;background:var(--chip);font-size:13px;margin:8px 0}
+.msg.err{color:var(--bad)} .msg.warn{color:var(--warn)}
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+.mlist{display:flex;flex-direction:column;gap:6px}
+.mrow{display:flex;gap:6px;flex-wrap:wrap}
+.answer{white-space:pre-wrap;font-size:13.5px;margin:8px 0}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<div class="wrap">
+<header>
+  <h1>株式DWH 分析室</h1>
+  <span class="meta">BigQuery（stock-analyzer-edinet）を開いたその場で集計します。テンプレは board の「分析」タブと共通です。</span>
+  <span id="status" class="status">接続を確認中…</span>
+</header>
+<div class="grid">
+  <nav class="shelf" id="shelf" aria-label="テンプレート"></nav>
+  <section class="bench">
+    <div class="tabs" role="tablist">
+      <button role="tab" id="t-tpl" aria-selected="true" data-tab="tpl">テンプレ</button>
+      <button role="tab" id="t-free" aria-selected="false" data-tab="free">自由分析</button>
+      <button role="tab" id="t-ask" aria-selected="false" data-tab="ask">Claudeに聞く</button>
+      <button role="tab" id="t-sql" aria-selected="false" data-tab="sql">SQL</button>
+    </div>
+    <div id="p-tpl"></div>
+    <div id="p-free" hidden></div>
+    <div id="p-ask" hidden>
+      <p class="q">日本語で聞くと、Claude が SQL を組んで BigQuery で実行します</p>
+      <p class="note">使える表はテンプレと同じマート（下の一覧）。質問は1回ごとにあなたの Claude の利用枠を使います。</p>
+      <textarea id="askText" placeholder="例：情報・通信業で、直近3年の売上成長率が高い会社を10社。営業利益率も並べて"></textarea>
+      <div class="row" style="margin-top:8px"><button class="go" id="askGo">質問する</button><button class="ghost" id="askStop" hidden>止める</button></div>
+      <div id="askOut"></div>
+    </div>
+    <div id="p-sql" hidden>
+      <p class="note">マート名（例 m_fin_annual）をそのまま FROM に書けます。読み取りのみ・最大1,000行。</p>
+      <textarea id="sqlText"></textarea>
+      <div class="row" style="margin-top:8px"><button class="go" id="sqlGo">実行</button></div>
+      <div id="sqlOut"></div>
+    </div>
+    <div id="result"></div>
+  </section>
+</div>
+</div>
+
+<script>
+/* ── 埋め込みデータ（ビルド時に stock_analyzer/bi から差し込む）── */
+const BI = {"project": "stock-analyzer-edinet", "marts": {"m_company": {"sql": "-- m_company: 1社1行（キー edinet_code）。edinet.company は edinet_code が一意（4,010社＝4,010キー）なので重複除去は不要。\n-- sec_code は5桁（末尾に検査用の0）。先頭4桁が銘柄コード（英字入り '285A' 含む）。\nSELECT\n  c.edinet_code,\n  SUBSTR(c.sec_code, 1, 4) AS sec_code4,\n  c.name,\n  c.industry,\n  c.accounting_standard,\n  c.listing_status,\n  c.is_delisted\nFROM `stock-analyzer-edinet.edinet.company` AS c\n", "desc": "上場会社マスタ。1社1行", "columns": [{"name": "edinet_code", "type": "string", "label": "EDINETコード"}, {"name": "sec_code4", "type": "string", "label": "証券コード"}, {"name": "name", "type": "string", "label": "社名"}, {"name": "industry", "type": "string", "label": "業種"}, {"name": "accounting_standard", "type": "string", "label": "会計基準"}, {"name": "listing_status", "type": "string", "label": "上場状態"}, {"name": "is_delisted", "type": "bool", "label": "上場廃止"}]}, "m_fin_annual": {"sql": "-- m_fin_annual: 1社1年度1行（キー edinet_code, fiscal_year。fiscal_year は決算期末の年）。\n-- 基準表は edinet.financials。実測（2026-10）で financial_items の (edinet_code, fiscal_year) 36,654 組は\n-- すべて financials（36,656 組）に含まれ、両表とも同キーの重複は0。items だけにある年度は無いため、\n-- financials を基準に LEFT JOIN で細目を横持ちする。items 側が将来 financials に無い年度を持った場合は、\n-- 主要約列（売上・利益など）が空のままその年度が落ちる点に注意（落とさない方が分析上の欠けに気づける）。\n-- 細目は1表1スキャンで済むよう、対象項目だけに絞って先に横持ちする。\nWITH items AS (\n  SELECT\n    edinet_code,\n    fiscal_year,\n    MAX(IF(item = 'gross_profit', value, NULL)) AS gross_profit,\n    MAX(IF(item = 'sga', value, NULL)) AS sga,\n    MAX(IF(item = 'rnd_expenses', value, NULL)) AS rnd_expenses,\n    MAX(IF(item = 'cost_of_sales', value, NULL)) AS cost_of_sales,\n    MAX(IF(item = 'goodwill', value, NULL)) AS goodwill,\n    MAX(IF(item = 'inventories', value, NULL)) AS inventories,\n    MAX(IF(item = 'trade_receivables', value, NULL)) AS trade_receivables,\n    MAX(IF(item = 'total_liabilities', value, NULL)) AS total_liabilities,\n    MAX(IF(item = 'net_assets', value, NULL)) AS net_assets,\n    MAX(IF(item = 'shareholders_equity', value, NULL)) AS shareholders_equity,\n    MAX(IF(item = 'eps', value, NULL)) AS eps,\n    MAX(IF(item = 'bps', value, NULL)) AS bps,\n    MAX(IF(item = 'dividend_per_share', value, NULL)) AS dividend_per_share,\n    MAX(IF(item = 'payout_ratio', value, NULL)) AS payout_ratio,\n    MAX(IF(item = 'per', value, NULL)) AS per,\n    MAX(IF(item = 'pbr', value, NULL)) AS pbr,\n    MAX(IF(item = 'num_employees', value, NULL)) AS num_employees,\n    MAX(IF(item = 'female_manager_ratio', value, NULL)) AS female_manager_ratio,\n    MAX(IF(item = 'avg_tenure_years', value, NULL)) AS avg_tenure_years,\n    MAX(IF(item = 'cash_dividends_paid', value, NULL)) AS cash_dividends_paid\n  FROM `stock-analyzer-edinet.edinet.financial_items`\n  WHERE item IN (\n    'gross_profit', 'sga', 'rnd_expenses', 'cost_of_sales', 'goodwill', 'inventories',\n    'trade_receivables', 'total_liabilities', 'net_assets', 'shareholders_equity', 'eps', 'bps',\n    'dividend_per_share', 'payout_ratio', 'per', 'pbr', 'num_employees', 'female_manager_ratio',\n    'avg_tenure_years', 'cash_dividends_paid')\n  GROUP BY edinet_code, fiscal_year\n),\nbase AS (\n  SELECT\n    f.edinet_code,\n    f.fiscal_year,\n    f.fiscal_year_end,\n    f.net_sales,\n    f.operating_income,\n    f.ordinary_income,\n    f.net_income,\n    f.total_assets,\n    f.equity,\n    f.interest_bearing_debt,\n    f.cash_and_equiv,\n    f.operating_cf,\n    f.investing_cf,\n    f.free_cf,\n    f.employee_count,\n    f.avg_annual_salary,\n    f.capex,\n    f.depreciation,\n    f.roe,\n    f.roa,\n    f.operating_margin\n  FROM `stock-analyzer-edinet.edinet.financials` AS f\n)\nSELECT\n  b.edinet_code,\n  b.fiscal_year,\n  b.fiscal_year_end,\n  m.name,\n  SUBSTR(m.sec_code, 1, 4) AS sec_code4,\n  m.industry,\n  b.net_sales,\n  b.operating_income,\n  b.ordinary_income,\n  b.net_income,\n  b.total_assets,\n  b.equity,\n  b.interest_bearing_debt,\n  b.cash_and_equiv,\n  b.operating_cf,\n  b.investing_cf,\n  b.free_cf,\n  b.employee_count,\n  b.avg_annual_salary,\n  b.capex,\n  b.depreciation,\n  b.roe,\n  b.roa,\n  b.operating_margin,\n  i.gross_profit,\n  i.sga,\n  i.rnd_expenses,\n  i.cost_of_sales,\n  i.goodwill,\n  i.inventories,\n  i.trade_receivables,\n  i.total_liabilities,\n  i.net_assets,\n  i.shareholders_equity,\n  i.eps,\n  i.bps,\n  i.dividend_per_share,\n  i.payout_ratio,\n  i.per,\n  i.pbr,\n  i.num_employees,\n  i.female_manager_ratio,\n  i.avg_tenure_years,\n  i.cash_dividends_paid,\n  i.gross_profit / NULLIF(b.net_sales, 0) AS gross_margin,\n  i.sga / NULLIF(b.net_sales, 0) AS sga_ratio,\n  i.rnd_expenses / NULLIF(b.net_sales, 0) AS rnd_ratio,\n  b.equity / NULLIF(b.total_assets, 0) AS equity_ratio,\n  b.net_income / NULLIF(b.net_sales, 0) AS net_margin\nFROM base AS b\nLEFT JOIN items AS i\n  ON i.edinet_code = b.edinet_code AND i.fiscal_year = b.fiscal_year\nLEFT JOIN `stock-analyzer-edinet.edinet.company` AS m\n  ON m.edinet_code = b.edinet_code\n", "desc": "年次財務。1社1年度1行（fiscal_year＝決算期末の年）", "columns": [{"name": "edinet_code", "type": "string", "label": "EDINETコード"}, {"name": "fiscal_year", "type": "int64", "label": "年度"}, {"name": "fiscal_year_end", "type": "date", "label": "決算期末"}, {"name": "name", "type": "string", "label": "社名"}, {"name": "sec_code4", "type": "string", "label": "証券コード"}, {"name": "industry", "type": "string", "label": "業種"}, {"name": "net_sales", "type": "double", "label": "売上高"}, {"name": "operating_income", "type": "double", "label": "営業利益"}, {"name": "ordinary_income", "type": "double", "label": "経常利益"}, {"name": "net_income", "type": "double", "label": "純利益"}, {"name": "total_assets", "type": "double", "label": "総資産"}, {"name": "equity", "type": "double", "label": "自己資本"}, {"name": "interest_bearing_debt", "type": "double", "label": "有利子負債"}, {"name": "cash_and_equiv", "type": "double", "label": "現金同等物"}, {"name": "operating_cf", "type": "double", "label": "営業CF"}, {"name": "investing_cf", "type": "double", "label": "投資CF"}, {"name": "free_cf", "type": "double", "label": "フリーCF"}, {"name": "employee_count", "type": "int64", "label": "従業員数"}, {"name": "avg_annual_salary", "type": "double", "label": "平均年収"}, {"name": "capex", "type": "double", "label": "設備投資"}, {"name": "depreciation", "type": "double", "label": "減価償却費"}, {"name": "roe", "type": "double", "label": "ROE"}, {"name": "roa", "type": "double", "label": "ROA"}, {"name": "operating_margin", "type": "double", "label": "営業利益率"}, {"name": "gross_profit", "type": "double", "label": "売上総利益"}, {"name": "sga", "type": "double", "label": "販管費"}, {"name": "rnd_expenses", "type": "double", "label": "研究開発費"}, {"name": "cost_of_sales", "type": "double", "label": "売上原価"}, {"name": "goodwill", "type": "double", "label": "のれん"}, {"name": "inventories", "type": "double", "label": "棚卸資産"}, {"name": "trade_receivables", "type": "double", "label": "売上債権"}, {"name": "total_liabilities", "type": "double", "label": "負債合計"}, {"name": "net_assets", "type": "double", "label": "純資産"}, {"name": "shareholders_equity", "type": "double", "label": "株主資本"}, {"name": "eps", "type": "double", "label": "EPS"}, {"name": "bps", "type": "double", "label": "BPS"}, {"name": "dividend_per_share", "type": "double", "label": "1株配当"}, {"name": "payout_ratio", "type": "double", "label": "配当性向"}, {"name": "per", "type": "double", "label": "PER"}, {"name": "pbr", "type": "double", "label": "PBR"}, {"name": "num_employees", "type": "double", "label": "従業員数（細目）"}, {"name": "female_manager_ratio", "type": "double", "label": "女性管理職比率"}, {"name": "avg_tenure_years", "type": "double", "label": "平均勤続年数"}, {"name": "cash_dividends_paid", "type": "double", "label": "支払配当金"}, {"name": "gross_margin", "type": "double", "label": "粗利率"}, {"name": "sga_ratio", "type": "double", "label": "販管費率"}, {"name": "rnd_ratio", "type": "double", "label": "研究開発費率"}, {"name": "equity_ratio", "type": "double", "label": "自己資本比率"}, {"name": "net_margin", "type": "double", "label": "純利益率"}]}}, "templates": [{"id": "fin_company_10y", "domain": "finance", "title": "会社の10年推移", "question": "この会社の売上・営業利益・純利益は直近10年でどう動いたか", "mart": "m_fin_annual", "sql": "SELECT fiscal_year, name, net_sales, operating_income, net_income,\n       ROUND(operating_margin * 100, 2) AS operating_margin_pct\nFROM m_fin_annual\nWHERE sec_code4 = {{sec_code4}}\n  AND fiscal_year > (SELECT MAX(fiscal_year) FROM m_fin_annual WHERE sec_code4 = {{sec_code4}} AND net_sales IS NOT NULL) - {{years}}\nORDER BY fiscal_year", "params": [{"name": "sec_code4", "label": "証券コード（4桁）", "type": "string", "default": "7203"}, {"name": "years", "label": "遡る年数", "type": "int", "default": 10, "min": 1, "max": 15}], "chart": {"type": "line", "x": "fiscal_year", "y": ["net_sales", "operating_income", "net_income"], "series": null}, "note": "金額は円。最新期は決算発表前だと空欄になることがある。"}, {"id": "fin_industry_opm", "domain": "finance", "title": "業種別の営業利益率", "question": "どの業種が儲かっているか（営業利益率の業種平均と社数）", "mart": "m_fin_annual", "sql": "WITH d AS (\n  SELECT COALESCE(industry, '(不明)') AS industry_name, operating_margin\n  FROM m_fin_annual\n  WHERE fiscal_year = {{fiscal_year}} AND operating_margin BETWEEN -1 AND 1\n)\nSELECT industry_name, ROUND(AVG(operating_margin) * 100, 2) AS avg_operating_margin_pct, COUNT(*) AS companies\nFROM d\nGROUP BY industry_name\nHAVING COUNT(*) >= {{min_companies}}\nORDER BY avg_operating_margin_pct DESC", "params": [{"name": "fiscal_year", "label": "決算年（期末の年）", "type": "int", "default": 2025, "min": 2016, "max": 2030}, {"name": "min_companies", "label": "最低社数", "type": "int", "default": 5, "min": 1, "max": 1000}], "chart": {"type": "bar", "x": "industry_name", "y": "avg_operating_margin_pct", "series": null}, "note": "単純平均（社の大きさは加味しない）。営業利益率が±100%を超える外れ値は除く。"}, {"id": "fin_rnd_ranking", "domain": "finance", "title": "研究開発費率ランキング", "question": "売上に対する研究開発費の割合が高い会社は", "mart": "m_fin_annual", "sql": "SELECT sec_code4, name, industry, ROUND(rnd_ratio * 100, 2) AS rnd_ratio_pct, rnd_expenses, net_sales\nFROM m_fin_annual\nWHERE fiscal_year = {{fiscal_year}} AND rnd_ratio IS NOT NULL AND rnd_ratio <= 1 AND net_sales >= {{min_sales}}\nORDER BY rnd_ratio DESC\nLIMIT {{limit}}", "params": [{"name": "fiscal_year", "label": "決算年（期末の年）", "type": "int", "default": 2025, "min": 2016, "max": 2030}, {"name": "min_sales", "label": "売上高の下限（円）", "type": "number", "default": 10000000000, "min": 0}, {"name": "limit", "label": "表示件数", "type": "int", "default": 30, "min": 1, "max": 500}], "chart": {"type": "bar", "x": "name", "y": "rnd_ratio_pct", "series": null}, "note": "売上100億円未満は研究開発費率が極端に出やすいので既定で除外。"}, {"id": "fin_sales_growth_3y", "domain": "finance", "title": "売上3年成長率の上位", "question": "3年前から売上を最も伸ばした会社は", "mart": "m_fin_annual", "sql": "WITH w AS (\n  SELECT edinet_code, sec_code4, name, industry, fiscal_year, net_sales,\n         LAG(net_sales, 3) OVER (PARTITION BY edinet_code ORDER BY fiscal_year) AS sales_3y_ago,\n         LAG(fiscal_year, 3) OVER (PARTITION BY edinet_code ORDER BY fiscal_year) AS year_3y_ago\n  FROM m_fin_annual\n  WHERE net_sales IS NOT NULL\n)\nSELECT sec_code4, name, industry, sales_3y_ago, net_sales,\n       ROUND((net_sales / NULLIF(sales_3y_ago, 0) - 1) * 100, 1) AS growth_3y_pct\nFROM w\nWHERE fiscal_year = {{fiscal_year}} AND year_3y_ago = fiscal_year - 3 AND sales_3y_ago >= {{min_sales}}\nORDER BY growth_3y_pct DESC\nLIMIT {{limit}}", "params": [{"name": "fiscal_year", "label": "決算年（期末の年）", "type": "int", "default": 2025, "min": 2016, "max": 2030}, {"name": "min_sales", "label": "3年前の売上高の下限（円）", "type": "number", "default": 10000000000, "min": 0}, {"name": "limit", "label": "表示件数", "type": "int", "default": 30, "min": 1, "max": 500}], "chart": {"type": "bar", "x": "name", "y": "growth_3y_pct", "series": null}, "note": "3年前の決算が欠けている会社は対象外（行の並びではなく年で3年前を確認している）。合併・買収による増加も含む。"}, {"id": "fin_up_up_trend", "domain": "finance", "title": "増収増益企業数の年次推移", "question": "売上も営業利益も前年より増えた会社は毎年どれだけあるか", "mart": "m_fin_annual", "sql": "WITH w AS (\n  SELECT edinet_code, fiscal_year, net_sales, operating_income,\n         LAG(net_sales) OVER (PARTITION BY edinet_code ORDER BY fiscal_year) AS prev_sales,\n         LAG(operating_income) OVER (PARTITION BY edinet_code ORDER BY fiscal_year) AS prev_op,\n         LAG(fiscal_year) OVER (PARTITION BY edinet_code ORDER BY fiscal_year) AS prev_year\n  FROM m_fin_annual\n  WHERE net_sales IS NOT NULL AND operating_income IS NOT NULL\n)\nSELECT fiscal_year,\n       COUNT(*) AS companies,\n       SUM(CASE WHEN net_sales > prev_sales AND operating_income > prev_op THEN 1 ELSE 0 END) AS up_up_companies,\n       ROUND(SUM(CASE WHEN net_sales > prev_sales AND operating_income > prev_op THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS up_up_pct\nFROM w\nWHERE prev_year = fiscal_year - 1 AND fiscal_year BETWEEN {{from_year}} AND {{to_year}}\nGROUP BY fiscal_year\nORDER BY fiscal_year", "params": [{"name": "from_year", "label": "開始年", "type": "int", "default": 2017, "min": 2016, "max": 2030}, {"name": "to_year", "label": "終了年", "type": "int", "default": 2025, "min": 2016, "max": 2030}], "chart": {"type": "line", "x": "fiscal_year", "y": ["up_up_companies", "up_up_pct"], "series": null}, "note": "前年の決算が両方そろう会社だけが母数。母数は年によって変わるので割合も併記。"}, {"id": "fin_industry_salary", "domain": "finance", "title": "業種別の平均年収", "question": "業種ごとの平均年間給与（万円）", "mart": "m_fin_annual", "sql": "WITH d AS (\n  SELECT COALESCE(industry, '(不明)') AS industry_name, avg_annual_salary\n  FROM m_fin_annual\n  WHERE fiscal_year = {{fiscal_year}} AND avg_annual_salary > 0\n)\nSELECT industry_name, ROUND(AVG(avg_annual_salary) / 10000, 0) AS avg_salary_man_yen, COUNT(*) AS companies\nFROM d\nGROUP BY industry_name\nHAVING COUNT(*) >= {{min_companies}}\nORDER BY avg_salary_man_yen DESC", "params": [{"name": "fiscal_year", "label": "決算年（期末の年）", "type": "int", "default": 2025, "min": 2016, "max": 2030}, {"name": "min_companies", "label": "最低社数", "type": "int", "default": 5, "min": 1, "max": 1000}], "chart": {"type": "bar", "x": "industry_name", "y": "avg_salary_man_yen", "series": null}, "note": "有報の「平均年間給与」（提出会社単体・持株会社は社員が少なく高く出ることがある）。"}, {"id": "fin_sales_per_employee", "domain": "finance", "title": "1人当たり売上ランキング", "question": "従業員1人当たりの売上が大きい会社は", "mart": "m_fin_annual", "sql": "SELECT sec_code4, name, industry, employee_count, net_sales,\n       ROUND(net_sales / NULLIF(employee_count, 0) / 1000000, 1) AS sales_per_employee_m_yen\nFROM m_fin_annual\nWHERE fiscal_year = {{fiscal_year}} AND net_sales > 0 AND employee_count >= {{min_employees}}\nORDER BY sales_per_employee_m_yen DESC\nLIMIT {{limit}}", "params": [{"name": "fiscal_year", "label": "決算年（期末の年）", "type": "int", "default": 2025, "min": 2016, "max": 2030}, {"name": "min_employees", "label": "従業員数の下限", "type": "int", "default": 100, "min": 1, "max": 1000000}, {"name": "limit", "label": "表示件数", "type": "int", "default": 30, "min": 1, "max": 500}], "chart": {"type": "bar", "x": "name", "y": "sales_per_employee_m_yen", "series": null}, "note": "単位は百万円/人。売上は連結、従業員数は連結の人数（employee_count）。商社・持株会社が上位に出やすい。"}, {"id": "fin_fcf_positive_share", "domain": "finance", "title": "フリーCF黒字企業の割合", "question": "フリーキャッシュフローが黒字の会社は毎年どれだけあるか", "mart": "m_fin_annual", "sql": "SELECT fiscal_year,\n       COUNT(*) AS companies,\n       SUM(CASE WHEN free_cf > 0 THEN 1 ELSE 0 END) AS fcf_positive,\n       ROUND(SUM(CASE WHEN free_cf > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS fcf_positive_pct\nFROM m_fin_annual\nWHERE free_cf IS NOT NULL AND fiscal_year BETWEEN {{from_year}} AND {{to_year}}\nGROUP BY fiscal_year\nORDER BY fiscal_year", "params": [{"name": "from_year", "label": "開始年", "type": "int", "default": 2017, "min": 2016, "max": 2030}, {"name": "to_year", "label": "終了年", "type": "int", "default": 2025, "min": 2016, "max": 2030}], "chart": {"type": "line", "x": "fiscal_year", "y": "fcf_positive_pct", "series": null}, "note": "フリーCF＝営業CF＋投資CF（財務データの定義）。"}, {"id": "fin_equity_ratio_dist", "domain": "finance", "title": "自己資本比率の分布", "question": "自己資本比率はどの区間に何社いるか", "mart": "m_fin_annual", "sql": "WITH d AS (\n  SELECT CASE WHEN equity_ratio < 0 THEN 0\n              WHEN equity_ratio < 0.2 THEN 1\n              WHEN equity_ratio < 0.4 THEN 2\n              WHEN equity_ratio < 0.6 THEN 3\n              WHEN equity_ratio < 0.8 THEN 4\n              ELSE 5 END AS bucket_no,\n         CASE WHEN equity_ratio < 0 THEN '債務超過'\n              WHEN equity_ratio < 0.2 THEN '0〜20%'\n              WHEN equity_ratio < 0.4 THEN '20〜40%'\n              WHEN equity_ratio < 0.6 THEN '40〜60%'\n              WHEN equity_ratio < 0.8 THEN '60〜80%'\n              ELSE '80%以上' END AS bucket\n  FROM m_fin_annual\n  WHERE fiscal_year = {{fiscal_year}} AND equity_ratio IS NOT NULL\n)\nSELECT bucket_no, bucket, COUNT(*) AS companies\nFROM d\nGROUP BY bucket_no, bucket\nORDER BY bucket_no", "params": [{"name": "fiscal_year", "label": "決算年（期末の年）", "type": "int", "default": 2025, "min": 2016, "max": 2030}], "chart": {"type": "bar", "x": "bucket", "y": "companies", "series": null}, "note": "自己資本比率＝純資産(equity)÷総資産。銀行・保険は構造上低く出る。"}, {"id": "fin_goodwill_heavy", "domain": "finance", "title": "のれんが純資産に占める割合が大きい会社", "question": "買収で積んだのれんが純資産に比べて重い会社は", "mart": "m_fin_annual", "sql": "SELECT sec_code4, name, industry, goodwill, net_assets,\n       ROUND(goodwill / NULLIF(net_assets, 0) * 100, 1) AS goodwill_to_net_assets_pct\nFROM m_fin_annual\nWHERE fiscal_year = {{fiscal_year}} AND goodwill > 0 AND net_assets > {{min_net_assets}}\nORDER BY goodwill_to_net_assets_pct DESC\nLIMIT {{limit}}", "params": [{"name": "fiscal_year", "label": "決算年（期末の年）", "type": "int", "default": 2025, "min": 2016, "max": 2030}, {"name": "min_net_assets", "label": "純資産の下限（円）", "type": "number", "default": 1000000000, "min": 0}, {"name": "limit", "label": "表示件数", "type": "int", "default": 30, "min": 1, "max": 500}], "chart": {"type": "bar", "x": "name", "y": "goodwill_to_net_assets_pct", "series": null}, "note": "のれん/純資産が100%超は、のれんが減損されると債務超過に近づく目安。IFRS採用会社はのれんの扱いが違う。"}, {"id": "fin_payout_dist", "domain": "finance", "title": "配当性向の分布", "question": "配当性向はどの区間に何社いるか", "mart": "m_fin_annual", "sql": "WITH d AS (\n  SELECT CASE WHEN payout_ratio <= 0 THEN 0\n              WHEN payout_ratio < 0.2 THEN 1\n              WHEN payout_ratio < 0.4 THEN 2\n              WHEN payout_ratio < 0.6 THEN 3\n              WHEN payout_ratio < 1 THEN 4\n              ELSE 5 END AS bucket_no,\n         CASE WHEN payout_ratio <= 0 THEN '無配・0%'\n              WHEN payout_ratio < 0.2 THEN '0〜20%'\n              WHEN payout_ratio < 0.4 THEN '20〜40%'\n              WHEN payout_ratio < 0.6 THEN '40〜60%'\n              WHEN payout_ratio < 1 THEN '60〜100%'\n              ELSE '100%以上' END AS bucket\n  FROM m_fin_annual\n  WHERE fiscal_year = {{fiscal_year}} AND payout_ratio IS NOT NULL\n)\nSELECT bucket_no, bucket, COUNT(*) AS companies\nFROM d\nGROUP BY bucket_no, bucket\nORDER BY bucket_no", "params": [{"name": "fiscal_year", "label": "決算年（期末の年）", "type": "int", "default": 2025, "min": 2016, "max": 2030}], "chart": {"type": "bar", "x": "bucket", "y": "companies", "series": null}, "note": "配当性向は連結ベースの自前計算値（小数）。赤字で配当を出す会社は100%以上に入る。"}, {"id": "fin_roe_pbr_scatter", "domain": "finance", "title": "ROE × PBR 散布図", "question": "ROEが高い会社ほどPBRも高いか", "mart": "m_fin_annual", "sql": "SELECT sec_code4, name, COALESCE(industry, '(不明)') AS industry_name,\n       ROUND(roe * 100, 2) AS roe_pct, ROUND(pbr, 2) AS pbr\nFROM m_fin_annual\nWHERE fiscal_year = {{fiscal_year}} AND roe BETWEEN -0.5 AND 0.6 AND pbr > 0 AND pbr <= {{max_pbr}}", "params": [{"name": "fiscal_year", "label": "決算年（期末の年）", "type": "int", "default": 2025, "min": 2016, "max": 2030}, {"name": "max_pbr", "label": "PBRの上限（外れ値除去）", "type": "number", "default": 10, "min": 1, "max": 300}], "chart": {"type": "scatter", "x": "roe_pct", "y": "pbr", "series": "industry_name"}, "note": "PBRは有報記載の期末ベース。ROEが-50%〜60%の範囲だけを描く。"}, {"id": "fin_gross_vs_sga", "domain": "finance", "title": "粗利率と販管費率の業種比較", "question": "業種ごとの粗利率と販管費率の違い", "mart": "m_fin_annual", "sql": "WITH d AS (\n  SELECT COALESCE(industry, '(不明)') AS industry_name, gross_margin, sga_ratio\n  FROM m_fin_annual\n  WHERE fiscal_year = {{fiscal_year}} AND gross_margin BETWEEN 0 AND 1 AND sga_ratio BETWEEN 0 AND 1\n)\nSELECT industry_name,\n       ROUND(AVG(gross_margin) * 100, 1) AS avg_gross_margin_pct,\n       ROUND(AVG(sga_ratio) * 100, 1) AS avg_sga_ratio_pct,\n       COUNT(*) AS companies\nFROM d\nGROUP BY industry_name\nHAVING COUNT(*) >= {{min_companies}}\nORDER BY avg_gross_margin_pct DESC", "params": [{"name": "fiscal_year", "label": "決算年（期末の年）", "type": "int", "default": 2025, "min": 2016, "max": 2030}, {"name": "min_companies", "label": "最低社数", "type": "int", "default": 5, "min": 1, "max": 1000}], "chart": {"type": "bar", "x": "industry_name", "y": ["avg_gross_margin_pct", "avg_sga_ratio_pct"], "series": null}, "note": "粗利と販管費の両方を開示している会社だけ。粗利を開示しない業種（銀行・一部サービス）は出ない。"}, {"id": "fin_loss_companies", "domain": "finance", "title": "赤字企業数の推移", "question": "純損失の会社は毎年どれだけあるか", "mart": "m_fin_annual", "sql": "SELECT fiscal_year,\n       COUNT(*) AS companies,\n       SUM(CASE WHEN net_income < 0 THEN 1 ELSE 0 END) AS loss_companies,\n       ROUND(SUM(CASE WHEN net_income < 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS loss_pct\nFROM m_fin_annual\nWHERE net_income IS NOT NULL AND fiscal_year BETWEEN {{from_year}} AND {{to_year}}\nGROUP BY fiscal_year\nORDER BY fiscal_year", "params": [{"name": "from_year", "label": "開始年", "type": "int", "default": 2017, "min": 2016, "max": 2030}, {"name": "to_year", "label": "終了年", "type": "int", "default": 2025, "min": 2016, "max": 2030}], "chart": {"type": "line", "x": "fiscal_year", "y": ["loss_companies", "loss_pct"], "series": null}, "note": "純利益＝親会社株主に帰属する当期純利益で判定。"}, {"id": "fin_employee_change", "domain": "finance", "title": "従業員数の増減ランキング", "question": "前年から従業員が最も増えた（減った）会社は", "mart": "m_fin_annual", "sql": "WITH w AS (\n  SELECT edinet_code, sec_code4, name, industry, fiscal_year, employee_count,\n         LAG(employee_count) OVER (PARTITION BY edinet_code ORDER BY fiscal_year) AS prev_count,\n         LAG(fiscal_year) OVER (PARTITION BY edinet_code ORDER BY fiscal_year) AS prev_year\n  FROM m_fin_annual\n  WHERE employee_count > 0\n)\nSELECT sec_code4, name, industry, prev_count, employee_count,\n       employee_count - prev_count AS change_count,\n       ROUND((employee_count * 1.0 / prev_count - 1) * 100, 1) AS change_pct\nFROM w\nWHERE fiscal_year = {{fiscal_year}} AND prev_year = fiscal_year - 1 AND prev_count >= {{min_employees}}\nORDER BY change_count DESC\nLIMIT {{limit}}", "params": [{"name": "fiscal_year", "label": "決算年（期末の年）", "type": "int", "default": 2025, "min": 2016, "max": 2030}, {"name": "min_employees", "label": "前年の従業員数の下限", "type": "int", "default": 500, "min": 1, "max": 1000000}, {"name": "limit", "label": "表示件数", "type": "int", "default": 30, "min": 1, "max": 500}], "chart": {"type": "bar", "x": "name", "y": "change_count", "series": null}, "note": "連結従業員数。M&Aや連結範囲の変更でも大きく動く。減少上位は並びを昇順にして見る。"}, {"id": "fin_industry_roe_trend", "domain": "finance", "title": "業種のROE推移", "question": "この業種のROEの平均は年ごとにどう動いたか", "mart": "m_fin_annual", "sql": "SELECT fiscal_year,\n       ROUND(AVG(roe) * 100, 2) AS avg_roe_pct,\n       COUNT(*) AS companies\nFROM m_fin_annual\nWHERE industry = {{industry}} AND roe BETWEEN -1 AND 1\nGROUP BY fiscal_year\nHAVING COUNT(*) >= {{min_companies}}\nORDER BY fiscal_year", "params": [{"name": "industry", "label": "業種名", "type": "string", "default": "電気機器"}, {"name": "min_companies", "label": "最低社数", "type": "int", "default": 5, "min": 1, "max": 1000}], "chart": {"type": "line", "x": "fiscal_year", "y": "avg_roe_pct", "series": null}, "note": "業種名は東証33業種に近い表記（m_company.industry と同じ値）。ROEが±100%を超える外れ値は除く。"}, {"id": "fin_net_cash_rich", "domain": "finance", "title": "ネットキャッシュが厚い会社", "question": "現預金から有利子負債を引いた手元資金が総資産に比べて厚い会社は", "mart": "m_fin_annual", "sql": "SELECT sec_code4, name, industry, cash_and_equiv, interest_bearing_debt, total_assets,\n       ROUND((cash_and_equiv - COALESCE(interest_bearing_debt, 0)) / NULLIF(total_assets, 0) * 100, 1) AS net_cash_to_assets_pct\nFROM m_fin_annual\nWHERE fiscal_year = {{fiscal_year}} AND cash_and_equiv > 0 AND total_assets >= {{min_assets}}\nORDER BY net_cash_to_assets_pct DESC\nLIMIT {{limit}}", "params": [{"name": "fiscal_year", "label": "決算年（期末の年）", "type": "int", "default": 2025, "min": 2016, "max": 2030}, {"name": "min_assets", "label": "総資産の下限（円）", "type": "number", "default": 10000000000, "min": 0}, {"name": "limit", "label": "表示件数", "type": "int", "default": 30, "min": 1, "max": 500}], "chart": {"type": "bar", "x": "name", "y": "net_cash_to_assets_pct", "series": null}, "note": "有利子負債が未開示の会社は負債0として扱う（過大に出る可能性）。銀行・証券は対象外にしたい場合は業種で絞る。"}, {"id": "fin_female_manager_by_industry", "domain": "finance", "title": "業種別の女性管理職比率", "question": "女性管理職の比率が高い業種は", "mart": "m_fin_annual", "sql": "WITH d AS (\n  SELECT COALESCE(industry, '(不明)') AS industry_name, female_manager_ratio\n  FROM m_fin_annual\n  WHERE fiscal_year = {{fiscal_year}} AND female_manager_ratio BETWEEN 0 AND 1\n)\nSELECT industry_name, ROUND(AVG(female_manager_ratio) * 100, 1) AS avg_female_manager_pct, COUNT(*) AS companies\nFROM d\nGROUP BY industry_name\nHAVING COUNT(*) >= {{min_companies}}\nORDER BY avg_female_manager_pct DESC", "params": [{"name": "fiscal_year", "label": "決算年（期末の年）", "type": "int", "default": 2025, "min": 2016, "max": 2030}, {"name": "min_companies", "label": "最低社数", "type": "int", "default": 5, "min": 1, "max": 1000}], "chart": {"type": "bar", "x": "industry_name", "y": "avg_female_manager_pct", "series": null}, "note": "開示が義務化された2023年3月期以降が中心。それ以前は母数が少ない。"}, {"id": "fin_sales_ranking", "domain": "finance", "title": "売上高ランキング", "question": "売上が大きい会社の一覧（営業利益率つき）", "mart": "m_fin_annual", "sql": "SELECT sec_code4, name, industry, net_sales, operating_income,\n       ROUND(operating_margin * 100, 2) AS operating_margin_pct\nFROM m_fin_annual\nWHERE fiscal_year = {{fiscal_year}} AND net_sales IS NOT NULL\nORDER BY net_sales DESC\nLIMIT {{limit}}", "params": [{"name": "fiscal_year", "label": "決算年（期末の年）", "type": "int", "default": 2025, "min": 2016, "max": 2030}, {"name": "limit", "label": "表示件数", "type": "int", "default": 30, "min": 1, "max": 500}], "chart": {"type": "table", "x": "name", "y": ["net_sales", "operating_income", "operating_margin_pct"], "series": null}, "note": "単位は円。"}], "domains": {"finance": "財務・業績", "geo": "地政学", "realestate": "不動産", "taxonomy": "技術分類", "theme": "テーマ株", "market": "株価・スクリーニング", "us": "米国株"}, "built_at": "2026-10-09 23:07"};
+const SERVER = "BigQuery MCP", TOOL = "execute_sql_readonly";
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let mcp = null, sample = null, chart = null, CUR = null, FREE = {mart:"", dims:[], measures:[], filters:[], chart:"bar"};
+
+/* ── SQL の組み立て ─────────────────────────────── */
+function martsUsed(sql){ return Object.keys(BI.marts).filter(m => new RegExp("\\b"+m+"\\b").test(sql)); }
+function wrapSql(sql){
+  const used = martsUsed(sql);
+  if(!used.length) throw new Error("マート名（"+Object.keys(BI.marts).join("・")+"）を FROM に書いてください");
+  const body = sql.trim().replace(/;\s*$/,"");
+  if(!/^(select|with)\b/i.test(body) || /;/.test(body)) throw new Error("SELECT または WITH で始まる1文だけ実行できます");
+  return "WITH " + used.map(m => m + " AS (\n" + BI.marts[m].sql.trim().replace(/;\s*$/,"") + "\n)").join(",\n")
+       + "\nSELECT * FROM (\n" + body + "\n) LIMIT 1000";
+}
+function bindParams(sql, params, values){
+  return sql.replace(/\{\{(\w+)\}\}/g, (_, name) => {
+    const p = (params||[]).find(x => x.name === name);
+    if(!p) throw new Error("未定義のパラメータ: "+name);
+    const v = values[name] ?? p.default ?? "";
+    if(p.type === "number" || p.type === "int"){
+      const n = Number(v); if(!Number.isFinite(n)) throw new Error(p.label+" は数値で入れてください");
+      return String(p.type === "int" ? Math.trunc(n) : n);
+    }
+    return "'" + String(v).replace(/\\/g,"\\\\").replace(/'/g,"\\'") + "'";
+  });
+}
+
+/* ── BigQuery 実行（ビューアの BigQuery コネクタで） ─────────── */
+const ERR = {
+  needs_reauth: "BigQuery コネクタの再接続が必要です。claude.ai の設定 → コネクタ で BigQuery MCP をつなぎ直してください。",
+  server_not_connected: "BigQuery MCP コネクタが見つかりません。claude.ai の設定 → コネクタ で追加してください。",
+  selection_required: "同じ名前の BigQuery コネクタが複数あります。表示された選択で1つ選んでください。",
+  not_in_manifest: "このページでの BigQuery の利用が許可されていません。ページの権限設定から許可してください。",
+  approval_required: "この実行には承認が必要です。もう一度「実行」を押すと承認を求められます。",
+  blocked_by_policy: "組織のポリシーで BigQuery の実行が止められています。",
+  server_unavailable: "BigQuery に一時的につながりません。少し待ってからもう一度実行してください。",
+};
+async function runBQ(sql){
+  if(!mcp) throw {code:"not_granted", message:"このページでは BigQuery を呼べません（Claude の画面で開いてください）"};
+  const r = await mcp.callTool(SERVER, TOOL, {projectId: BI.project, query: sql, timeoutMs: 60000}, {cache:{staleTime:300000, gcTime:3600000}});
+  const p = r.payload || {};
+  if(typeof p === "string") throw {code:"tool_error", message:p};
+  if(p.jobComplete === false) throw {code:"tool_error", message:"60秒以内に終わりませんでした。条件を絞ってください。"};
+  const fields = (p.schema && p.schema.fields) || [];
+  const num = fields.map(f => /INT|FLOAT|NUMERIC|DOUBLE/.test(f.type));
+  const rows = (p.rows||[]).map(r => r.f.map((c,i) => c.v === null ? null : num[i] ? Number(c.v) : c.v));
+  return {columns: fields.map(f => f.name), num, rows, billed: Number(p.totalBytesBilled||0), cached: !!(r.cache)};
+}
+function errText(e){ return ERR[e && e.code] || (e && e.message) || "実行できませんでした"; }
+
+/* ── 描画 ─────────────────────────────────────── */
+function css(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+const PALETTE = ["--accent","--warn","--good","--bad","--sub"];
+function fmt(v){ if(v===null||v===undefined) return "–"; if(typeof v==="number"){ const a=Math.abs(v); if(a>=1e8) return (v/1e8).toLocaleString("ja-JP",{maximumFractionDigits:1})+"億"; if(a!==0&&a<1&&!Number.isInteger(v)) return (v*100).toFixed(1)+"%"; return v.toLocaleString("ja-JP",{maximumFractionDigits:2}); } return v; }
+function render(res, spec, onPick){
+  const out = $("result");
+  if(chart){ chart.destroy(); chart = null; }
+  const t = spec && spec.type || "table";
+  const ci = n => res.columns.indexOf(n);
+  let html = `<div class="note">${res.rows.length.toLocaleString()} 行${res.cached?"（5分以内の結果を再利用）":""}・課金対象 ${(res.billed/1048576).toFixed(0)}MB</div>`;
+  if(t !== "table" && res.rows.length) html += `<div class="chartbox"><canvas id="cv" aria-label="グラフ"></canvas></div>`;
+  html += `<div class="tablebox"><table><thead><tr>${res.columns.map(c=>`<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>`
+    + res.rows.slice(0,1000).map((r,i)=>`<tr class="${onPick?"click":""}" data-i="${i}">${r.map((v,j)=>`<td class="${res.num[j]?"n":""}">${esc(fmt(v))}</td>`).join("")}</tr>`).join("")
+    + `</tbody></table></div>`;
+  out.innerHTML = html;
+  if(onPick) out.querySelectorAll("tr.click").forEach(tr => tr.onclick = () => onPick(res.rows[+tr.dataset.i], res));
+  if(t === "table" || !res.rows.length) return;
+  const xi = ci(spec.x) >= 0 ? ci(spec.x) : 0;
+  const ys = (Array.isArray(spec.y) ? spec.y : [spec.y]).filter(Boolean).map(ci).filter(i=>i>=0);
+  const yi = ys.length ? ys : res.num.map((n,i)=>n&&i!==xi?i:-1).filter(i=>i>=0).slice(0,2);
+  const si = spec.series ? ci(spec.series) : -1;
+  const grid = css("--line"), ink = css("--sub");
+  let datasets, labels;
+  if(t === "scatter"){
+    const [a,b] = yi.length>=2 ? yi : [xi, yi[0]];
+    datasets = [{label:`${res.columns[a]} × ${res.columns[b]}`, data: res.rows.map(r=>({x:r[a],y:r[b],r0:r})), backgroundColor: css("--accent")}];
+  } else if(si >= 0){
+    labels = [...new Set(res.rows.map(r=>r[xi]))];
+    const groups = [...new Set(res.rows.map(r=>r[si]))].slice(0,8);
+    datasets = groups.map((g,k)=>({label:String(g), data: labels.map(l => { const r = res.rows.find(r=>r[xi]===l&&r[si]===g); return r? r[yi[0]] : null; }),
+      borderColor: css(PALETTE[k%5]), backgroundColor: css(PALETTE[k%5]), spanGaps:true}));
+  } else {
+    labels = res.rows.map(r=>r[xi]);
+    datasets = yi.map((i,k)=>({label:res.columns[i], data: res.rows.map(r=>r[i]), borderColor: css(PALETTE[k%5]), backgroundColor: css(PALETTE[k%5])}));
+  }
+  chart = new Chart($("cv"), {type: t==="scatter"?"scatter":t==="line"?"line":"bar",
+    data:{labels, datasets},
+    options:{responsive:true, maintainAspectRatio:false, animation:false,
+      plugins:{legend:{labels:{color:ink}}, tooltip:{callbacks:{label:c=> `${c.dataset.label}: ${fmt(t==="scatter"? c.raw.y : c.raw)}`}}},
+      scales:{x:{ticks:{color:ink,maxRotation:60}, grid:{color:grid}}, y:{ticks:{color:ink, callback:v=>fmt(v)}, grid:{color:grid}}},
+      onClick:(ev, els) => { if(!onPick || !els.length) return; const e = els[0];
+        const row = t==="scatter" ? datasets[e.datasetIndex].data[e.index].r0 : res.rows.find(r=>r[xi]===labels[e.index]); if(row) onPick(row, res); }}});
+}
+function showSql(sql, el){ el.insertAdjacentHTML("beforeend", `<details class="sql"><summary>実行したSQL</summary><pre>${esc(sql)}</pre></details>`); }
+
+/* ── テンプレ ─────────────────────────────────── */
+function buildShelf(){
+  const by = {};
+  BI.templates.forEach(t => (by[t.domain] = by[t.domain] || []).push(t));
+  $("shelf").innerHTML = Object.keys(by).map(d => `<h2>${esc(BI.domains[d]||d)}</h2>` +
+    by[d].map(t => `<button class="tpl" data-id="${esc(t.id)}"><b>${esc(t.title)}</b><span>${esc(t.question||"")}</span></button>`).join("")).join("")
+    || `<p class="note">テンプレがまだありません。</p>`;
+  $("shelf").querySelectorAll(".tpl").forEach(b => b.onclick = () => { tab("tpl"); openTpl(b.dataset.id); });
+}
+function openTpl(id){
+  CUR = BI.templates.find(t => t.id === id); if(!CUR) return;
+  document.querySelectorAll(".tpl").forEach(b => b.classList.toggle("on", b.dataset.id === id));
+  $("p-tpl").innerHTML = `<p class="q">${esc(CUR.title)}</p><p class="note">${esc(CUR.question||"")}${CUR.note?"　"+esc(CUR.note):""}</p>
+    <div class="row">${(CUR.params||[]).map(p=>`<label class="f">${esc(p.label||p.name)}<input id="pp-${esc(p.name)}" value="${esc(p.default??"")}" ${p.type==="number"||p.type==="int"?'inputmode="decimal"':""}></label>`).join("")}
+    <button class="go" id="tplGo">実行</button><button class="ghost" id="tplFree">自由分析で開く</button></div>`;
+  $("tplGo").onclick = runTpl; $("tplFree").onclick = () => { FREE = {mart: CUR.mart, dims:[], measures:[], filters:[], chart:"bar"}; tab("free"); buildFree(); };
+  $("result").innerHTML = "";
+  runTpl();
+}
+async function runTpl(){
+  const vals = {}; (CUR.params||[]).forEach(p => vals[p.name] = $("pp-"+p.name).value);
+  let sql;
+  try{ sql = wrapSql(bindParams(CUR.sql, CUR.params, vals)); }catch(e){ $("result").innerHTML = `<div class="msg err">${esc(e.message)}</div>`; return; }
+  $("result").innerHTML = `<div class="msg">BigQuery で集計中…</div>`;
+  try{ const res = await runBQ(sql); render(res, CUR.chart||{type:"table"}); showSql(sql, $("result")); }
+  catch(e){ $("result").innerHTML = `<div class="msg err">${esc(errText(e))}</div>`; showSql(sql, $("result")); }
+}
+
+/* ── 自由分析（連動選択） ──────────────────────── */
+function martCols(m){ return (BI.marts[m] && BI.marts[m].columns) || []; }
+function isNum(c){ return /int|float|numeric|double|decimal/i.test(c.type||""); }
+function buildFree(){
+  const marts = Object.keys(BI.marts);
+  if(!FREE.mart) FREE.mart = marts.includes("m_fin_annual") ? "m_fin_annual" : marts[0];
+  const cols = martCols(FREE.mart);
+  const dimCols = cols.filter(c => !isNum(c) || /year|code/.test(c.name));
+  const numCols = cols.filter(c => isNum(c));
+  if(!FREE.dims.length && dimCols.find(c=>c.name==="industry")) FREE.dims = ["industry"];
+  if(!FREE.measures.length && numCols.length) FREE.measures = [{col:(numCols.find(c=>c.name==="net_sales")||numCols[0]).name, agg:"SUM"}, {col:"*", agg:"COUNT"}];
+  const opt = (arr, sel) => arr.map(c=>`<option value="${esc(c.name)}" ${c.name===sel?"selected":""}>${esc(c.label||c.name)}</option>`).join("");
+  $("p-free").innerHTML = `
+    <div class="cols">
+      <label class="f">マート<select id="fMart">${marts.map(m=>`<option ${m===FREE.mart?"selected":""}>${esc(m)}</option>`).join("")}</select></label>
+      <label class="f">グラフ<select id="fChart">${[["bar","棒"],["line","折れ線"],["scatter","散布図"],["table","表"]].map(([v,l])=>`<option value="${v}" ${v===FREE.chart?"selected":""}>${l}</option>`).join("")}</select></label>
+    </div>
+    <div class="cols" style="margin-top:8px">
+      <div><div class="note" style="margin:0">軸（GROUP BY）</div><div class="mlist" id="fDims">${FREE.dims.map((d,i)=>`<div class="mrow"><select data-dim="${i}">${opt(dimCols,d)}</select><button class="ghost" data-deldim="${i}" aria-label="軸を外す">×</button></div>`).join("")}</div>
+        <button class="ghost" id="fAddDim" style="margin-top:6px">＋ 軸</button></div>
+      <div><div class="note" style="margin:0">指標</div><div class="mlist" id="fMeas">${FREE.measures.map((m,i)=>`<div class="mrow"><select data-magg="${i}">${["SUM","AVG","MIN","MAX","COUNT"].map(a=>`<option ${a===m.agg?"selected":""}>${a}</option>`).join("")}</select><select data-mcol="${i}"><option value="*" ${m.col==="*"?"selected":""}>件数(*)</option>${opt(numCols,m.col)}</select><button class="ghost" data-delmeas="${i}" aria-label="指標を外す">×</button></div>`).join("")}</div>
+        <button class="ghost" id="fAddMeas" style="margin-top:6px">＋ 指標</button></div>
+    </div>
+    <div class="chips" id="fChips">${FREE.filters.map((f,i)=>`<span class="chip">${esc(f.col)} = ${esc(f.value)}<button data-delf="${i}" aria-label="絞り込みを外す">×</button></span>`).join("") || `<span class="note" style="margin:0">グラフの棒や表の行をクリックすると、その値で絞り込みます</span>`}</div>
+    <div class="row"><button class="go" id="fGo">集計</button></div>`;
+  $("fMart").onchange = e => { FREE = {mart:e.target.value, dims:[], measures:[], filters:[], chart:FREE.chart}; buildFree(); };
+  $("fChart").onchange = e => { FREE.chart = e.target.value; runFree(); };
+  $("p-free").querySelectorAll("[data-dim]").forEach(s => s.onchange = () => { FREE.dims[+s.dataset.dim] = s.value; runFree(); });
+  $("p-free").querySelectorAll("[data-magg]").forEach(s => s.onchange = () => { FREE.measures[+s.dataset.magg].agg = s.value; runFree(); });
+  $("p-free").querySelectorAll("[data-mcol]").forEach(s => s.onchange = () => { FREE.measures[+s.dataset.mcol].col = s.value; runFree(); });
+  $("p-free").querySelectorAll("[data-deldim]").forEach(b => b.onclick = () => { FREE.dims.splice(+b.dataset.deldim,1); buildFree(); runFree(); });
+  $("p-free").querySelectorAll("[data-delmeas]").forEach(b => b.onclick = () => { FREE.measures.splice(+b.dataset.delmeas,1); buildFree(); runFree(); });
+  $("p-free").querySelectorAll("[data-delf]").forEach(b => b.onclick = () => { FREE.filters.splice(+b.dataset.delf,1); buildFree(); runFree(); });
+  $("fAddDim").onclick = () => { const c = dimCols.find(c=>!FREE.dims.includes(c.name)); if(c){ FREE.dims.push(c.name); buildFree(); } };
+  $("fAddMeas").onclick = () => { if(numCols[0]){ FREE.measures.push({col:numCols[0].name, agg:"AVG"}); buildFree(); } };
+  $("fGo").onclick = runFree;
+}
+function qid(n){ if(!/^[A-Za-z_][A-Za-z0-9_]*$/.test(n)) throw new Error("列名が不正です: "+n); return n; }
+function lit(v){ return typeof v === "number" ? String(v) : "'" + String(v).replace(/\\/g,"\\\\").replace(/'/g,"\\'") + "'"; }
+function freeSql(){
+  const cols = martCols(FREE.mart).map(c=>c.name);
+  const ok = n => { if(!cols.includes(n)) throw new Error("このマートに無い列です: "+n); return qid(n); };
+  const dims = FREE.dims.map(ok);
+  const meas = FREE.measures.map(m => m.col==="*" ? `COUNT(*) AS cnt` : `${m.agg}(${ok(m.col)}) AS ${m.agg.toLowerCase()}_${m.col}`);
+  if(!meas.length) throw new Error("指標を1つ以上選んでください");
+  const where = FREE.filters.map(f => f.value === null ? `${ok(f.col)} IS NULL` : `${ok(f.col)} = ${lit(f.value)}`);
+  return `SELECT ${[...dims, ...meas].join(", ")}\nFROM ${FREE.mart}` + (where.length?`\nWHERE ${where.join(" AND ")}`:"")
+    + (dims.length ? `\nGROUP BY ${dims.join(", ")}\nORDER BY ` + (dims.length===1 && /year/.test(dims[0]) ? dims[0] : `${dims.length+1} DESC`) : "")
+    + `\nLIMIT 500`;
+}
+async function runFree(){
+  let sql;
+  try{ sql = wrapSql(freeSql()); }catch(e){ $("result").innerHTML = `<div class="msg err">${esc(e.message)}</div>`; return; }
+  $("result").innerHTML = `<div class="msg">BigQuery で集計中…</div>`;
+  try{
+    const res = await runBQ(sql);
+    const spec = {type: FREE.chart, x: FREE.dims[0], y: res.columns.filter((c,i)=>res.num[i] && !FREE.dims.includes(c)).slice(0, FREE.chart==="scatter"?2:3), series: FREE.dims[1]};
+    render(res, spec, (row, r) => {   // 連動選択：クリックした行の軸の値で絞り込む
+      FREE.dims.forEach(d => { const v = row[r.columns.indexOf(d)]; if(!FREE.filters.some(f=>f.col===d&&f.value===v)) FREE.filters.push({col:d, value:v}); });
+      if(FREE.dims.length) FREE.dims = FREE.dims.length > 1 ? FREE.dims.slice(1) : FREE.dims;
+      buildFree(); runFree();
+    });
+    showSql(sql, $("result"));
+  }catch(e){ $("result").innerHTML = `<div class="msg err">${esc(errText(e))}</div>`; showSql(sql, $("result")); }
+}
+
+/* ── Claude に聞く（日本語 → SQL） ──────────────── */
+let askCtl = null;
+function schemaText(){
+  return Object.entries(BI.marts).map(([m,v]) => `- ${m}（${v.desc||""}）: ` + (v.columns||[]).map(c=>`${c.name}${c.label?"="+c.label:""}`).join(", ")).join("\n");
+}
+async function ask(){
+  const q = $("askText").value.trim(); if(!q) return;
+  if(!sample){ $("askOut").innerHTML = `<div class="msg warn">このページでは Claude に質問できません（Claude の画面で開くと使えます）。</div>`; return; }
+  askCtl = new AbortController(); $("askGo").disabled = true; $("askStop").hidden = false;
+  $("askOut").innerHTML = `<div class="msg">Claude が SQL を考えています…</div>`;
+  const prompt = `あなたは日本株の財務DWHのアナリストです。次の表（マート）だけを使い、質問に答えるSQLを1本書いてください。
+表は BigQuery GoogleSQL で実行されます。表名はそのまま（例: FROM m_fin_annual）書き、データセット名は付けない。SELECT または WITH で始まる1文だけ。行が多くなる一覧は LIMIT 100。
+金額は円。比率の列は小数（0.12＝12%）。fiscal_year は決算期末の年。業種は industry、証券コードは sec_code4、社名は name。
+使える表:
+${schemaText()}
+
+質問: ${q}
+
+次のJSONだけで答える: {"sql": "...", "chart": {"type": "bar|line|scatter|table", "x": "列名", "y": ["列名"], "series": "列名またはnull"}, "explain": "何を出したかを日本語で2文以内"}`;
+  try{
+    const a = await sample.json(prompt, {signal: askCtl.signal});
+    if(!a || typeof a.sql !== "string") throw {code:"invalid_json"};
+    $("askOut").innerHTML = `<p class="answer">${esc(a.explain||"")}</p>`;
+    const sql = wrapSql(a.sql);
+    $("result").innerHTML = `<div class="msg">BigQuery で集計中…</div>`;
+    try{ const res = await runBQ(sql); render(res, a.chart||{type:"table"}); showSql(sql, $("result")); $("sqlText").value = a.sql; }
+    catch(e){ $("result").innerHTML = `<div class="msg err">${esc(errText(e))}</div>`; showSql(sql, $("result")); }
+  }catch(e){
+    const m = {not_granted:"Claude への質問が許可されていません。", rate_limited:"質問が多すぎます。少し時間をおいてください。", invalid_json:"SQLをうまく組めませんでした。質問を具体的にしてもう一度どうぞ。", cancelled:"止めました。", refused:"この質問には答えられませんでした。言い方を変えてください。"}[e && e.code] || (e && e.message) || "質問できませんでした";
+    $("askOut").innerHTML = `<div class="msg ${e&&e.code==="cancelled"?"":"err"}">${esc(m)}</div>`;
+  }finally{ $("askGo").disabled = false; $("askStop").hidden = true; }
+}
+
+/* ── タブと起動 ─────────────────────────────────── */
+function tab(name){
+  document.querySelectorAll(".tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab===name));
+  ["tpl","free","ask","sql"].forEach(n => $("p-"+n).hidden = n !== name);
+}
+document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => { tab(b.dataset.tab); if(b.dataset.tab==="free"){ buildFree(); } });
+$("askGo").onclick = ask; $("askStop").onclick = () => askCtl && askCtl.abort();
+$("sqlGo").onclick = async () => {
+  let sql; try{ sql = wrapSql($("sqlText").value); }catch(e){ $("result").innerHTML = `<div class="msg err">${esc(e.message)}</div>`; return; }
+  $("result").innerHTML = `<div class="msg">BigQuery で集計中…</div>`;
+  try{ const res = await runBQ(sql); render(res, {type:"table"}); showSql(sql, $("result")); }
+  catch(e){ $("result").innerHTML = `<div class="msg err">${esc(errText(e))}</div>`; showSql(sql, $("result")); }
+};
+$("sqlText").value = "SELECT industry, COUNT(*) AS n_companies, AVG(operating_margin) AS avg_op_margin\nFROM m_fin_annual\nWHERE fiscal_year = 2025\nGROUP BY industry\nORDER BY n_companies DESC";
+buildShelf();
+$("p-tpl").innerHTML = `<p class="q">左の棚からテンプレを選んでください</p><p class="note">テンプレ ${BI.templates.length} 本・マート ${Object.keys(BI.marts).length} 本（${esc(BI.built_at)} 時点の定義）。結果のクリックで「自由分析」に入ると、その値で絞り込んだまま深掘りできます。</p>`;
+(async () => {
+  try{ mcp = window.claude ? await window.claude.use("mcp") : null; }catch(e){ mcp = null; }
+  try{ sample = window.claude ? await window.claude.use("sample") : null; }catch(e){ sample = null; }
+  const st = $("status");
+  if(!mcp){ st.textContent = "BigQuery 未接続（Claude の画面で開くと使えます）"; st.className = "status bad"; return; }
+  st.textContent = "BigQuery 接続可"; st.className = "status ok";
+  if(BI.templates[0]) openTpl(BI.templates[0].id);
+})();
+</script>
