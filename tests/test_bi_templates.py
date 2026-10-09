@@ -165,7 +165,8 @@ def _load_geo_and_realestate(c) -> None:
             "land_price_yoy_change": -5.0 + m * 0.4, "flood_risk_area_pct": (m % 10) * 0.1,
             "latest_avg_price_condo": 4e7, "hospital_count": m % 7})
     for i in range(12):
-        code = "7203" if i == 0 else f"{7000 + i}"
+        # 会社別の保有不動産テンプレは既定がイオン（8267）なので、その会社を必ず含める
+        code = "7203" if i == 0 else ("8267" if i == 1 else f"{7000 + i}")
         for fy in (2024, 2025, 2026):
             for j in range(3):
                 m = (i * 3 + j) % 30
