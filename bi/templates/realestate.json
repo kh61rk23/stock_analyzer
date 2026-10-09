@@ -1,0 +1,352 @@
+[
+  {
+    "id": "re_land_rise_top",
+    "domain": "realestate",
+    "title": "地価上昇率の高い市区町村",
+    "question": "地価が最も上がっている市区町村はどこか",
+    "mart": "m_re_area",
+    "sql": "SELECT prefecture_name, municipality_name, land_price_yoy_change,\n       avg_land_price_commercial, avg_land_price_residential\nFROM m_re_area\nWHERE land_price_yoy_change IS NOT NULL\nORDER BY land_price_yoy_change DESC\nLIMIT {{top_n}}",
+    "params": [
+      {
+        "name": "top_n",
+        "label": "表示する市区町村数",
+        "type": "int",
+        "default": 20,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "municipality_name",
+      "y": [
+        "land_price_yoy_change"
+      ],
+      "series": null
+    },
+    "note": "前年比は％（5＝+5%）。地価は円/m2。"
+  },
+  {
+    "id": "re_land_fall_top",
+    "domain": "realestate",
+    "title": "地価下落率の大きい市区町村",
+    "question": "地価が最も下がっている市区町村はどこか",
+    "mart": "m_re_area",
+    "sql": "SELECT prefecture_name, municipality_name, land_price_yoy_change,\n       avg_land_price_commercial, avg_land_price_residential\nFROM m_re_area\nWHERE land_price_yoy_change IS NOT NULL\nORDER BY land_price_yoy_change\nLIMIT {{top_n}}",
+    "params": [
+      {
+        "name": "top_n",
+        "label": "表示する市区町村数",
+        "type": "int",
+        "default": 20,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "municipality_name",
+      "y": [
+        "land_price_yoy_change"
+      ],
+      "series": null
+    },
+    "note": "前年比は％。地価が空の市区町村（取引が少ない）は含まれない。"
+  },
+  {
+    "id": "re_flood_high_price_high",
+    "domain": "realestate",
+    "title": "洪水リスクが高く地価も高い地域",
+    "question": "地価が高いのに洪水リスクが高い地域はどこか",
+    "mart": "m_re_area",
+    "sql": "SELECT prefecture_name, municipality_name, flood_risk_area_pct, avg_land_price_commercial,\n       avg_land_price_residential, land_price_yoy_change\nFROM m_re_area\nWHERE flood_risk_area_pct >= {{min_flood}}\n  AND avg_land_price_commercial >= {{min_price}}\nORDER BY avg_land_price_commercial DESC\nLIMIT {{top_n}}",
+    "params": [
+      {
+        "name": "min_flood",
+        "label": "洪水リスク地域率の下限（0〜1）",
+        "type": "number",
+        "default": 0.3,
+        "min": 0,
+        "max": 1
+      },
+      {
+        "name": "min_price",
+        "label": "商業地の平均地価の下限（円/m2）",
+        "type": "int",
+        "default": 100000,
+        "min": 0,
+        "max": 100000000
+      },
+      {
+        "name": "top_n",
+        "label": "表示する市区町村数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "scatter",
+      "x": "avg_land_price_commercial",
+      "y": [
+        "flood_risk_area_pct"
+      ],
+      "series": null
+    },
+    "note": "洪水リスク地域率は市区町村の面積に占める浸水想定区域の割合。0.3＝30%。"
+  },
+  {
+    "id": "re_pref_overview",
+    "domain": "realestate",
+    "title": "都道府県別の地価と洪水リスク",
+    "question": "都道府県ごとの地価水準と上昇率・洪水リスクはどう違うか",
+    "mart": "m_re_area",
+    "sql": "SELECT prefecture_name, COUNT(*) AS municipalities,\n       ROUND(AVG(avg_land_price_commercial), 0) AS avg_commercial,\n       ROUND(AVG(avg_land_price_residential), 0) AS avg_residential,\n       ROUND(AVG(land_price_yoy_change), 2) AS avg_yoy_change,\n       ROUND(AVG(flood_risk_area_pct), 3) AS avg_flood\nFROM m_re_area\nGROUP BY prefecture_name\nORDER BY avg_commercial DESC",
+    "params": [],
+    "chart": {
+      "type": "bar",
+      "x": "prefecture_name",
+      "y": [
+        "avg_commercial"
+      ],
+      "series": null
+    },
+    "note": "市区町村の単純平均（面積や取引量で重み付けしない）。"
+  },
+  {
+    "id": "re_company_holdings",
+    "domain": "realestate",
+    "title": "企業の保有不動産（市区町村別）",
+    "question": "この会社はどこにどれだけ土地を持ち、含み益の目安はいくらか",
+    "mart": "m_re_holdings",
+    "sql": "SELECT prefecture, municipality_name, facility_count, land_area_m2, book_value_land_m_yen,\n       land_value_est_m_yen, unrealized_gain_est_m_yen\nFROM m_re_holdings\nWHERE sec_code4 = {{sec_code4}}\n  AND fiscal_year = (SELECT MAX(fiscal_year) FROM m_re_holdings WHERE sec_code4 = {{sec_code4}})\nORDER BY book_value_land_m_yen DESC\nLIMIT {{top_n}}",
+    "params": [
+      {
+        "name": "sec_code4",
+        "label": "証券コード（4桁）",
+        "type": "string",
+        "default": "7203"
+      },
+      {
+        "name": "top_n",
+        "label": "表示する市区町村数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "municipality_name",
+      "y": [
+        "book_value_land_m_yen",
+        "land_value_est_m_yen"
+      ],
+      "series": null
+    },
+    "note": "簿価・時価の目安は百万円。時価の目安は面積×参照地価（工業地→商業地→住宅地の順）で、施設の実勢価格ではない。"
+  },
+  {
+    "id": "re_company_land_trend",
+    "domain": "realestate",
+    "title": "会社の土地簿価と時価目安の推移",
+    "question": "この会社の保有土地の簿価と時価の目安は年度でどう変わったか",
+    "mart": "m_re_holdings_pref",
+    "sql": "SELECT fiscal_year, name, SUM(book_value_land_m_yen) AS book_value_land_m_yen,\n       SUM(land_value_est_m_yen) AS land_value_est_m_yen,\n       SUM(unrealized_gain_est_m_yen) AS unrealized_gain_est_m_yen\nFROM m_re_holdings_pref\nWHERE sec_code4 = {{sec_code4}}\nGROUP BY fiscal_year, name\nORDER BY fiscal_year",
+    "params": [
+      {
+        "name": "sec_code4",
+        "label": "証券コード（4桁）",
+        "type": "string",
+        "default": "7203"
+      }
+    ],
+    "chart": {
+      "type": "line",
+      "x": "fiscal_year",
+      "y": [
+        "book_value_land_m_yen",
+        "land_value_est_m_yen"
+      ],
+      "series": null
+    },
+    "note": "年度ごとに開示される施設の範囲が変わるため、増減は保有の変化と開示の変化の両方を含む。"
+  },
+  {
+    "id": "re_unrealized_gain_ranking",
+    "domain": "realestate",
+    "title": "土地の含み益の目安が大きい会社",
+    "question": "保有土地の時価の目安が簿価を大きく上回る会社はどこか",
+    "mart": "m_re_holdings_pref",
+    "sql": "SELECT name, sec_code4, SUM(book_value_land_m_yen) AS book_value_land_m_yen,\n       SUM(land_value_est_m_yen) AS land_value_est_m_yen,\n       SUM(unrealized_gain_est_m_yen) AS unrealized_gain_est_m_yen\nFROM m_re_holdings_pref\nWHERE fiscal_year = {{fiscal_year}}\n  AND name IS NOT NULL\nGROUP BY name, sec_code4\nORDER BY unrealized_gain_est_m_yen DESC\nLIMIT {{top_n}}",
+    "params": [
+      {
+        "name": "fiscal_year",
+        "label": "年度（決算期末の年）",
+        "type": "int",
+        "default": 2025,
+        "min": 2015,
+        "max": 2035
+      },
+      {
+        "name": "top_n",
+        "label": "表示する会社数",
+        "type": "int",
+        "default": 20,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "name",
+      "y": [
+        "unrealized_gain_est_m_yen"
+      ],
+      "series": null
+    },
+    "note": "概算。敷地面積が複数施設・複数社で重複計上される場合や参照地価が実態と離れる場合があり、極端な値は疑って個別に確認する。"
+  },
+  {
+    "id": "re_depopulation_holders",
+    "domain": "realestate",
+    "title": "人口減少地域に不動産が多い会社",
+    "question": "2050年までに人口が大きく減る地域に施設を多く持つ会社はどこか",
+    "mart": "m_re_holdings",
+    "sql": "SELECT name, sec_code4, SUM(facility_count) AS facilities, COUNT(*) AS municipalities,\n       SUM(book_value_land_m_yen) AS book_value_land_m_yen\nFROM m_re_holdings\nWHERE fiscal_year = {{fiscal_year}}\n  AND population_change_pct <= {{max_change}}\n  AND name IS NOT NULL\nGROUP BY name, sec_code4\nORDER BY facilities DESC\nLIMIT {{top_n}}",
+    "params": [
+      {
+        "name": "fiscal_year",
+        "label": "年度（決算期末の年）",
+        "type": "int",
+        "default": 2025,
+        "min": 2015,
+        "max": 2035
+      },
+      {
+        "name": "max_change",
+        "label": "人口増減の上限（％。-30＝30%以上減る地域）",
+        "type": "number",
+        "default": -30,
+        "min": -100,
+        "max": 100
+      },
+      {
+        "name": "top_n",
+        "label": "表示する会社数",
+        "type": "int",
+        "default": 20,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "name",
+      "y": [
+        "facilities"
+      ],
+      "series": null
+    },
+    "note": "人口増減は市区町村の現在から2050年までの推計（％）。施設数は開示された施設の数。"
+  },
+  {
+    "id": "re_pref_holdings",
+    "domain": "realestate",
+    "title": "都道府県別の保有不動産",
+    "question": "どの都道府県に企業の土地が集中しているか",
+    "mart": "m_re_holdings_pref",
+    "sql": "SELECT prefecture, COUNT(*) AS company_years, SUM(facility_count) AS facilities,\n       SUM(book_value_land_m_yen) AS book_value_land_m_yen,\n       SUM(land_value_est_m_yen) AS land_value_est_m_yen,\n       SUM(unrealized_gain_est_m_yen) AS unrealized_gain_est_m_yen\nFROM m_re_holdings_pref\nWHERE fiscal_year = {{fiscal_year}}\nGROUP BY prefecture\nORDER BY book_value_land_m_yen DESC",
+    "params": [
+      {
+        "name": "fiscal_year",
+        "label": "年度（決算期末の年）",
+        "type": "int",
+        "default": 2025,
+        "min": 2015,
+        "max": 2035
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "prefecture",
+      "y": [
+        "book_value_land_m_yen",
+        "land_value_est_m_yen"
+      ],
+      "series": null
+    },
+    "note": "company_years ＝ その都道府県に開示のある会社の数（1社1行）。金額は百万円。"
+  },
+  {
+    "id": "re_company_prefectures",
+    "domain": "realestate",
+    "title": "ある会社の都道府県別保有",
+    "question": "この会社の土地はどの都道府県に偏っているか",
+    "mart": "m_re_holdings_pref",
+    "sql": "SELECT prefecture, facility_count, land_area_m2, book_value_land_m_yen, land_value_est_m_yen,\n       unrealized_gain_est_m_yen, population_change_pct, flood_risk_area_pct\nFROM m_re_holdings_pref\nWHERE sec_code4 = {{sec_code4}}\n  AND fiscal_year = (SELECT MAX(fiscal_year) FROM m_re_holdings_pref WHERE sec_code4 = {{sec_code4}})\nORDER BY book_value_land_m_yen DESC",
+    "params": [
+      {
+        "name": "sec_code4",
+        "label": "証券コード（4桁）",
+        "type": "string",
+        "default": "7203"
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "prefecture",
+      "y": [
+        "book_value_land_m_yen",
+        "land_value_est_m_yen"
+      ],
+      "series": null
+    },
+    "note": "人口増減・洪水リスクは市区町村値の単純平均。最新の開示年度で表示する。"
+  },
+  {
+    "id": "re_flood_exposed_holders",
+    "domain": "realestate",
+    "title": "洪水リスクが高い地域に土地を持つ会社",
+    "question": "浸水想定区域の広い地域に多くの土地簿価を持つ会社はどこか",
+    "mart": "m_re_holdings",
+    "sql": "SELECT name, sec_code4, COUNT(*) AS municipalities, SUM(facility_count) AS facilities,\n       SUM(book_value_land_m_yen) AS book_value_land_m_yen\nFROM m_re_holdings\nWHERE fiscal_year = {{fiscal_year}}\n  AND flood_risk_area_pct >= {{min_flood}}\n  AND name IS NOT NULL\nGROUP BY name, sec_code4\nORDER BY book_value_land_m_yen DESC\nLIMIT {{top_n}}",
+    "params": [
+      {
+        "name": "fiscal_year",
+        "label": "年度（決算期末の年）",
+        "type": "int",
+        "default": 2025,
+        "min": 2015,
+        "max": 2035
+      },
+      {
+        "name": "min_flood",
+        "label": "洪水リスク地域率の下限（0〜1）",
+        "type": "number",
+        "default": 0.5,
+        "min": 0,
+        "max": 1
+      },
+      {
+        "name": "top_n",
+        "label": "表示する会社数",
+        "type": "int",
+        "default": 20,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "name",
+      "y": [
+        "book_value_land_m_yen"
+      ],
+      "series": null
+    },
+    "note": "地域率は市区町村全体の値で、施設そのものが浸水想定区域にあるとは限らない。"
+  }
+]

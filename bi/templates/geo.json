@@ -1,0 +1,266 @@
+[
+  {
+    "id": "geo_country_risk_trend",
+    "domain": "geo",
+    "title": "国別リスクの推移",
+    "question": "この国の総合リスクとGDELT不安定度は最近どう動いたか",
+    "mart": "m_country_risk",
+    "sql": "SELECT risk_date, country_name_ja, composite_risk_score, gdelt_instability\nFROM m_country_risk\nWHERE country_code = {{country_code}}\nORDER BY risk_date",
+    "params": [
+      {
+        "name": "country_code",
+        "label": "国コード（ISO3）",
+        "type": "string",
+        "default": "CHN"
+      }
+    ],
+    "chart": {
+      "type": "line",
+      "x": "risk_date",
+      "y": [
+        "composite_risk_score",
+        "gdelt_instability"
+      ],
+      "series": null
+    },
+    "note": "国コードは ISO3（JPN・USA・CHN・RUS など）。総合リスクは大きいほど高リスク。日次データは2026-06-29以降。"
+  },
+  {
+    "id": "geo_risk_surge",
+    "domain": "geo",
+    "title": "リスクが急上昇した国",
+    "question": "直近でリスクが大きく上がった国はどこか",
+    "mart": "m_country_risk",
+    "sql": "WITH ranked AS (\n  SELECT country_code, country_name_ja, region, composite_risk_score,\n         ROW_NUMBER() OVER (PARTITION BY country_code ORDER BY risk_date DESC) AS rn\n  FROM m_country_risk\n  WHERE composite_risk_score IS NOT NULL\n),\ncur AS (SELECT * FROM ranked WHERE rn = 1),\nprev AS (SELECT * FROM ranked WHERE rn = {{lookback}} + 1)\nSELECT cur.country_code, cur.country_name_ja, cur.region,\n       prev.composite_risk_score AS score_before,\n       cur.composite_risk_score AS score_now,\n       cur.composite_risk_score - prev.composite_risk_score AS change\nFROM cur\nJOIN prev ON prev.country_code = cur.country_code\nORDER BY change DESC\nLIMIT {{top_n}}",
+    "params": [
+      {
+        "name": "lookback",
+        "label": "何回前の観測と比べるか",
+        "type": "int",
+        "default": 14,
+        "min": 1,
+        "max": 60
+      },
+      {
+        "name": "top_n",
+        "label": "表示する国数",
+        "type": "int",
+        "default": 15,
+        "min": 1,
+        "max": 59
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "country_name_ja",
+      "y": [
+        "change"
+      ],
+      "series": null
+    },
+    "note": "「何回前」は日数ではなく観測行の数（日次に欠けがある国では実際の日数が少し長くなる）。マイナスは低下。"
+  },
+  {
+    "id": "geo_region_risk_now",
+    "domain": "geo",
+    "title": "地域別リスク平均（最新）",
+    "question": "どの地域が今いちばんリスクが高いか",
+    "mart": "m_country_risk",
+    "sql": "SELECT region, ROUND(AVG(composite_risk_score), 2) AS avg_risk, COUNT(*) AS countries\nFROM m_country_risk\nWHERE risk_date = (SELECT MAX(risk_date) FROM m_country_risk)\nGROUP BY region\nORDER BY avg_risk DESC",
+    "params": [],
+    "chart": {
+      "type": "bar",
+      "x": "region",
+      "y": [
+        "avg_risk"
+      ],
+      "series": null
+    },
+    "note": "最新日の単純平均。国数が少ない地域（欧州・ロシア など）は1国の動きに左右される。"
+  },
+  {
+    "id": "geo_region_risk_trend",
+    "domain": "geo",
+    "title": "地域別リスク平均の推移",
+    "question": "地域ごとのリスクは時間とともにどう動いたか",
+    "mart": "m_country_risk",
+    "sql": "SELECT risk_date, region, ROUND(AVG(composite_risk_score), 2) AS avg_risk\nFROM m_country_risk\nGROUP BY risk_date, region\nORDER BY risk_date, region",
+    "params": [],
+    "chart": {
+      "type": "line",
+      "x": "risk_date",
+      "y": [
+        "avg_risk"
+      ],
+      "series": "region"
+    },
+    "note": "地域内の国の単純平均。"
+  },
+  {
+    "id": "geo_high_risk_ranking",
+    "domain": "geo",
+    "title": "高リスク国ランキング（最新）",
+    "question": "いま総合リスクが高い国はどこか",
+    "mart": "m_country_risk",
+    "sql": "SELECT country_name_ja, region, composite_risk_score, gdelt_instability,\n       foreign_ministry_level, state_dept_level, sanction_flag\nFROM m_country_risk\nWHERE risk_date = (SELECT MAX(risk_date) FROM m_country_risk)\nORDER BY composite_risk_score DESC\nLIMIT {{top_n}}",
+    "params": [
+      {
+        "name": "top_n",
+        "label": "表示する国数",
+        "type": "int",
+        "default": 15,
+        "min": 1,
+        "max": 59
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "country_name_ja",
+      "y": [
+        "composite_risk_score"
+      ],
+      "series": null
+    },
+    "note": "外務省・国務省レベルは渡航情報の危険度（大きいほど危険）。"
+  },
+  {
+    "id": "geo_company_by_country",
+    "domain": "geo",
+    "title": "ある国に依存する会社",
+    "question": "この国に権益・売上・調達で関わっている会社はどこか",
+    "mart": "m_company_country",
+    "sql": "SELECT COALESCE(name, ticker) AS company, ticker, exposure_type, exposure_strength,\n       revenue_share_est, latest_risk_score\nFROM m_company_country\nWHERE country_code = {{country_code}}\nORDER BY exposure_strength DESC, company",
+    "params": [
+      {
+        "name": "country_code",
+        "label": "国コード（ISO3）",
+        "type": "string",
+        "default": "AUS"
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "company",
+      "y": [
+        "exposure_strength"
+      ],
+      "series": null
+    },
+    "note": "依存度は0〜1の目安（自動推定を含む）。取り込み済みの会社だけが対象で、全上場会社ではない。"
+  },
+  {
+    "id": "geo_company_countries",
+    "domain": "geo",
+    "title": "ある会社の依存国",
+    "question": "この会社はどの国にどれだけ依存しているか",
+    "mart": "m_company_country",
+    "sql": "SELECT country_name_ja, region, exposure_type, exposure_strength, latest_risk_score, risk_weighted_score, sanction_flag\nFROM m_company_country\nWHERE sec_code4 = {{sec_code4}}\nORDER BY exposure_strength DESC, country_name_ja",
+    "params": [
+      {
+        "name": "sec_code4",
+        "label": "証券コード（4桁）",
+        "type": "string",
+        "default": "8058"
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "country_name_ja",
+      "y": [
+        "exposure_strength",
+        "risk_weighted_score"
+      ],
+      "series": null
+    },
+    "note": "日本株のみ（米国株の ticker は証券コードを持たない）。risk_weighted_score ＝ 依存度 × 最新の国リスク。"
+  },
+  {
+    "id": "geo_high_risk_dependence",
+    "domain": "geo",
+    "title": "高リスク国への依存が大きい会社",
+    "question": "リスクの高い国に依存している会社はどこか",
+    "mart": "m_company_country",
+    "sql": "WITH d AS (\n  SELECT COALESCE(name, ticker) AS company, ticker, exposure_strength, risk_weighted_score\n  FROM m_company_country\n  WHERE latest_risk_score >= {{min_risk}}\n)\nSELECT company, ticker, COUNT(*) AS countries, SUM(exposure_strength) AS exposure_total,\n       ROUND(SUM(risk_weighted_score), 2) AS weighted_risk\nFROM d\nGROUP BY company, ticker\nORDER BY weighted_risk DESC\nLIMIT {{top_n}}",
+    "params": [
+      {
+        "name": "min_risk",
+        "label": "高リスクとみなす総合リスクの下限",
+        "type": "number",
+        "default": 30,
+        "min": 0,
+        "max": 100
+      },
+      {
+        "name": "top_n",
+        "label": "表示する会社数",
+        "type": "int",
+        "default": 15,
+        "min": 1,
+        "max": 100
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "company",
+      "y": [
+        "weighted_risk"
+      ],
+      "series": null
+    },
+    "note": "依存度を足し合わせた値は、権益が多い会社ほど大きくなる（会社間の優劣ではなく関与の広さの目安）。"
+  },
+  {
+    "id": "geo_sanction_exposure",
+    "domain": "geo",
+    "title": "制裁対象国への関与",
+    "question": "制裁対象とされる国に関わっている会社はどこか",
+    "mart": "m_company_country",
+    "sql": "SELECT COALESCE(name, ticker) AS company, ticker, country_name_ja, exposure_type, exposure_strength,\n       latest_risk_score, review_flag\nFROM m_company_country\nWHERE sanction_flag = TRUE\nORDER BY exposure_strength DESC, company",
+    "params": [],
+    "chart": {
+      "type": "bar",
+      "x": "company",
+      "y": [
+        "exposure_strength"
+      ],
+      "series": null
+    },
+    "note": "制裁対象の判定は country_profile の sanction_flag（イラン・ミャンマー・ロシア・ベネズエラ）。review_flag が真のものは人の確認待ちの自動推定。"
+  },
+  {
+    "id": "geo_democracy_vs_risk",
+    "domain": "geo",
+    "title": "民主主義指数と総合リスク",
+    "question": "民主主義の度合いと国リスクに関係はあるか",
+    "mart": "m_country_profile",
+    "sql": "SELECT p.country_name_ja, p.region, p.democracy_index, r.composite_risk_score\nFROM m_country_profile AS p\nJOIN m_country_risk AS r ON r.country_code = p.country_code\nWHERE r.risk_date = (SELECT MAX(risk_date) FROM m_country_risk)\n  AND p.democracy_index IS NOT NULL\nORDER BY p.democracy_index",
+    "params": [],
+    "chart": {
+      "type": "scatter",
+      "x": "democracy_index",
+      "y": [
+        "composite_risk_score"
+      ],
+      "series": null
+    },
+    "note": "最新日のリスクと静的な民主主義指数の散布図。相関は因果を意味しない。"
+  },
+  {
+    "id": "geo_exposure_type_mix",
+    "domain": "geo",
+    "title": "権益の種類別の件数",
+    "question": "どんな種類の関与（資源権益・生産拠点・販売網など）が多いか",
+    "mart": "m_company_country",
+    "sql": "SELECT exposure_type, COUNT(*) AS pairs, ROUND(AVG(exposure_strength), 3) AS avg_strength\nFROM m_company_country\nGROUP BY exposure_type\nORDER BY pairs DESC",
+    "params": [],
+    "chart": {
+      "type": "bar",
+      "x": "exposure_type",
+      "y": [
+        "pairs"
+      ],
+      "series": null
+    },
+    "note": "会社×国の組の数。種類が複数ある組は最も強い種類で数える。"
+  }
+]

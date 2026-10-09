@@ -18,10 +18,21 @@ sys.path.insert(0, str(REPO))
 
 import bi_templates as bt  # noqa: E402
 
-STRING_COLS = {"edinet_code", "name", "sec_code4", "industry", "accounting_standard", "listing_status"}
-INT_COLS = {"fiscal_year", "employee_count"}
-DATE_COLS = {"fiscal_year_end"}
-BOOL_COLS = {"is_delisted"}
+STRING_COLS = {
+    "edinet_code", "name", "sec_code4", "industry", "accounting_standard", "listing_status",
+    "country_code", "country_name_ja", "region", "ticker", "market", "exposure_type",
+    "prefecture_name", "prefecture", "municipality_code", "municipality_name",
+    "top_export_commodities", "sealane_adjacency", "military_alliances",
+}
+INT_COLS = {
+    "fiscal_year", "employee_count", "foreign_ministry_level", "state_dept_level", "exposure_type_count",
+    "latest_foreign_ministry_level", "latest_state_dept_level", "hospital_count", "facility_count",
+    "municipality_count", "population_current", "population_2050",
+}
+DATE_COLS = {"fiscal_year_end", "risk_date", "latest_risk_date"}
+BOOL_COLS = {"is_delisted", "sanction_flag", "is_landlocked", "review_flag"}
+ALL_MARTS = ("m_company", "m_fin_annual", "m_country_profile", "m_country_risk", "m_company_country",
+             "m_re_area", "m_re_holdings", "m_re_holdings_pref")
 
 
 def mart_columns(mart: str) -> list[str]:
@@ -55,7 +66,7 @@ def sql_type(col: str) -> str:
 @pytest.fixture(scope="module")
 def con():
     c = duckdb.connect(":memory:")
-    for mart in ("m_company", "m_fin_annual"):
+    for mart in ALL_MARTS:
         cols = mart_columns(mart)
         c.execute(f"CREATE TABLE {mart} (" + ", ".join(f"{col} {sql_type(col)}" for col in cols) + ")")
     industries = ["電気機器", "小売業", None]
@@ -93,15 +104,101 @@ def con():
             assert set(row) == set(cols), (set(row) ^ set(cols))
             c.execute(f"INSERT INTO m_fin_annual ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
                       [row[col] for col in cols])
+    _load_geo_and_realestate(c)
     return c
 
 
-MARTS = {"m_company", "m_fin_annual"}
+def _insert(c, mart: str, row: dict) -> None:
+    cols = mart_columns(mart)
+    assert set(row) == set(cols), (mart, set(row) ^ set(cols))
+    c.execute(f"INSERT INTO {mart} ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+              [row[col] for col in cols])
+
+
+COUNTRIES = [("CHN", "中国", "東アジア", False), ("USA", "アメリカ合衆国", "北米", False),
+             ("AUS", "オーストラリア", "オセアニア", False), ("RUS", "ロシア", "欧州・ロシア", True),
+             ("IRN", "イラン", "中東", True), ("SAU", "サウジアラビア", "中東", False),
+             ("JPN", "日本", "東アジア", False), ("IDN", "インドネシア", "東南アジア", False)]
+PREFS = ["東京都", "愛知県", "北海道", "宮崎県"]
+
+
+def _load_geo_and_realestate(c) -> None:
+    import datetime as dt
+    for k, (code, nm, region, sanc) in enumerate(COUNTRIES):
+        _insert(c, "m_country_profile", {
+            "country_code": code, "country_name_ja": nm, "region": region, "democracy_index": 1.0 + k,
+            "corruption_index": 3.0 + k, "rule_of_law": 2.0 + k, "gdp_usd_bn": 100.0 * (k + 1),
+            "export_concentration": 0.1 * k, "is_landlocked": False, "sanction_flag": sanc,
+            "trade_dependency_jp": 0.01 * k, "top_export_commodities": "[]", "sealane_adjacency": "[]",
+            "military_alliances": "[]"})
+        for d in range(20):
+            _insert(c, "m_country_risk", {
+                "country_code": code, "risk_date": dt.date(2026, 9, 20) + dt.timedelta(days=d),
+                "country_name_ja": nm, "region": region, "sanction_flag": sanc,
+                "gdelt_instability": 10.0 + k, "foreign_ministry_level": k % 4, "state_dept_level": (k + 1) % 4,
+                "composite_risk_score": 20.0 + k * 3 + d * (0.5 if k % 2 else -0.2)})
+    pairs = [("8058.T", "8058", "三菱商事", "総合商社", "AUS", "RESOURCE_CONCESSION", 0.18),
+             ("8058.T", "8058", "三菱商事", "総合商社", "RUS", "RESOURCE_CONCESSION", 0.10),
+             ("7203.T", "7203", "トヨタ自動車", "輸送用機器", "CHN", "PRODUCTION_FACILITY", 0.22),
+             ("7203.T", "7203", "トヨタ自動車", "輸送用機器", "USA", "PRODUCTION_FACILITY", 0.18),
+             ("5019.T", "5019", "出光興産", "石油", "IRN", "PROCUREMENT", 0.25),
+             ("LRCX", None, None, None, "USA", "SALES_NETWORK", 0.56)]
+    for tk, s4, nm, ind, cc, et, st in pairs:
+        k = [x[0] for x in COUNTRIES].index(cc)
+        _insert(c, "m_company_country", {
+            "ticker": tk, "market": "JP" if s4 else "US", "sec_code4": s4, "edinet_code": f"E{tk[:4]}" if s4 else None,
+            "name": nm, "industry": ind, "country_code": cc, "country_name_ja": COUNTRIES[k][1],
+            "region": COUNTRIES[k][2], "sanction_flag": COUNTRIES[k][3], "exposure_type": et,
+            "exposure_type_count": 1, "exposure_strength": st, "revenue_share_est": None, "review_flag": False,
+            "latest_risk_score": 20.0 + k * 5, "latest_gdelt_instability": 10.0 + k,
+            "latest_foreign_ministry_level": k % 4, "latest_state_dept_level": (k + 1) % 4,
+            "latest_risk_date": dt.date(2026, 10, 9), "risk_weighted_score": st * (20.0 + k * 5)})
+    for m in range(30):
+        _insert(c, "m_re_area", {
+            "municipality_code": f"{13100 + m:05d}", "prefecture_name": PREFS[m % 4],
+            "municipality_name": f"市{m}", "median_price": 3e7 + m * 1e5,
+            "avg_land_price_commercial": 50000.0 + m * 20000, "avg_land_price_residential": 30000.0 + m * 5000,
+            "land_price_yoy_change": -5.0 + m * 0.4, "flood_risk_area_pct": (m % 10) * 0.1,
+            "latest_avg_price_condo": 4e7, "hospital_count": m % 7})
+    for i in range(12):
+        code = "7203" if i == 0 else f"{7000 + i}"
+        for fy in (2024, 2025, 2026):
+            for j in range(3):
+                m = (i * 3 + j) % 30
+                area = 1000.0 * (j + 1)
+                book = 100.0 * (i + 1)
+                ref = 50000.0 + m * 20000
+                est = area * ref / 1e6
+                pop = -60.0 + m * 4
+                flood = (m % 10) * 0.1
+                _insert(c, "m_re_holdings", {
+                    "edinet_code": f"E{i:05d}", "name": f"会社{i}", "sec_code4": code, "industry": "電気機器",
+                    "fiscal_year": fy, "prefecture": PREFS[m % 4], "municipality_code": f"{13100 + m:05d}",
+                    "municipality_name": f"市{m}", "facility_count": j + 1, "land_area_m2": area,
+                    "book_value_land_m_yen": book, "book_value_buildings_m_yen": book / 2,
+                    "land_price_ref_per_m2": ref, "land_value_est_m_yen": est, "unrealized_gain_est_m_yen": est - book,
+                    "population_current": 100000, "population_2050": 60000, "population_change_pct": pop,
+                    "flood_risk_area_pct": flood, "landslide_risk_area_pct": 0.1,
+                    "area_land_price_yoy_change": 1.0})
+            for pi, pref in enumerate(PREFS[:3]):
+                est = 50.0 * (pi + 1) * (i + 1)
+                book = 30.0 * (i + 1)
+                _insert(c, "m_re_holdings_pref", {
+                    "edinet_code": f"E{i:05d}", "name": f"会社{i}", "sec_code4": code, "industry": "電気機器",
+                    "fiscal_year": fy, "prefecture": pref, "facility_count": pi + 1, "municipality_count": 1,
+                    "land_area_m2": 5000.0, "book_value_land_m_yen": book, "land_value_est_m_yen": est,
+                    "unrealized_gain_est_m_yen": est - book, "population_change_pct": -35.0 + pi * 10,
+                    "flood_risk_area_pct": 0.2 * pi})
+
+
+MARTS = set(ALL_MARTS)
 TEMPLATES = bt.load_templates()
 
 
 def test_template_count_and_unique_ids():
     assert len(TEMPLATES) >= 15
+    for domain in ("geo", "realestate"):
+        assert sum(1 for t in TEMPLATES if t["domain"] == domain) >= 8, domain
     ids = [t["id"] for t in TEMPLATES]
     assert len(ids) == len(set(ids))
 
@@ -131,6 +228,22 @@ def test_mart_columns_in_sync_with_test_definition():
     assert "edinet_code" in cols and "fiscal_year" in cols and len(cols) == len(set(cols))
     assert mart_columns("m_company") == [
         "edinet_code", "sec_code4", "name", "industry", "accounting_standard", "listing_status", "is_delisted"]
+    for mart in ALL_MARTS:
+        cols = mart_columns(mart)
+        assert cols and len(cols) == len(set(cols)), mart
+
+
+def test_every_mart_file_is_covered_by_this_test():
+    files = {p.stem for p in (REPO / "bi" / "marts").glob("*.sql")}
+    assert files == set(ALL_MARTS), files ^ set(ALL_MARTS)
+
+
+def test_mart_sql_does_not_read_its_own_output_tables():
+    """マートSQLが実体化後の表（bi データセット）を読むと、自分自身の出力に依存して循環する。"""
+    for mart in ALL_MARTS:
+        sql = (REPO / "bi" / "marts" / f"{mart}.sql").read_text(encoding="utf-8")
+        body = "\n".join(l for l in sql.splitlines() if not l.strip().startswith("--"))
+        assert "stock-analyzer-edinet.bi." not in body, mart
 
 
 def test_param_type_checks():
