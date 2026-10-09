@@ -1,0 +1,310 @@
+[
+ {
+  "id": "theme_company_stats",
+  "domain": "theme",
+  "title": "テーマごとの銘柄数と平均営業利益率",
+  "question": "どのテーマに銘柄が多く、稼ぐ力（営業利益率）はどうか",
+  "mart": "m_theme",
+  "sql": "SELECT theme_name, sector_name_ja, COUNT(DISTINCT ticker) AS companies, ROUND(AVG(CASE WHEN operating_margin BETWEEN -1 AND 1 THEN operating_margin END) * 100, 1) AS avg_operating_margin_pct\nFROM m_theme\nGROUP BY theme_name, sector_name_ja\nHAVING COUNT(DISTINCT ticker) >= {{min_companies}}\nORDER BY avg_operating_margin_pct DESC, theme_name\nLIMIT {{top_n}}",
+  "params": [
+   {
+    "name": "min_companies",
+    "label": "最低銘柄数",
+    "type": "int",
+    "default": 2,
+    "min": 1,
+    "max": 10
+   },
+   {
+    "name": "top_n",
+    "label": "表示する件数",
+    "type": "int",
+    "default": 30,
+    "min": 1,
+    "max": 200
+   }
+  ],
+  "chart": {
+   "type": "bar",
+   "x": "theme_name",
+   "y": [
+    "avg_operating_margin_pct"
+   ],
+   "series": null
+  },
+  "note": "営業利益率は各社の最新年度の営業利益÷売上の単純平均（営業利益率が±100%を超える会社は平均から除く）。銘柄は m_theme に実在する代表銘柄のみ。テーマは業種ごとに定義され、銘柄は業種の代表銘柄（2〜3社）に業種のテーマ全部が付く。同じ業種のテーマは同じ銘柄の集合になるので、テーマ間の差は業種の差とほぼ同じ。"
+ },
+ {
+  "id": "theme_companies",
+  "domain": "theme",
+  "title": "あるテーマの銘柄一覧（財務つき）",
+  "question": "このテーマの銘柄と、最新年度の売上・営業利益・利益率・売上成長は",
+  "mart": "m_theme",
+  "sql": "SELECT sec_code4, name, industry, fiscal_year, net_sales, operating_income, ROUND(operating_margin * 100, 1) AS operating_margin_pct, ROUND(sales_growth * 100, 1) AS sales_growth_pct\nFROM m_theme\nWHERE theme_name = {{theme_name}}\nORDER BY net_sales DESC, sec_code4\nLIMIT {{top_n}}",
+  "params": [
+   {
+    "name": "theme_name",
+    "label": "テーマ名（例 AI半導体・後発薬・電池材料）",
+    "type": "string",
+    "default": "AI半導体"
+   },
+   {
+    "name": "top_n",
+    "label": "表示する件数",
+    "type": "int",
+    "default": 50,
+    "min": 1,
+    "max": 200
+   }
+  ],
+  "chart": {
+   "type": "table",
+   "x": "name",
+   "y": [
+    "net_sales"
+   ],
+   "series": null
+  },
+  "note": "財務は各社の売上が入っている最新年度1年分。売上成長は前年が実在するときだけ（無ければ空）。テーマ名は theme_company_stats の結果で確認できる。"
+ },
+ {
+  "id": "theme_company_themes",
+  "domain": "theme",
+  "title": "ある会社が属するテーマ",
+  "question": "この会社はどのテーマに入っているか",
+  "mart": "m_theme",
+  "sql": "SELECT theme_name, sector_name_ja, supply_chain_position, name, relevance\nFROM m_theme\nWHERE sec_code4 = {{sec_code4}}\nORDER BY theme_name",
+  "params": [
+   {
+    "name": "sec_code4",
+    "label": "証券コード（4桁）",
+    "type": "string",
+    "default": "6501"
+   }
+  ],
+  "chart": {
+   "type": "table",
+   "x": "theme_name",
+   "y": [
+    "relevance"
+   ],
+   "series": null
+  },
+  "note": "テーマが付くのは業種ごとの代表銘柄（約86社）だけ。上場会社でもここに無い会社は0行。relevance は元表の値（現在はほぼ1.0）。supply_chain_position は業種の位置づけ（upstream・midstream・downstream）。"
+ },
+ {
+  "id": "theme_signal_recent",
+  "domain": "theme",
+  "title": "シグナルが多いテーマ（直近N日）",
+  "question": "直近のシグナル（スクリーナー通過・ドリフト）が多いテーマは",
+  "mart": "m_theme_signal",
+  "sql": "SELECT theme_name, sector_name_ja, SUM(signal_count) AS signals, SUM(CASE WHEN direction = 'bullish' THEN signal_count ELSE 0 END) AS bullish, SUM(CASE WHEN direction = 'bearish' THEN signal_count ELSE 0 END) AS bearish\nFROM m_theme_signal\nWHERE days_before_latest < {{days}}\nGROUP BY theme_name, sector_name_ja\nORDER BY signals DESC, theme_name\nLIMIT {{top_n}}",
+  "params": [
+   {
+    "name": "days",
+    "label": "直近の日数（表内の最新シグナル日から数える）",
+    "type": "int",
+    "default": 30,
+    "min": 1,
+    "max": 365
+   },
+   {
+    "name": "top_n",
+    "label": "表示する件数",
+    "type": "int",
+    "default": 20,
+    "min": 1,
+    "max": 200
+   }
+  ],
+  "chart": {
+   "type": "bar",
+   "x": "theme_name",
+   "y": [
+    "bullish",
+    "bearish"
+   ],
+   "series": null
+  },
+  "note": "シグナルは ontology.signal_event を業種コードでテーマに結びつけたもの。業種内のテーマは同じ件数になる。『直近』は今日ではなく表内の最新シグナル日からの日数。event_id の重複は除いて数える。"
+ },
+ {
+  "id": "theme_sales_growth",
+  "domain": "theme",
+  "title": "テーマ別の売上成長",
+  "question": "どのテーマの銘柄の売上が伸びているか",
+  "mart": "m_theme",
+  "sql": "SELECT theme_name, sector_name_ja, COUNT(DISTINCT ticker) AS companies, ROUND(AVG(sales_growth) * 100, 1) AS avg_sales_growth_pct\nFROM m_theme\nWHERE sales_growth BETWEEN -0.9 AND 3\nGROUP BY theme_name, sector_name_ja\nHAVING COUNT(DISTINCT ticker) >= {{min_companies}}\nORDER BY avg_sales_growth_pct DESC, theme_name\nLIMIT {{top_n}}",
+  "params": [
+   {
+    "name": "min_companies",
+    "label": "最低銘柄数（前年と比べられる銘柄）",
+    "type": "int",
+    "default": 2,
+    "min": 1,
+    "max": 10
+   },
+   {
+    "name": "top_n",
+    "label": "表示する件数",
+    "type": "int",
+    "default": 30,
+    "min": 1,
+    "max": 200
+   }
+  ],
+  "chart": {
+   "type": "bar",
+   "x": "theme_name",
+   "y": [
+    "avg_sales_growth_pct"
+   ],
+   "series": null
+  },
+  "note": "最新年度の売上÷前年の売上−1 の単純平均。前年が無い会社と、成長率が−90%〜+300%の外にある会社は除く。companies はその条件を満たす銘柄数。テーマは業種ごとに定義され、銘柄は業種の代表銘柄（2〜3社）に業種のテーマ全部が付く。同じ業種のテーマは同じ銘柄の集合になるので、テーマ間の差は業種の差とほぼ同じ。"
+ },
+ {
+  "id": "theme_industry_cross",
+  "domain": "theme",
+  "title": "業種×テーマのクロス",
+  "question": "どの業種の会社がどのテーマに入っているか",
+  "mart": "m_theme",
+  "sql": "SELECT industry, theme_name, COUNT(DISTINCT ticker) AS companies\nFROM m_theme\nWHERE industry IS NOT NULL\nGROUP BY industry, theme_name\nORDER BY companies DESC, industry, theme_name\nLIMIT {{top_n}}",
+  "params": [
+   {
+    "name": "top_n",
+    "label": "表示する件数",
+    "type": "int",
+    "default": 60,
+    "min": 1,
+    "max": 300
+   }
+  ],
+  "chart": {
+   "type": "bar",
+   "x": "theme_name",
+   "y": [
+    "companies"
+   ],
+   "series": "industry"
+  },
+  "note": "industry は edinet.company の業種名、theme の業種（sector_name_ja）とは別の分類。表記の揺れで同じ業種が分かれることがある。上場会社として見つからない銘柄は業種が空で除く。"
+ },
+ {
+  "id": "theme_sector_overview",
+  "domain": "theme",
+  "title": "業種ごとのテーマ数と銘柄数",
+  "question": "どの業種にテーマが多く、実在銘柄がどれだけ紐づくか",
+  "mart": "m_theme_def",
+  "sql": "SELECT sector_name_ja, market, COUNT(*) AS themes, SUM(company_count) AS company_links\nFROM m_theme_def\nWHERE market = {{market}}\nGROUP BY sector_name_ja, market\nORDER BY themes DESC, company_links DESC, sector_name_ja",
+  "params": [
+   {
+    "name": "market",
+    "label": "市場（JP または US）",
+    "type": "string",
+    "default": "JP"
+   }
+  ],
+  "chart": {
+   "type": "bar",
+   "x": "sector_name_ja",
+   "y": [
+    "themes",
+    "company_links"
+   ],
+   "series": null
+  },
+  "note": "company_links はテーマごとの実在銘柄数の合計（同じ銘柄が複数テーマに入るため会社数ではない）。米国（US）のテーマは定義だけで実在銘柄が無く 0。"
+ },
+ {
+  "id": "theme_sector_themes",
+  "domain": "theme",
+  "title": "ある業種のテーマ一覧",
+  "question": "この業種にはどんなテーマが定義されているか",
+  "mart": "m_theme_def",
+  "sql": "SELECT theme_name, sector_name_ja, supply_chain_position, theme_order, company_count\nFROM m_theme_def\nWHERE sector_code = {{sector_code}} AND market = {{market}}\nORDER BY theme_order",
+  "params": [
+   {
+    "name": "sector_code",
+    "label": "業種コード（日本は東証33業種 1001〜1033・米国は 10〜60）",
+    "type": "string",
+    "default": "1016"
+   },
+   {
+    "name": "market",
+    "label": "市場（JP または US）",
+    "type": "string",
+    "default": "JP"
+   }
+  ],
+  "chart": {
+   "type": "table",
+   "x": "theme_name",
+   "y": [
+    "company_count"
+   ],
+   "series": null
+  },
+  "note": "業種コードは theme_sector_overview の結果の業種名から引ける（電気機器=1016・医薬品=1008・機械=1015）。theme_order は元表の並び。"
+ },
+ {
+  "id": "theme_signal_trend",
+  "domain": "theme",
+  "title": "あるテーマのシグナル件数の推移",
+  "question": "このテーマのシグナルは日ごとにどう出ているか",
+  "mart": "m_theme_signal",
+  "sql": "SELECT fired_at, direction, SUM(signal_count) AS signals\nFROM m_theme_signal\nWHERE theme_name = {{theme_name}}\nGROUP BY fired_at, direction\nORDER BY fired_at, direction",
+  "params": [
+   {
+    "name": "theme_name",
+    "label": "テーマ名（例 AI半導体）",
+    "type": "string",
+    "default": "AI半導体"
+   }
+  ],
+  "chart": {
+   "type": "line",
+   "x": "fired_at",
+   "y": [
+    "signals"
+   ],
+   "series": "direction"
+  },
+  "note": "シグナルが出た日だけ点が付く（出ない日は欠ける）。業種単位のシグナルを含み、同じ業種の他テーマと同じ推移になる。"
+ },
+ {
+  "id": "theme_margin_vs_growth",
+  "domain": "theme",
+  "title": "テーマの収益性と成長性",
+  "question": "利益率が高く売上も伸びているテーマはどれか",
+  "mart": "m_theme",
+  "sql": "SELECT theme_name, COUNT(DISTINCT ticker) AS companies, ROUND(AVG(sales_growth) * 100, 1) AS avg_sales_growth_pct, ROUND(AVG(operating_margin) * 100, 1) AS avg_operating_margin_pct\nFROM m_theme\nWHERE sales_growth BETWEEN -0.9 AND 3 AND operating_margin BETWEEN -1 AND 1\nGROUP BY theme_name\nHAVING COUNT(DISTINCT ticker) >= {{min_companies}}\nORDER BY avg_operating_margin_pct DESC, theme_name\nLIMIT {{top_n}}",
+  "params": [
+   {
+    "name": "min_companies",
+    "label": "最低銘柄数",
+    "type": "int",
+    "default": 2,
+    "min": 1,
+    "max": 10
+   },
+   {
+    "name": "top_n",
+    "label": "表示する件数",
+    "type": "int",
+    "default": 150,
+    "min": 1,
+    "max": 200
+   }
+  ],
+  "chart": {
+   "type": "scatter",
+   "x": "avg_sales_growth_pct",
+   "y": [
+    "avg_operating_margin_pct"
+   ],
+   "series": null
+  },
+  "note": "x=売上成長・y=営業利益率（いずれも各社最新年度の単純平均）。成長率が−90%〜+300%、営業利益率が±100%の外の会社は除く。テーマは業種ごとに定義され、銘柄は業種の代表銘柄（2〜3社）に業種のテーマ全部が付く。同じ業種のテーマは同じ銘柄の集合になるので、テーマ間の差は業種の差とほぼ同じ。"
+ }
+]

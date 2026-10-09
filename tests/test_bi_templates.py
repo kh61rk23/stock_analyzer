@@ -26,17 +26,20 @@ STRING_COLS = {
     "company_id", "entity_type", "node_id", "node_name_ja", "node_name_en", "node_type", "supply_chain_pos",
     "parent_id", "domain_id", "domain_name_ja", "path_name", "confidence_type",
     "price_source", "interest_bearing_debt_basis",
+    "theme_name", "sector_code", "sector_name_ja", "supply_chain_position", "source", "signal_category", "direction",
 }
 INT_COLS = {
     "fiscal_year", "employee_count", "foreign_ministry_level", "state_dept_level", "exposure_type_count",
     "latest_foreign_ministry_level", "latest_state_dept_level", "hospital_count", "facility_count",
     "municipality_count", "population_current", "population_2050", "est_excluded_count",
     "node_level", "child_count", "company_count", "company_count_rollup",
+    "theme_order", "days_before_latest", "signal_count", "ticker_signal_count", "ticker_count",
 }
-DATE_COLS = {"fiscal_year_end", "risk_date", "latest_risk_date", "price_date", "snapshot_date", "technical_date"}
+DATE_COLS = {"fiscal_year_end", "risk_date", "latest_risk_date", "price_date", "snapshot_date", "technical_date", "fired_at"}
 BOOL_COLS = {"is_delisted", "sanction_flag", "is_landlocked", "review_flag", "auto_derived", "verified_flag", "above_ma200"}
 ALL_MARTS = ("m_company", "m_fin_annual", "m_country_profile", "m_country_risk", "m_company_country",
-             "m_re_area", "m_re_holdings", "m_re_holdings_pref", "m_tax_node", "m_company_tax", "m_screener")
+             "m_re_area", "m_re_holdings", "m_re_holdings_pref", "m_tax_node", "m_company_tax", "m_screener",
+             "m_theme", "m_theme_def", "m_theme_signal")
 
 
 def mart_columns(mart: str) -> list[str]:
@@ -111,6 +114,7 @@ def con():
     _load_geo_and_realestate(c)
     _load_taxonomy(c)
     _load_screener(c)
+    _load_theme(c)
     return c
 
 
@@ -300,6 +304,41 @@ def _load_screener(c) -> None:
         _insert(c, "m_screener", row)
 
 
+# 業種2つ（電気機器1016・医薬品1008）×テーマ各3つ。実在銘柄は業種ごとに3社（うち1社は 6501）。
+THEME_SECTORS = [("1016", "電気機器", "midstream", ["AI半導体", "5G通信機器", "スマートグリッド"]),
+                 ("1008", "医薬品", "downstream", ["後発薬", "AI創薬", "がん免疫療法"])]
+
+
+def _load_theme(c) -> None:
+    import datetime as dt
+    for si, (sec, sname, pos, themes) in enumerate(THEME_SECTORS):
+        for ti, th in enumerate(themes):
+            _insert(c, "m_theme_def", {"theme_name": th, "market": "JP", "sector_code": sec, "sector_name_ja": sname,
+                                       "supply_chain_position": pos, "theme_order": ti, "company_count": 3})
+            for k in range(3):
+                code = "6501" if (si == 0 and k == 0) else f"{7100 + si * 10 + k}"
+                n = si * 3 + k
+                sales = (100 + n * 20) * 1e9
+                _insert(c, "m_theme", {
+                    "theme_name": th, "market": "JP", "sector_code": sec, "sector_name_ja": sname,
+                    "supply_chain_position": pos, "ticker": f"{code}.T", "sec_code4": code,
+                    "edinet_code": f"E9{code}", "name": f"会社{code}", "industry": ["電気機器", "精密機器"][k % 2],
+                    "relevance": 1.0, "source": "config_representative", "fiscal_year": 2026, "net_sales": sales,
+                    "operating_income": sales * (0.04 + 0.02 * k), "net_income": sales * 0.03,
+                    "operating_margin": 0.04 + 0.02 * k, "sales_growth": 0.02 + 0.03 * n})
+            for d in range(0, 40, 5):
+                for cat, dr in (("screener_pass", "bullish"), ("drift_spike", "bearish")):
+                    _insert(c, "m_theme_signal", {
+                        "theme_name": th, "sector_code": sec, "sector_name_ja": sname,
+                        "fired_at": dt.date(2026, 10, 5) - dt.timedelta(days=d), "days_before_latest": d,
+                        "signal_category": cat, "direction": dr, "signal_count": 3 + d % 4,
+                        "ticker_signal_count": 3 if cat == "screener_pass" else 0, "ticker_count": 2,
+                        "avg_signal_value": 1.0 if cat == "screener_pass" else None})
+    _insert(c, "m_theme_def", {"theme_name": "AIインフラ", "market": "US", "sector_code": "45",
+                               "sector_name_ja": "情報技術", "supply_chain_position": None, "theme_order": 0,
+                               "company_count": 0})
+
+
 MARTS = set(ALL_MARTS)
 TEMPLATES = bt.load_templates()
 
@@ -352,7 +391,8 @@ def test_mart_sql_does_not_read_its_own_output_tables():
     for mart in ALL_MARTS:
         sql = (REPO / "bi" / "marts" / f"{mart}.sql").read_text(encoding="utf-8")
         body = "\n".join(l for l in sql.splitlines() if not l.strip().startswith("--"))
-        assert "stock-analyzer-edinet.bi." not in body, mart
+        # bi.src_*（location が違う元表の写し）は元表と同じ扱いで読んでよい
+        assert "stock-analyzer-edinet.bi." not in body.replace("stock-analyzer-edinet.bi.src_", ""), mart
 
 
 def test_param_type_checks():
@@ -417,10 +457,10 @@ def test_taxonomy_mart_guards():
     assert "company_id <> 'nan'" in node_sql and "STARTS_WITH(company_id, 'sector:')" in node_sql
 
 
-def test_taxonomy_templates_are_single_mart():
+def test_taxonomy_and_theme_templates_are_single_mart():
     """ダッシュボードは1テンプレ1マートで実体化表を読むので、テンプレSQLが他のマートを参照しない。"""
     for t in TEMPLATES:
-        if t["domain"] != "taxonomy":
+        if t["domain"] not in ("taxonomy", "theme"):
             continue
         refs = {m for m in ALL_MARTS if re.search(rf"\b{m}\b", t["sql"])}
         assert refs == {t["mart"]}, (t["id"], refs)
@@ -443,3 +483,21 @@ def test_screener_templates_are_single_mart():
     for t in TEMPLATES:
         if t["domain"] == "screener":
             assert t["mart"] == "m_screener" and not re.search(r"\bm_(?!screener)\w+", t["sql"]), t["id"]
+
+
+def test_theme_mart_guards():
+    """テーマ株マートの重複・プレースホルダ対策が外れていない。"""
+    sql = (REPO / "bi" / "marts" / "m_theme.sql").read_text(encoding="utf-8")
+    assert "PARTITION BY ticker, subtheme, sector_code ORDER BY updated_at DESC" in sql
+    assert "NOT STARTS_WITH(ticker, 'SECTOR_')" in sql
+    assert "prev.fiscal_year = fin.fiscal_year - 1" in sql
+    sig = (REPO / "bi" / "marts" / "m_theme_signal.sql").read_text(encoding="utf-8")
+    assert "COUNT(DISTINCT event_id)" in sig and "bi.src_signal_event" in sig
+    assert "market = 'JP'" in sig
+
+
+def test_theme_templates_cover_required_questions():
+    ids = {t["id"] for t in TEMPLATES if t["domain"] == "theme"}
+    assert len(ids) >= 8
+    assert {"theme_company_stats", "theme_companies", "theme_company_themes", "theme_signal_recent",
+            "theme_sales_growth", "theme_industry_cross"} <= ids
