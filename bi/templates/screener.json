@@ -54,7 +54,7 @@
       "y": "dividend_yield_pct",
       "series": null
     },
-    "note": "株価・時価総額のある会社（約700社。price_source が snapshot か price_daily）だけが対象。配当性向が高すぎる会社は減配リスクがあるので上限で外せる。市場全体ではない点に注意。"
+    "note": "株価のある会社（price_source が price_daily。全上場が対象）だけが対象。PER が意味を持たない会社（valuation_flag）は per が空。配当性向が高すぎる会社は減配リスクがあるので上限で外せる。市場全体ではない点に注意。"
   },
   {
     "id": "scr_high_roe_low_per",
@@ -103,7 +103,7 @@
       "y": "roe_pct",
       "series": null
     },
-    "note": "ROE は最新の通期（財務表）、PER は株価系（snapshot または 株価÷EPS）。ROE が100%を超える外れ値は除く。株価のある約700社が対象。"
+    "note": "ROE は最新の通期（財務表）、PER は 最新終値÷EPS。ROE が100%を超える外れ値は除く。株価のある全上場が対象。"
   },
   {
     "id": "scr_growth_small_cap",
@@ -144,7 +144,7 @@
       "y": "op_income_growth_pct",
       "series": null
     },
-    "note": "前年値が黒字の会社だけが成長率の対象（赤字からの回復は除く）。前年の年度が財務表に無い会社も除く。株価のある約700社が対象。"
+    "note": "前年値が黒字の会社だけが成長率の対象（赤字からの回復は除く）。前年の年度が財務表に無い会社も除く。株価のある全上場が対象。"
   },
   {
     "id": "scr_net_cash_value",
@@ -193,7 +193,7 @@
       "y": "net_cash_to_mcap_pct",
       "series": null
     },
-    "note": "ネットキャッシュ＝現金及び現金同等物−有利子負債（円）。有利子負債は報告値、無ければ借入金・社債・CPの合計（interest_bearing_debt_basis が estimated・リース負債は含まない概算）。銀行・保険など金融業は預金等が有利子負債に入らず現金が過大になるので、業種で除いて読む。株価のある約700社が対象。"
+    "note": "ネットキャッシュ＝現金及び現金同等物−有利子負債（円）。有利子負債は報告値、無ければ借入金・社債・CPの合計（interest_bearing_debt_basis が estimated・リース負債は含まない概算）。銀行・保険など金融業は預金等が有利子負債に入らず現金が過大になるので、業種で除いて読む。株価のある全上場が対象。"
   },
   {
     "id": "scr_high_growth_cagr",
@@ -234,7 +234,7 @@
       "y": "sales_cagr_3y_pct",
       "series": null
     },
-    "note": "売上の最新年度と、ちょうど3年前の年度の値から計算。M&Aによる増収も含む。株価は不要なので全上場約3,800社が対象。"
+    "note": "売上の最新年度と、ちょうど3年前の年度の値から計算。M&Aによる増収も含む。株価は不要で、財務のある全上場が対象。"
   },
   {
     "id": "scr_rnd_intensive",
@@ -283,7 +283,7 @@
     "title": "52週高値圏の好業績",
     "question": "52週高値圏にあって、利益率とROEも高い会社はどこか",
     "mart": "m_screener",
-    "sql": "SELECT sec_code4, name, industry, current_price, ROUND(week52_position_pct, 0) AS week52_position_pct,\n       ROUND(rsi14, 0) AS rsi14, ROUND(operating_margin * 100, 1) AS operating_margin_pct, ROUND(roe * 100, 1) AS roe_pct,\n       ROUND(sales_growth_1y * 100, 1) AS sales_growth_pct, technical_date\nFROM m_screener\nWHERE week52_position_pct >= {{min_position}}\n  AND operating_margin >= {{min_opm_pct}} / 100\n  AND roe >= {{min_roe_pct}} / 100\nORDER BY week52_position_pct DESC, roe DESC\nLIMIT {{limit}}",
+    "sql": "SELECT sec_code4, name, industry, current_price, ROUND(week52_position_pct, 0) AS week52_position_pct,\n       ROUND(rsi14, 0) AS rsi14, ROUND(return_3m * 100, 1) AS return_3m_pct, ROUND(operating_margin * 100, 1) AS operating_margin_pct, ROUND(roe * 100, 1) AS roe_pct,\n       ROUND(sales_growth_1y * 100, 1) AS sales_growth_pct, price_date\nFROM m_screener\nWHERE week52_position_pct >= {{min_position}}\n  AND operating_margin >= {{min_opm_pct}} / 100\n  AND roe >= {{min_roe_pct}} / 100\nORDER BY week52_position_pct DESC, roe DESC\nLIMIT {{limit}}",
     "params": [
       {
         "name": "min_position",
@@ -324,7 +324,7 @@
       "y": "roe_pct",
       "series": null
     },
-    "note": "52週位置・RSI は snapshot の技術指標が入っている会社（約100社）だけが対象。技術指標は日によって空の日があるため、会社ごとの値のある最新日（technical_date）を使う。"
+    "note": "52週位置は終値ベースの直近252営業日（履歴120営業日未満は空）で全上場が対象。RSI は snapshot の技術指標が入っている会社だけ値があり、無い会社は空欄で表に出る。分割の調整漏れが疑われる銘柄（price_break_date あり）は break 以降の終値だけで計算している。"
   },
   {
     "id": "scr_composite_top",
@@ -365,6 +365,96 @@
       "y": "composite_score",
       "series": null
     },
-    "note": "スコアはスナップショットを作る日次処理の算出値で、対象は約440社。スコア自体の作り方は SPEC_core.md を参照。"
+    "note": "スコアはスナップショットを作る日次処理の算出値で、対象はスコアのある約440社。スコア自体の作り方は SPEC_core.md を参照。株価・PER・PBR は株価系（最新終値ベース）。"
+  },
+  {
+    "id": "scr_momentum_3m",
+    "domain": "screener",
+    "title": "3か月騰落率の上位",
+    "question": "直近3か月で株価が大きく上がった会社はどこか（流動性と時価総額の下限付き）",
+    "mart": "m_screener",
+    "sql": "SELECT sec_code4, name, industry, current_price,\n       ROUND(return_1m * 100, 1) AS return_1m_pct, ROUND(return_3m * 100, 1) AS return_3m_pct, ROUND(return_1y * 100, 1) AS return_1y_pct,\n       ROUND(week52_position_pct, 0) AS week52_position_pct, market_cap_b\nFROM m_screener\nWHERE return_3m IS NOT NULL\n  AND market_cap_b >= {{min_mcap_oku}}\n  AND avg_turnover_20d >= {{min_turnover_oku}} * 100000000.0\nORDER BY return_3m DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "min_mcap_oku",
+        "label": "時価総額の下限（億円）",
+        "type": "number",
+        "default": 100,
+        "min": 0,
+        "max": 1000000
+      },
+      {
+        "name": "min_turnover_oku",
+        "label": "20日平均売買代金の下限（億円）",
+        "type": "number",
+        "default": 1,
+        "min": 0,
+        "max": 100000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "name",
+      "y": "return_3m_pct",
+      "series": null
+    },
+    "note": "騰落率は終値ベースで63営業日前との比。終値は分割調整済み・配当未調整。株価履歴が約400日分なので return_1y は足りない会社で空。分割の調整漏れ（price_break_date あり）の銘柄は break 以降だけで計算するため騰落率が空になりやすい。"
+  },
+  {
+    "id": "scr_liquid_cheap",
+    "domain": "screener",
+    "title": "売買代金が大きい割安株",
+    "question": "売買代金が十分あって、PERもPBRも低い会社はどこか",
+    "mart": "m_screener",
+    "sql": "SELECT sec_code4, name, industry, current_price, ROUND(per, 1) AS per, ROUND(pbr, 2) AS pbr,\n       ROUND(avg_turnover_20d / 100000000.0, 1) AS turnover_oku, ROUND(return_3m * 100, 1) AS return_3m_pct, market_cap_b\nFROM m_screener\nWHERE per > 0 AND per <= {{max_per}}\n  AND pbr > 0 AND pbr <= {{max_pbr}}\n  AND avg_turnover_20d >= {{min_turnover_oku}} * 100000000.0\nORDER BY avg_turnover_20d DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "max_per",
+        "label": "PER の上限（倍）",
+        "type": "number",
+        "default": 15,
+        "min": 1,
+        "max": 100
+      },
+      {
+        "name": "max_pbr",
+        "label": "PBR の上限（倍）",
+        "type": "number",
+        "default": 1.2,
+        "min": 0.1,
+        "max": 10
+      },
+      {
+        "name": "min_turnover_oku",
+        "label": "20日平均売買代金の下限（億円）",
+        "type": "number",
+        "default": 5,
+        "min": 0,
+        "max": 100000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "scatter",
+      "x": "per",
+      "y": "turnover_oku",
+      "series": null
+    },
+    "note": "平均売買代金は直近20営業日の 終値×出来高 の平均（15営業日分未満は空）。出来高は取引所合計に近い値だが、代金は終値で概算したもの。"
   }
 ]

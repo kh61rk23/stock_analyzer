@@ -25,7 +25,7 @@ STRING_COLS = {
     "top_export_commodities", "sealane_adjacency", "military_alliances",
     "company_id", "entity_type", "node_id", "node_name_ja", "node_name_en", "node_type", "supply_chain_pos",
     "parent_id", "domain_id", "domain_name_ja", "path_name", "confidence_type",
-    "price_source", "interest_bearing_debt_basis",
+    "price_source", "interest_bearing_debt_basis", "valuation_flag",
     "theme_name", "sector_code", "sector_name_ja", "supply_chain_position", "source", "signal_category", "direction",
 }
 INT_COLS = {
@@ -33,12 +33,12 @@ INT_COLS = {
     "latest_foreign_ministry_level", "latest_state_dept_level", "hospital_count", "facility_count",
     "municipality_count", "population_current", "population_2050", "est_excluded_count",
     "node_level", "child_count", "company_count", "company_count_rollup",
-    "theme_order", "days_before_latest", "signal_count", "ticker_signal_count", "ticker_count",
+    "theme_order", "days_before_latest", "price_days", "cik", "signal_count", "ticker_signal_count", "ticker_count",
 }
-DATE_COLS = {"fiscal_year_end", "risk_date", "latest_risk_date", "price_date", "snapshot_date", "technical_date", "fired_at"}
-BOOL_COLS = {"is_delisted", "sanction_flag", "is_landlocked", "review_flag", "auto_derived", "verified_flag", "above_ma200"}
+DATE_COLS = {"fiscal_year_end", "risk_date", "latest_risk_date", "price_date", "price_break_date", "snapshot_date", "technical_date", "fired_at"}
+BOOL_COLS = {"is_delisted", "sanction_flag", "is_landlocked", "review_flag", "auto_derived", "verified_flag", "above_ma200", "has_fundamentals"}
 ALL_MARTS = ("m_company", "m_fin_annual", "m_country_profile", "m_country_risk", "m_company_country",
-             "m_re_area", "m_re_holdings", "m_re_holdings_pref", "m_tax_node", "m_company_tax", "m_screener",
+             "m_re_area", "m_re_holdings", "m_re_holdings_pref", "m_tax_node", "m_company_tax", "m_screener", "m_screener_us",
              "m_theme", "m_theme_def", "m_theme_signal")
 
 
@@ -258,7 +258,8 @@ def _load_taxonomy(c) -> None:
         "operating_margin": None, "rnd_expenses": None, "rnd_ratio": None})
 
 
-# 1社1行。株価系は i%3==0 が snapshot、1 が price_daily、2 が株価なし。技術指標は snapshot の一部だけ
+# 1社1行。株価系は i%3==2 が株価なし、他は price_daily。valuation_flag は i%10==7 が eps_mismatch。
+# スコアは i%3==0、技術指標は i%6==0 の会社だけ
 def _load_screener(c) -> None:
     import datetime as dt
     for i in range(60):
@@ -270,10 +271,11 @@ def _load_screener(c) -> None:
         eq = assets * (0.2 + (i % 6) * 0.1)
         cash = sales * 0.3
         debt = sales * (0.05 if i % 4 else 0.0)
-        src = ["snapshot", "price_daily", None][i % 3]
-        price = 1000.0 + i * 50 if src else None
-        cap_b = (100.0 + i * 40) if src else None
+        px = i % 3 != 2
+        price = 1000.0 + i * 50 if px else None
+        cap_b = (100.0 + i * 40) if px else None
         d = dt.date(2026, 10, 9)
+        flag = "eps_mismatch" if i % 10 == 7 else None
         row = {
             "edinet_code": f"E{i:05d}", "sec_code4": code, "ticker": f"{code}.T", "name": f"会社{i}",
             "industry": ["電気機器", "小売業", None][i % 3], "accounting_standard": "日本基準",
@@ -287,21 +289,75 @@ def _load_screener(c) -> None:
             "sales_growth_1y": -0.05 + (i % 9) * 0.04, "op_income_growth_1y": -0.1 + (i % 7) * 0.06,
             "net_income_growth_1y": -0.1 + (i % 5) * 0.08, "sales_cagr_3y": -0.02 + (i % 11) * 0.03,
             "eps": 50.0, "bps": 800.0, "dividend_per_share": 20.0, "payout_ratio": (i % 8) * 0.12, "shares_issued": 1e8,
-            "price_source": src, "current_price": price, "price_date": d if src else None,
-            "snapshot_date": d if src == "snapshot" else None,
-            "market_cap_b": cap_b, "market_cap": cap_b * 1e8 if src else None,
-            "per": 6.0 + (i % 10) * 1.5 if src else None, "pbr": 0.4 + (i % 8) * 0.25 if src else None,
-            "dividend_yield": 0.01 + (i % 9) * 0.008 if src else None,
-            "net_cash_to_mcap": (cash - debt) / (cap_b * 1e8) if src else None,
-            "composite_score": 30.0 + i if src == "snapshot" else None,
-            "value_score": 40.0 + i % 50 if src == "snapshot" else None,
-            "quality_score": 50.0 + i % 40 if src == "snapshot" else None,
-            "rsi14": 40.0 + i % 40 if src == "snapshot" and i % 2 == 0 else None,
-            "week52_position_pct": 50.0 + (i % 50) if src == "snapshot" and i % 2 == 0 else None,
-            "above_ma200": True if src == "snapshot" and i % 2 == 0 else None,
-            "technical_date": d if src == "snapshot" and i % 2 == 0 else None,
+            "shares_out": 9e7,
+            "price_source": "price_daily" if px else None, "current_price": price, "price_date": d if px else None,
+            "snapshot_date": d if i % 3 == 0 else None,
+            "market_cap_b": cap_b, "market_cap": cap_b * 1e8 if px else None,
+            "per": None if (flag or not px) else 6.0 + (i % 10) * 1.5, "pbr": 0.4 + (i % 8) * 0.25 if px else None,
+            "dividend_yield": 0.01 + (i % 9) * 0.008 if px else None, "valuation_flag": flag,
+            "net_cash_to_mcap": (cash - debt) / (cap_b * 1e8) if px else None,
+            "return_1m": -0.1 + (i % 10) * 0.03 if px else None, "return_3m": -0.2 + (i % 12) * 0.05 if px else None,
+            "return_1y": -0.3 + (i % 15) * 0.07 if px and i % 5 else None,
+            "high_52w": price * 1.2 if px else None, "low_52w": price * 0.7 if px else None,
+            "week52_position_pct": 41.0 + (i % 60) if px else None,
+            "avg_turnover_20d": 1e8 * (1 + i) if px else None, "price_days": 250 if px else None,
+            "price_break_date": None,
+            "composite_score": 30.0 + i if i % 3 == 0 else None,
+            "value_score": 40.0 + i % 50 if i % 3 == 0 else None,
+            "quality_score": 50.0 + i % 40 if i % 3 == 0 else None,
+            "rsi14": 40.0 + i % 40 if i % 6 == 0 else None,
+            "above_ma200": True if i % 6 == 0 else None,
+            "technical_date": d if i % 6 == 0 else None,
         }
         _insert(c, "m_screener", row)
+    _load_screener_us(c)
+
+
+# 米国株: 1銘柄1行。i%4==3 は財務なし（株価のみ）、i%5==4 は株価なし
+def _load_screener_us(c) -> None:
+    import datetime as dt
+    for i in range(60):
+        fund = i % 4 != 3
+        px = i % 5 != 4
+        rev = (10 + i) * 1e9 if fund else None
+        op = rev * (0.05 + (i % 7) * 0.03) if fund else None
+        ni = op * 0.7 if fund else None
+        eps = 5.0 + (i % 6) * 3 if fund else None
+        price = 20.0 + i * 5 if px else None
+        mcap = price * 1e9 / 10 if (px and fund) else None
+        d = dt.date(2026, 10, 9)
+        row = {
+            "ticker": "AAPL" if i == 0 else f"T{i:03d}", "name": f"Corp {i}" if i % 3 == 0 else None,
+            "cik": 1000 + i, "has_fundamentals": fund, "fiscal_year_end": dt.date(2026, 6, 30) if fund else None,
+            "revenue_usd": rev, "operating_income_usd": op, "net_income_usd": ni,
+            "fcf_usd": ni * 0.8 if fund else None, "buyback_usd": ni * 0.3 if fund else None, "eps_usd": eps,
+            "operating_margin": op / rev if fund else None, "net_margin": ni / rev if fund else None,
+            "fcf_margin": ni * 0.8 / rev if fund else None,
+            "sales_growth_1y": -0.05 + (i % 9) * 0.04 if fund else None,
+            "op_income_growth_1y": -0.1 + (i % 7) * 0.06 if fund else None,
+            "net_income_growth_1y": -0.1 + (i % 5) * 0.08 if fund else None,
+            "eps_growth_1y": -0.1 + (i % 5) * 0.08 if fund else None,
+            "shares_est": 1e8 if fund else None,
+            "price_source": "price_daily" if px else None, "current_price_usd": price, "price_date": d if px else None,
+            "snapshot_date": d if i % 3 == 0 else None,
+            "market_cap_usd": mcap, "market_cap_bn_usd": mcap / 1e9 if mcap else None,
+            "per": price / eps if (px and fund) else None,
+            "ps_ratio": mcap / rev if mcap else None, "fcf_yield": ni * 0.8 / mcap if mcap else None,
+            "buyback_yield": ni * 0.3 / mcap if mcap else None, "valuation_flag": None,
+            "pbr": 1.0 + (i % 8) * 0.8 if i % 3 == 0 else None, "roe": 0.05 + (i % 10) * 0.03 if i % 3 == 0 else None,
+            "dividend_yield": (i % 6) * 0.007 if i % 3 == 0 else None,
+            "return_1m": -0.1 + (i % 10) * 0.03 if px else None, "return_3m": -0.2 + (i % 12) * 0.05 if px else None,
+            "return_1y": -0.3 + (i % 15) * 0.07 if px else None,
+            "high_52w_usd": price * 1.2 if px else None, "low_52w_usd": price * 0.7 if px else None,
+            "week52_position_pct": 41.0 + (i % 60) if px else None,
+            "avg_turnover_20d_usd": 1e8 * (1 + i) if px else None, "price_days": 250 if px else None,
+            "price_break_date": None,
+            "composite_score": 30.0 + i if i % 3 == 0 else None, "value_score": 40.0 + i % 50 if i % 3 == 0 else None,
+            "quality_score": 50.0 + i % 40 if i % 3 == 0 else None,
+            "rsi14": 40.0 + i % 40 if i % 6 == 0 else None, "above_ma200": True if i % 6 == 0 else None,
+            "technical_date": d if i % 6 == 0 else None,
+        }
+        _insert(c, "m_screener_us", row)
 
 
 # 業種2つ（電気機器1016・医薬品1008）×テーマ各3つ。実在銘柄は業種ごとに3社（うち1社は 6501）。
@@ -347,6 +403,7 @@ def test_template_count_and_unique_ids():
     assert len(TEMPLATES) >= 15
     for domain in ("geo", "realestate", "taxonomy", "screener"):
         assert sum(1 for t in TEMPLATES if t["domain"] == domain) >= 8, domain
+    assert sum(1 for t in TEMPLATES if t["domain"] == "screener_us") >= 6
     ids = [t["id"] for t in TEMPLATES]
     assert len(ids) == len(set(ids))
 
@@ -483,6 +540,23 @@ def test_screener_templates_are_single_mart():
     for t in TEMPLATES:
         if t["domain"] == "screener":
             assert t["mart"] == "m_screener" and not re.search(r"\bm_(?!screener)\w+", t["sql"]), t["id"]
+
+
+def test_screener_us_mart_shape():
+    """米国スクリーナーは1銘柄1行・通貨は米ドル（列名の _usd）。元表は bi.src_us_fundamentals の写し。"""
+    cols = mart_columns("m_screener_us")
+    assert cols[0] == "ticker" and len(cols) == len(set(cols))
+    for need in ("revenue_usd", "net_income_usd", "eps_usd", "current_price_usd", "market_cap_usd", "has_fundamentals",
+                 "return_3m", "week52_position_pct", "valuation_flag", "price_break_date"):
+        assert need in cols, need
+    sql = (REPO / "bi" / "marts" / "m_screener_us.sql").read_text(encoding="utf-8")
+    assert "bi.src_us_fundamentals" in sql and "market = 'US'" in sql and "price_daily_latest" in sql
+
+
+def test_screener_us_templates_are_single_mart():
+    for t in TEMPLATES:
+        if t["domain"] == "screener_us":
+            assert t["mart"] == "m_screener_us" and not re.search(r"\bm_(?!screener_us)\w+", t["sql"]), t["id"]
 
 
 def test_theme_mart_guards():

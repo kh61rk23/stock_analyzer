@@ -18,7 +18,7 @@ bi_export.py — BI基盤のマートを BigQuery から書き出す
 これを怠ると毎日 parquet がコミットされて git が肥大する。
 
 実行は4段階（1回の bi_export で全マートを一斉に進める）:
-  0. テンプレートを検査（NGなら何もせず失敗）。location が違う元表（US の ontology.signal_event）は
+  0. テンプレートを検査（NGなら何もせず失敗）。location が違う元表（US の ontology.signal_event・us.fundamentals）は
      `list_rows`（無料）→ load job（無料）で asia-northeast1 の `bi.src_*` へ写す
   1. 全マートについて `CREATE OR REPLACE TABLE bi.<mart>__next AS <マートSQL>` … 元表を読むのはここだけ
   2. 全マートの行数検査（0行・前回の半分未満は失敗）と `list_rows` での中身の読み出し（tabledata.list は課金されない）
@@ -66,6 +66,7 @@ MART_KEYS = {
     "m_theme_def": ["theme_name", "sector_code", "market"],
     "m_theme_signal": ["theme_name", "sector_code", "fired_at", "signal_category", "direction"],
     "m_screener": ["edinet_code"],
+    "m_screener_us": ["ticker"],
 }
 # 前回の行数のこの割合を下回ったら、壊れた結果とみなして上書きしない
 MIN_ROW_RATIO = 0.5
@@ -81,6 +82,11 @@ SOURCES = [
         "source": "stock-analyzer-edinet.ontology.signal_event",
         "dest": "src_signal_event",
         "columns": ["event_id", "fired_at", "ticker", "sector_code", "signal_category", "signal_value", "direction", "source_module"],
+    },
+    {
+        "source": "stock-analyzer-edinet.us.fundamentals",
+        "dest": "src_us_fundamentals",
+        "columns": ["ticker", "cik", "period_end", "revenue", "operating_income", "net_income", "eps_diluted", "fcf", "buyback"],
     },
 ]
 

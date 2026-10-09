@@ -1,0 +1,281 @@
+[
+  {
+    "id": "scru_value_fcf",
+    "domain": "screener_us",
+    "title": "FCF利回りが高い大型株",
+    "question": "時価総額に対してフリーキャッシュフローの比率が高い米国株はどこか",
+    "mart": "m_screener_us",
+    "sql": "SELECT ticker, name, current_price_usd, ROUND(fcf_yield * 100, 2) AS fcf_yield_pct, ROUND(per, 1) AS per, ROUND(ps_ratio, 2) AS ps_ratio,\n       ROUND(operating_margin * 100, 1) AS operating_margin_pct, market_cap_bn_usd\nFROM m_screener_us\nWHERE fcf_yield >= {{min_fcf_yield_pct}} / 100\n  AND market_cap_bn_usd >= {{min_mcap_bn}}\nORDER BY fcf_yield DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "min_fcf_yield_pct",
+        "label": "FCF利回りの下限（%）",
+        "type": "number",
+        "default": 5,
+        "min": 0,
+        "max": 100
+      },
+      {
+        "name": "min_mcap_bn",
+        "label": "時価総額の下限（十億ドル）",
+        "type": "number",
+        "default": 10,
+        "min": 0,
+        "max": 100000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "ticker",
+      "y": "fcf_yield_pct",
+      "series": null
+    },
+    "note": "通貨は米ドル（列名の _usd）。時価総額は終値×株数の推定（株数＝純利益÷希薄化EPS）で、実際の発行済株式数ではない。FCF・EPS は SEC XBRL の最新通期。valuation_flag が付いた銘柄（株式分割の疑い）は空。"
+  },
+  {
+    "id": "scru_growth",
+    "domain": "screener_us",
+    "title": "増収増益",
+    "question": "売上も営業利益も純利益も前年を上回っている米国株はどこか",
+    "mart": "m_screener_us",
+    "sql": "SELECT ticker, name, current_price_usd, ROUND(sales_growth_1y * 100, 1) AS sales_growth_pct, ROUND(op_income_growth_1y * 100, 1) AS op_income_growth_pct,\n       ROUND(net_income_growth_1y * 100, 1) AS net_income_growth_pct, ROUND(per, 1) AS per, market_cap_bn_usd\nFROM m_screener_us\nWHERE sales_growth_1y > 0 AND op_income_growth_1y > 0 AND net_income_growth_1y > 0\n  AND market_cap_bn_usd >= {{min_mcap_bn}}\nORDER BY op_income_growth_1y DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "min_mcap_bn",
+        "label": "時価総額の下限（十億ドル）",
+        "type": "number",
+        "default": 5,
+        "min": 0,
+        "max": 100000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "ticker",
+      "y": "op_income_growth_pct",
+      "series": null
+    },
+    "note": "通貨は米ドル（列名の _usd）。成長率は最新通期と1年前の通期の比。前年が黒字の会社だけ対象（赤字からの回復は除く）。売上が空の会社（SEC の項目名の差）は sales_growth が空なので出ない。"
+  },
+  {
+    "id": "scru_momentum",
+    "domain": "screener_us",
+    "title": "3か月騰落率の上位",
+    "question": "直近3か月で株価が大きく上がった米国株はどこか（流動性の下限付き）",
+    "mart": "m_screener_us",
+    "sql": "SELECT ticker, name, current_price_usd, ROUND(return_1m * 100, 1) AS return_1m_pct, ROUND(return_3m * 100, 1) AS return_3m_pct,\n       ROUND(return_1y * 100, 1) AS return_1y_pct, ROUND(week52_position_pct, 0) AS week52_position_pct, market_cap_bn_usd\nFROM m_screener_us\nWHERE return_3m IS NOT NULL\n  AND avg_turnover_20d_usd >= {{min_turnover_musd}} * 1000000.0\nORDER BY return_3m DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "min_turnover_musd",
+        "label": "20日平均売買代金の下限（百万ドル）",
+        "type": "number",
+        "default": 20,
+        "min": 0,
+        "max": 1000000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "ticker",
+      "y": "return_3m_pct",
+      "series": null
+    },
+    "note": "通貨は米ドル（列名の _usd）。騰落率は終値ベースで63営業日前との比（分割調整済み・配当未調整）。株価のある全銘柄が対象で、財務が無い銘柄（ETF など）も含む。株価の履歴が約400日分のため return_1y は足りない銘柄で空。"
+  },
+  {
+    "id": "scru_near_52w_high",
+    "domain": "screener_us",
+    "title": "52週高値圏",
+    "question": "52週高値圏にあって利益率も高い米国株はどこか",
+    "mart": "m_screener_us",
+    "sql": "SELECT ticker, name, current_price_usd, ROUND(week52_position_pct, 0) AS week52_position_pct, ROUND(return_3m * 100, 1) AS return_3m_pct,\n       ROUND(operating_margin * 100, 1) AS operating_margin_pct, ROUND(sales_growth_1y * 100, 1) AS sales_growth_pct, market_cap_bn_usd\nFROM m_screener_us\nWHERE week52_position_pct >= {{min_position}}\n  AND operating_margin >= {{min_opm_pct}} / 100\n  AND avg_turnover_20d_usd >= {{min_turnover_musd}} * 1000000.0\nORDER BY week52_position_pct DESC, operating_margin DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "min_position",
+        "label": "52週レンジ内の位置の下限（0〜100・100が高値）",
+        "type": "number",
+        "default": 90,
+        "min": 0,
+        "max": 100
+      },
+      {
+        "name": "min_opm_pct",
+        "label": "営業利益率の下限（%）",
+        "type": "number",
+        "default": 15,
+        "min": -100,
+        "max": 100
+      },
+      {
+        "name": "min_turnover_musd",
+        "label": "20日平均売買代金の下限（百万ドル）",
+        "type": "number",
+        "default": 20,
+        "min": 0,
+        "max": 1000000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "scatter",
+      "x": "week52_position_pct",
+      "y": "operating_margin_pct",
+      "series": null
+    },
+    "note": "通貨は米ドル（列名の _usd）。52週位置は終値ベースの直近252営業日（履歴120営業日未満は空）。営業利益率は財務のある銘柄だけ。"
+  },
+  {
+    "id": "scru_profitable_cheap",
+    "domain": "screener_us",
+    "title": "黒字で割安（低PER×高利益率）",
+    "question": "利益率が高いのにPERが低い米国株はどこか",
+    "mart": "m_screener_us",
+    "sql": "SELECT ticker, name, current_price_usd, ROUND(per, 1) AS per, ROUND(ps_ratio, 2) AS ps_ratio, ROUND(net_margin * 100, 1) AS net_margin_pct,\n       ROUND(operating_margin * 100, 1) AS operating_margin_pct, market_cap_bn_usd\nFROM m_screener_us\nWHERE per > 0 AND per <= {{max_per}}\n  AND net_margin >= {{min_net_margin_pct}} / 100\n  AND market_cap_bn_usd >= {{min_mcap_bn}}\nORDER BY per ASC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "max_per",
+        "label": "PER の上限（倍）",
+        "type": "number",
+        "default": 15,
+        "min": 1,
+        "max": 200
+      },
+      {
+        "name": "min_net_margin_pct",
+        "label": "純利益率の下限（%）",
+        "type": "number",
+        "default": 10,
+        "min": -100,
+        "max": 100
+      },
+      {
+        "name": "min_mcap_bn",
+        "label": "時価総額の下限（十億ドル）",
+        "type": "number",
+        "default": 5,
+        "min": 0,
+        "max": 100000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "scatter",
+      "x": "per",
+      "y": "net_margin_pct",
+      "series": null
+    },
+    "note": "通貨は米ドル（列名の _usd）。PER は 最新終値÷最新通期の希薄化EPS。EPS が株価と同じ分割基準でない銘柄（valuation_flag）は空。"
+  },
+  {
+    "id": "scru_buyback",
+    "domain": "screener_us",
+    "title": "自社株買い利回りが高い",
+    "question": "時価総額に対して自社株買いの額が大きい米国株はどこか",
+    "mart": "m_screener_us",
+    "sql": "SELECT ticker, name, current_price_usd, ROUND(buyback_yield * 100, 2) AS buyback_yield_pct, ROUND(fcf_yield * 100, 2) AS fcf_yield_pct,\n       ROUND(per, 1) AS per, ROUND(return_1y * 100, 1) AS return_1y_pct, market_cap_bn_usd\nFROM m_screener_us\nWHERE buyback_yield >= {{min_buyback_pct}} / 100\n  AND market_cap_bn_usd >= {{min_mcap_bn}}\nORDER BY buyback_yield DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "min_buyback_pct",
+        "label": "自社株買い利回りの下限（%）",
+        "type": "number",
+        "default": 3,
+        "min": 0,
+        "max": 100
+      },
+      {
+        "name": "min_mcap_bn",
+        "label": "時価総額の下限（十億ドル）",
+        "type": "number",
+        "default": 10,
+        "min": 0,
+        "max": 100000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "ticker",
+      "y": "buyback_yield_pct",
+      "series": null
+    },
+    "note": "通貨は米ドル（列名の _usd）。自社株買いは最新通期の取得額（SEC XBRL）。時価総額は推定値。"
+  },
+  {
+    "id": "scru_composite_top",
+    "domain": "screener_us",
+    "title": "総合スコア上位",
+    "question": "総合スコア（composite_score）の高い米国株はどこか",
+    "mart": "m_screener_us",
+    "sql": "SELECT ticker, name, ROUND(composite_score, 1) AS composite_score, ROUND(value_score, 1) AS value_score, ROUND(quality_score, 1) AS quality_score,\n       current_price_usd, ROUND(pbr, 2) AS pbr, ROUND(roe * 100, 1) AS roe_pct, ROUND(rsi14, 0) AS rsi14\nFROM m_screener_us\nWHERE composite_score >= {{min_score}}\nORDER BY composite_score DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "min_score",
+        "label": "総合スコアの下限（0〜100）",
+        "type": "number",
+        "default": 60,
+        "min": 0,
+        "max": 100
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "ticker",
+      "y": "composite_score",
+      "series": null
+    },
+    "note": "通貨は米ドル（列名の _usd）。スコア・PBR・ROE・RSI は日次スナップショット（stock_snapshot の market='US'）にある約400銘柄だけ。スコアの作り方は SPEC_core.md を参照。"
+  }
+]
