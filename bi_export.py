@@ -58,6 +58,7 @@ MART_KEYS = {
     "m_re_holdings_pref": ["edinet_code", "fiscal_year", "prefecture"],
     "m_tax_node": ["node_id"],
     "m_company_tax": ["company_id", "node_id"],
+    "m_screener": ["edinet_code"],
 }
 # 前回の行数のこの割合を下回ったら、壊れた結果とみなして上書きしない
 MIN_ROW_RATIO = 0.5

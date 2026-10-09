@@ -1,0 +1,370 @@
+[
+  {
+    "id": "scr_value_dividend",
+    "domain": "screener",
+    "title": "割安高配当",
+    "question": "PBRが低く配当利回りが高い会社はどこか（株価のある会社だけ）",
+    "mart": "m_screener",
+    "sql": "SELECT sec_code4, name, industry, current_price,\n       ROUND(pbr, 2) AS pbr, ROUND(per, 1) AS per, ROUND(dividend_yield * 100, 2) AS dividend_yield_pct,\n       ROUND(payout_ratio * 100, 0) AS payout_ratio_pct, market_cap_b\nFROM m_screener\nWHERE pbr > 0 AND pbr < {{max_pbr}}\n  AND dividend_yield > {{min_yield_pct}} / 100\n  AND market_cap_b >= {{min_mcap_oku}}\n  AND (payout_ratio IS NULL OR payout_ratio <= {{max_payout_pct}} / 100)\nORDER BY dividend_yield DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "max_pbr",
+        "label": "PBR の上限（倍）",
+        "type": "number",
+        "default": 1,
+        "min": 0.1,
+        "max": 10
+      },
+      {
+        "name": "min_yield_pct",
+        "label": "配当利回りの下限（%）",
+        "type": "number",
+        "default": 3,
+        "min": 0,
+        "max": 20
+      },
+      {
+        "name": "min_mcap_oku",
+        "label": "時価総額の下限（億円）",
+        "type": "number",
+        "default": 100,
+        "min": 0,
+        "max": 1000000
+      },
+      {
+        "name": "max_payout_pct",
+        "label": "配当性向の上限（%・不明は除かない）",
+        "type": "number",
+        "default": 100,
+        "min": 0,
+        "max": 1000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "name",
+      "y": "dividend_yield_pct",
+      "series": null
+    },
+    "note": "株価・時価総額のある会社（約700社。price_source が snapshot か price_daily）だけが対象。配当性向が高すぎる会社は減配リスクがあるので上限で外せる。市場全体ではない点に注意。"
+  },
+  {
+    "id": "scr_high_roe_low_per",
+    "domain": "screener",
+    "title": "高ROE×低PER",
+    "question": "ROEが高いのにPERが低い（収益力の割に安い）会社はどこか",
+    "mart": "m_screener",
+    "sql": "SELECT sec_code4, name, industry, current_price,\n       ROUND(roe * 100, 1) AS roe_pct, ROUND(per, 1) AS per, ROUND(pbr, 2) AS pbr,\n       ROUND(operating_margin * 100, 1) AS operating_margin_pct, market_cap_b\nFROM m_screener\nWHERE roe >= {{min_roe_pct}} / 100 AND roe <= 1\n  AND per > 0 AND per <= {{max_per}}\n  AND market_cap_b >= {{min_mcap_oku}}\nORDER BY roe DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "min_roe_pct",
+        "label": "ROE の下限（%）",
+        "type": "number",
+        "default": 12,
+        "min": 0,
+        "max": 100
+      },
+      {
+        "name": "max_per",
+        "label": "PER の上限（倍）",
+        "type": "number",
+        "default": 12,
+        "min": 1,
+        "max": 100
+      },
+      {
+        "name": "min_mcap_oku",
+        "label": "時価総額の下限（億円）",
+        "type": "number",
+        "default": 100,
+        "min": 0,
+        "max": 1000000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "scatter",
+      "x": "per",
+      "y": "roe_pct",
+      "series": null
+    },
+    "note": "ROE は最新の通期（財務表）、PER は株価系（snapshot または 株価÷EPS）。ROE が100%を超える外れ値は除く。株価のある約700社が対象。"
+  },
+  {
+    "id": "scr_growth_small_cap",
+    "domain": "screener",
+    "title": "増収増益の小型株",
+    "question": "売上も営業利益も純利益も前年を上回っている小型株はどこか",
+    "mart": "m_screener",
+    "sql": "SELECT sec_code4, name, industry, market_cap_b,\n       ROUND(sales_growth_1y * 100, 1) AS sales_growth_pct, ROUND(op_income_growth_1y * 100, 1) AS op_income_growth_pct,\n       ROUND(net_income_growth_1y * 100, 1) AS net_income_growth_pct,\n       ROUND(per, 1) AS per, ROUND(operating_margin * 100, 1) AS operating_margin_pct\nFROM m_screener\nWHERE sales_growth_1y > 0 AND op_income_growth_1y > 0 AND net_income_growth_1y > 0\n  AND market_cap_b >= {{min_mcap_oku}} AND market_cap_b <= {{max_mcap_oku}}\nORDER BY op_income_growth_1y DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "min_mcap_oku",
+        "label": "時価総額の下限（億円）",
+        "type": "number",
+        "default": 50,
+        "min": 0,
+        "max": 1000000
+      },
+      {
+        "name": "max_mcap_oku",
+        "label": "時価総額の上限（億円）",
+        "type": "number",
+        "default": 1000,
+        "min": 1,
+        "max": 10000000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "name",
+      "y": "op_income_growth_pct",
+      "series": null
+    },
+    "note": "前年値が黒字の会社だけが成長率の対象（赤字からの回復は除く）。前年の年度が財務表に無い会社も除く。株価のある約700社が対象。"
+  },
+  {
+    "id": "scr_net_cash_value",
+    "domain": "screener",
+    "title": "ネットキャッシュが厚い割安株",
+    "question": "時価総額に対して現金が有利子負債を大きく上回る（ネットキャッシュ比率が高い）割安株はどこか",
+    "mart": "m_screener",
+    "sql": "SELECT sec_code4, name, industry, market_cap_b,\n       ROUND(net_cash_to_mcap * 100, 1) AS net_cash_to_mcap_pct, ROUND(pbr, 2) AS pbr, ROUND(per, 1) AS per,\n       ROUND(equity_ratio * 100, 1) AS equity_ratio_pct, interest_bearing_debt_basis\nFROM m_screener\nWHERE net_cash_to_mcap >= {{min_ratio_pct}} / 100\n  AND pbr > 0 AND pbr <= {{max_pbr}}\n  AND market_cap_b >= {{min_mcap_oku}}\nORDER BY net_cash_to_mcap DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "min_ratio_pct",
+        "label": "ネットキャッシュ÷時価総額の下限（%）",
+        "type": "number",
+        "default": 30,
+        "min": 0,
+        "max": 1000
+      },
+      {
+        "name": "max_pbr",
+        "label": "PBR の上限（倍）",
+        "type": "number",
+        "default": 1.5,
+        "min": 0.1,
+        "max": 10
+      },
+      {
+        "name": "min_mcap_oku",
+        "label": "時価総額の下限（億円）",
+        "type": "number",
+        "default": 50,
+        "min": 0,
+        "max": 1000000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "name",
+      "y": "net_cash_to_mcap_pct",
+      "series": null
+    },
+    "note": "ネットキャッシュ＝現金及び現金同等物−有利子負債（円）。有利子負債は報告値、無ければ借入金・社債・CPの合計（interest_bearing_debt_basis が estimated・リース負債は含まない概算）。株価のある約700社が対象。"
+  },
+  {
+    "id": "scr_high_growth_cagr",
+    "domain": "screener",
+    "title": "高成長（売上3年CAGR上位）",
+    "question": "売上高の3年平均成長率（CAGR）が高い会社はどこか",
+    "mart": "m_screener",
+    "sql": "SELECT sec_code4, name, industry, fiscal_year,\n       ROUND(sales_cagr_3y * 100, 1) AS sales_cagr_3y_pct, ROUND(sales_growth_1y * 100, 1) AS sales_growth_pct,\n       ROUND(operating_margin * 100, 1) AS operating_margin_pct, net_sales\nFROM m_screener\nWHERE sales_cagr_3y IS NOT NULL\n  AND net_sales >= {{min_sales_oku}} * 100000000.0\n  AND operating_margin >= {{min_opm_pct}} / 100\nORDER BY sales_cagr_3y DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "min_sales_oku",
+        "label": "売上高の下限（億円）",
+        "type": "number",
+        "default": 100,
+        "min": 0,
+        "max": 10000000
+      },
+      {
+        "name": "min_opm_pct",
+        "label": "営業利益率の下限（%）",
+        "type": "number",
+        "default": 5,
+        "min": -100,
+        "max": 100
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "name",
+      "y": "sales_cagr_3y_pct",
+      "series": null
+    },
+    "note": "売上の最新年度と、ちょうど3年前の年度の値から計算。M&Aによる増収も含む。株価は不要なので全上場約3,800社が対象。"
+  },
+  {
+    "id": "scr_rnd_intensive",
+    "domain": "screener",
+    "title": "研究開発型",
+    "question": "売上に対する研究開発費の比率が高い会社はどこか",
+    "mart": "m_screener",
+    "sql": "SELECT sec_code4, name, industry, ROUND(rnd_ratio * 100, 1) AS rnd_ratio_pct,\n       ROUND(operating_margin * 100, 1) AS operating_margin_pct, ROUND(gross_margin * 100, 1) AS gross_margin_pct,\n       net_sales, employees\nFROM m_screener\nWHERE rnd_ratio >= {{min_rnd_pct}} / 100 AND rnd_ratio <= 1\n  AND net_sales >= {{min_sales_oku}} * 100000000.0\nORDER BY rnd_ratio DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "min_rnd_pct",
+        "label": "研究開発費率の下限（%）",
+        "type": "number",
+        "default": 8,
+        "min": 0,
+        "max": 100
+      },
+      {
+        "name": "min_sales_oku",
+        "label": "売上高の下限（億円）",
+        "type": "number",
+        "default": 100,
+        "min": 0,
+        "max": 10000000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "name",
+      "y": "rnd_ratio_pct",
+      "series": null
+    },
+    "note": "研究開発費を開示している会社（約2,000社）だけが対象。開示が無い会社は『研究開発をしていない』のではなく空欄。全上場が対象で株価は不要。"
+  },
+  {
+    "id": "scr_near_52w_high",
+    "domain": "screener",
+    "title": "52週高値圏の好業績",
+    "question": "52週高値圏にあって、利益率とROEも高い会社はどこか",
+    "mart": "m_screener",
+    "sql": "SELECT sec_code4, name, industry, current_price, ROUND(week52_position_pct, 0) AS week52_position_pct,\n       ROUND(rsi14, 0) AS rsi14, ROUND(operating_margin * 100, 1) AS operating_margin_pct, ROUND(roe * 100, 1) AS roe_pct,\n       ROUND(sales_growth_1y * 100, 1) AS sales_growth_pct, technical_date\nFROM m_screener\nWHERE week52_position_pct >= {{min_position}}\n  AND operating_margin >= {{min_opm_pct}} / 100\n  AND roe >= {{min_roe_pct}} / 100\nORDER BY week52_position_pct DESC, roe DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "min_position",
+        "label": "52週レンジ内の位置の下限（0〜100・100が高値）",
+        "type": "number",
+        "default": 90,
+        "min": 0,
+        "max": 100
+      },
+      {
+        "name": "min_opm_pct",
+        "label": "営業利益率の下限（%）",
+        "type": "number",
+        "default": 8,
+        "min": -100,
+        "max": 100
+      },
+      {
+        "name": "min_roe_pct",
+        "label": "ROE の下限（%）",
+        "type": "number",
+        "default": 10,
+        "min": -100,
+        "max": 100
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "scatter",
+      "x": "week52_position_pct",
+      "y": "roe_pct",
+      "series": null
+    },
+    "note": "52週位置・RSI は snapshot の技術指標が入っている会社（約100社）だけが対象。技術指標は日によって空の日があるため、会社ごとの値のある最新日（technical_date）を使う。"
+  },
+  {
+    "id": "scr_composite_top",
+    "domain": "screener",
+    "title": "総合スコア上位",
+    "question": "総合スコア（composite_score）の高い会社はどこか（割安・質のスコア付き）",
+    "mart": "m_screener",
+    "sql": "SELECT sec_code4, name, industry, ROUND(composite_score, 1) AS composite_score,\n       ROUND(value_score, 1) AS value_score, ROUND(quality_score, 1) AS quality_score,\n       ROUND(per, 1) AS per, ROUND(pbr, 2) AS pbr, ROUND(dividend_yield * 100, 2) AS dividend_yield_pct, market_cap_b\nFROM m_screener\nWHERE composite_score >= {{min_score}}\n  AND market_cap_b >= {{min_mcap_oku}}\nORDER BY composite_score DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "min_score",
+        "label": "総合スコアの下限（0〜100）",
+        "type": "number",
+        "default": 60,
+        "min": 0,
+        "max": 100
+      },
+      {
+        "name": "min_mcap_oku",
+        "label": "時価総額の下限（億円）",
+        "type": "number",
+        "default": 100,
+        "min": 0,
+        "max": 1000000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "name",
+      "y": "composite_score",
+      "series": null
+    },
+    "note": "スコアはスナップショットを作る日次処理の算出値で、対象は約440社。スコア自体の作り方は SPEC_core.md を参照。"
+  }
+]

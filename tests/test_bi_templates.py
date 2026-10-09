@@ -25,6 +25,7 @@ STRING_COLS = {
     "top_export_commodities", "sealane_adjacency", "military_alliances",
     "company_id", "entity_type", "node_id", "node_name_ja", "node_name_en", "node_type", "supply_chain_pos",
     "parent_id", "domain_id", "domain_name_ja", "path_name", "confidence_type",
+    "price_source", "interest_bearing_debt_basis",
 }
 INT_COLS = {
     "fiscal_year", "employee_count", "foreign_ministry_level", "state_dept_level", "exposure_type_count",
@@ -32,10 +33,10 @@ INT_COLS = {
     "municipality_count", "population_current", "population_2050", "est_excluded_count",
     "node_level", "child_count", "company_count", "company_count_rollup",
 }
-DATE_COLS = {"fiscal_year_end", "risk_date", "latest_risk_date"}
-BOOL_COLS = {"is_delisted", "sanction_flag", "is_landlocked", "review_flag", "auto_derived", "verified_flag"}
+DATE_COLS = {"fiscal_year_end", "risk_date", "latest_risk_date", "price_date", "snapshot_date", "technical_date"}
+BOOL_COLS = {"is_delisted", "sanction_flag", "is_landlocked", "review_flag", "auto_derived", "verified_flag", "above_ma200"}
 ALL_MARTS = ("m_company", "m_fin_annual", "m_country_profile", "m_country_risk", "m_company_country",
-             "m_re_area", "m_re_holdings", "m_re_holdings_pref", "m_tax_node", "m_company_tax")
+             "m_re_area", "m_re_holdings", "m_re_holdings_pref", "m_tax_node", "m_company_tax", "m_screener")
 
 
 def mart_columns(mart: str) -> list[str]:
@@ -109,6 +110,7 @@ def con():
                       [row[col] for col in cols])
     _load_geo_and_realestate(c)
     _load_taxonomy(c)
+    _load_screener(c)
     return c
 
 
@@ -252,13 +254,59 @@ def _load_taxonomy(c) -> None:
         "operating_margin": None, "rnd_expenses": None, "rnd_ratio": None})
 
 
+# 1社1行。株価系は i%3==0 が snapshot、1 が price_daily、2 が株価なし。技術指標は snapshot の一部だけ
+def _load_screener(c) -> None:
+    import datetime as dt
+    for i in range(60):
+        code = "7203" if i == 0 else f"{7000 + i}"
+        sales = (100 + i * 10) * 1e9
+        op = sales * (0.02 + (i % 7) * 0.03)
+        ni = op * 0.7
+        assets = sales * 1.2
+        eq = assets * (0.2 + (i % 6) * 0.1)
+        cash = sales * 0.3
+        debt = sales * (0.05 if i % 4 else 0.0)
+        src = ["snapshot", "price_daily", None][i % 3]
+        price = 1000.0 + i * 50 if src else None
+        cap_b = (100.0 + i * 40) if src else None
+        d = dt.date(2026, 10, 9)
+        row = {
+            "edinet_code": f"E{i:05d}", "sec_code4": code, "ticker": f"{code}.T", "name": f"会社{i}",
+            "industry": ["電気機器", "小売業", None][i % 3], "accounting_standard": "日本基準",
+            "fiscal_year": 2026, "fiscal_year_end": dt.date(2026, 3, 31),
+            "net_sales": sales, "operating_income": op, "ordinary_income": op, "net_income": ni,
+            "total_assets": assets, "equity": eq, "employees": 500.0 + i * 100, "avg_annual_salary": 6e6 + i * 1e5,
+            "operating_margin": op / sales, "net_margin": ni / sales, "gross_margin": 0.3,
+            "roe": 0.04 + (i % 10) * 0.03, "roa": 0.03, "rnd_ratio": (i % 5) * 0.03,
+            "equity_ratio": eq / assets, "interest_bearing_debt": debt, "interest_bearing_debt_basis": "reported" if i % 2 else "estimated",
+            "cash_and_equiv": cash, "net_cash": cash - debt, "de_ratio": debt / eq,
+            "sales_growth_1y": -0.05 + (i % 9) * 0.04, "op_income_growth_1y": -0.1 + (i % 7) * 0.06,
+            "net_income_growth_1y": -0.1 + (i % 5) * 0.08, "sales_cagr_3y": -0.02 + (i % 11) * 0.03,
+            "eps": 50.0, "bps": 800.0, "dividend_per_share": 20.0, "payout_ratio": (i % 8) * 0.12, "shares_issued": 1e8,
+            "price_source": src, "current_price": price, "price_date": d if src else None,
+            "snapshot_date": d if src == "snapshot" else None,
+            "market_cap_b": cap_b, "market_cap": cap_b * 1e8 if src else None,
+            "per": 6.0 + (i % 10) * 1.5 if src else None, "pbr": 0.4 + (i % 8) * 0.25 if src else None,
+            "dividend_yield": 0.01 + (i % 9) * 0.008 if src else None,
+            "net_cash_to_mcap": (cash - debt) / (cap_b * 1e8) if src else None,
+            "composite_score": 30.0 + i if src == "snapshot" else None,
+            "value_score": 40.0 + i % 50 if src == "snapshot" else None,
+            "quality_score": 50.0 + i % 40 if src == "snapshot" else None,
+            "rsi14": 40.0 + i % 40 if src == "snapshot" and i % 2 == 0 else None,
+            "week52_position_pct": 50.0 + (i % 50) if src == "snapshot" and i % 2 == 0 else None,
+            "above_ma200": True if src == "snapshot" and i % 2 == 0 else None,
+            "technical_date": d if src == "snapshot" and i % 2 == 0 else None,
+        }
+        _insert(c, "m_screener", row)
+
+
 MARTS = set(ALL_MARTS)
 TEMPLATES = bt.load_templates()
 
 
 def test_template_count_and_unique_ids():
     assert len(TEMPLATES) >= 15
-    for domain in ("geo", "realestate", "taxonomy"):
+    for domain in ("geo", "realestate", "taxonomy", "screener"):
         assert sum(1 for t in TEMPLATES if t["domain"] == domain) >= 8, domain
     ids = [t["id"] for t in TEMPLATES]
     assert len(ids) == len(set(ids))
@@ -376,3 +424,22 @@ def test_taxonomy_templates_are_single_mart():
             continue
         refs = {m for m in ALL_MARTS if re.search(rf"\b{m}\b", t["sql"])}
         assert refs == {t["mart"]}, (t["id"], refs)
+
+
+def test_screener_mart_shape():
+    """スクリーナーは1社1行。単位（比率は小数・時価総額は円と億円）と株価の出どころの列が外れていない。"""
+    cols = mart_columns("m_screener")
+    assert cols[0] == "edinet_code" and len(cols) == len(set(cols))
+    for need in ("ticker", "price_source", "market_cap", "market_cap_b", "net_cash_to_mcap", "sales_cagr_3y",
+                 "interest_bearing_debt_basis", "technical_date"):
+        assert need in cols, need
+    sql = (REPO / "bi" / "marts" / "m_screener.sql").read_text(encoding="utf-8")
+    assert "market = 'JP'" in sql and "ingested_at DESC" in sql
+    assert "ROW_NUMBER() OVER (PARTITION BY edinet_code ORDER BY fiscal_year DESC)" in sql
+    assert "p1.fiscal_year = l.fiscal_year - 1" in sql and "p3.fiscal_year = l.fiscal_year - 3" in sql
+
+
+def test_screener_templates_are_single_mart():
+    for t in TEMPLATES:
+        if t["domain"] == "screener":
+            assert t["mart"] == "m_screener" and not re.search(r"\bm_(?!screener)\w+", t["sql"]), t["id"]
