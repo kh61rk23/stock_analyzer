@@ -20,9 +20,10 @@
 
 ## SQLの方言ルール（DuckDB と BigQuery の両方で動く）
 
-- 参照する表は**マート名だけ**（`m_company`・`m_fin_annual`）。完全名・バッククォートは使わない。
-  board は DuckDB にマートの parquet を同名のビューとして登録し、Claudeダッシュボードは
-  `bi_templates.compose_bigquery_sql` で `WITH <マート名> AS (<bi/marts/*.sql>)` を前置して BigQuery に投げる。
+- 参照する表は**マート名だけ**（`bi/marts/*.sql` のファイル名。例 `m_company`・`m_country_risk`・`m_re_area`）。完全名・バッククォートは使わない。
+  board は DuckDB にマートの parquet を同名のビューとして登録する。Claudeダッシュボードは、bi_export が BigQuery に実体化した
+  `stock-analyzer-edinet.bi.<マート名>` を読む（未実体化のマートだけ `bi_templates.compose_bigquery_sql` で
+  `WITH <マート名> AS (<bi/marts/*.sql>)` を前置して投げる。元表を毎回スキャンしないので読み取りが小さい）。
 - 使える関数（許可リスト）：`SUM AVG MIN MAX COUNT COALESCE NULLIF ROUND ABS ROW_NUMBER RANK DENSE_RANK LAG LEAD`、
   `CASE WHEN`、`OVER (PARTITION BY ... ORDER BY ...)`。
 - 禁止：`MEDIAN`・`QUALIFY`・`SAFE_DIVIDE`・`APPROX_*`・配列系（`UNNEST` 等）・`CAST(... AS DOUBLE)`・`FLOAT64`。
