@@ -20,6 +20,7 @@ PROJECT = "stock-analyzer-edinet"
 DOMAINS = {"finance": "財務・業績", "geo": "地政学", "realestate": "不動産", "taxonomy": "技術分類",
            "theme": "テーマ株", "market": "株価・スクリーニング", "us": "米国株"}
 MART_DESC = {
+    "m_screener_us": "米国株スクリーナー。1銘柄1行（NYSE・Nasdaq）。金額はUSD、財務が付くのは一部の銘柄のみ",
     "m_theme": "テーマ×銘柄。業種ごとの代表銘柄にその業種のテーマが付く（同じ業種のテーマは同じ銘柄集合）",
     "m_theme_def": "テーマ定義。業種サブテーマの一覧（米国を含む）",
     "m_theme_signal": "テーマ×日×シグナル種別。days_before_latest で直近N日に絞れる",
@@ -36,6 +37,14 @@ MART_DESC = {
     "m_re_holdings_pref": "企業の保有不動産の都道府県別集約。1社×都道府県×年度1行",
 }
 LABELS = {
+    "cik": "CIK", "has_fundamentals": "財務あり", "revenue_usd": "売上(USD)", "operating_income_usd": "営業利益(USD)",
+    "net_income_usd": "純利益(USD)", "fcf_usd": "フリーCF(USD)", "buyback_usd": "自社株買い(USD)", "eps_usd": "EPS(USD)",
+    "fcf_margin": "FCFマージン", "eps_growth_1y": "EPS成長率(1年)", "shares_est": "推定株数", "current_price_usd": "株価(USD)",
+    "market_cap_usd": "時価総額(USD)", "market_cap_bn_usd": "時価総額(十億USD)", "ps_ratio": "PSR", "fcf_yield": "FCF利回り",
+    "buyback_yield": "自社株買い利回り", "valuation_flag": "注意フラグ", "high_52w_usd": "52週高値(USD)", "low_52w_usd": "52週安値(USD)",
+    "avg_turnover_20d_usd": "平均売買代金20日(USD)", "price_days": "株価の日数", "price_break_date": "分割の疑い日",
+    "high_52w": "52週高値", "low_52w": "52週安値", "avg_turnover_20d": "平均売買代金20日", "shares_out": "株数",
+    "return_1m": "騰落率1か月", "return_3m": "騰落率3か月", "return_1y": "騰落率1年",
     "ticker": "ティッカー", "employees": "従業員数", "interest_bearing_debt_basis": "有利子負債の算出方法",
     "net_cash": "ネットキャッシュ", "de_ratio": "D/Eレシオ", "sales_growth_1y": "売上成長率(1年)",
     "op_income_growth_1y": "営業利益成長率(1年)", "net_income_growth_1y": "純利益成長率(1年)", "sales_cagr_3y": "売上CAGR(3年)",

@@ -444,6 +444,25 @@ function builderSql(){
 }
 
 /* ── スクリーナー（1社1行の m_screener を条件で絞り込む） ── */
+const SCR_SETS_US = {
+  "概要": ["ticker","name","market_cap_bn_usd","per","ps_ratio","fcf_yield","operating_margin","sales_growth_1y","return_3m"],
+  "バリュエーション": ["ticker","name","current_price_usd","market_cap_bn_usd","per","ps_ratio","pbr","fcf_yield","buyback_yield","dividend_yield"],
+  "収益性": ["ticker","name","revenue_usd","operating_income_usd","net_income_usd","operating_margin","net_margin","fcf_margin","roe"],
+  "成長": ["ticker","name","revenue_usd","sales_growth_1y","op_income_growth_1y","net_income_growth_1y","eps_growth_1y"],
+  "株価": ["ticker","name","current_price_usd","return_1m","return_3m","return_1y","high_52w_usd","low_52w_usd","week52_position_pct","avg_turnover_20d_usd"],
+};
+const SCR_PRESETS_US = {
+  "FCF利回り割安": [["fcf_yield",">=",0.06],["per",">",0]],
+  "高成長": [["sales_growth_1y",">=",0.25]],
+  "3か月モメンタム": [["return_3m",">=",0.2]],
+  "52週高値圏": [["week52_position_pct",">=",90]],
+  "黒字の割安": [["per",">",0],["per","<=",15],["net_margin",">=",0.05]],
+  "自社株買い": [["buyback_yield",">=",0.03]],
+};
+let SCR_MKT = "jp";
+function scrMart(){ return SCR_MKT === "us" ? "m_screener_us" : "m_screener"; }
+function scrSets(){ return SCR_MKT === "us" ? SCR_SETS_US : SCR_SETS; }
+function scrPresets(){ return SCR_MKT === "us" ? SCR_PRESETS_US : SCR_PRESETS; }
 const SCR_SETS = {
   "概要": ["sec_code4","name","industry","market_cap","per","pbr","dividend_yield","roe","operating_margin","sales_growth_1y"],
   "バリュエーション": ["sec_code4","name","current_price","market_cap","per","pbr","dividend_yield","eps","bps","net_cash"],
@@ -451,7 +470,7 @@ const SCR_SETS = {
   "成長": ["sec_code4","name","industry","net_sales","sales_growth_1y","sales_cagr_3y","op_income_growth_1y","net_income_growth_1y"],
   "財務健全性": ["sec_code4","name","equity_ratio","de_ratio","interest_bearing_debt","cash_and_equiv","net_cash","free_cf"],
   "配当": ["sec_code4","name","dividend_yield","dividend_per_share","payout_ratio","eps"],
-  "株価": ["sec_code4","name","current_price","return_1m","return_3m","return_1y","week52_position_pct","rsi14","above_ma200","snapshot_date"],
+  "株価": ["sec_code4","name","current_price","return_1m","return_3m","return_1y","high_52w","low_52w","week52_position_pct","avg_turnover_20d"],
 };
 const SCR_PRESETS = {
   "割安高配当": [["pbr","<=",1],["dividend_yield",">=",0.03]],
@@ -460,17 +479,21 @@ const SCR_PRESETS = {
   "ネットキャッシュ": [["net_cash",">",0],["pbr","<=",1.2]],
   "高成長": [["sales_cagr_3y",">=",0.15]],
   "高配当": [["dividend_yield",">=",0.04]],
+  "3か月モメンタム": [["return_3m",">=",0.2]],
+  "売買代金が大きい割安株": [["avg_turnover_20d",">=",1e9],["pbr","<=",1]],
 };
 let SCR = {filters:[], set:"概要", sort:"market_cap", dir:"DESC", page:0, industries:[]};
-function scrCols(){ return martCols("m_screener"); }
+function scrCols(){ return martCols(scrMart()); }
 function buildScreener(){
   const el = $("p-scr");
-  if(!BI.marts.m_screener){ el.innerHTML = `<div class="msg warn">スクリーナー用の表（m_screener）はまだ書き出されていません。次の書き出しのあとに再公開します。</div>`; return; }
+  if(!BI.marts[scrMart()]){ el.innerHTML = `<div class="msg warn">スクリーナー用の表（m_screener）はまだ書き出されていません。次の書き出しのあとに再公開します。</div>`; return; }
   const cols = scrCols(), names = cols.map(c=>c.name), lab = n => { const c = cols.find(x=>x.name===n); return esc(c && c.label || n); };
   const numCols = cols.filter(isNum);
   el.innerHTML = `
-    <p class="q">企業スクリーナー</p><p class="note">全上場企業（最新の決算期×最新の株価）を条件で絞り込みます。比率は % で入れてください（例 ROE 15 → 15%）。</p>
-    <div class="chips">${Object.keys(SCR_PRESETS).map(k=>`<button class="ghost" data-pre="${esc(k)}">${esc(k)}</button>`).join("")}<button class="ghost" id="scrClear">条件をすべて外す</button></div>
+    <div class="row"><p class="q" style="margin:0">企業スクリーナー</p>
+      <label class="f">市場<select id="scrMkt"><option value="jp" ${SCR_MKT==="jp"?"selected":""}>日本株</option><option value="us" ${SCR_MKT==="us"?"selected":""}>米国株（USD）</option></select></label></div>
+    <p class="note">${SCR_MKT==="us" ? "NYSE・Nasdaq の普通株（最新の決算×最新の終値）。財務が付くのは一部の銘柄のみ。金額は USD。" : "全上場企業（最新の決算期×最新の終値）。"}比率は % で入れてください（例 ROE 15 → 15%）。52週位置は 0〜100。</p>
+    <div class="chips">${Object.keys(scrPresets()).map(k=>`<button class="ghost" data-pre="${esc(k)}">${esc(k)}</button>`).join("")}<button class="ghost" id="scrClear">条件をすべて外す</button></div>
     <div class="chips" id="scrChips">${SCR.filters.map((f,i)=>`<span class="chip">${lab(f[0])} ${esc(f[1])} ${esc(fmtIn(f[0],f[2]))}<button data-fdel="${i}" aria-label="条件を外す">×</button></span>`).join("") || `<span class="note" style="margin:0">条件なし（全社）</span>`}</div>
     <div class="row">
       <label class="f">列<select id="scrCol">${numCols.map(c=>`<option value="${esc(c.name)}">${lab(c.name)}</option>`).join("")}</select></label>
@@ -480,13 +503,14 @@ function buildScreener(){
       ${names.includes("industry") ? `<label class="f">業種（含む）<input id="scrInd" placeholder="例 情報・通信" value="${esc(SCR.industries.join(","))}"></label>` : ""}
     </div>
     <div class="row" style="margin-top:8px">
-      <label class="f">列セット<select id="scrSet">${Object.keys(SCR_SETS).map(k=>`<option ${k===SCR.set?"selected":""}>${esc(k)}</option>`).join("")}</select></label>
+      <label class="f">列セット<select id="scrSet">${Object.keys(scrSets()).map(k=>`<option ${k===SCR.set?"selected":""}>${esc(k)}</option>`).join("")}</select></label>
       <label class="f">並べ替え<select id="scrSort">${numCols.map(c=>`<option value="${esc(c.name)}" ${c.name===SCR.sort?"selected":""}>${lab(c.name)}</option>`).join("")}</select></label>
       <label class="f">向き<select id="scrDir"><option ${SCR.dir==="DESC"?"selected":""} value="DESC">大きい順</option><option ${SCR.dir==="ASC"?"selected":""} value="ASC">小さい順</option></select></label>
       <button class="go" id="scrGo">検索</button>
       <label class="f">保存名<input id="scrName" placeholder="例：自分の割安株"></label><button class="ghost" id="scrSave">条件をスロットに保存</button><span class="note" id="scrMsg"></span>
     </div>`;
-  el.querySelectorAll("[data-pre]").forEach(b => b.onclick = () => { SCR.filters = SCR_PRESETS[b.dataset.pre].filter(f=>names.includes(f[0])).map(f=>f.slice()); SCR.page = 0; buildScreener(); runScreener(); });
+  $("scrMkt").onchange = e => { SCR_MKT = e.target.value; SCR = {filters:[], set:"概要", sort: SCR_MKT==="us" ? "market_cap_bn_usd" : "market_cap", dir:"DESC", page:0, industries:[]}; buildScreener(); runScreener(); };
+  el.querySelectorAll("[data-pre]").forEach(b => b.onclick = () => { SCR.filters = scrPresets()[b.dataset.pre].filter(f=>names.includes(f[0])).map(f=>f.slice()); SCR.page = 0; buildScreener(); runScreener(); });
   el.querySelectorAll("[data-fdel]").forEach(b => b.onclick = () => { SCR.filters.splice(+b.dataset.fdel,1); SCR.page=0; buildScreener(); runScreener(); });
   $("scrClear").onclick = () => { SCR.filters = []; SCR.industries = []; SCR.page = 0; buildScreener(); runScreener(); };
   $("scrAdd").onclick = () => { const c=$("scrCol").value, raw=$("scrVal").value.trim(); const n = Number(raw);
@@ -504,10 +528,10 @@ function fmtIn(n, v){ return isRatio(n) ? (v*100).toFixed(1).replace(/\.0$/,"")+
 function screenerSql(){
   const names = scrCols().map(c=>c.name);
   const ok = n => { if(!names.includes(n)) throw new Error("列がありません: "+n); return qid(n); };
-  const show = [...new Set([...(SCR_SETS[SCR.set]||SCR_SETS["概要"]), ...SCR.filters.map(f=>f[0])])].filter(n=>names.includes(n));
+  const sets = scrSets(), show = [...new Set([...(sets[SCR.set]||sets["概要"]), ...SCR.filters.map(f=>f[0]), ...(names.includes("valuation_flag")?["valuation_flag"]:[])])].filter(n=>names.includes(n));
   const where = SCR.filters.map(f => { if(![">=","<=",">","<"].includes(f[1]) || !Number.isFinite(Number(f[2]))) throw new Error("条件が不正です"); return `${ok(f[0])} ${f[1]} ${Number(f[2])}`; });
   if(SCR.industries.length && names.includes("industry")) where.push("(" + SCR.industries.map(x => `industry LIKE ${lit("%"+x+"%")}`).join(" OR ") + ")");
-  return `SELECT ${show.map(ok).join(", ")}, COUNT(*) OVER() AS total_hits\nFROM m_screener` + (where.length ? `\nWHERE ${where.join("\n  AND ")}` : "")
+  return `SELECT ${show.map(ok).join(", ")}, COUNT(*) OVER() AS total_hits\nFROM ${scrMart()}` + (where.length ? `\nWHERE ${where.join("\n  AND ")}` : "")
     + `\nORDER BY ${ok(SCR.sort)} ${SCR.dir === "ASC" ? "ASC" : "DESC"} NULLS LAST\nLIMIT 100 OFFSET ${SCR.page*100}`;
 }
 async function runScreener(){
@@ -518,9 +542,9 @@ async function runScreener(){
     const ti = res.columns.indexOf("total_hits"), total = res.rows.length ? res.rows[0][ti] : 0;
     res.columns.splice(ti,1); res.num.splice(ti,1); res.rows.forEach(r=>r.splice(ti,1));
     const labs = scrCols(); res.columns = res.columns.map(n => (labs.find(c=>c.name===n)||{}).label || n);
-    render(res, {type:"table"}, row => { const code = row[0]; const t = BI.templates.find(x=>x.id==="fin_company_10y"); if(t && code){ tab("tpl"); openTpl(t.id); const inp = $("pp-sec_code4"); if(inp){ inp.value = code; runTpl(); } } });
+    render(res, {type:"table"}, row => { const code = row[0]; const t = BI.templates.find(x=>x.id==="fin_company_10y"); if(SCR_MKT==="us"){ return; } if(t && code){ tab("tpl"); openTpl(t.id); const inp = $("pp-sec_code4"); if(inp){ inp.value = code; runTpl(); } } });
     const pages = Math.max(1, Math.ceil(total/100));
-    $("result").insertAdjacentHTML("afterbegin", `<div class="row" style="margin:6px 0"><b>${Number(total).toLocaleString()} 社</b><span class="note">行をクリックで「会社の10年推移」</span>
+    $("result").insertAdjacentHTML("afterbegin", `<div class="row" style="margin:6px 0"><b>${Number(total).toLocaleString()} 社</b><span class="note">${SCR_MKT==="us" ? "" : "行をクリックで「会社の10年推移」"}</span>
       <button class="ghost" id="scrPrev" ${SCR.page<=0?"disabled":""}>前の100社</button><span class="note">${SCR.page+1} / ${pages}</span><button class="ghost" id="scrNext" ${SCR.page+1>=pages?"disabled":""}>次の100社</button></div>`);
     $("scrPrev").onclick = () => { SCR.page--; runScreener(); }; $("scrNext").onclick = () => { SCR.page++; runScreener(); };
     showSql(sql, $("result")); logRun("スクリーナー", SCR.filters.map(f=>f[0]+f[1]+f[2]).join(" ") || "全社", q);
