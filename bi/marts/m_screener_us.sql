@@ -11,7 +11,7 @@
 --   終値は分割調整済み・配当未調整。日々の前日比が 0.6倍未満／1.7倍超の日（分割の調整漏れ・異常値）があれば、その日以降の終値だけを使う
 --   （price_break_date）。決算期末より後にその日があるときは、EPS と株価の分割基準がずれるため valuation_flag='split_suspect' として
 --   per・時価総額・FCF利回り・自社株買い利回りを空にする。
--- 騰落率は営業日ベース（return_1m＝21営業日前・return_3m＝63営業日前・return_1y＝252営業日前、足りなければ365日前以前で最も新しい終値、それも無ければ NULL）。
+-- 騰落率は営業日ベース（return_1m＝21営業日前・return_3m＝63営業日前・return_1y＝252営業日前、足りなければ360日前以前で最も新しい終値、それも無ければ NULL）。
 -- 52週高値・安値は終値ベースで直近252営業日、履歴が120営業日未満なら NULL。最新日が全体の最新日から14日以内の株価だけ使う。
 -- name・スコア・RSI・PBR・ROE・配当利回りは analytics.stock_snapshot の market='US' の会社別最新行（14日以内）から。
 WITH fx AS (
@@ -97,7 +97,7 @@ px AS (
     MAX(IF(rn = 22, close, NULL)) AS c_1m,
     MAX(IF(rn = 64, close, NULL)) AS c_3m,
     COALESCE(MAX(IF(rn = 253, close, NULL)),
-             ARRAY_AGG(IF(trade_date <= DATE_SUB(tm, INTERVAL 365 DAY), close, NULL) IGNORE NULLS ORDER BY trade_date DESC LIMIT 1)[SAFE_OFFSET(0)]) AS c_1y,
+             ARRAY_AGG(IF(trade_date <= DATE_SUB(tm, INTERVAL 360 DAY), close, NULL) IGNORE NULLS ORDER BY trade_date DESC LIMIT 1)[SAFE_OFFSET(0)]) AS c_1y,
     COUNT(*) AS price_days,
     MAX(break_date) AS break_date,
     MAX(IF(rn <= 252, close, NULL)) AS hi_52w,

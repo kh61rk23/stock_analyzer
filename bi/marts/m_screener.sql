@@ -6,7 +6,7 @@
 -- 細目の adjusted_eps / adjusted_bps / adjusted_dividend_per_share（分割調整後）があればそれを使い、
 -- 調整前EPS÷調整後EPS を分割倍率として株数にも掛ける（東京海上 8766 は期末後の分割で EPS が15倍に見えていた）。
 -- stock_snapshot はスコア（composite_score 等）とテクニカル（rsi14・above_ma200）にだけ使う。株価・時価総額・PER 等には使わない。
--- 騰落率は営業日ベース（return_1m＝21営業日前・return_3m＝63営業日前・return_1y＝252営業日前の終値との比。足りなければ calendar 365日前以前で最も新しい終値。それも無ければ NULL）。
+-- 騰落率は営業日ベース（return_1m＝21営業日前・return_3m＝63営業日前・return_1y＝252営業日前の終値との比。足りなければ 360日前以前で最も新しい終値。それも無ければ NULL）。
 -- 52週高値・安値は終値ベースで直近252営業日、履歴が120営業日未満なら NULL。
 -- 最新日が全体の最新日から14日以内の株価だけ使う（上場廃止・取込停止の古い株価を最新として出さないため）。
 -- 成長率は「ちょうど1年前／3年前の年度」が財務表にあるときだけ計算し、無ければ NULL（年が欠けた期を跨がない）。
@@ -112,7 +112,7 @@ px AS (
     MAX(IF(rn = 22, close, NULL)) AS c_1m,
     MAX(IF(rn = 64, close, NULL)) AS c_3m,
     COALESCE(MAX(IF(rn = 253, close, NULL)),
-             ARRAY_AGG(IF(trade_date <= DATE_SUB(tm, INTERVAL 365 DAY), close, NULL) IGNORE NULLS ORDER BY trade_date DESC LIMIT 1)[SAFE_OFFSET(0)]) AS c_1y,
+             ARRAY_AGG(IF(trade_date <= DATE_SUB(tm, INTERVAL 360 DAY), close, NULL) IGNORE NULLS ORDER BY trade_date DESC LIMIT 1)[SAFE_OFFSET(0)]) AS c_1y,
     COUNT(*) AS price_days,
     MAX(break_date) AS break_date,
     MAX(IF(rn <= 252, close, NULL)) AS hi_52w,
