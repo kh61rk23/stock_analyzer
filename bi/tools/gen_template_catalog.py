@@ -25,13 +25,11 @@ DOMAINS = [
     ("taxonomy", "③ 技術分類"),
     ("theme", "④ テーマ株"),
     ("screener", "⑤ 企業スクリーナー"),
-    ("us", "⑥ 米国株"),
+    ("screener_us", "⑥ 米国株スクリーナー"),
 ]
 # 実装中の領域は表を出さず枠だけ置く（未コミットの試作を資料に載せない）。完成してコミットしたらここから外して再生成する
 IN_PROGRESS: set[str] = set()
-STATUS = {
-    "us": "未着手",
-}
+STATUS: dict[str, str] = {}
 
 
 def md(s) -> str:
