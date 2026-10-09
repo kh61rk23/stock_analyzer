@@ -13,6 +13,9 @@ on:
           - monthly_mail_prev_month
           - seisakudb_probe
           - bi_export
+          - price_universe_jp
+          - price_universe_us
+          - price_universe_backfill
 
 permissions:
   contents: write
@@ -24,7 +27,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -33,7 +36,11 @@ jobs:
           cache: pip
           cache-dependency-path: requirements.txt
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          case "${{ inputs.task }}" in
+            price_universe_*) pip install -r requirements-prices.txt ;;
+            *) pip install -r requirements.txt ;;
+          esac
       - name: Run task
         id: run
         env:
@@ -43,6 +50,7 @@ jobs:
           ALERT_GMAIL_PASSWORD: ${{ secrets.ALERT_GMAIL_PASSWORD }}
           ALERT_GMAIL_TO: ${{ secrets.ALERT_GMAIL_TO }}
           SEISAKUDB_API_KEY: ${{ secrets.SEISAKUDB_API_KEY }}
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
           STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
         run: |
           case "${{ inputs.task }}" in
@@ -51,6 +59,9 @@ jobs:
             monthly_mail_prev_month) python -u monthly_mail.py "$(date -d "$(date +%Y-%m-01) -1 day" +%Y%m)" ;;
             seisakudb_probe) python -u seisakudb_ingestor.py --probe ;;
             bi_export) python -u bi_export.py ;;
+            price_universe_jp) python -u price_universe.py --market jp ;;
+            price_universe_us) python -u price_universe.py --market us ;;
+            price_universe_backfill) python -u price_universe.py --market all --backfill ;;
           esac
       - name: Commit state
         if: always()
@@ -64,6 +75,7 @@ jobs:
           fi
           git add stock_data/data/ 2>/dev/null || true
           git add stock_data/bi/ 2>/dev/null || true
+          git add stock_data/logs/ 2>/dev/null || true
           git diff --cached --quiet && exit 0
           git commit -m "auto: manual task ${{ inputs.task }}"
           for i in 1 2 3; do git pull --rebase origin main && git push && exit 0; sleep 10; done

@@ -141,6 +141,11 @@ def _statements(project: str) -> list[str]:
           source STRING,
           ingested_at TIMESTAMP
         ) PARTITION BY trade_date CLUSTER BY ticker""",
+        # price_daily は load job の追記で (ticker, trade_date) の重複がありうる。読む側はこのビューを使う。
+        f"""CREATE OR REPLACE VIEW `{project}.analytics.price_daily_latest` AS
+        SELECT * EXCEPT(rn) FROM (
+          SELECT *, ROW_NUMBER() OVER (PARTITION BY ticker, trade_date ORDER BY ingested_at DESC) AS rn
+          FROM `{project}.analytics.price_daily`) WHERE rn = 1""",
         # 財務三表の細目（売上原価・販管費・研究開発費・支払利息・棚卸資産・
         # のれん・支払配当金など154項目）。edinet.financials は約25項目だけなので、
         # EdinetDB /financials（1年度178項目）の残りをここに縦持ちで入れる。

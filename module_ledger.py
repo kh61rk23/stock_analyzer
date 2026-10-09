@@ -97,6 +97,44 @@ def _load_daily(cfg, date_str: str) -> Optional[dict]:
 # BLOCK 1: 日次台帳の構築
 # ==============================================================
 
+def _external_path(cfg, date_str: str) -> Path:
+    return _log_dir(cfg) / f"module_ledger_external_{date_str}.json"
+
+
+def record_external(cfg, name: str, status: str, note: str = "",
+                    date_str: str = None) -> None:
+    """日次本体とは別の実行（price_universe など）の結果を台帳へ記録する。
+
+    日次台帳は本体の終端で RunLogger のログから作り直して上書きされるため、
+    別ワークフローの記録は専用ファイルに残し、finalize_daily_ledger が取り込む。
+    その日の日次台帳が既にあれば、そちらにも直接反映する（本体より後に走る場合）。
+    """
+    now = datetime.now()
+    date_str = date_str or now.strftime("%Y-%m-%d")
+    entry = {"status": str(status), "note": str(note)[:200],
+             "datetime": now.strftime("%Y-%m-%d %H:%M:%S")}
+    ext_path = _external_path(cfg, date_str)
+    try:
+        ext = json.loads(ext_path.read_text(encoding="utf-8")) if ext_path.exists() else {}
+    except Exception:
+        ext = {}
+    ext[name] = entry
+    ext_path.write_text(json.dumps(ext, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    daily = _load_daily(cfg, date_str)
+    if daily is not None:
+        daily.setdefault("modules", {})[name] = entry
+        payload = json.dumps(daily, ensure_ascii=False, indent=2)
+        _daily_path(cfg, date_str).write_text(payload, encoding="utf-8")
+        latest = _log_dir(cfg) / _LATEST_FILENAME
+        if latest.exists():
+            try:
+                if json.loads(latest.read_text(encoding="utf-8")).get("date") == date_str:
+                    latest.write_text(payload, encoding="utf-8")
+            except Exception:
+                pass
+
+
 def build_daily_ledger(cfg, logs: list, date_str: str = None) -> dict:
     """
     RunLogger のフラットログから当日分を抽出し、モジュール別台帳を作る。
@@ -115,6 +153,14 @@ def build_daily_ledger(cfg, logs: list, date_str: str = None) -> dict:
             "note":     str(e.get("note", ""))[:200],
             "datetime": e.get("datetime", ""),
         }
+
+    # 別ワークフローで走ったモジュール（record_external）の当日分を取り込む
+    try:
+        ext = json.loads(_external_path(cfg, date_str).read_text(encoding="utf-8"))
+        for name, entry in ext.items():
+            modules.setdefault(name, entry)
+    except Exception:
+        pass
 
     # warn / alert は success でも error でもないため、数えないと「失敗0」に見え、
     # 成果ゼロで alert を出しているモジュールが健全に見えてしまう。
