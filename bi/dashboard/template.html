@@ -119,10 +119,13 @@ function martsUsed(sql){ return Object.keys(BI.marts).filter(m => new RegExp("\\
 function wrapSql(sql){
   const used = martsUsed(sql);
   if(!used.length) throw new Error("マート名（"+Object.keys(BI.marts).join("・")+"）を FROM に書いてください");
-  const body = sql.trim().replace(/;\s*$/,"");
+  let body = sql.trim().replace(/;\s*$/,"");
   if(!/^(select|with)\b/i.test(body) || /;/.test(body)) throw new Error("SELECT または WITH で始まる1文だけ実行できます");
-  return "WITH " + used.map(m => m + " AS (\n" + BI.marts[m].sql.trim().replace(/;\s*$/,"") + "\n)").join(",\n")
-       + "\nSELECT * FROM (\n" + body + "\n) LIMIT 1000";
+  // 実体化済みのマートは小さな表（bi データセット）を直接読む。未実体化のものだけ元の表から組み立てる（読む量が大きい）
+  const tables = used.filter(m => BI.marts[m].table), ctes = used.filter(m => !BI.marts[m].table);
+  tables.forEach(m => { body = body.replace(new RegExp("\\b"+m+"\\b","g"), "`"+BI.marts[m].table+"`"); });
+  const head = ctes.length ? "WITH " + ctes.map(m => m + " AS (\n" + BI.marts[m].sql.trim().replace(/;\s*$/,"") + "\n)").join(",\n") + "\n" : "";
+  return head + "SELECT * FROM (\n" + body + "\n) LIMIT 1000";
 }
 function bindParams(sql, params, values){
   return sql.replace(/\{\{(\w+)\}\}/g, (_, name) => {
@@ -169,7 +172,7 @@ function render(res, spec, onPick){
   if(chart){ chart.destroy(); chart = null; }
   const t = spec && spec.type || "table";
   const ci = n => res.columns.indexOf(n);
-  let html = `<div class="note">${res.rows.length.toLocaleString()} 行${res.cached?"（5分以内の結果を再利用）":""}・課金対象 ${(res.billed/1048576).toFixed(0)}MB</div>`;
+  let html = `<div class="note">${res.rows.length.toLocaleString()} 行${res.cached?"（5分以内の結果を再利用）":""}・BigQuery 無料枠から ${(res.billed/1048576).toFixed(0)}MB（月1TB＝約100万MBまで無料）</div>`;
   if(t !== "table" && res.rows.length) html += `<div class="chartbox"><canvas id="cv" aria-label="グラフ"></canvas></div>`;
   html += `<div class="tablebox"><table><thead><tr>${res.columns.map(c=>`<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>`
     + res.rows.slice(0,1000).map((r,i)=>`<tr class="${onPick?"click":""}" data-i="${i}">${r.map((v,j)=>`<td class="${res.num[j]?"n":""}">${esc(fmt(v))}</td>`).join("")}</tr>`).join("")
