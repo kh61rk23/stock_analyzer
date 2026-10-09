@@ -27,7 +27,7 @@ STRING_COLS = {
 INT_COLS = {
     "fiscal_year", "employee_count", "foreign_ministry_level", "state_dept_level", "exposure_type_count",
     "latest_foreign_ministry_level", "latest_state_dept_level", "hospital_count", "facility_count",
-    "municipality_count", "population_current", "population_2050",
+    "municipality_count", "population_current", "population_2050", "est_excluded_count",
 }
 DATE_COLS = {"fiscal_year_end", "risk_date", "latest_risk_date"}
 BOOL_COLS = {"is_delisted", "sanction_flag", "is_landlocked", "review_flag"}
@@ -176,7 +176,7 @@ def _load_geo_and_realestate(c) -> None:
                     "fiscal_year": fy, "prefecture": PREFS[m % 4], "municipality_code": f"{13100 + m:05d}",
                     "municipality_name": f"市{m}", "facility_count": j + 1, "land_area_m2": area,
                     "book_value_land_m_yen": book, "book_value_buildings_m_yen": book / 2,
-                    "land_price_ref_per_m2": ref, "land_value_est_m_yen": est, "unrealized_gain_est_m_yen": est - book,
+                    "land_price_ref_per_m2": ref, "land_value_est_m_yen": est, "est_excluded_count": 0, "unrealized_gain_est_m_yen": est - book,
                     "population_current": 100000, "population_2050": 60000, "population_change_pct": pop,
                     "flood_risk_area_pct": flood, "landslide_risk_area_pct": 0.1,
                     "area_land_price_yoy_change": 1.0})
@@ -187,6 +187,7 @@ def _load_geo_and_realestate(c) -> None:
                     "edinet_code": f"E{i:05d}", "name": f"会社{i}", "sec_code4": code, "industry": "電気機器",
                     "fiscal_year": fy, "prefecture": pref, "facility_count": pi + 1, "municipality_count": 1,
                     "land_area_m2": 5000.0, "book_value_land_m_yen": book, "land_value_est_m_yen": est,
+                    "est_excluded_count": 0,
                     "unrealized_gain_est_m_yen": est - book, "population_change_pct": -35.0 + pi * 10,
                     "flood_risk_area_pct": 0.2 * pi})
 

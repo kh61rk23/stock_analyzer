@@ -6,7 +6,9 @@
 -- 時価の目安：土地面積 × 参照地価（工業地→商業地→住宅地の順で最初にある値）。
 --   land_value_est_m_yen は面積と参照地価がある施設の合計、
 --   unrealized_gain_est_m_yen は上に加えて土地簿価がある施設だけの（時価目安 − 簿価）の合計。
---   面積が敷地全体で複数社に重複計上される施設もあり、あくまで概算（投資判断の根拠にしない）。
+--   本社欄に会社全体の面積が入っている施設（出光興産の本社欄 569万m2 を千代田区の地価で評価すると 22兆円になる等）が実在するため、
+--   土地簿価がある施設で時価の目安が簿価の20倍を超えるものは紐づけ違いの疑いとして時価・含み益から除き、
+--   その施設数を est_excluded_count に持つ（簿価が無い施設は検証できないので除かない）。あくまで概算で、投資判断の根拠にしない。
 -- 市区町村名と地価の上昇率は area_profile_p1 から付ける。
 WITH h AS (
   SELECT
@@ -25,11 +27,18 @@ WITH h AS (
     landslide_risk_area_pct
   FROM `stock-analyzer-edinet.real_estate.corporate_holdings_p1`
 ),
-h2 AS (
+h1 AS (
   SELECT
     h.*,
-    IF(h.land_area_m2 > 0 AND h.ref_price IS NOT NULL, h.land_area_m2 * h.ref_price / 1000000, NULL) AS est_m_yen
+    IF(h.land_area_m2 > 0 AND h.ref_price IS NOT NULL, h.land_area_m2 * h.ref_price / 1000000, NULL) AS est_raw
   FROM h
+),
+h2 AS (
+  SELECT
+    h1.*,
+    IF(COALESCE(h1.book_value_land_m_yen, 0) > 0 AND h1.est_raw > 20 * h1.book_value_land_m_yen, NULL, h1.est_raw) AS est_m_yen,
+    IF(COALESCE(h1.book_value_land_m_yen, 0) > 0 AND h1.est_raw > 20 * h1.book_value_land_m_yen, 1, 0) AS excl
+  FROM h1
 ),
 agg AS (
   SELECT
@@ -42,6 +51,7 @@ agg AS (
     SUM(book_value_land_m_yen) AS book_value_land_m_yen,
     SUM(book_value_buildings_m_yen) AS book_value_buildings_m_yen,
     SUM(est_m_yen) AS land_value_est_m_yen,
+    SUM(excl) AS est_excluded_count,
     SUM(IF(book_value_land_m_yen > 0 AND est_m_yen IS NOT NULL, est_m_yen - book_value_land_m_yen, NULL)) AS unrealized_gain_est_m_yen,
     AVG(ref_price) AS land_price_ref_per_m2,
     MAX(population_current) AS population_current,
@@ -67,6 +77,7 @@ SELECT
   g.book_value_buildings_m_yen,
   g.land_price_ref_per_m2,
   g.land_value_est_m_yen,
+  g.est_excluded_count,
   g.unrealized_gain_est_m_yen,
   g.population_current,
   g.population_2050,
