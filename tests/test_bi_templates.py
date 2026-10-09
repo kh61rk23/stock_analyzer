@@ -23,16 +23,19 @@ STRING_COLS = {
     "country_code", "country_name_ja", "region", "ticker", "market", "exposure_type",
     "prefecture_name", "prefecture", "municipality_code", "municipality_name",
     "top_export_commodities", "sealane_adjacency", "military_alliances",
+    "company_id", "entity_type", "node_id", "node_name_ja", "node_name_en", "node_type", "supply_chain_pos",
+    "parent_id", "domain_id", "domain_name_ja", "path_name", "confidence_type",
 }
 INT_COLS = {
     "fiscal_year", "employee_count", "foreign_ministry_level", "state_dept_level", "exposure_type_count",
     "latest_foreign_ministry_level", "latest_state_dept_level", "hospital_count", "facility_count",
     "municipality_count", "population_current", "population_2050", "est_excluded_count",
+    "node_level", "child_count", "company_count", "company_count_rollup",
 }
 DATE_COLS = {"fiscal_year_end", "risk_date", "latest_risk_date"}
-BOOL_COLS = {"is_delisted", "sanction_flag", "is_landlocked", "review_flag"}
+BOOL_COLS = {"is_delisted", "sanction_flag", "is_landlocked", "review_flag", "auto_derived", "verified_flag"}
 ALL_MARTS = ("m_company", "m_fin_annual", "m_country_profile", "m_country_risk", "m_company_country",
-             "m_re_area", "m_re_holdings", "m_re_holdings_pref")
+             "m_re_area", "m_re_holdings", "m_re_holdings_pref", "m_tax_node", "m_company_tax")
 
 
 def mart_columns(mart: str) -> list[str]:
@@ -105,6 +108,7 @@ def con():
             c.execute(f"INSERT INTO m_fin_annual ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
                       [row[col] for col in cols])
     _load_geo_and_realestate(c)
+    _load_taxonomy(c)
     return c
 
 
@@ -192,13 +196,68 @@ def _load_geo_and_realestate(c) -> None:
                     "flood_risk_area_pct": 0.2 * pi})
 
 
+# 階層: 領域3つ（2階層目 <領域>_a/_b、3階層目 <領域>_a1）。会社は 20 社、各社は 1〜3 ノードに紐づく。
+def _load_taxonomy(c) -> None:
+    nodes = []
+    for d, did in enumerate(["semiconductor", "ai_software", "robotics_automation"]):
+        nodes.append((did, None, f"領域{d}", 1, "domain"))
+        for k in "ab":
+            nodes.append((f"{did}_{k}", did, f"分野{d}{k}", 2, "category"))
+        nodes.append((f"{did}_a1", f"{did}_a", f"細分{d}a1", 3, "leaf"))
+    by_id = {n[0]: n for n in nodes}
+
+    def chain(nid):
+        out = []
+        while nid:
+            out.append(by_id[nid])
+            nid = by_id[nid][1]
+        return list(reversed(out))
+
+    direct = {n[0]: set() for n in nodes}
+    members = []
+    for i in range(20):
+        for j in range(1 + i % 3):
+            members.append((i, nodes[(i * 2 + j * 3) % len(nodes)][0]))
+    members += [(1, "ai_software"), (1, "semiconductor_a1")]  # テンプレ既定値（ai_software・6869・semiconductor）に行を持たせる
+    for i, nid in members:
+        direct[nid].add(i)
+    for nid, parent, nm, lv, tp in nodes:
+        ch = chain(nid)
+        sub = {x for n2 in nodes if nid in [a[0] for a in chain(n2[0])] for x in direct[n2[0]]}
+        _insert(c, "m_tax_node", {
+            "node_id": nid, "parent_id": parent, "node_name_ja": nm, "node_name_en": nm, "node_level": lv,
+            "node_type": tp, "supply_chain_pos": None, "domain_id": ch[0][0], "domain_name_ja": ch[0][2],
+            "path_name": " > ".join(a[2] for a in ch), "child_count": sum(1 for n2 in nodes if n2[1] == nid),
+            "company_count": len(direct[nid]), "company_count_rollup": len(sub)})
+    for i, nid in members:
+        ch = chain(nid)
+        code = "7203" if i == 0 else ("6869" if i == 1 else f"{7000 + i}")
+        _insert(c, "m_company_tax", {
+            "company_id": code, "entity_type": "company", "edinet_code": f"E{i:05d}", "name": f"会社{i}",
+            "industry": ["電気機器", "小売業", None][i % 3], "node_id": nid, "node_name_ja": by_id[nid][2],
+            "node_level": by_id[nid][3], "parent_id": by_id[nid][1], "domain_id": ch[0][0],
+            "domain_name_ja": ch[0][2], "path_name": " > ".join(a[2] for a in ch),
+            "relevance_score": 0.3 + 0.1 * (i % 5), "confidence": 0.7, "revenue_share_est": 0.2,
+            "confidence_type": "edinet", "auto_derived": True, "verified_flag": False, "fiscal_year": 2026,
+            "net_sales": (100 + i * 10) * 1e9, "operating_income": (100 + i * 10) * 1e9 * 0.05,
+            "operating_margin": 0.05 + (i % 4) * 0.02, "rnd_expenses": (100 + i * 10) * 1e9 * 0.03,
+            "rnd_ratio": 0.01 + (i % 5) * 0.01})
+    _insert(c, "m_company_tax", {
+        "company_id": "sector:JP:1011", "entity_type": "sector", "edinet_code": None, "name": None,
+        "industry": None, "node_id": "semiconductor_a", "node_name_ja": "分野0a", "node_level": 2, "parent_id": "semiconductor",
+        "domain_id": "semiconductor", "domain_name_ja": "領域0", "path_name": "領域0 > 分野0a", "relevance_score": 0.2,
+        "confidence": 0.7, "revenue_share_est": None, "confidence_type": "edinet", "auto_derived": True,
+        "verified_flag": False, "fiscal_year": None, "net_sales": None, "operating_income": None,
+        "operating_margin": None, "rnd_expenses": None, "rnd_ratio": None})
+
+
 MARTS = set(ALL_MARTS)
 TEMPLATES = bt.load_templates()
 
 
 def test_template_count_and_unique_ids():
     assert len(TEMPLATES) >= 15
-    for domain in ("geo", "realestate"):
+    for domain in ("geo", "realestate", "taxonomy"):
         assert sum(1 for t in TEMPLATES if t["domain"] == domain) >= 8, domain
     ids = [t["id"] for t in TEMPLATES]
     assert len(ids) == len(set(ids))
@@ -297,3 +356,22 @@ def test_compose_bigquery_sql_merges_with():
     assert out2.count("WITH ") == 1
     # 組み立て結果は DuckDB でも通る（構文の共通部分の確認）
     assert duckdb.connect(":memory:").execute(out).fetchall() == [(1,)]
+
+
+def test_taxonomy_mart_guards():
+    """技術分類マートの重複・欠損対策が外れていない（週次 map_id の重複、company_id='nan'、期限切れ）。"""
+    sql = (REPO / "bi" / "marts" / "m_company_tax.sql").read_text(encoding="utf-8")
+    assert "PARTITION BY company_id, node_id ORDER BY updated_at DESC" in sql
+    assert "company_id <> 'nan'" in sql and "valid_to" in sql
+    assert mart_columns("m_company_tax")[:2] == ["company_id", "entity_type"]
+    node_sql = (REPO / "bi" / "marts" / "m_tax_node.sql").read_text(encoding="utf-8")
+    assert "company_id <> 'nan'" in node_sql and "STARTS_WITH(company_id, 'sector:')" in node_sql
+
+
+def test_taxonomy_templates_are_single_mart():
+    """ダッシュボードは1テンプレ1マートで実体化表を読むので、テンプレSQLが他のマートを参照しない。"""
+    for t in TEMPLATES:
+        if t["domain"] != "taxonomy":
+            continue
+        refs = {m for m in ALL_MARTS if re.search(rf"\b{m}\b", t["sql"])}
+        assert refs == {t["mart"]}, (t["id"], refs)

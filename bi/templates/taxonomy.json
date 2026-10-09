@@ -1,0 +1,319 @@
+[
+  {
+    "id": "tax_node_company_count",
+    "domain": "taxonomy",
+    "title": "技術分類ごとの企業数",
+    "question": "どの技術分類に紐づく会社が多いか",
+    "mart": "m_tax_node",
+    "sql": "SELECT node_name_ja, path_name, company_count, company_count_rollup\nFROM m_tax_node\nWHERE node_level = {{level}}\nORDER BY company_count_rollup DESC, node_id\nLIMIT {{top_n}}",
+    "params": [
+      {
+        "name": "level",
+        "label": "階層（1=領域 2=分野 3=細分 4=最細）",
+        "type": "int",
+        "default": 2,
+        "min": 1,
+        "max": 4
+      },
+      {
+        "name": "top_n",
+        "label": "表示するノード数",
+        "type": "int",
+        "default": 20,
+        "min": 1,
+        "max": 100
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "node_name_ja",
+      "y": [
+        "company_count_rollup"
+      ],
+      "series": null
+    },
+    "note": "company_count_rollup は自ノード以下に紐づく会社の重複なしの数、company_count は自ノードに直接紐づく数。上場会社のみで、業種単位の行（sector:）と company_id='nan' は数えない。"
+  },
+  {
+    "id": "tax_domain_distribution",
+    "domain": "taxonomy",
+    "title": "領域別の企業数の分布",
+    "question": "最上位（領域）ごとに会社がどう分布しているか",
+    "mart": "m_tax_node",
+    "sql": "SELECT node_name_ja, child_count, company_count, company_count_rollup\nFROM m_tax_node\nWHERE node_level = 1\nORDER BY company_count_rollup DESC, node_id",
+    "params": [],
+    "chart": {
+      "type": "bar",
+      "x": "node_name_ja",
+      "y": [
+        "company_count_rollup"
+      ],
+      "series": null
+    },
+    "note": "領域（node_level=1）25件。1社が複数の領域に入りうるため、領域の企業数を足し合わせても会社数にはならない。"
+  },
+  {
+    "id": "tax_tree_children",
+    "domain": "taxonomy",
+    "title": "技術分類ツリーの子ノード",
+    "question": "この分類の下にどんな細分があり、会社は何社か",
+    "mart": "m_tax_node",
+    "sql": "SELECT node_id, node_name_ja, node_level, child_count, company_count, company_count_rollup, path_name\nFROM m_tax_node\nWHERE parent_id = {{parent_id}}\nORDER BY company_count_rollup DESC, node_id",
+    "params": [
+      {
+        "name": "parent_id",
+        "label": "親ノードID（例 semiconductor・ai_software）",
+        "type": "string",
+        "default": "semiconductor"
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "node_name_ja",
+      "y": [
+        "company_count_rollup"
+      ],
+      "series": null
+    },
+    "note": "親ノードIDは英小文字・_ の識別子（m_tax_node.node_id）。領域のIDは tax_domain_distribution の結果で確認できる。"
+  },
+  {
+    "id": "tax_companies_by_node",
+    "domain": "taxonomy",
+    "title": "ある技術分類を持つ会社一覧（財務つき）",
+    "question": "この技術分類に紐づく会社と、最新年度の売上・営業利益率・研究開発費率は",
+    "mart": "m_company_tax",
+    "sql": "SELECT company_id AS sec_code4, name, industry, relevance_score, revenue_share_est, fiscal_year, net_sales, ROUND(operating_margin * 100, 1) AS operating_margin_pct, ROUND(rnd_ratio * 100, 2) AS rnd_ratio_pct\nFROM m_company_tax\nWHERE entity_type = 'company' AND node_id = {{node_id}}\nORDER BY relevance_score DESC, net_sales DESC, company_id\nLIMIT {{top_n}}",
+    "params": [
+      {
+        "name": "node_id",
+        "label": "技術分類ノードID（例 ai_software・semiconductor_equipment）",
+        "type": "string",
+        "default": "ai_software"
+      },
+      {
+        "name": "top_n",
+        "label": "表示する会社数",
+        "type": "int",
+        "default": 50,
+        "min": 1,
+        "max": 300
+      }
+    ],
+    "chart": {
+      "type": "table",
+      "x": "name",
+      "y": [
+        "net_sales"
+      ],
+      "series": null
+    },
+    "note": "財務は各社の売上が入っている最新年度1年分（fiscal_year）。営業利益率・研究開発費率は売上比。研究開発費を開示しない会社は空。relevance_score・revenue_share_est は推定値（revenue_share_est は会社単位で、同じ会社の全ノードに同じ値が入る）。"
+  },
+  {
+    "id": "tax_companies_by_domain",
+    "domain": "taxonomy",
+    "title": "ある領域に属する会社一覧（財務つき）",
+    "question": "この領域（例 半導体）に関わる会社を、関連度の高い順に財務つきで",
+    "mart": "m_company_tax",
+    "sql": "SELECT company_id AS sec_code4, name, industry, COUNT(*) AS node_count, MAX(relevance_score) AS max_relevance, MAX(fiscal_year) AS fiscal_year, MAX(net_sales) AS net_sales, ROUND(MAX(operating_margin) * 100, 1) AS operating_margin_pct, ROUND(MAX(rnd_ratio) * 100, 2) AS rnd_ratio_pct\nFROM m_company_tax\nWHERE entity_type = 'company' AND domain_id = {{domain_id}}\nGROUP BY company_id, name, industry\nORDER BY max_relevance DESC, net_sales DESC, company_id\nLIMIT {{top_n}}",
+    "params": [
+      {
+        "name": "domain_id",
+        "label": "領域ノードID（例 semiconductor・ai_software・robotics_automation）",
+        "type": "string",
+        "default": "semiconductor"
+      },
+      {
+        "name": "top_n",
+        "label": "表示する会社数",
+        "type": "int",
+        "default": 50,
+        "min": 1,
+        "max": 300
+      }
+    ],
+    "chart": {
+      "type": "table",
+      "x": "name",
+      "y": [
+        "net_sales"
+      ],
+      "series": null
+    },
+    "note": "領域＝階層1のノード。会社ごとに1行へ集約（node_count はその領域内で紐づくノード数）。財務は会社単位の値なので MAX は同じ値を取り出すだけ。"
+  },
+  {
+    "id": "tax_company_nodes",
+    "domain": "taxonomy",
+    "title": "ある会社の技術分類",
+    "question": "この会社はどの技術分類に紐づいているか",
+    "mart": "m_company_tax",
+    "sql": "SELECT name, path_name, node_level, relevance_score, confidence, revenue_share_est, confidence_type, verified_flag\nFROM m_company_tax\nWHERE company_id = {{sec_code4}}\nORDER BY relevance_score DESC, node_id",
+    "params": [
+      {
+        "name": "sec_code4",
+        "label": "証券コード（4桁）",
+        "type": "string",
+        "default": "6869"
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "path_name",
+      "y": [
+        "relevance_score"
+      ],
+      "series": null
+    },
+    "note": "会社の識別子は証券コード4桁（英字入りも可）。verified_flag が false の行は自動導出（人手で確認していない）。上場会社でない場合や分類が無い場合は0行。"
+  },
+  {
+    "id": "tax_rnd_by_node",
+    "domain": "taxonomy",
+    "title": "研究開発費率が高い技術分野",
+    "question": "どの技術分野の会社が売上に対する研究開発費の比率が高いか",
+    "mart": "m_company_tax",
+    "sql": "SELECT node_name_ja, path_name, COUNT(DISTINCT company_id) AS companies, ROUND(AVG(rnd_ratio) * 100, 2) AS avg_rnd_ratio_pct\nFROM m_company_tax\nWHERE entity_type = 'company' AND node_level = {{level}} AND rnd_ratio BETWEEN 0 AND 1\nGROUP BY node_name_ja, path_name\nHAVING COUNT(DISTINCT company_id) >= {{min_companies}}\nORDER BY avg_rnd_ratio_pct DESC, node_name_ja\nLIMIT {{top_n}}",
+    "params": [
+      {
+        "name": "level",
+        "label": "階層（1=領域 2=分野 3=細分 4=最細）",
+        "type": "int",
+        "default": 2,
+        "min": 1,
+        "max": 4
+      },
+      {
+        "name": "min_companies",
+        "label": "最低社数（研究開発費を開示する会社）",
+        "type": "int",
+        "default": 3,
+        "min": 1,
+        "max": 50
+      },
+      {
+        "name": "top_n",
+        "label": "表示するノード数",
+        "type": "int",
+        "default": 20,
+        "min": 1,
+        "max": 100
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "node_name_ja",
+      "y": [
+        "avg_rnd_ratio_pct"
+      ],
+      "series": null
+    },
+    "note": "各社の最新年度の研究開発費÷売上の単純平均（売上加重ではない）。研究開発費を開示していない会社は含まれず、companies はその開示社数。比率が0〜100%の範囲外は除外。"
+  },
+  {
+    "id": "tax_margin_by_node",
+    "domain": "taxonomy",
+    "title": "技術分野別の平均営業利益率",
+    "question": "どの技術分野の会社が稼ぐ力（営業利益率）が高いか",
+    "mart": "m_company_tax",
+    "sql": "SELECT node_name_ja, path_name, COUNT(DISTINCT company_id) AS companies, ROUND(AVG(operating_margin) * 100, 1) AS avg_operating_margin_pct\nFROM m_company_tax\nWHERE entity_type = 'company' AND node_level = {{level}} AND operating_margin BETWEEN -1 AND 1\nGROUP BY node_name_ja, path_name\nHAVING COUNT(DISTINCT company_id) >= {{min_companies}}\nORDER BY avg_operating_margin_pct DESC, node_name_ja\nLIMIT {{top_n}}",
+    "params": [
+      {
+        "name": "level",
+        "label": "階層（1=領域 2=分野 3=細分 4=最細）",
+        "type": "int",
+        "default": 2,
+        "min": 1,
+        "max": 4
+      },
+      {
+        "name": "min_companies",
+        "label": "最低社数",
+        "type": "int",
+        "default": 3,
+        "min": 1,
+        "max": 50
+      },
+      {
+        "name": "top_n",
+        "label": "表示するノード数",
+        "type": "int",
+        "default": 20,
+        "min": 1,
+        "max": 100
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "node_name_ja",
+      "y": [
+        "avg_operating_margin_pct"
+      ],
+      "series": null
+    },
+    "note": "各社の最新年度の営業利益÷売上の単純平均。営業利益率が -100%〜+100% の範囲外は外れ値として除外。金融など売上の定義が異なる業種も含まれる。"
+  },
+  {
+    "id": "tax_multi_domain_companies",
+    "domain": "taxonomy",
+    "title": "複数の技術領域を横断する会社",
+    "question": "いくつもの技術領域にまたがる会社はどこか",
+    "mart": "m_company_tax",
+    "sql": "SELECT company_id AS sec_code4, name, industry, COUNT(DISTINCT domain_id) AS domains, COUNT(*) AS nodes, MAX(fiscal_year) AS fiscal_year, MAX(net_sales) AS net_sales\nFROM m_company_tax\nWHERE entity_type = 'company'\nGROUP BY company_id, name, industry\nHAVING COUNT(DISTINCT domain_id) >= {{min_domains}}\nORDER BY domains DESC, nodes DESC, company_id\nLIMIT {{top_n}}",
+    "params": [
+      {
+        "name": "min_domains",
+        "label": "最低の領域数",
+        "type": "int",
+        "default": 2,
+        "min": 1,
+        "max": 10
+      },
+      {
+        "name": "top_n",
+        "label": "表示する会社数",
+        "type": "int",
+        "default": 50,
+        "min": 1,
+        "max": 300
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "name",
+      "y": [
+        "domains"
+      ],
+      "series": null
+    },
+    "note": "領域＝階層1のノード。分類は自動導出が中心で、領域数が多い＝事業が広いとは限らない（同じ事業を複数領域に割り振った可能性がある）。"
+  },
+  {
+    "id": "tax_industry_domain_cross",
+    "domain": "taxonomy",
+    "title": "業種×技術領域のクロス",
+    "question": "どの業種の会社がどの技術領域に多く紐づくか",
+    "mart": "m_company_tax",
+    "sql": "SELECT industry, domain_name_ja, COUNT(DISTINCT company_id) AS companies\nFROM m_company_tax\nWHERE entity_type = 'company' AND industry IS NOT NULL AND domain_name_ja IS NOT NULL\nGROUP BY industry, domain_name_ja\nORDER BY companies DESC, industry, domain_name_ja\nLIMIT {{top_n}}",
+    "params": [
+      {
+        "name": "top_n",
+        "label": "表示する組み合わせ数",
+        "type": "int",
+        "default": 40,
+        "min": 1,
+        "max": 300
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "domain_name_ja",
+      "y": [
+        "companies"
+      ],
+      "series": "industry"
+    },
+    "note": "industry は EDINET の業種区分（edinet.company.industry）。1社が複数領域に入るため、領域ごとの社数を足しても会社数にはならない。"
+  }
+]
