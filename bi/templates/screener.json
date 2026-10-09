@@ -193,7 +193,7 @@
       "y": "net_cash_to_mcap_pct",
       "series": null
     },
-    "note": "ネットキャッシュ＝現金及び現金同等物−有利子負債（円）。有利子負債は報告値、無ければ借入金・社債・CPの合計（interest_bearing_debt_basis が estimated・リース負債は含まない概算）。株価のある約700社が対象。"
+    "note": "ネットキャッシュ＝現金及び現金同等物−有利子負債（円）。有利子負債は報告値、無ければ借入金・社債・CPの合計（interest_bearing_debt_basis が estimated・リース負債は含まない概算）。銀行・保険など金融業は預金等が有利子負債に入らず現金が過大になるので、業種で除いて読む。株価のある約700社が対象。"
   },
   {
     "id": "scr_high_growth_cagr",
