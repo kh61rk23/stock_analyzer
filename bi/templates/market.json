@@ -1,0 +1,499 @@
+[
+  {
+    "id": "mkt_sector_returns",
+    "domain": "market",
+    "title": "業種別の騰落（1か月・3か月・年初来）",
+    "question": "日本株の業種ごとに、直近1か月・3か月・年初来でどれだけ動いたか（時価総額加重）",
+    "mart": "m_sector_perf",
+    "sql": "SELECT industry, n_stocks, ROUND(ret_1m_cw * 100, 1) AS ret_1m_pct, ROUND(ret_3m_cw * 100, 1) AS ret_3m_pct,\n       ROUND(ret_ytd_cw * 100, 1) AS ret_ytd_pct, ROUND(up_ratio * 100, 0) AS up_ratio_pct\nFROM m_sector_perf\nWHERE trade_date = (SELECT MAX(trade_date) FROM m_sector_perf)\n  AND n_stocks >= {{min_stocks}}\nORDER BY ret_3m_cw DESC",
+    "params": [
+      {
+        "name": "min_stocks",
+        "label": "業種の銘柄数の下限",
+        "type": "int",
+        "default": 3,
+        "min": 1,
+        "max": 1000
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "industry",
+      "y": [
+        "ret_1m_pct",
+        "ret_3m_pct",
+        "ret_ytd_pct"
+      ],
+      "series": null
+    },
+    "note": "最新の営業日の値（株価の取り込みが途中の日は除く）。時価総額加重は最新の時価総額を重みに固定した近似で、実際の業種指数（TOPIX-17 等）とは一致しない。年初来は前年最終営業日の指数との比（履歴が無ければ空）。up_ratio_pct はその日に上がった銘柄の割合。"
+  },
+  {
+    "id": "mkt_sector_ew_vs_cw",
+    "domain": "market",
+    "title": "業種の騰落：等加重と時価総額加重の差",
+    "question": "業種の上昇は大型株だけか、それとも業種全体か（等加重と時価総額加重の3か月騰落の差）",
+    "mart": "m_sector_perf",
+    "sql": "SELECT industry, n_stocks, ROUND(ret_3m_ew * 100, 1) AS ret_3m_ew_pct, ROUND(ret_3m_cw * 100, 1) AS ret_3m_cw_pct,\n       ROUND((ret_3m_cw - ret_3m_ew) * 100, 1) AS cw_minus_ew_pct\nFROM m_sector_perf\nWHERE trade_date = (SELECT MAX(trade_date) FROM m_sector_perf)\n  AND n_stocks >= {{min_stocks}} AND ret_3m_ew IS NOT NULL AND ret_3m_cw IS NOT NULL\nORDER BY cw_minus_ew_pct DESC",
+    "params": [
+      {
+        "name": "min_stocks",
+        "label": "業種の銘柄数の下限",
+        "type": "int",
+        "default": 5,
+        "min": 1,
+        "max": 1000
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "industry",
+      "y": [
+        "ret_3m_ew_pct",
+        "ret_3m_cw_pct"
+      ],
+      "series": null
+    },
+    "note": "cw_minus_ew_pct が大きい業種は大型株が引っ張っている（小型株は付いてきていない）。逆に負なら小型株のほうが強い。時価総額の重みは最新値で固定。"
+  },
+  {
+    "id": "mkt_sector_index_trend",
+    "domain": "market",
+    "title": "業種指数の推移",
+    "question": "ある業種の指数は直近1年でどう動いたか（等加重と時価総額加重）",
+    "mart": "m_sector_perf",
+    "sql": "SELECT trade_date, ROUND(idx_ew, 2) AS idx_ew, ROUND(idx_cw, 2) AS idx_cw, ROUND(up_ratio * 100, 0) AS up_ratio_pct\nFROM m_sector_perf\nWHERE industry = {{industry}}\nORDER BY trade_date",
+    "params": [
+      {
+        "name": "industry",
+        "label": "業種（EDINETの業種名。例 電気機器・銀行業・海運業）",
+        "type": "string",
+        "default": "電気機器"
+      }
+    ],
+    "chart": {
+      "type": "line",
+      "x": "trade_date",
+      "y": [
+        "idx_ew",
+        "idx_cw"
+      ],
+      "series": null
+    },
+    "note": "指数は取得期間の頭の前営業日を100とする。業種名は表記が正確に一致しないと0行になる（mkt_sector_returns の industry 列をコピーする）。"
+  },
+  {
+    "id": "mkt_sector_rotation_monthly",
+    "domain": "market",
+    "title": "業種ローテーション（月ごとの業種騰落）",
+    "question": "月ごとにどの業種が買われ、どの業種が売られたか（業種×月の表。ヒートマップ用）",
+    "mart": "m_price_monthly",
+    "sql": "SELECT industry, month, COUNT(*) AS n_stocks, ROUND(AVG(return_1m) * 100, 1) AS avg_return_pct\nFROM m_price_monthly\nWHERE market = 'JP' AND is_partial = FALSE AND industry IS NOT NULL AND return_1m IS NOT NULL\n  AND turnover >= {{min_turnover_m}} * 1000000\nGROUP BY industry, month\nHAVING COUNT(*) >= {{min_stocks}}\nORDER BY month, industry",
+    "params": [
+      {
+        "name": "min_turnover_m",
+        "label": "月間売買代金の下限（百万・現地通貨。日本株は百万円、米国株は百万ドル）",
+        "type": "number",
+        "default": 100,
+        "min": 0,
+        "max": 100000000
+      },
+      {
+        "name": "min_stocks",
+        "label": "業種×月の銘柄数の下限",
+        "type": "int",
+        "default": 3,
+        "min": 1,
+        "max": 1000
+      }
+    ],
+    "chart": {
+      "type": "table",
+      "x": "month",
+      "y": "avg_return_pct",
+      "series": "industry"
+    },
+    "note": "月間騰落率（月末終値の前月比）の業種内単純平均。月が終わっていない当月と、取得期間の頭の月（前月が無い）は含めない。月間売買代金が下限未満の銘柄は除く（小型株の極端な値動きで平均が歪むため）。表の行＝業種、列＝月で見る。"
+  },
+  {
+    "id": "mkt_breadth_ad_ratio",
+    "domain": "market",
+    "title": "騰落レシオと上昇銘柄比率の推移",
+    "question": "市場全体の買われ方の広がりはどうか（騰落レシオ・その日に上がった銘柄の割合）",
+    "mart": "m_market_breadth",
+    "sql": "SELECT trade_date, n_stocks, ROUND(ad_ratio_25d, 1) AS ad_ratio_25d, ROUND(up_ratio * 100, 1) AS up_ratio_pct\nFROM m_market_breadth\nWHERE market = {{market}} AND is_complete = TRUE\nORDER BY trade_date",
+    "params": [
+      {
+        "name": "market",
+        "label": "市場（JP＝日本株・US＝米国株）",
+        "type": "string",
+        "default": "JP"
+      }
+    ],
+    "chart": {
+      "type": "line",
+      "x": "trade_date",
+      "y": [
+        "ad_ratio_25d"
+      ],
+      "series": null
+    },
+    "note": "騰落レシオは25営業日の上昇銘柄数合計÷下落銘柄数合計×100。120以上が過熱、70以下が売られすぎの目安。株価の取り込みが途中の日は除く。取得期間の頭の約25日は空。"
+  },
+  {
+    "id": "mkt_breadth_new_highs_lows",
+    "domain": "market",
+    "title": "新高値・新安値の銘柄数の推移",
+    "question": "新高値をつけた銘柄と新安値をつけた銘柄はどちらが多いか",
+    "mart": "m_market_breadth",
+    "sql": "SELECT trade_date, n_hl_base, n_new_high, n_new_low, n_new_high - n_new_low AS net_new_high\nFROM m_market_breadth\nWHERE market = {{market}} AND is_complete = TRUE AND n_hl_base >= {{min_base}}\nORDER BY trade_date",
+    "params": [
+      {
+        "name": "market",
+        "label": "市場（JP＝日本株・US＝米国株）",
+        "type": "string",
+        "default": "JP"
+      },
+      {
+        "name": "min_base",
+        "label": "判定できる銘柄数の下限（直前の履歴が120営業日以上ある銘柄数）",
+        "type": "int",
+        "default": 100,
+        "min": 1,
+        "max": 100000
+      }
+    ],
+    "chart": {
+      "type": "line",
+      "x": "trade_date",
+      "y": [
+        "n_new_high",
+        "n_new_low"
+      ],
+      "series": null
+    },
+    "note": "新高値＝終値が直前252営業日の終値の最高値を上回った銘柄。株価の履歴が約1年しか無いため、取得開始から約120営業日までは判定できる銘柄が少ない（min_base で除く）。"
+  },
+  {
+    "id": "mkt_breadth_above_ma",
+    "domain": "market",
+    "title": "移動平均線より上の銘柄の比率",
+    "question": "50日・200日移動平均線より上にいる銘柄はどれくらいか（相場の強さ）",
+    "mart": "m_market_breadth",
+    "sql": "SELECT trade_date, ROUND(pct_above_ma50 * 100, 1) AS above_ma50_pct, ROUND(pct_above_ma200 * 100, 1) AS above_ma200_pct,\n       n_ma200\nFROM m_market_breadth\nWHERE market = {{market}} AND is_complete = TRUE AND pct_above_ma50 IS NOT NULL\nORDER BY trade_date",
+    "params": [
+      {
+        "name": "market",
+        "label": "市場（JP＝日本株・US＝米国株）",
+        "type": "string",
+        "default": "JP"
+      }
+    ],
+    "chart": {
+      "type": "line",
+      "x": "trade_date",
+      "y": [
+        "above_ma50_pct",
+        "above_ma200_pct"
+      ],
+      "series": null
+    },
+    "note": "移動平均は当日を含む終値の単純平均。200日は取得開始から約200営業日後（2026年7月ごろ）から出るので、それまでは50日だけ。n_ma200 が母数。"
+  },
+  {
+    "id": "mkt_index_compare_jp_us",
+    "domain": "market",
+    "title": "日米の株価指数（等加重）の推移",
+    "question": "全上場の等加重で見ると日本株と米国株はどちらが強いか",
+    "mart": "m_market_breadth",
+    "sql": "SELECT trade_date, market, ROUND(idx_ew, 2) AS idx_ew, n_stocks\nFROM m_market_breadth\nWHERE is_complete = TRUE\nORDER BY trade_date, market",
+    "params": [],
+    "chart": {
+      "type": "line",
+      "x": "trade_date",
+      "y": "idx_ew",
+      "series": "market"
+    },
+    "note": "全上場の日次騰落率の単純平均を掛け合わせた指数（取得期間の頭の前営業日＝100）。通貨換算はしない（日本株は円、米国株はドルのまま）。小型株の寄与が大きく、日経平均・S&P500 とは一致しない。"
+  },
+  {
+    "id": "mkt_momentum_monthly",
+    "domain": "market",
+    "title": "月次モメンタム上位銘柄",
+    "question": "直近の完了月で、3か月・6か月の騰落が大きい銘柄はどこか（売買代金の下限付き）",
+    "mart": "m_price_monthly",
+    "sql": "SELECT ticker, name, industry, ROUND(return_1m * 100, 1) AS return_1m_pct, ROUND(return_3m * 100, 1) AS return_3m_pct,\n       ROUND(return_6m * 100, 1) AS return_6m_pct, ROUND(turnover / 1000000.0, 0) AS turnover_m\nFROM m_price_monthly\nWHERE market = {{market}} AND is_partial = FALSE AND return_3m IS NOT NULL\n  AND month = (SELECT MAX(month) FROM m_price_monthly WHERE market = {{market}} AND is_partial = FALSE)\n  AND turnover >= {{min_turnover_m}} * 1000000\nORDER BY return_3m DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "market",
+        "label": "市場（JP＝日本株・US＝米国株）",
+        "type": "string",
+        "default": "JP"
+      },
+      {
+        "name": "min_turnover_m",
+        "label": "月間売買代金の下限（百万・現地通貨。日本株は百万円、米国株は百万ドル）",
+        "type": "number",
+        "default": 500,
+        "min": 0,
+        "max": 100000000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "ticker",
+      "y": "return_3m_pct",
+      "series": null
+    },
+    "note": "月が終わった最新の月の月末終値で比べる（当月途中は含めない）。名前・業種は日本株のみ（米国株の name は stock_snapshot にある約400銘柄だけ）。月間売買代金の下限を下げるほど値動きの荒い小型株が混ざる。"
+  },
+  {
+    "id": "mkt_volume_surge",
+    "domain": "market",
+    "title": "出来高（売買代金）が急増した銘柄",
+    "question": "直前3か月の平均に比べて、直近の完了月の売買代金が急に膨らんだ銘柄はどこか",
+    "mart": "m_price_monthly",
+    "sql": "SELECT ticker, name, industry, ROUND(turnover_ratio_3m, 1) AS turnover_ratio_3m, ROUND(turnover / 1000000.0, 0) AS turnover_m,\n       ROUND(return_1m * 100, 1) AS return_1m_pct\nFROM m_price_monthly\nWHERE market = {{market}} AND is_partial = FALSE AND turnover_ratio_3m IS NOT NULL\n  AND month = (SELECT MAX(month) FROM m_price_monthly WHERE market = {{market}} AND is_partial = FALSE)\n  AND turnover >= {{min_turnover_m}} * 1000000 AND turnover_ratio_3m >= {{min_ratio}}\nORDER BY turnover_ratio_3m DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "market",
+        "label": "市場（JP＝日本株・US＝米国株）",
+        "type": "string",
+        "default": "JP"
+      },
+      {
+        "name": "min_turnover_m",
+        "label": "月間売買代金の下限（百万・現地通貨。日本株は百万円、米国株は百万ドル）",
+        "type": "number",
+        "default": 300,
+        "min": 0,
+        "max": 100000000
+      },
+      {
+        "name": "min_ratio",
+        "label": "急増倍率の下限（直前3か月平均の何倍か）",
+        "type": "number",
+        "default": 3,
+        "min": 1,
+        "max": 1000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "ticker",
+      "y": "turnover_ratio_3m",
+      "series": null
+    },
+    "note": "月次の売買代金（終値×出来高の合計）での比較で、日次の出来高急増ではない。売買代金は株価の上昇でも増えるので、return_1m_pct と並べて見る。直前3か月がそろう銘柄だけ。"
+  },
+  {
+    "id": "mkt_drawdown",
+    "domain": "market",
+    "title": "52週高値から大きく下がっている銘柄",
+    "question": "52週高値から大きく下がっている日本株はどこか（時価総額・売買代金の下限付き）",
+    "mart": "m_screener",
+    "sql": "SELECT sec_code4, name, industry, current_price, high_52w, ROUND((current_price / high_52w - 1) * 100, 1) AS drawdown_pct,\n       ROUND(return_3m * 100, 1) AS return_3m_pct, market_cap_b\nFROM m_screener\nWHERE current_price > 0 AND high_52w > 0 AND price_break_date IS NULL\n  AND market_cap_b >= {{min_mcap_oku}}\n  AND avg_turnover_20d >= {{min_turnover_oku}} * 100000000\nORDER BY drawdown_pct\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "min_mcap_oku",
+        "label": "時価総額の下限（億円）",
+        "type": "number",
+        "default": 300,
+        "min": 0,
+        "max": 1000000
+      },
+      {
+        "name": "min_turnover_oku",
+        "label": "直近20日の平均売買代金の下限（億円）",
+        "type": "number",
+        "default": 0.3,
+        "min": 0,
+        "max": 100000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "name",
+      "y": "drawdown_pct",
+      "series": null
+    },
+    "note": "ドローダウン＝現在の終値÷直近252営業日の終値の最高値－1（終値ベースで日中高値ではない）。株式分割の調整漏れの疑いがある銘柄（price_break_date あり）は除く。履歴が120営業日未満の銘柄は52週高値が空なので出ない。"
+  },
+  {
+    "id": "mkt_new_high_streak",
+    "domain": "market",
+    "title": "高値更新が続く銘柄（月次）",
+    "question": "直近3か月続けて月高値が過去の最高値を更新している銘柄はどこか",
+    "mart": "m_price_monthly",
+    "sql": "WITH h AS (\n  SELECT ticker, name, industry, month, close, month_high, return_3m, turnover, is_partial,\n         CASE WHEN COUNT(month_high) OVER (PARTITION BY ticker ORDER BY month ROWS BETWEEN 11 PRECEDING AND 1 PRECEDING) >= 3\n                   AND month_high > MAX(month_high) OVER (PARTITION BY ticker ORDER BY month ROWS BETWEEN 11 PRECEDING AND 1 PRECEDING)\n              THEN 1 ELSE 0 END AS is_new_high\n  FROM m_price_monthly\n  WHERE market = {{market}}\n),\ns AS (\n  SELECT *, SUM(is_new_high) OVER (PARTITION BY ticker ORDER BY month ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS hits_3m,\n         COUNT(*) OVER (PARTITION BY ticker ORDER BY month ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS months_n\n  FROM h\n)\nSELECT ticker, name, industry, month, hits_3m, ROUND(close, 2) AS close, ROUND(return_3m * 100, 1) AS return_3m_pct,\n       ROUND(turnover / 1000000.0, 0) AS turnover_m\nFROM s\nWHERE is_partial = FALSE AND months_n = 3 AND hits_3m >= {{min_hits}}\n  AND month = (SELECT MAX(month) FROM m_price_monthly WHERE market = {{market}} AND is_partial = FALSE)\n  AND turnover >= {{min_turnover_m}} * 1000000\nORDER BY hits_3m DESC, return_3m DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "market",
+        "label": "市場（JP＝日本株・US＝米国株）",
+        "type": "string",
+        "default": "JP"
+      },
+      {
+        "name": "min_hits",
+        "label": "直近3か月で高値を更新した月数の下限（3＝3か月連続）",
+        "type": "int",
+        "default": 3,
+        "min": 1,
+        "max": 3
+      },
+      {
+        "name": "min_turnover_m",
+        "label": "月間売買代金の下限（百万・現地通貨。日本株は百万円、米国株は百万ドル）",
+        "type": "number",
+        "default": 300,
+        "min": 0,
+        "max": 100000000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "ticker",
+      "y": "return_3m_pct",
+      "series": null
+    },
+    "note": "月高値（日足の高値）が、それ以前の最大11か月分の月高値の最大を上回った月を「更新」とする（比べる月が3か月以上ある銘柄だけ）。日次の52週高値ではなく月単位の近似。履歴が約1年なので長期の高値は判定できない。直近の完了月で判定する。"
+  },
+  {
+    "id": "mkt_lowvol_high_dividend",
+    "domain": "market",
+    "title": "値動きの小さい高配当株",
+    "question": "配当利回りが高く、月中の値動きの幅が小さい日本株はどこか",
+    "mart": "m_screener",
+    "sql": "WITH v AS (\n  SELECT ticker, COUNT(*) AS n_months, AVG(range_pct) AS avg_range, AVG(ABS(return_1m)) AS avg_abs_return\n  FROM m_price_monthly\n  WHERE market = 'JP' AND is_partial = FALSE AND range_pct IS NOT NULL AND return_1m IS NOT NULL\n  GROUP BY ticker\n  HAVING COUNT(*) >= {{min_months}}\n)\nSELECT s.sec_code4, s.name, s.industry, ROUND(s.dividend_yield * 100, 2) AS dividend_yield_pct, ROUND(v.avg_range * 100, 1) AS avg_month_range_pct,\n       ROUND(v.avg_abs_return * 100, 1) AS avg_abs_return_pct, v.n_months, ROUND(s.pbr, 2) AS pbr, s.market_cap_b\nFROM m_screener AS s\nJOIN v ON v.ticker = s.ticker\nWHERE s.dividend_yield >= {{min_yield_pct}} / 100 AND s.market_cap_b >= {{min_mcap_oku}}\nORDER BY v.avg_range\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "min_yield_pct",
+        "label": "配当利回りの下限（%）",
+        "type": "number",
+        "default": 3,
+        "min": 0,
+        "max": 20
+      },
+      {
+        "name": "min_mcap_oku",
+        "label": "時価総額の下限（億円）",
+        "type": "number",
+        "default": 300,
+        "min": 0,
+        "max": 1000000
+      },
+      {
+        "name": "min_months",
+        "label": "値動きを測る月数の下限",
+        "type": "int",
+        "default": 6,
+        "min": 1,
+        "max": 14
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "scatter",
+      "x": "avg_month_range_pct",
+      "y": "dividend_yield_pct",
+      "series": null
+    },
+    "note": "値動きの小ささ＝完了月の「月高値÷月安値－1」の平均（avg_month_range_pct。標準偏差ではなく幅で代用）。配当利回りが高い銘柄ほど株価が急落中のこともあるので、dividend_yield_pct が15%超の異常値は m_screener 側で空になっている。分割調整漏れの疑いがある銘柄は月次側で履歴が短くなり除かれやすい。"
+  },
+  {
+    "id": "mkt_us_momentum",
+    "domain": "market",
+    "title": "米国株の騰落率上位（業種なし）",
+    "question": "直近の完了月で6か月の騰落が大きい米国株はどこか（セクター分類なし・売買代金の下限付き）",
+    "mart": "m_price_monthly",
+    "sql": "SELECT ticker, name, ROUND(close, 2) AS close_usd, ROUND(return_1m * 100, 1) AS return_1m_pct, ROUND(return_3m * 100, 1) AS return_3m_pct,\n       ROUND(return_6m * 100, 1) AS return_6m_pct, ROUND(turnover / 1000000.0, 0) AS turnover_m_usd\nFROM m_price_monthly\nWHERE market = 'US' AND is_partial = FALSE AND return_6m IS NOT NULL\n  AND month = (SELECT MAX(month) FROM m_price_monthly WHERE market = 'US' AND is_partial = FALSE)\n  AND turnover >= {{min_turnover_m}} * 1000000 AND close >= {{min_price}}\nORDER BY return_6m DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "min_turnover_m",
+        "label": "月間売買代金の下限（百万ドル）",
+        "type": "number",
+        "default": 100,
+        "min": 0,
+        "max": 100000000
+      },
+      {
+        "name": "min_price",
+        "label": "月末終値の下限（ドル。ペニー株を除く）",
+        "type": "number",
+        "default": 5,
+        "min": 0,
+        "max": 100000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "ticker",
+      "y": "return_6m_pct",
+      "series": null
+    },
+    "note": "セクターは株価だけからは分からないため持たない。name は stock_snapshot にある約400銘柄だけで、他は空。通貨は米ドル。月末終値は分割調整済み・配当未調整。"
+  },
+  {
+    "id": "mkt_us_market_breadth_snapshot",
+    "domain": "market",
+    "title": "日米の市場の広がり（最新日）",
+    "question": "いま日本株と米国株で、上がった銘柄・下がった銘柄・新高値・移動平均より上はどれくらいか",
+    "mart": "m_market_breadth",
+    "sql": "SELECT market, trade_date, n_stocks, n_up, n_down, ROUND(ad_ratio_25d, 1) AS ad_ratio_25d, n_new_high, n_new_low,\n       ROUND(pct_above_ma50 * 100, 1) AS above_ma50_pct, ROUND(pct_above_ma200 * 100, 1) AS above_ma200_pct\nFROM m_market_breadth\nWHERE is_complete = TRUE\n  AND trade_date = (SELECT MAX(b.trade_date) FROM m_market_breadth AS b WHERE b.market = m_market_breadth.market AND b.is_complete = TRUE)\nORDER BY market",
+    "params": [],
+    "chart": {
+      "type": "table",
+      "x": "market",
+      "y": "n_up",
+      "series": null
+    },
+    "note": "市場ごとに、株価の取り込みが完了している最新の営業日の値（日本株と米国株で日付が違うことがある）。"
+  }
+]

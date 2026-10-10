@@ -67,6 +67,9 @@ MART_KEYS = {
     "m_theme_signal": ["theme_name", "sector_code", "fired_at", "signal_category", "direction"],
     "m_screener": ["edinet_code"],
     "m_screener_us": ["ticker"],
+    "m_price_monthly": ["ticker", "month"],
+    "m_sector_perf": ["industry", "trade_date"],
+    "m_market_breadth": ["market", "trade_date"],
 }
 # 前回の行数のこの割合を下回ったら、壊れた結果とみなして上書きしない
 MIN_ROW_RATIO = 0.5

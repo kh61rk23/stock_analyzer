@@ -34,12 +34,14 @@ INT_COLS = {
     "municipality_count", "population_current", "population_2050", "est_excluded_count",
     "node_level", "child_count", "company_count", "company_count_rollup",
     "theme_order", "days_before_latest", "price_days", "cik", "signal_count", "ticker_signal_count", "ticker_count",
+    "trading_days", "n_stocks", "n_up", "n_down", "n_flat", "n_hl_base", "n_new_high", "n_new_low", "n_ma50", "n_ma200",
 }
-DATE_COLS = {"fiscal_year_end", "risk_date", "latest_risk_date", "price_date", "price_break_date", "snapshot_date", "technical_date", "fired_at"}
-BOOL_COLS = {"is_delisted", "sanction_flag", "is_landlocked", "review_flag", "auto_derived", "verified_flag", "above_ma200", "has_fundamentals"}
+DATE_COLS = {"fiscal_year_end", "risk_date", "latest_risk_date", "price_date", "price_break_date", "snapshot_date", "technical_date", "fired_at",
+             "month", "month_end_date", "trade_date"}
+BOOL_COLS = {"is_delisted", "sanction_flag", "is_landlocked", "review_flag", "auto_derived", "verified_flag", "above_ma200", "has_fundamentals", "is_partial", "is_complete"}
 ALL_MARTS = ("m_company", "m_fin_annual", "m_country_profile", "m_country_risk", "m_company_country",
              "m_re_area", "m_re_holdings", "m_re_holdings_pref", "m_tax_node", "m_company_tax", "m_screener", "m_screener_us",
-             "m_theme", "m_theme_def", "m_theme_signal")
+             "m_theme", "m_theme_def", "m_theme_signal", "m_price_monthly", "m_sector_perf", "m_market_breadth")
 
 
 def mart_columns(mart: str) -> list[str]:
@@ -115,6 +117,7 @@ def con():
     _load_taxonomy(c)
     _load_screener(c)
     _load_theme(c)
+    _load_market(c)
     return c
 
 
@@ -360,6 +363,64 @@ def _load_screener_us(c) -> None:
         _insert(c, "m_screener_us", row)
 
 
+# 株価・スクリーニング: 日本株25銘柄（7001〜7025）・米国株25銘柄、2026-01〜10の月次、業種×営業日、市場×営業日
+def _load_market(c) -> None:
+    import datetime as dt
+    months = [dt.date(2026, m, 1) for m in range(1, 11)]
+    for i in range(1, 26):
+        for market, ticker in (("JP", f"{7000 + i}.T"), ("US", f"T{i:03d}")):
+            rising = i % 3 == 0
+            base = 100.0 * (1 + i / 10)
+            closes = []
+            for k, m in enumerate(months):
+                closes.append(base * (1.06 ** k) if rising else base * (1 + 0.04 * ((k * i) % 5 - 2)))
+            for k, m in enumerate(months):
+                close = closes[k]
+                partial = k == len(months) - 1
+                surge = i % 7 == 0 and k == len(months) - 2
+                row = {
+                    "ticker": ticker, "market": market,
+                    "name": f"会社{i}" if market == "JP" else (f"Corp {i}" if i % 3 == 0 else None),
+                    "industry": ["電気機器", "小売業", None][i % 3] if market == "JP" else None,
+                    "month": m, "month_end_date": m.replace(day=28), "trading_days": 5 if partial else 20,
+                    "is_partial": partial, "close": close,
+                    "prev_month_close": closes[k - 1] if k else None,
+                    "return_1m": close / closes[k - 1] - 1 if k else None,
+                    "return_3m": close / closes[k - 3] - 1 if k >= 3 else None,
+                    "return_6m": close / closes[k - 6] - 1 if k >= 6 else None,
+                    "month_high": close * 1.03, "month_low": close * (0.9 + (i % 5) * 0.015),
+                    "range_pct": 1.03 / (0.9 + (i % 5) * 0.015) - 1,
+                    "turnover": 5e9 * i * (3.5 if surge else 1.0), "volume": 1e6 * i,
+                    "turnover_ratio_3m": (3.5 if surge else 1.0) if k >= 3 else None,
+                }
+                _insert(c, "m_price_monthly", row)
+    days = [dt.date(2026, 8, 1) + dt.timedelta(days=n) for n in range(60)]
+    for si, ind in enumerate(["電気機器", "小売業", "銀行業"]):
+        idx_ew = idx_cw = 100.0
+        for n, d in enumerate(days):
+            r_ew = 0.002 * (si - 1) + 0.001 * ((n % 5) - 2)
+            r_cw = r_ew * 1.2
+            idx_ew *= 1 + r_ew
+            idx_cw *= 1 + r_cw
+            _insert(c, "m_sector_perf", {
+                "industry": ind, "trade_date": d, "n_stocks": 10 + si, "n_up": 6, "n_down": 4, "up_ratio": 0.6,
+                "ret_ew": r_ew, "ret_cw": r_cw, "idx_ew": idx_ew, "idx_cw": idx_cw,
+                "ret_1m_ew": idx_ew / 100 - 1 if n >= 21 else None, "ret_3m_ew": idx_ew / 100 - 1 if n >= 59 else None,
+                "ret_ytd_ew": idx_ew / 100 - 1, "ret_1m_cw": idx_cw / 100 - 1 if n >= 21 else None,
+                "ret_3m_cw": idx_cw / 100 - 1 if n >= 59 else None, "ret_ytd_cw": idx_cw / 100 - 1, "turnover": 1e10 * (si + 1)})
+    for market in ("JP", "US"):
+        idx = 100.0
+        for n, d in enumerate(days):
+            full = n != len(days) - 1
+            idx *= 1.001
+            _insert(c, "m_market_breadth", {
+                "market": market, "trade_date": d, "n_stocks": 3800 if full else 300, "is_complete": full,
+                "n_up": 2000, "n_down": 1500, "n_flat": 300, "up_ratio": 2000 / 3500,
+                "ad_ratio_25d": 100.0 + n if n >= 25 else None, "n_hl_base": 3500, "n_new_high": 50 + n, "n_new_low": 40,
+                "n_ma50": 3500, "pct_above_ma50": 0.45, "n_ma200": 3000 if n >= 30 else 0,
+                "pct_above_ma200": 0.5 if n >= 30 else None, "ret_ew": 0.001, "idx_ew": idx, "turnover": 8e12})
+
+
 # 業種2つ（電気機器1016・医薬品1008）×テーマ各3つ。実在銘柄は業種ごとに3社（うち1社は 6501）。
 THEME_SECTORS = [("1016", "電気機器", "midstream", ["AI半導体", "5G通信機器", "スマートグリッド"]),
                  ("1008", "医薬品", "downstream", ["後発薬", "AI創薬", "がん免疫療法"])]
@@ -396,6 +457,8 @@ def _load_theme(c) -> None:
 
 
 MARTS = set(ALL_MARTS)
+# 実体化済みの別マートを入力にするマート（業種の時価総額加重の重み）。逆向きの依存は作らない
+MART_DEPENDS = {"m_sector_perf": ("m_screener",)}
 TEMPLATES = bt.load_templates()
 
 
@@ -404,6 +467,7 @@ def test_template_count_and_unique_ids():
     for domain in ("geo", "realestate", "taxonomy", "screener"):
         assert sum(1 for t in TEMPLATES if t["domain"] == domain) >= 8, domain
     assert sum(1 for t in TEMPLATES if t["domain"] == "screener_us") >= 6
+    assert sum(1 for t in TEMPLATES if t["domain"] == "market") >= 10
     ids = [t["id"] for t in TEMPLATES]
     assert len(ids) == len(set(ids))
 
@@ -448,8 +512,11 @@ def test_mart_sql_does_not_read_its_own_output_tables():
     for mart in ALL_MARTS:
         sql = (REPO / "bi" / "marts" / f"{mart}.sql").read_text(encoding="utf-8")
         body = "\n".join(l for l in sql.splitlines() if not l.strip().startswith("--"))
-        # bi.src_*（location が違う元表の写し）は元表と同じ扱いで読んでよい
-        assert "stock-analyzer-edinet.bi." not in body.replace("stock-analyzer-edinet.bi.src_", ""), mart
+        # bi.src_*（location が違う元表の写し）は元表と同じ扱いで読んでよい。MART_DEPENDS に宣言した別マートの読み取りも許す（循環しない向きだけ）
+        allowed = body.replace("stock-analyzer-edinet.bi.src_", "")
+        for dep in MART_DEPENDS.get(mart, ()):
+            allowed = allowed.replace(f"stock-analyzer-edinet.bi.{dep}`", "")
+        assert "stock-analyzer-edinet.bi." not in allowed, mart
 
 
 def test_param_type_checks():
@@ -575,3 +642,32 @@ def test_theme_templates_cover_required_questions():
     assert len(ids) >= 8
     assert {"theme_company_stats", "theme_companies", "theme_company_themes", "theme_signal_recent",
             "theme_sales_growth", "theme_industry_cross"} <= ids
+
+
+def test_market_marts_shape():
+    """株価マート3本：日次の全件ではなく月・業種×日・市場×日の粒度で、取り込み途中の日と未完了の月が見分けられる。"""
+    assert mart_columns("m_price_monthly")[:2] == ["ticker", "market"]
+    for need in ("month", "is_partial", "return_1m", "return_6m", "turnover", "turnover_ratio_3m", "month_high", "range_pct"):
+        assert need in mart_columns("m_price_monthly"), need
+    assert mart_columns("m_sector_perf")[:2] == ["industry", "trade_date"]
+    for need in ("idx_cw", "idx_ew", "ret_ytd_cw", "up_ratio"):
+        assert need in mart_columns("m_sector_perf"), need
+    assert mart_columns("m_market_breadth")[:2] == ["market", "trade_date"]
+    for need in ("is_complete", "ad_ratio_25d", "n_new_high", "n_new_low", "pct_above_ma200", "n_hl_base"):
+        assert need in mart_columns("m_market_breadth"), need
+    for mart in ("m_price_monthly", "m_sector_perf", "m_market_breadth"):
+        sql = (REPO / "bi" / "marts" / f"{mart}.sql").read_text(encoding="utf-8")
+        assert "price_daily_latest" in sql and "INTERVAL 400 DAY" in sql, mart
+        assert "break_date" in sql, mart
+    assert "bi.m_screener" in (REPO / "bi" / "marts" / "m_sector_perf.sql").read_text(encoding="utf-8")
+
+
+def test_market_templates_use_complete_data_only():
+    """取り込み途中の日・未完了の月を使うテンプレは誤読のもと。市場広がり系は is_complete、月次系は is_partial で絞る。"""
+    for t in TEMPLATES:
+        if t["domain"] != "market":
+            continue
+        if t["mart"] == "m_market_breadth":
+            assert "is_complete = TRUE" in t["sql"], t["id"]
+        if t["mart"] == "m_price_monthly":
+            assert "is_partial = FALSE" in t["sql"], t["id"]
