@@ -16,12 +16,14 @@ on:
           - price_universe_jp
           - price_universe_us
           - price_universe_backfill
+          - us_company_facts_update
+          - us_company_facts_backfill
 
 permissions:
   contents: write
 
 concurrency:
-  group: manual-${{ inputs.task }}
+  group: ${{ startsWith(inputs.task, 'us_company_facts') && 'us-company-facts' || format('manual-{0}', inputs.task) }}
   cancel-in-progress: false
 
 jobs:
@@ -38,7 +40,7 @@ jobs:
       - name: Install dependencies
         run: |
           case "${{ inputs.task }}" in
-            price_universe_*) pip install -r requirements-prices.txt ;;
+            price_universe_*|us_company_facts_*) pip install -r requirements-prices.txt ;;
             *) pip install -r requirements.txt ;;
           esac
       - name: Run task
@@ -62,6 +64,8 @@ jobs:
             price_universe_jp) python -u price_universe.py --market jp ;;
             price_universe_us) python -u price_universe.py --market us ;;
             price_universe_backfill) python -u price_universe.py --market all --backfill ;;
+            us_company_facts_update) python -u us_company_facts.py --mode update ;;
+            us_company_facts_backfill) python -u us_company_facts.py --mode backfill --budget-minutes 100 ;;
           esac
       - name: Commit state
         if: always()
