@@ -9,6 +9,8 @@
 # 【なぜ必要か】
 #   銘柄mdに出ている指標のうち、technical系（RSI/MACD/MA200/VWAP/52週位置）、
 #   FCFマージン、D/E比率、自己資本比率、配当利回り、sector_score、
+#   比率の列（roe・roic・fcf_margin・equity_ratio・dividend_yield）は小数（0.22＝22%）、debt_equity は倍（0.30）。
+#   stock_detail_report の detail は % で持つので、そこから拾うときは 100 で割る。
 #   technical_score は performance_tracker.append_screener_history() が
 #   保存する14項目に含まれない。ここで残さないと**その日のmdを開く以外に
 #   参照する方法がなく**、時系列で追えないためシグナルの事後検証も
@@ -114,12 +116,21 @@ def build_snapshot_rows(
         macd = tech.get("macd") or {}
         ma   = tech.get("ma_cross") or {}
 
-        def pick(key, *fallbacks):
-            """候補dict優先、無ければ detail（yfinance由来）から拾う。"""
-            for src in (c, det):
-                for k in (key, *fallbacks):
-                    if src.get(k) is not None:
-                        return src[k]
+        def pick(key, *fallbacks, det_pct=False):
+            """候補dict優先、無ければ detail（yfinance由来）から拾う。
+
+            候補の比率は小数（ROE 0.22）、detail の比率は %（22.3）で入っている。DB は小数にそろえるため、
+            det_pct=True の列は detail から拾ったときだけ 100 で割る。
+            """
+            for k in (key, *fallbacks):
+                if c.get(k) is not None:
+                    return c[k]
+            for k in (key, *fallbacks):
+                if det.get(k) is not None:
+                    try:
+                        return float(det[k]) / 100 if det_pct else det[k]
+                    except (TypeError, ValueError):
+                        return None
             return None
 
         signals = tech.get("signals") or c.get("signals") or []
@@ -145,12 +156,13 @@ def build_snapshot_rows(
             "discovery_score": _f(c.get("discovery_score")),
             "per":            _f(pick("per")),
             "pbr":            _f(pick("pbr")),
-            "roe":            _f(pick("roe")),
-            "roic":           _f(pick("roic")),
-            "fcf_margin":     _f(pick("fcf_margin")),
-            "debt_equity":    _f(pick("debt_equity")),
-            "equity_ratio":   _f(pick("equity_ratio")),
-            "dividend_yield": _f(pick("div_yield", "dividend_yield")),
+            "roe":            _f(pick("roe", det_pct=True)),
+            "roic":           _f(pick("roic", det_pct=True)),
+            "fcf_margin":     _f(pick("fcf_margin", det_pct=True)),
+            "debt_equity":    _f(pick("debt_equity", det_pct=True)),
+            # detail の自己資本比率は yfinance の1株純資産×株数÷総資産で、通貨・株数の食い違いで100%超になることがある
+            "equity_ratio":   (lambda v: v if v is not None and 0 <= v <= 1 else None)(_f(pick("equity_ratio", det_pct=True))),
+            "dividend_yield": _f(pick("div_yield", "dividend_yield", det_pct=True)),
             "gross_margin":   _f(pick("gross_margin")),
             "op_margin":      _f(pick("op_margin")),
             "market_cap_b":   _f(pick("market_cap_b")),

@@ -495,5 +495,154 @@
       "series": null
     },
     "note": "市場ごとに、株価の取り込みが完了している最新の営業日の値（日本株と米国株で日付が違うことがある）。"
+  },
+  {
+    "id": "snap_ticker_history",
+    "domain": "market",
+    "title": "銘柄レポートの推移（日次）",
+    "question": "この銘柄はスクリーナーで毎日どう評価されてきたか（過去の銘柄レポートの代わり）",
+    "mart": "m_stock_snapshot",
+    "sql": "SELECT snapshot_date, name, ROUND(composite_score, 1) AS composite_score, ROUND(technical_score, 1) AS technical_score,\n       ROUND(rsi14, 1) AS rsi14, current_price, ROUND(per, 1) AS per, ROUND(pbr, 2) AS pbr, ROUND(roe * 100, 1) AS roe_pct,\n       ROUND(week52_position_pct, 0) AS week52_position_pct, signal_text\nFROM m_stock_snapshot\nWHERE ticker = {{ticker}}\nORDER BY snapshot_date",
+    "params": [
+      {
+        "name": "ticker",
+        "label": "ティッカー（例 1418.T / AAPL）",
+        "type": "string",
+        "default": "1418.T"
+      }
+    ],
+    "chart": {
+      "type": "line",
+      "x": "snapshot_date",
+      "y": [
+        "composite_score",
+        "technical_score",
+        "rsi14"
+      ],
+      "series": null
+    },
+    "note": "銘柄レポート（md）の正本。md は最新だけ（detail_latest）になったので、過去の日の中身はここで見る。"
+  },
+  {
+    "id": "snap_rsi_forward",
+    "domain": "market",
+    "title": "RSI帯ごとのその後のリターン",
+    "question": "スクリーナーを通った日の RSI の高さで、その後5日・20日の値動きはどう違うか",
+    "mart": "m_stock_snapshot",
+    "sql": "SELECT CASE WHEN rsi14 < 30 THEN '1 30未満' WHEN rsi14 < 50 THEN '2 30〜50' WHEN rsi14 < 70 THEN '3 50〜70' ELSE '4 70以上' END AS rsi_band,\n       COUNT(*) AS n, ROUND(AVG(fwd_return_5d) * 100, 2) AS avg_fwd_5d_pct, ROUND(AVG(fwd_return_20d) * 100, 2) AS avg_fwd_20d_pct,\n       ROUND(SUM(CASE WHEN fwd_return_20d > 0 THEN 1 ELSE 0 END) * 100.0 / NULLIF(SUM(CASE WHEN fwd_return_20d IS NOT NULL THEN 1 ELSE 0 END), 0), 0) AS win_rate_20d_pct\nFROM m_stock_snapshot\nWHERE market = {{market}} AND rsi14 IS NOT NULL AND fwd_return_5d IS NOT NULL\nGROUP BY rsi_band\nORDER BY rsi_band",
+    "params": [
+      {
+        "name": "market",
+        "label": "市場（JP / US）",
+        "type": "string",
+        "default": "JP"
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "rsi_band",
+      "y": [
+        "avg_fwd_5d_pct",
+        "avg_fwd_20d_pct"
+      ],
+      "series": null
+    },
+    "note": "同じ銘柄が何日も通過すると何度も数える（日ごとの記録のため）。リターンは終値ベース・配当なし。蓄積が短いうちは件数が少ない。"
+  },
+  {
+    "id": "snap_score_forward",
+    "domain": "market",
+    "title": "総合スコア帯ごとのその後のリターン",
+    "question": "総合スコアが高い日に通過した銘柄ほど、その後よく上がっているか（スコアの事後検証）",
+    "mart": "m_stock_snapshot",
+    "sql": "SELECT CASE WHEN composite_score < 50 THEN '1 50未満' WHEN composite_score < 60 THEN '2 50〜60' WHEN composite_score < 70 THEN '3 60〜70' ELSE '4 70以上' END AS score_band,\n       COUNT(*) AS n, ROUND(AVG(fwd_return_5d) * 100, 2) AS avg_fwd_5d_pct, ROUND(AVG(fwd_return_20d) * 100, 2) AS avg_fwd_20d_pct\nFROM m_stock_snapshot\nWHERE market = {{market}} AND composite_score IS NOT NULL AND fwd_return_5d IS NOT NULL\nGROUP BY score_band\nORDER BY score_band",
+    "params": [
+      {
+        "name": "market",
+        "label": "市場（JP / US）",
+        "type": "string",
+        "default": "JP"
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "score_band",
+      "y": [
+        "avg_fwd_5d_pct",
+        "avg_fwd_20d_pct"
+      ],
+      "series": null
+    },
+    "note": "スコアの付け方が途中で変わった日をまたぐと比較がぶれる。"
+  },
+  {
+    "id": "snap_persistent_top",
+    "domain": "market",
+    "title": "上位に居座っている銘柄",
+    "question": "直近N日のうち、総合スコアが高いまま何日も通過し続けている銘柄はどれか",
+    "mart": "m_stock_snapshot",
+    "sql": "SELECT ticker, MAX(name) AS name, COUNT(*) AS days_in_top, ROUND(AVG(composite_score), 1) AS avg_score,\n       MIN(snapshot_date) AS first_date, MAX(snapshot_date) AS last_date\nFROM m_stock_snapshot\nWHERE market = {{market}} AND composite_score >= {{min_score}}\n  AND snapshot_date >= (SELECT MAX(snapshot_date) FROM m_stock_snapshot) - {{days}}\nGROUP BY ticker\nHAVING COUNT(*) >= {{min_days}}\nORDER BY days_in_top DESC, avg_score DESC\nLIMIT 50",
+    "params": [
+      {
+        "name": "market",
+        "label": "市場（JP / US）",
+        "type": "string",
+        "default": "JP"
+      },
+      {
+        "name": "min_score",
+        "label": "総合スコアの下限",
+        "type": "number",
+        "default": 70,
+        "min": 0,
+        "max": 100
+      },
+      {
+        "name": "days",
+        "label": "遡る日数",
+        "type": "int",
+        "default": 60,
+        "min": 7,
+        "max": 365
+      },
+      {
+        "name": "min_days",
+        "label": "通過日数の下限",
+        "type": "int",
+        "default": 10,
+        "min": 1,
+        "max": 365
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "ticker",
+      "y": "days_in_top",
+      "series": null
+    },
+    "note": "日付の引き算は DATE − 整数（両エンジンで日数を引く）。"
+  },
+  {
+    "id": "snap_new_entries",
+    "domain": "market",
+    "title": "最新日に初めて通過した銘柄",
+    "question": "最新の日に、これまで一度も通っていなかった銘柄はどれか",
+    "mart": "m_stock_snapshot",
+    "sql": "SELECT s.ticker, s.name, s.sector_name, ROUND(s.composite_score, 1) AS composite_score, ROUND(s.rsi14, 1) AS rsi14, s.signal_text\nFROM m_stock_snapshot AS s\nWHERE s.market = {{market}} AND s.snapshot_date = (SELECT MAX(snapshot_date) FROM m_stock_snapshot)\n  AND NOT EXISTS (SELECT 1 FROM m_stock_snapshot AS o WHERE o.ticker = s.ticker AND o.snapshot_date < s.snapshot_date)\nORDER BY s.composite_score DESC",
+    "params": [
+      {
+        "name": "market",
+        "label": "市場（JP / US）",
+        "type": "string",
+        "default": "JP"
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "ticker",
+      "y": "composite_score",
+      "series": null
+    },
+    "note": "記録の始まり（2026-09-09）より前の通過は数えない。"
   }
 ]

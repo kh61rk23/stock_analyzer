@@ -28,6 +28,7 @@ STRING_COLS = {
     "price_source", "interest_bearing_debt_basis", "valuation_flag", "roic_tax_basis", "re_gain_flag", "exchange", "sic", "shares_source",
     "theme_name", "sector_code", "sector_name_ja", "supply_chain_position", "source", "signal_category", "direction",
     "tickers_all", "axis", "axis_ja", "member", "segment_name",
+    "sector_name", "accrual_tier", "size_tier", "strategy_label", "analyst_reco", "signal_text",
 }
 INT_COLS = {
     "fiscal_year", "employee_count", "foreign_ministry_level", "state_dept_level", "exposure_type_count",
@@ -39,12 +40,12 @@ INT_COLS = {
     "trading_days", "n_stocks", "n_up", "n_down", "n_flat", "n_hl_base", "n_new_high", "n_new_low", "n_ma50", "n_ma200",
 }
 DATE_COLS = {"fiscal_year_end", "risk_date", "latest_risk_date", "price_date", "price_break_date", "snapshot_date", "technical_date", "fired_at",
-             "month", "month_end_date", "trade_date", "ttm_period_end", "balance_date", "shares_as_of"}
-BOOL_COLS = {"is_delisted", "sanction_flag", "is_landlocked", "review_flag", "auto_derived", "verified_flag", "above_ma200", "has_fundamentals", "is_partial", "is_complete", "is_latest"}
+             "month", "month_end_date", "trade_date", "ttm_period_end", "balance_date", "shares_as_of", "base_trade_date"}
+BOOL_COLS = {"is_delisted", "sanction_flag", "is_landlocked", "review_flag", "auto_derived", "verified_flag", "above_ma200", "has_fundamentals", "is_partial", "is_complete", "is_latest", "macd_crossup", "above_vwap"}
 ALL_MARTS = ("m_company", "m_fin_annual", "m_country_profile", "m_country_risk", "m_company_country",
              "m_re_area", "m_re_holdings", "m_re_holdings_pref", "m_tax_node", "m_company_tax", "m_screener", "m_screener_us",
              "m_theme", "m_theme_def", "m_theme_signal", "m_price_monthly", "m_sector_perf", "m_market_breadth",
-             "m_us_fin_annual", "m_us_segments")
+             "m_us_fin_annual", "m_us_segments", "m_stock_snapshot")
 
 
 def mart_columns(mart: str) -> list[str]:
@@ -351,6 +352,29 @@ def _load_screener(c) -> None:
         _insert(c, "m_screener", row)
     _load_screener_us(c)
     _load_us(c)
+    _load_snapshot(c)
+
+
+# スクリーナー通過の日次記録（JP/US 各8銘柄×30日。最新日だけ新規の銘柄 NEW.T を足す）
+def _load_snapshot(c) -> None:
+    import datetime as dt
+    d0 = dt.date(2026, 9, 9)
+    for mk, tks in (("JP", ["1418.T"] + [f"{7000 + i}.T" for i in range(7)]), ("US", ["AAPL"] + [f"U{i}" for i in range(7)])):
+        for k in range(30):
+            d = d0 + dt.timedelta(days=k)
+            for i, tk in enumerate(tks):
+                _insert(c, "m_stock_snapshot", {
+                    "snapshot_date": d, "ticker": tk, "market": mk, "name": f"銘柄{i}", "sector_code": "3050", "sector_name": "建設業",
+                    "composite_score": 45.0 + i * 5 + k % 3, "sector_score": 40.0, "value_score": 60.0, "quality_score": 70.0,
+                    "technical_score": 55.0, "discovery_score": 10.0, "per": 12.0, "pbr": 1.1, "roe": 0.12, "roic": 0.08,
+                    "fcf_margin": 0.1, "debt_equity": 0.3, "equity_ratio": 0.5, "dividend_yield": 0.03, "market_cap_b": 100.0,
+                    "current_price": 1000.0 + k, "rsi14": 20.0 + (i * 9 + k) % 70, "macd_crossup": k % 2 == 0, "above_ma200": True,
+                    "above_vwap": True, "week52_position_pct": 60.0, "accrual_tier": "A", "size_tier": "small", "strategy_label": "value",
+                    "analyst_reco": "buy", "signal_text": "MACDクロスアップ:+20", "base_trade_date": d, "base_close": 1000.0 + k,
+                    "fwd_return_5d": 0.01 * (i - 3) if k < 25 else None, "fwd_return_20d": 0.02 * (i - 3) if k < 10 else None})
+    last = d0 + dt.timedelta(days=29)
+    _insert(c, "m_stock_snapshot", {k: None for k in mart_columns("m_stock_snapshot")} | {
+        "snapshot_date": last, "ticker": "NEW.T", "market": "JP", "name": "新顔", "composite_score": 80.0, "rsi14": 50.0})
 
 
 # 米国株の通期財務（20銘柄×5期）とセグメント（AAPL・MSFT の事業／製品／地域）

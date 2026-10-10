@@ -235,11 +235,13 @@ def generate_scorecard_md(
     sec_s   = candidate.get("sector_score", 0)
     val_s   = candidate.get("value_score", 0)
     qual_s  = candidate.get("quality_score", 0)
-    tech_s  = candidate.get("technical_score", 50)
+    # 候補に無ければ technical_scorer の点数（DB の stock_snapshot と同じ出どころ）。どちらも無ければ中立の50
+    tech_s  = next((v for v in (candidate.get("technical_score"), (tech or {}).get("score")) if v is not None), 50)
     sec_name = candidate.get("sector_name", "")
     per     = candidate.get("per") or detail.get("per")
     pbr     = candidate.get("pbr") or detail.get("pbr")
-    roe     = candidate.get("roe") or detail.get("roe")
+    # 候補の roe は小数（0.22）、detail（yfinance）は %（22.3）。表示は % にそろえる
+    roe     = candidate.get("roe") * 100 if candidate.get("roe") is not None else detail.get("roe")
 
     # ── ヘッダー ─────────────────────────────────────────
     lines = [
@@ -409,9 +411,13 @@ def run_stock_detail_report(cfg, screener_result: dict, results: dict) -> dict:
     # 出力ディレクトリ
     today     = datetime.now().strftime("%Y-%m-%d")
     base_dir  = Path(getattr(cfg, "INSIGHT_DIR", "stock_data/insights")) / "screener"
+    # 正本は BigQuery の analytics.stock_snapshot（日次・全項目）。md は閲覧用に最新だけを detail_latest/ に置く。
+    # 日付別の detail_YYYY-MM-DD/ は既定で作らない（STOCK_DETAIL_KEEP_DATED=True で従来どおり残す）
+    keep_dated = bool(getattr(cfg, "STOCK_DETAIL_KEEP_DATED", False))
     dated_dir = base_dir / f"detail_{today}"
     latest_dir = base_dir / "detail_latest"
-    dated_dir.mkdir(parents=True, exist_ok=True)
+    if keep_dated:
+        dated_dir.mkdir(parents=True, exist_ok=True)
     latest_dir.mkdir(parents=True, exist_ok=True)
 
     generated = 0
@@ -456,10 +462,11 @@ def run_stock_detail_report(cfg, screener_result: dict, results: dict) -> dict:
         latest_p = latest_dir / fname
 
         try:
-            dated_p.write_text(md_text, encoding="utf-8")
+            if keep_dated:
+                dated_p.write_text(md_text, encoding="utf-8")
             latest_p.write_text(md_text, encoding="utf-8")
             generated += 1
-            paths.append(str(dated_p))
+            paths.append(str(dated_p if keep_dated else latest_p))
             print(f"✅ score={c.get('composite_score',0):.1f}")
         except Exception as e:
             print(f"❌ 保存失敗: {e}")
@@ -468,6 +475,6 @@ def run_stock_detail_report(cfg, screener_result: dict, results: dict) -> dict:
 
     print(f"    ✅ 詳細レポート生成完了: {generated}/{len(passed)}銘柄")
     return {"generated": generated, "paths": paths,
-            "today_dir": str(dated_dir),
+            "today_dir": str(dated_dir if keep_dated else latest_dir),
             "details": details,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}

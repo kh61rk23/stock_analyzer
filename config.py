@@ -1826,6 +1826,7 @@ ENABLE_OPTIONS_MONITOR: bool = True   # オプション市場センチメント 
 ENABLE_SUPPORT_RESISTANCE: bool = True   # SR自動検出 [4-6]
 ENABLE_VOLUME_PROFILE: bool = True   # 出来高プロファイル [4-7]
 ENABLE_STOCK_DETAIL_REPORT: bool = True   # 銘柄詳細レポート [5-1]
+STOCK_DETAIL_KEEP_DATED: bool = False     # 銘柄mdの日付別 detail_YYYY-MM-DD/ も残すか（正本は analytics.stock_snapshot。既定は detail_latest/ だけ）
 ENABLE_COMPS_ANALYZER:      bool = True   # 同業種内比較 [5-2]
 ENABLE_BACKTESTER:          bool = True   # バックテスト [5-3]
 ENABLE_SIGNAL_AGGREGATOR: bool = True   # 統合シグナル [4-9]

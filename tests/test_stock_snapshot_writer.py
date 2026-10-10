@@ -1,3 +1,4 @@
+import pytest
 # stock_snapshot_writer — スクリーナー結果の日次スナップショット（DB移管 Ph1）
 import stock_snapshot_writer as w
 
@@ -65,12 +66,13 @@ class TestFieldMapping:
 
     def test_financial_fields_absent_from_history_are_captured(self):
         row = w.build_snapshot_rows([_cand(
-            fcf_margin=2.3, debt_equity=70.47, equity_ratio=48.1,
-            div_yield=2.7, roic=8.2, sector_score=56.8,
+            fcf_margin=0.023, debt_equity=0.7047, equity_ratio=0.481,
+            div_yield=0.027, roic=0.082, sector_score=56.8,
         )], "JP", DATE)[0]
-        for k, v in [("fcf_margin", 2.3), ("debt_equity", 70.47),
-                     ("equity_ratio", 48.1), ("dividend_yield", 2.7),
-                     ("roic", 8.2), ("sector_score", 56.8)]:
+        # 候補 dict の比率は小数のまま入る
+        for k, v in [("fcf_margin", 0.023), ("debt_equity", 0.7047),
+                     ("equity_ratio", 0.481), ("dividend_yield", 0.027),
+                     ("roic", 0.082), ("sector_score", 56.8)]:
             assert row[k] == v, f"{k} が欠落"
 
     def test_non_numeric_and_nan_become_null(self):
@@ -95,13 +97,22 @@ class TestFieldMapping:
                              "recommendation": "buy"}}
         row = w.build_snapshot_rows([_cand()], "JP", DATE,
                                     detail_cache=detail)[0]
-        assert row["roic"] == 8.2
-        assert row["fcf_margin"] == 2.3
-        assert row["debt_equity"] == 70.47
-        assert row["equity_ratio"] == 48.1
-        assert row["dividend_yield"] == 2.7
+        # detail は % で持つので、DB では小数（D/E は倍）にそろえる
+        assert row["roic"] == pytest.approx(0.082)
+        assert row["fcf_margin"] == pytest.approx(0.023)
+        assert row["debt_equity"] == pytest.approx(0.7047)
+        assert row["equity_ratio"] == pytest.approx(0.481)
+        assert row["dividend_yield"] == pytest.approx(0.027)
         assert row["current_price"] == 4210.0
         assert row["analyst_reco"] == "buy"
+
+    def test_roe_unit_is_fraction_from_either_source(self):
+        """候補の ROE（小数）と detail の ROE（%）が日によって混ざると時系列が壊れる"""
+        from_cand = w.build_snapshot_rows([_cand(roe=0.223)], "JP", DATE, detail_cache={"6501.T": {"roe": 99.0}})[0]
+        c = _cand()
+        c.pop("roe", None)
+        from_det = w.build_snapshot_rows([c], "JP", DATE, detail_cache={"6501.T": {"roe": 22.3}})[0]
+        assert from_cand["roe"] == pytest.approx(0.223) and from_det["roe"] == pytest.approx(0.223)
 
     def test_candidate_value_wins_over_detail_cache(self):
         """候補dict側が正本。detailは欠損の補完にのみ使う"""
