@@ -1,7 +1,7 @@
 # ==============================================================
 # us_company_facts.py
 # 全上場の米国株（NYSE・Nasdaq 普通株）の財務・企業情報を SEC の無料 API から取り、
-# BigQuery の us.company_profile / us.financials_annual へ書く。
+# BigQuery の us.company_profile / us.financials_annual / us.company_facts へ書く。
 # ==============================================================
 # 【役割】
 #   us.fundamentals（us_fundamental_rotator.py が書く四半期の混在表）が
@@ -21,6 +21,17 @@
 #              + 未取得 + 古い順の少数（取りこぼしの安全網）。
 #   書込は読み出し（list_rows・無料）→ メモリ上で統合 → load job（WRITE_TRUNCATE・無料）。
 #   クエリを使わないので BigQuery の課金は発生しない。
+#
+# 【全タグの縦持ち表 us.company_facts】
+#   companyfacts の全 namespace（us-gaap・dei・ifrs-full・srt・ecd 等）× 全タグ × 全期間の値を
+#   1行1値で保存する（cik・taxonomy・tag・unit・period_start/end・val・accn・fy・fp・form・filed・frame）。
+#   同じ値が複数の提出に重複して載る（翌年の 10-K の比較列など）ので、(taxonomy, tag, unit, start, end, val) が
+#   同じものは最初に提出した1行だけにする。値が訂正されたもの（val が違う）は別の行として残る。
+#   期末が KEEP_FACTS_YEARS 年（5年）より古い値は保存しない（BigQuery 無料枠 10GB に収めるため）。
+#   period_end の年でパーティション、cik・tag でクラスタ。load job の WRITE_APPEND だけで更新する（無料・DML なし）。
+#   会社ごとの取り込み済みの提出日を company_profile.facts_max_filed に持ち、それより新しい提出日の行だけを追記する。
+#   当日提出分は SEC 側が未確定のため取り込まない（翌日以降に取る）。
+#   load job には内容から決めた job_id を付け、書込と台帳の間で落ちた再実行でも二重に入らないようにする。
 #
 # 【タグの揺れ】
 #   同じ項目でも会社・年度で使う US-GAAP タグが違う（MSFT は Revenues が 2010 年で止まり、
@@ -54,6 +65,10 @@ DAILY_INDEX_URL = "https://www.sec.gov/Archives/edgar/daily-index/{y}/QTR{q}/mas
 BQ_LOCATION = "US"  # us データセットの location（asia の表とは JOIN できない）
 PROFILE_TABLE = "company_profile"
 ANNUAL_TABLE = "financials_annual"
+FACTS_TABLE = "company_facts"
+KEEP_FACTS_YEARS = 5
+FACTS_MAX_BYTES = 6 * 1024 ** 3   # 全データセット合計の無料枠 10GB に対し、この表だけで 6GiB を超えたら追記を止めて警告
+FACTS_LOAD_RETRIES = 2
 
 # SEC の公平利用は秒間10件まで。余裕を見て 0.2 秒間隔（5件/秒）にする。
 REQUEST_INTERVAL_SEC = 0.2
@@ -65,7 +80,7 @@ STALE_DAYS = 75                 # update で、これより古い会社を安全
 NOFACTS_RETRY_DAYS = 30         # 財務を持たない会社（信託等）の再確認間隔
 ROTATE_PER_RUN = 40
 NEW_PER_RUN = 400
-CHECKPOINT_EVERY = 500
+CHECKPOINT_EVERY = 250          # 1回の load job は 約150社分（約100万行）になる
 SHRINK_GUARD_RATIO = 0.5        # 書込後の行数が前回のこの割合を下回るなら上書きしない
 
 # 優先順（上ほど優先）。年度ごとに最初に値があるタグを採る。
@@ -96,7 +111,21 @@ FLOW_TAGS = {
     ],
     "buyback": ["PaymentsForRepurchaseOfCommonStock", "PaymentsForRepurchaseOfEquity"],
     "dividends_paid": ["PaymentsOfDividendsCommonStock", "PaymentsOfDividends"],
+    "gross_profit": ["GrossProfit"],
+    "depreciation": [
+        "DepreciationDepletionAndAmortization",
+        "DepreciationAmortizationAndAccretionNet",
+        "DepreciationAndAmortization",
+        "Depreciation",
+    ],
+    "income_tax": ["IncomeTaxExpenseBenefit"],
+    "pretax_income": [
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+    ],
+    "interest_expense": ["InterestExpense", "InterestExpenseDebt", "InterestAndDebtExpense"],
 }
+SHARES_FLOW_TAGS = ["WeightedAverageNumberOfDilutedSharesOutstanding", "WeightedAverageNumberOfSharesOutstandingBasic"]
 EPS_TAGS = ["EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted", "EarningsPerShareBasic"]
 DPS_TAGS = ["CommonStockDividendsPerShareDeclared", "CommonStockDividendsPerShareCashPaid"]
 STOCK_TAGS = {
@@ -116,12 +145,16 @@ STOCK_TAGS = {
     "ltd_noncurrent": ["LongTermDebtNoncurrent", "LongTermDebtAndCapitalLeaseObligations"],
     "ltd_notes": ["LongTermNotesPayable"],
     "ltd_total": ["LongTermDebt"],
+    "assets_current": ["AssetsCurrent"],
+    "liabilities_current": ["LiabilitiesCurrent"],
 }
 TTM_CONCEPTS = ["revenue", "operating_income", "net_income", "operating_cf", "capex"]
 ANNUAL_COLUMNS = [
     "revenue", "operating_income", "net_income", "eps_diluted", "total_assets", "total_liabilities",
     "equity", "equity_incl_nci", "cash", "debt_short", "debt_long", "operating_cf", "capex",
     "buyback", "dividends_paid", "dividends_per_share",
+    "gross_profit", "depreciation", "income_tax", "pretax_income", "interest_expense", "shares_diluted",
+    "assets_current", "liabilities_current",
 ]
 
 
@@ -232,6 +265,7 @@ def stock_values_at(stocks: dict, end: str) -> dict:
         "total_assets": assets, "total_liabilities": liabilities, "equity": equity,
         "equity_incl_nci": equity_all if equity_all is not None else equity,
         "cash": g("cash"), "debt_short": debt_short, "debt_long": debt_long,
+        "assets_current": g("assets_current"), "liabilities_current": g("liabilities_current"),
     }
 
 
@@ -240,6 +274,7 @@ def extract_concepts(facts: dict) -> dict:
     flows = {name: resolve_flow(facts, tags) for name, tags in FLOW_TAGS.items()}
     flows["eps_diluted"] = resolve_flow(facts, EPS_TAGS, unit="USD/shares")
     flows["dividends_per_share"] = resolve_flow(facts, DPS_TAGS, unit="USD/shares")
+    flows["shares_diluted"] = resolve_flow(facts, SHARES_FLOW_TAGS, unit="shares")
     stocks = {name: resolve_stock(facts, tags) for name, tags in STOCK_TAGS.items()}
     latest_stocks = {name: resolve_stock(facts, tags, annual_only=False) for name, tags in STOCK_TAGS.items()}
     return {"flows": flows, "stocks": stocks, "latest_stocks": latest_stocks}
@@ -386,6 +421,7 @@ def build_profile(ticker: str, cik: int, exchange: str | None, facts: dict | Non
         "latest_annual_period_end": max((r["period_end"] for r in annual_rows), default=None),
         "fetched_at": now_iso,
     }
+    prof.update(submissions_summary(subs))
     if not facts:
         prof.update({"status": "no_facts"})
         return prof
@@ -395,6 +431,109 @@ def build_profile(ticker: str, cik: int, exchange: str | None, facts: dict | Non
     prof.update(compute_ttm(facts))
     prof["status"] = "ok" if annual_rows else "no_annual_usd"
     return prof
+
+
+FACT_COLUMNS = ["cik", "taxonomy", "tag", "unit", "period_start", "period_end", "val",
+                "accn", "fy", "fp", "form", "filed", "frame"]
+
+
+def build_fact_rows(cik: int, facts: dict | None, today: date, filed_after: str | None = None,
+                    keep_years: int = KEEP_FACTS_YEARS) -> tuple:
+    """companyfacts 全体を縦持ちの行にする。(rows, max_filed)。
+
+    重複（同じ値が別の提出にも載るもの）は最初に提出した1行に畳む。畳むのは取得した全体に対して行い、
+    そのあとで filed_after より新しい行だけを返す。こうすると、新しい提出に再掲された過去の値が
+    「新しい行」として二重に入らない。max_filed は当日より前に提出された全行の最大（期末の古い行も含む）。
+    """
+    if not facts:
+        return [], None
+    cutoff = date(today.year - keep_years, today.month, 1).isoformat() if today.month else None
+    today_s = today.isoformat()
+    uniq: dict = {}
+    for ns, tags in ((facts.get("facts") or {}).items()):
+        for tag, body in (tags or {}).items():
+            for unit, entries in ((body or {}).get("units") or {}).items():
+                for en in entries or []:
+                    end, filed = en.get("end"), en.get("filed")
+                    if not end or not filed or filed >= today_s:
+                        continue
+                    try:
+                        val = float(en["val"])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    key = (ns, tag, unit, en.get("start"), end, val)
+                    cur = uniq.get(key)
+                    if cur is None:
+                        uniq[key] = dict(en, _val=val)
+                    else:
+                        if filed < cur["filed"]:
+                            frame = cur.get("frame")
+                            uniq[key] = dict(en, _val=val)
+                            if frame and not en.get("frame"):
+                                uniq[key]["frame"] = frame
+                        elif en.get("frame") and not cur.get("frame"):
+                            cur["frame"] = en["frame"]
+    max_filed = max((v["filed"] for v in uniq.values()), default=None)
+    rows = []
+    for (ns, tag, unit, start, end, _), en in uniq.items():
+        if (cutoff and end < cutoff) or (filed_after and en["filed"] <= filed_after):
+            continue
+        rows.append({
+            "cik": int(cik), "taxonomy": ns, "tag": tag, "unit": unit, "period_start": start, "period_end": end,
+            "val": en["_val"], "accn": en.get("accn"), "fy": en.get("fy"), "fp": en.get("fp"),
+            "form": en.get("form"), "filed": en["filed"], "frame": en.get("frame"),
+        })
+    return rows, max_filed
+
+
+def facts_job_id(cik_marks: list) -> str:
+    """load job の ID。取り込む (cik, 前回の提出日, 今回の提出日) の並びから決める（同じ内容の再実行は同じ ID）。"""
+    import hashlib
+    raw = "|".join(f"{c}:{a}:{b}" for c, a, b in sorted(cik_marks, key=lambda x: x[0]))
+    return "usfacts_" + hashlib.sha1(raw.encode()).hexdigest()[:24]
+
+
+def submissions_summary(subs: dict | None) -> dict:
+    """submissions API の企業情報のうち、スクリーナー・調査で使う項目を平らにする。"""
+    subs = subs or {}
+    addr = ((subs.get("addresses") or {}).get("business")) or {}
+    recent = ((subs.get("filings") or {}).get("recent")) or {}
+    forms, dates, accns = recent.get("form") or [], recent.get("filingDate") or [], recent.get("accessionNumber") or []
+
+    def latest(pred):
+        c = [(d, a) for f, d, a in zip(forms, dates, accns) if pred(f)]
+        return max(c) if c else (None, None)
+
+    counts: dict = {}
+    for f in forms:
+        counts[f] = counts.get(f, 0) + 1
+    k_date, k_accn = latest(lambda f: _is_annual_form(f))
+    q_date, _ = latest(lambda f: str(f or "").startswith("10-Q"))
+    former = [{"name": x.get("name"), "to": (x.get("to") or "")[:10] or None} for x in (subs.get("formerNames") or [])]
+
+    def s(key):
+        v = subs.get(key)
+        return str(v) if v not in (None, "") else None
+
+    return {
+        "entity_type": s("entityType"), "owner_org": s("ownerOrg"), "category": s("category"),
+        "ein": s("ein"), "lei": s("lei"), "website": s("website"), "investor_website": s("investorWebsite"),
+        "description": s("description"), "phone": s("phone"), "flags": s("flags"),
+        "state_of_incorporation": s("stateOfIncorporation"),
+        "state_of_incorporation_desc": s("stateOfIncorporationDescription"),
+        "business_city": addr.get("city"), "business_state": addr.get("stateOrCountry"),
+        "business_state_desc": addr.get("stateOrCountryDescription"), "business_zip": addr.get("zipCode"),
+        "tickers_all": ",".join(subs.get("tickers") or []) or None,
+        "exchanges_all": ",".join(e for e in (subs.get("exchanges") or []) if e) or None,
+        "former_names": json.dumps(former, ensure_ascii=False) if former else None,
+        "insider_transaction_for_issuer": subs.get("insiderTransactionForIssuerExists"),
+        "insider_transaction_for_owner": subs.get("insiderTransactionForOwnerExists"),
+        "filings_recent_count": len(forms) or None,
+        "filings_form_counts": json.dumps(counts, ensure_ascii=False, sort_keys=True) if counts else None,
+        "first_filing_in_recent": min(dates) if dates else None,
+        "latest_10k_filed": k_date, "latest_10k_accn": k_accn, "latest_10q_filed": q_date,
+        "latest_filing_any": max(dates) if dates else None,
+    }
 
 
 def parse_daily_index(text: str, forms=("10-K", "10-K/A", "10-KT", "10-Q", "10-Q/A", "10-QT")) -> set:
@@ -434,6 +573,11 @@ def advance_pointer(results: dict, today: date) -> str | None:
     return done
 
 
+def _facts_done(prof: dict) -> bool:
+    """全タグ表への取り込みが済んだ行か。財務を持たない会社（no_facts）は対象外なので済み扱い。"""
+    return prof.get("status") == "no_facts" or bool(prof.get("facts_loaded_at"))
+
+
 def select_queue(universe: dict, profiles: dict, changed_ciks: set, today: date,
                  mode: str, new_cap: int = NEW_PER_RUN, rotate: int = ROTATE_PER_RUN) -> list:
     """取得する CIK の順序。universe は {ticker: {cik, ...}}、profiles は {ticker: 行}。
@@ -445,7 +589,7 @@ def select_queue(universe: dict, profiles: dict, changed_ciks: set, today: date,
         by_cik.setdefault(int(u["cik"]), []).append(t)
 
     def last_fetch(cik):
-        fs = [profiles[t].get("fetched_at") if t in profiles else None for t in by_cik[cik]]
+        fs = [profiles[t].get("fetched_at") if t in profiles and _facts_done(profiles[t]) else None for t in by_cik[cik]]
         return None if any(f is None for f in fs) else min(fs)  # 新規上場の ticker が混じる CIK は未取得扱い
 
     def age_days(ts):
@@ -577,6 +721,24 @@ def fetch_facts_and_subs(cik: int, cfg):
 # BigQuery
 # ==============================================================
 
+PROFILE_TEXT_COLUMNS = [
+    "entity_type", "owner_org", "category", "ein", "lei", "website", "investor_website", "description", "phone", "flags",
+    "state_of_incorporation", "state_of_incorporation_desc", "business_city", "business_state", "business_state_desc",
+    "business_zip", "tickers_all", "exchanges_all", "former_names", "filings_form_counts", "latest_10k_accn",
+]
+
+
+def facts_schema():
+    from google.cloud import bigquery as bq
+    F = bq.SchemaField
+    return [
+        F("cik", "INT64", "REQUIRED"), F("taxonomy", "STRING"), F("tag", "STRING", "REQUIRED"), F("unit", "STRING"),
+        F("period_start", "DATE"), F("period_end", "DATE", "REQUIRED"), F("val", "FLOAT64"),
+        F("accn", "STRING"), F("fy", "INT64"), F("fp", "STRING"), F("form", "STRING"),
+        F("filed", "DATE"), F("frame", "STRING"),
+    ]
+
+
 def _schemas():
     from google.cloud import bigquery as bq
     F = bq.SchemaField
@@ -590,6 +752,12 @@ def _schemas():
         F("ttm_period_end", "DATE"), F("ttm_revenue", "FLOAT64"), F("ttm_operating_income", "FLOAT64"),
         F("ttm_net_income", "FLOAT64"), F("ttm_eps_diluted", "FLOAT64"), F("ttm_operating_cf", "FLOAT64"),
         F("ttm_capex", "FLOAT64"), F("status", "STRING"), F("fetched_at", "TIMESTAMP"),
+    ] + [F(c, "STRING") for c in PROFILE_TEXT_COLUMNS] + [
+        F("insider_transaction_for_issuer", "INT64"), F("insider_transaction_for_owner", "INT64"),
+        F("filings_recent_count", "INT64"),
+        F("first_filing_in_recent", "DATE"), F("latest_10k_filed", "DATE"), F("latest_10q_filed", "DATE"),
+        F("latest_filing_any", "DATE"),
+        F("facts_max_filed", "DATE"), F("facts_rows", "INT64"), F("facts_loaded_at", "TIMESTAMP"),
     ]
     annual = [
         F("ticker", "STRING", "REQUIRED"), F("cik", "INT64"), F("period_end", "DATE", "REQUIRED"),
@@ -653,6 +821,47 @@ def write_table(client, table: str, schema: list, rows: list, previous_count: in
     job.result()
 
 
+def ensure_facts_table(client):
+    """us.company_facts を無ければ作る（period_end の年でパーティション・cik と tag でクラスタ）。"""
+    from google.api_core.exceptions import NotFound
+    from google.cloud import bigquery
+    ref = f"{client.project}.us.{FACTS_TABLE}"
+    try:
+        return client.get_table(ref)
+    except NotFound:
+        t = bigquery.Table(ref, schema=facts_schema())
+        t.time_partitioning = bigquery.TimePartitioning(type_=bigquery.TimePartitioningType.YEAR, field="period_end")
+        t.clustering_fields = ["cik", "tag"]
+        return client.create_table(t)
+
+
+def append_facts_file(client, path: Path, job_id: str, rows_n: int) -> None:
+    """NDJSON を WRITE_APPEND の load job（無料）で追記する。同じ job_id が既に成功していれば何もしない。"""
+    from google.api_core.exceptions import Conflict
+    from google.cloud import bigquery
+    ref = f"{client.project}.us.{FACTS_TABLE}"
+    for attempt in range(FACTS_LOAD_RETRIES + 1):
+        jid = job_id if attempt == 0 else f"{job_id}_r{attempt}"
+        cfg = bigquery.LoadJobConfig(
+            source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON, schema=facts_schema(),
+            write_disposition=bigquery.WriteDisposition.WRITE_APPEND)
+        try:
+            with open(path, "rb") as fh:
+                job = client.load_table_from_file(fh, ref, job_id=jid, job_config=cfg, location=BQ_LOCATION)
+            job.result()
+            return
+        except Conflict:
+            old = client.get_job(jid, location=BQ_LOCATION)
+            if old.state == "DONE" and not old.error_result:
+                print(f"  ↩️ load job {jid} は成功済み（再実行のため追記しない）")
+                return
+        except Exception as e:
+            if attempt >= FACTS_LOAD_RETRIES:
+                raise
+            print(f"  ⚠️ facts load 失敗（再試行）: {type(e).__name__}: {str(e)[:100]}")
+    raise RuntimeError(f"facts load が{FACTS_LOAD_RETRIES + 1}回失敗: {job_id}")
+
+
 def coverage(profiles: list, annual: list, universe_n: int) -> dict:
     ann_t = {r["ticker"] for r in annual}
     with_rev = {r["ticker"] for r in annual if r.get("revenue") is not None}
@@ -705,6 +914,13 @@ def run(mode: str, cfg, client, budget_minutes: float, limit: int = 0, dry_run: 
 
     new_profiles: list = []
     new_annual: list = []
+    fact_marks: list = []        # (cik, 前回の取り込み済み提出日, 今回の提出日)
+    facts_tmp = _state_dir(cfg).parent.parent / "cache" / "us_company_facts_rows.ndjson"
+    facts_tmp.parent.mkdir(parents=True, exist_ok=True)
+    facts_fh = open(facts_tmp, "w", encoding="utf-8")
+    fact_n = {"pending": 0, "loaded": 0}
+    if client and not dry_run:
+        ensure_facts_table(client)
     stats = {"ok": 0, "no_facts": 0, "error": 0, "attempted": 0}
     consecutive_fail = 0
     aborted = ""
@@ -713,6 +929,17 @@ def run(mode: str, cfg, client, budget_minutes: float, limit: int = 0, dry_run: 
     def checkpoint(final=False):
         if dry_run or not client or not new_profiles:
             return
+        facts_fh.flush()
+        if fact_n["pending"]:
+            size = client.get_table(f"{client.project}.us.{FACTS_TABLE}").num_bytes or 0
+            if size > FACTS_MAX_BYTES:
+                raise RuntimeError(f"us.{FACTS_TABLE} が {size / 1024 ** 3:.2f}GiB で上限 {FACTS_MAX_BYTES / 1024 ** 3:g}GiB を超えた（無料枠 10GB を守るため追記を止めた）")
+            append_facts_file(client, facts_tmp, facts_job_id(fact_marks), fact_n["pending"])
+            fact_n["loaded"] += fact_n["pending"]
+        facts_fh.seek(0)
+        facts_fh.truncate()
+        fact_n["pending"] = 0
+        fact_marks.clear()
         merged_p, merged_a = merge_rows(saved["profiles"], saved["annual"], new_profiles, new_annual)
         sp, sa = _schemas()
         write_table(client, PROFILE_TABLE, sp, merged_p, len(saved["profiles"]))
@@ -743,17 +970,31 @@ def run(mode: str, cfg, client, budget_minutes: float, limit: int = 0, dry_run: 
         consecutive_fail = 0
         stats[outcome] += 1
         now_iso = datetime.now(timezone.utc).isoformat()
+        prev_wm = max((profiles.get(t, {}).get("facts_max_filed") or "" for t in item["tickers"]), default="") or None
+        frows, new_wm = build_fact_rows(cik, facts, today, filed_after=prev_wm)
+        for fr in frows:
+            facts_fh.write(json.dumps(fr, ensure_ascii=False, separators=(",", ":")) + "\n")
+        fact_n["pending"] += len(frows)
+        if frows:
+            fact_marks.append((cik, prev_wm, new_wm))
         for t in item["tickers"]:
             u = universe[t]
             arows = build_annual_rows(t, cik, facts, now_iso, today) if facts else []
             new_annual.extend(arows)
-            new_profiles.append(build_profile(t, cik, u.get("exchange"), facts, subs, arows, now_iso))
+            prof = build_profile(t, cik, u.get("exchange"), facts, subs, arows, now_iso)
+            prof["facts_max_filed"] = new_wm or prev_wm
+            prof["facts_rows"] = (profiles.get(t, {}).get("facts_rows") or 0) + len(frows)
+            prof["facts_loaded_at"] = now_iso
+            new_profiles.append(prof)
         if i % 100 == 0:
             print(f"  [{i}/{len(queue)}] ok={stats['ok']} no_facts={stats['no_facts']} error={stats['error']}")
         if len(new_profiles) >= CHECKPOINT_EVERY:
             checkpoint()
 
     checkpoint(final=True)
+    facts_fh.close()
+    facts_tmp.unlink(missing_ok=True)
+    stats["fact_rows_loaded"] = fact_n["loaded"]
     if not dry_run and mode == "update" and pointer and pointer != state.get("last_index_date"):
         state["last_index_date"] = pointer
         _write_json(state_path, state)

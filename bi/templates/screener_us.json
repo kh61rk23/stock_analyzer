@@ -38,7 +38,7 @@
       "y": "fcf_yield_pct",
       "series": null
     },
-    "note": "通貨は米ドル（列名の _usd）。時価総額は終値×株数の推定（株数＝純利益÷希薄化EPS）で、実際の発行済株式数ではない。FCF・EPS は SEC XBRL の最新通期。valuation_flag が付いた銘柄（株式分割の疑い）は空。"
+    "note": "通貨は米ドル（列名の _usd）。時価総額は終値×発行済株式数（SEC の表紙値。出どころは shares_source）。FCF＝営業CF－設備投資で、直近4四半期が揃えばそれ、無ければ最新通期。valuation_flag が付いた銘柄（株式分割の疑い）は空。"
   },
   {
     "id": "scru_growth",
@@ -71,7 +71,7 @@
       "y": "op_income_growth_pct",
       "series": null
     },
-    "note": "通貨は米ドル（列名の _usd）。成長率は最新通期と1年前の通期の比。前年が黒字の会社だけ対象（赤字からの回復は除く）。売上が空の会社（SEC の項目名の差）は sales_growth が空なので出ない。"
+    "note": "通貨は米ドル（列名の _usd）。成長率は最新通期と1年前の通期の比。前年が黒字の会社だけ対象（赤字からの回復は除く）。売上の項目名は年度ごとに吸収しているが、売上を開示しない会社（信託など）は sales_growth が空なので出ない。"
   },
   {
     "id": "scru_momentum",
@@ -202,7 +202,7 @@
       "y": "net_margin_pct",
       "series": null
     },
-    "note": "通貨は米ドル（列名の _usd）。PER は 最新終値÷最新通期の希薄化EPS。EPS が株価と同じ分割基準でない銘柄（valuation_flag）は空。"
+    "note": "通貨は米ドル（列名の _usd）。PER は 最新終値÷直近4四半期の希薄化EPS（無ければ最新通期）。EPS が株価と同じ分割基準でない銘柄（valuation_flag）は空。"
   },
   {
     "id": "scru_buyback",
@@ -243,7 +243,7 @@
       "y": "buyback_yield_pct",
       "series": null
     },
-    "note": "通貨は米ドル（列名の _usd）。自社株買いは最新通期の取得額（SEC XBRL）。時価総額は推定値。"
+    "note": "通貨は米ドル（列名の _usd）。自社株買いは最新通期の取得額（SEC XBRL）。時価総額は終値×発行済株式数。"
   },
   {
     "id": "scru_composite_top",
@@ -276,6 +276,259 @@
       "y": "composite_score",
       "series": null
     },
-    "note": "通貨は米ドル（列名の _usd）。スコア・PBR・ROE・RSI は日次スナップショット（stock_snapshot の market='US'）にある約400銘柄だけ。スコアの作り方は SPEC_core.md を参照。"
+    "note": "通貨は米ドル（列名の _usd）。スコア・RSI は日次スナップショット（stock_snapshot の market='US'）にある約400銘柄だけ。PBR・ROE は SEC の貸借から全銘柄分を計算（PBR＝時価総額÷最新の株主資本、ROE＝直近4四半期の純利益÷最新の株主資本）。スコアの作り方は SPEC_core.md を参照。"
+  },
+  {
+    "id": "scru_roic_cheap",
+    "domain": "screener_us",
+    "title": "高ROIC×EV/EBITDA割安",
+    "question": "資本効率（ROIC）が高いのに、EV/EBITDA で見て安い米国株はどこか",
+    "mart": "m_screener_us",
+    "sql": "SELECT ticker, name, industry, market_cap_bn_usd,\n       ROUND(roic * 100, 1) AS roic_pct, roic_tax_basis, ROUND(ev_ebitda, 1) AS ev_ebitda,\n       ROUND(operating_margin * 100, 1) AS operating_margin_pct, ROUND(per, 1) AS per\nFROM m_screener_us\nWHERE roic >= {{min_roic_pct}} / 100 AND ev_ebitda > 0 AND ev_ebitda <= {{max_ev_ebitda}}\n  AND market_cap_bn_usd >= {{min_mcap_bn}}\nORDER BY roic / ev_ebitda DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "min_roic_pct",
+        "label": "ROIC の下限（%）",
+        "type": "number",
+        "default": 15,
+        "min": -100,
+        "max": 500
+      },
+      {
+        "name": "max_ev_ebitda",
+        "label": "EV/EBITDA の上限（倍）",
+        "type": "number",
+        "default": 12,
+        "min": 0.5,
+        "max": 200
+      },
+      {
+        "name": "min_mcap_bn",
+        "label": "時価総額の下限（十億ドル）",
+        "type": "number",
+        "default": 2,
+        "min": 0,
+        "max": 100000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "scatter",
+      "x": "ev_ebitda",
+      "y": "roic_pct",
+      "series": null
+    },
+    "note": "ROIC＝営業利益×(1−税率)÷(有利子負債＋株主資本)（通期）。税率は報告値（5〜50%）が無ければ25%。減価償却などは取得側の取り直しが済むまで空の銘柄がある。"
+  },
+  {
+    "id": "scru_quality_fscore",
+    "domain": "screener_us",
+    "title": "財務の質（Fスコア）",
+    "question": "ピオトロスキーFスコアが高く、利払い余力と流動性が十分な米国株はどこか",
+    "mart": "m_screener_us",
+    "sql": "SELECT ticker, name, industry, market_cap_bn_usd,\n       f_score, f_score_items, ROUND(interest_coverage, 1) AS interest_coverage, ROUND(current_ratio, 2) AS current_ratio,\n       ROUND(accrual_ratio * 100, 1) AS accrual_pct, ROUND(per, 1) AS per, ROUND(pbr, 2) AS pbr\nFROM m_screener_us\nWHERE f_score >= {{min_f_score}} AND current_ratio >= {{min_current_ratio}}\n  AND (interest_coverage IS NULL OR interest_coverage >= {{min_icr}})\n  AND market_cap_bn_usd >= {{min_mcap_bn}}\nORDER BY f_score DESC, per ASC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "min_f_score",
+        "label": "Fスコアの下限（0〜9）",
+        "type": "int",
+        "default": 7,
+        "min": 0,
+        "max": 9
+      },
+      {
+        "name": "min_current_ratio",
+        "label": "流動比率の下限（倍）",
+        "type": "number",
+        "default": 1.2,
+        "min": 0,
+        "max": 50
+      },
+      {
+        "name": "min_icr",
+        "label": "インタレストカバレッジの下限（倍・利払い無しは除かない）",
+        "type": "number",
+        "default": 8,
+        "min": 0,
+        "max": 1000
+      },
+      {
+        "name": "min_mcap_bn",
+        "label": "時価総額の下限（十億ドル）",
+        "type": "number",
+        "default": 2,
+        "min": 0,
+        "max": 100000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "ticker",
+      "y": "f_score",
+      "series": null
+    },
+    "note": "Fスコアは9項目（前年の通期が取れる項目が7つ以上のときだけ）。"
+  },
+  {
+    "id": "scru_garp_peg",
+    "domain": "screener_us",
+    "title": "成長に対して割安（PEG）",
+    "question": "EPSの3年成長率に比べてPERが低い米国株はどこか",
+    "mart": "m_screener_us",
+    "sql": "SELECT ticker, name, industry, market_cap_bn_usd,\n       ROUND(peg, 2) AS peg, ROUND(per, 1) AS per, ROUND(eps_cagr_3y * 100, 1) AS eps_cagr_3y_pct,\n       ROUND(sales_cagr_3y * 100, 1) AS sales_cagr_3y_pct, ROUND(roic * 100, 1) AS roic_pct\nFROM m_screener_us\nWHERE peg > 0 AND peg <= {{max_peg}} AND eps_cagr_3y >= {{min_cagr_pct}} / 100\n  AND market_cap_bn_usd >= {{min_mcap_bn}}\nORDER BY peg ASC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "max_peg",
+        "label": "PEG の上限（倍）",
+        "type": "number",
+        "default": 1,
+        "min": 0.05,
+        "max": 10
+      },
+      {
+        "name": "min_cagr_pct",
+        "label": "EPS 3年成長率の下限（%）",
+        "type": "number",
+        "default": 10,
+        "min": -50,
+        "max": 500
+      },
+      {
+        "name": "min_mcap_bn",
+        "label": "時価総額の下限（十億ドル）",
+        "type": "number",
+        "default": 2,
+        "min": 0,
+        "max": 100000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "scatter",
+      "x": "eps_cagr_3y_pct",
+      "y": "per",
+      "series": null
+    },
+    "note": "PEG＝PER÷EPS3年CAGR（%）。3年前と今がともに黒字の銘柄だけ。"
+  },
+  {
+    "id": "scru_shareholder_yield",
+    "domain": "screener_us",
+    "title": "総還元利回り（配当＋自社株買い）",
+    "question": "配当と自社株買いの合計が時価総額に対して大きい米国株はどこか",
+    "mart": "m_screener_us",
+    "sql": "SELECT ticker, name, industry, market_cap_bn_usd,\n       ROUND(total_payout_yield * 100, 1) AS total_payout_yield_pct, ROUND(dividend_yield * 100, 2) AS dividend_yield_pct,\n       ROUND(buyback_yield * 100, 2) AS buyback_yield_pct, ROUND(fcf_yield * 100, 1) AS fcf_yield_pct, ROUND(per, 1) AS per\nFROM m_screener_us\nWHERE total_payout_yield >= {{min_payout_pct}} / 100 AND fcf_yield > 0\n  AND market_cap_bn_usd >= {{min_mcap_bn}}\nORDER BY total_payout_yield DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "min_payout_pct",
+        "label": "総還元利回りの下限（%）",
+        "type": "number",
+        "default": 5,
+        "min": 0,
+        "max": 100
+      },
+      {
+        "name": "min_mcap_bn",
+        "label": "時価総額の下限（十億ドル）",
+        "type": "number",
+        "default": 2,
+        "min": 0,
+        "max": 100000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "ticker",
+      "y": "total_payout_yield_pct",
+      "series": null
+    },
+    "note": "通期の配当支払総額＋自社株買い÷時価総額。FCF が赤字の銘柄は除く（借入での還元を避ける）。"
+  },
+  {
+    "id": "scru_multi_factor",
+    "domain": "screener_us",
+    "title": "多面スコア（割安×質×還元）",
+    "question": "割安さ・資本効率・財務の質・株主還元をまとめて満たす米国株はどこか",
+    "mart": "m_screener_us",
+    "sql": "SELECT ticker, name, industry, market_cap_bn_usd,\n       (CASE WHEN ev_ebitda > 0 AND ev_ebitda <= {{max_ev_ebitda}} THEN 1 ELSE 0 END\n      + CASE WHEN per > 0 AND per <= {{max_per}} THEN 1 ELSE 0 END\n      + CASE WHEN roic >= {{min_roic_pct}} / 100 THEN 1 ELSE 0 END\n      + CASE WHEN f_score >= 6 THEN 1 ELSE 0 END\n      + CASE WHEN fcf_yield >= 0.05 THEN 1 ELSE 0 END\n      + CASE WHEN total_payout_yield >= 0.04 THEN 1 ELSE 0 END\n      + CASE WHEN sales_cagr_3y >= 0.05 THEN 1 ELSE 0 END) AS hits,\n       ROUND(ev_ebitda, 1) AS ev_ebitda, ROUND(per, 1) AS per, ROUND(roic * 100, 1) AS roic_pct, f_score,\n       ROUND(fcf_yield * 100, 1) AS fcf_yield_pct, ROUND(total_payout_yield * 100, 1) AS total_payout_yield_pct\nFROM m_screener_us\nWHERE market_cap_bn_usd >= {{min_mcap_bn}}\nORDER BY hits DESC, ev_ebitda ASC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "max_ev_ebitda",
+        "label": "EV/EBITDA が何倍以下で1点",
+        "type": "number",
+        "default": 10,
+        "min": 0.5,
+        "max": 200
+      },
+      {
+        "name": "max_per",
+        "label": "PER が何倍以下で1点",
+        "type": "number",
+        "default": 15,
+        "min": 1,
+        "max": 500
+      },
+      {
+        "name": "min_roic_pct",
+        "label": "ROIC が何%以上で1点",
+        "type": "number",
+        "default": 15,
+        "min": -100,
+        "max": 500
+      },
+      {
+        "name": "min_mcap_bn",
+        "label": "時価総額の下限（十億ドル）",
+        "type": "number",
+        "default": 2,
+        "min": 0,
+        "max": 100000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "ticker",
+      "y": "hits",
+      "series": null
+    },
+    "note": "7項目（EV/EBITDA・PER・ROIC・Fスコア6以上・FCF利回り5%以上・総還元4%以上・売上3年CAGR5%以上）のうち満たす数の多い順。値が無い項目は0点。"
   }
 ]

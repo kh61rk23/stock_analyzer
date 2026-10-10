@@ -25,7 +25,7 @@ STRING_COLS = {
     "top_export_commodities", "sealane_adjacency", "military_alliances",
     "company_id", "entity_type", "node_id", "node_name_ja", "node_name_en", "node_type", "supply_chain_pos",
     "parent_id", "domain_id", "domain_name_ja", "path_name", "confidence_type",
-    "price_source", "interest_bearing_debt_basis", "valuation_flag",
+    "price_source", "interest_bearing_debt_basis", "valuation_flag", "roic_tax_basis", "re_gain_flag", "exchange", "sic", "shares_source",
     "theme_name", "sector_code", "sector_name_ja", "supply_chain_position", "source", "signal_category", "direction",
 }
 INT_COLS = {
@@ -34,10 +34,11 @@ INT_COLS = {
     "municipality_count", "population_current", "population_2050", "est_excluded_count",
     "node_level", "child_count", "company_count", "company_count_rollup",
     "theme_order", "days_before_latest", "price_days", "cik", "signal_count", "ticker_signal_count", "ticker_count",
+    "re_fiscal_year", "re_facility_count", "re_est_excluded_count", "f_score", "f_score_items", "consec_up_years",
     "trading_days", "n_stocks", "n_up", "n_down", "n_flat", "n_hl_base", "n_new_high", "n_new_low", "n_ma50", "n_ma200",
 }
 DATE_COLS = {"fiscal_year_end", "risk_date", "latest_risk_date", "price_date", "price_break_date", "snapshot_date", "technical_date", "fired_at",
-             "month", "month_end_date", "trade_date"}
+             "month", "month_end_date", "trade_date", "ttm_period_end", "balance_date", "shares_as_of"}
 BOOL_COLS = {"is_delisted", "sanction_flag", "is_landlocked", "review_flag", "auto_derived", "verified_flag", "above_ma200", "has_fundamentals", "is_partial", "is_complete"}
 ALL_MARTS = ("m_company", "m_fin_annual", "m_country_profile", "m_country_risk", "m_company_country",
              "m_re_area", "m_re_holdings", "m_re_holdings_pref", "m_tax_node", "m_company_tax", "m_screener", "m_screener_us",
@@ -312,6 +313,39 @@ def _load_screener(c) -> None:
             "above_ma200": True if i % 6 == 0 else None,
             "technical_date": d if i % 6 == 0 else None,
         }
+        mcap = cap_b * 1e8 if px else None
+        ocf = op * 1.1
+        capex = sales * 0.03
+        dep = sales * 0.02
+        ev = mcap + debt - cash if px else None
+        has_re = i % 4 == 1
+        gain = sales * 0.2 * (i % 5) if has_re else None
+        fcf = ocf - capex
+        divs = 20.0 * 9e7
+        bb = sales * 0.005 * (i % 3)
+        row.update({
+            "nopat": op * 0.7, "invested_capital": debt + eq, "tax_rate": 0.3, "roic_tax_basis": "reported" if i % 2 else "assumed",
+            "roic": op * 0.7 / (debt + eq), "ocf_margin": ocf / sales, "fcf_margin": fcf / sales, "gross_margin_chg_1y": 0.01 * ((i % 5) - 2),
+            "operating_cf": ocf, "fcf": fcf, "ebitda": op + dep, "ev": ev,
+            "ev_ebitda": ev / (op + dep) if px and ev > 0 else None, "ev_sales": ev / sales if px and ev > 0 else None,
+            "psr": mcap / sales if px else None,
+            "peg": (6.0 + (i % 10) * 1.5) / (5 + i % 20) if px and not flag else None,
+            "fcf_yield": fcf / mcap if px else None, "earnings_yield": 50.0 / price if px and not flag else None,
+            "re_fiscal_year": 2025 if has_re else None, "re_facility_count": 3 + i % 7 if has_re else None,
+            "re_est_excluded_count": 0 if has_re else None, "re_land_value_est": gain * 1.5 if has_re else None,
+            "re_unrealized_gain": gain, "re_gain_flag": None, "re_gain_to_mcap": gain / mcap if has_re and px else None,
+            "re_land_value_to_mcap": gain * 1.5 / mcap if has_re and px else None,
+            "re_gain_after_tax": gain * 0.694 if has_re else None, "adj_equity": eq + gain * 0.694 if has_re else None,
+            "adj_pbr": mcap / (eq + gain * 0.694) if has_re and px else None,
+            "asset_value_ratio": (cash - debt + gain * 0.694) / mcap if has_re and px else None,
+            "interest_coverage": op / (debt * 0.01) if debt else None, "current_ratio": 1.0 + (i % 6) * 0.4,
+            "goodwill_to_equity": (i % 5) * 0.05, "accrual_ratio": (ni - ocf) / assets,
+            "f_score": 3 + i % 7 if i % 7 != 6 else None, "f_score_items": 9 if i % 7 != 6 else 5,
+            "buyback_est": bb, "buyback_yield": bb / mcap if px else None,
+            "total_payout_yield": (divs + bb) / mcap if px else None, "doe": divs / eq,
+            "op_income_cagr_3y": -0.05 + (i % 9) * 0.04, "net_income_cagr_3y": 0.05 + (i % 20) * 0.01,
+            "consec_up_years": i % 8,
+        })
         _insert(c, "m_screener", row)
     _load_screener_us(c)
 
@@ -330,25 +364,36 @@ def _load_screener_us(c) -> None:
         mcap = price * 1e9 / 10 if (px and fund) else None
         d = dt.date(2026, 10, 9)
         row = {
-            "ticker": "AAPL" if i == 0 else f"T{i:03d}", "name": f"Corp {i}" if i % 3 == 0 else None,
+            "ticker": "AAPL" if i == 0 else f"T{i:03d}", "name": f"Corp {i}" if i % 3 != 2 else None,
+            "exchange": "Nasdaq" if i % 2 else "NYSE", "sic": "3571" if fund else None,
+            "industry": "Electronic Computers" if fund else None,
             "cik": 1000 + i, "has_fundamentals": fund, "fiscal_year_end": dt.date(2026, 6, 30) if fund else None,
             "revenue_usd": rev, "operating_income_usd": op, "net_income_usd": ni,
-            "fcf_usd": ni * 0.8 if fund else None, "buyback_usd": ni * 0.3 if fund else None, "eps_usd": eps,
+            "fcf_usd": ni * 0.8 if fund else None, "buyback_usd": ni * 0.3 if fund else None, "dividends_paid_usd": ni * 0.2 if fund else None,
+            "eps_usd": eps,
             "operating_margin": op / rev if fund else None, "net_margin": ni / rev if fund else None,
             "fcf_margin": ni * 0.8 / rev if fund else None,
             "sales_growth_1y": -0.05 + (i % 9) * 0.04 if fund else None,
             "op_income_growth_1y": -0.1 + (i % 7) * 0.06 if fund else None,
             "net_income_growth_1y": -0.1 + (i % 5) * 0.08 if fund else None,
             "eps_growth_1y": -0.1 + (i % 5) * 0.08 if fund else None,
-            "shares_est": 1e8 if fund else None,
+            "ttm_period_end": dt.date(2026, 9, 30) if fund else None,
+            "ttm_revenue_usd": rev * 1.05 if fund else None, "ttm_operating_income_usd": op * 1.05 if fund else None,
+            "ttm_net_income_usd": ni * 1.05 if fund else None, "ttm_eps_usd": eps * 1.05 if fund else None,
+            "balance_date": dt.date(2026, 9, 30) if fund else None,
+            "total_assets_usd": rev * 2 if fund else None, "total_liabilities_usd": rev * 1.2 if fund else None,
+            "equity_usd": rev * 0.8 if fund else None, "cash_usd": rev * 0.3 if fund else None,
+            "interest_bearing_debt_usd": rev * 0.4 if fund else None, "equity_ratio": 0.4 if fund else None,
+            "shares_outstanding": 1e8 if fund else None, "shares_as_of": dt.date(2026, 9, 20) if fund else None,
+            "shares_source": "dei_cover" if fund else None,
             "price_source": "price_daily" if px else None, "current_price_usd": price, "price_date": d if px else None,
             "snapshot_date": d if i % 3 == 0 else None,
             "market_cap_usd": mcap, "market_cap_bn_usd": mcap / 1e9 if mcap else None,
             "per": price / eps if (px and fund) else None,
             "ps_ratio": mcap / rev if mcap else None, "fcf_yield": ni * 0.8 / mcap if mcap else None,
             "buyback_yield": ni * 0.3 / mcap if mcap else None, "valuation_flag": None,
-            "pbr": 1.0 + (i % 8) * 0.8 if i % 3 == 0 else None, "roe": 0.05 + (i % 10) * 0.03 if i % 3 == 0 else None,
-            "dividend_yield": (i % 6) * 0.007 if i % 3 == 0 else None,
+            "pbr": 1.0 + (i % 8) * 0.8 if (px and fund) else None, "roe": 0.05 + (i % 10) * 0.03 if fund else None,
+            "dividend_yield": (i % 6) * 0.007 if (px and fund) else None,
             "return_1m": -0.1 + (i % 10) * 0.03 if px else None, "return_3m": -0.2 + (i % 12) * 0.05 if px else None,
             "return_1y": -0.3 + (i % 15) * 0.07 if px else None,
             "high_52w_usd": price * 1.2 if px else None, "low_52w_usd": price * 0.7 if px else None,
@@ -360,6 +405,21 @@ def _load_screener_us(c) -> None:
             "rsi14": 40.0 + i % 40 if i % 6 == 0 else None, "above_ma200": True if i % 6 == 0 else None,
             "technical_date": d if i % 6 == 0 else None,
         }
+        ev = mcap + rev * 0.4 - rev * 0.3 if mcap else None
+        ebitda = op * 1.2 if fund else None
+        row.update({
+            "ebitda_usd": ebitda, "ev_usd": ev, "ev_ebitda": ev / ebitda if ev and ebitda and ebitda > 0 else None,
+            "ev_sales": ev / rev if ev else None, "tax_rate": 0.21 if fund else None,
+            "roic_tax_basis": ("reported" if i % 2 else "assumed") if fund else None,
+            "invested_capital_usd": rev * 1.2 if fund else None, "roic": op * 0.79 / (rev * 1.2) if fund else None,
+            "gross_margin": 0.4 if fund else None, "interest_coverage": 5.0 + i % 20 if fund else None,
+            "current_ratio": 1.0 + (i % 5) * 0.3 if fund else None, "accrual_ratio": -0.02 + (i % 4) * 0.01 if fund else None,
+            "total_payout_yield": ni * 0.5 / mcap if mcap else None, "earnings_yield": eps / price if (px and fund) else None,
+            "peg": 0.5 + (i % 6) * 0.3 if (px and fund) else None,
+            "sales_cagr_3y": 0.03 + (i % 7) * 0.03 if fund else None, "op_income_cagr_3y": 0.02 + (i % 6) * 0.04 if fund else None,
+            "eps_cagr_3y": 0.05 + (i % 5) * 0.04 if fund else None,
+            "f_score": 3 + i % 7 if fund else None, "f_score_items": 9 if fund else 0,
+        })
         _insert(c, "m_screener_us", row)
 
 
@@ -457,8 +517,8 @@ def _load_theme(c) -> None:
 
 
 MARTS = set(ALL_MARTS)
-# 実体化済みの別マートを入力にするマート（業種の時価総額加重の重み）。逆向きの依存は作らない
-MART_DEPENDS = {"m_sector_perf": ("m_screener",)}
+# 実体化済みの別マートを入力にするマート（業種の時価総額加重の重み・土地の含み益）。逆向きの依存は作らない
+MART_DEPENDS = {"m_sector_perf": ("m_screener",), "m_screener": ("m_re_holdings_pref",)}
 TEMPLATES = bt.load_templates()
 
 
@@ -610,14 +670,18 @@ def test_screener_templates_are_single_mart():
 
 
 def test_screener_us_mart_shape():
-    """米国スクリーナーは1銘柄1行・通貨は米ドル（列名の _usd）。元表は bi.src_us_fundamentals の写し。"""
+    """米国スクリーナーは1銘柄1行・通貨は米ドル（列名の _usd）。元表は us.company_profile / us.financials_annual の写し。株数は実数で、推定株数の列は無い。"""
     cols = mart_columns("m_screener_us")
     assert cols[0] == "ticker" and len(cols) == len(set(cols))
     for need in ("revenue_usd", "net_income_usd", "eps_usd", "current_price_usd", "market_cap_usd", "has_fundamentals",
-                 "return_3m", "week52_position_pct", "valuation_flag", "price_break_date"):
+                 "return_3m", "week52_position_pct", "valuation_flag", "price_break_date",
+                 "total_assets_usd", "equity_usd", "shares_outstanding", "shares_source", "industry", "ttm_revenue_usd",
+                 "pbr", "roe"):
         assert need in cols, need
+    assert "shares_est" not in cols
     sql = (REPO / "bi" / "marts" / "m_screener_us.sql").read_text(encoding="utf-8")
-    assert "bi.src_us_fundamentals" in sql and "market = 'US'" in sql and "price_daily_latest" in sql
+    assert "bi.src_us_company_profile" in sql and "bi.src_us_financials_annual" in sql and "bi.src_us_fundamentals" not in sql
+    assert "market = 'US'" in sql and "price_daily_latest" in sql
 
 
 def test_screener_us_templates_are_single_mart():

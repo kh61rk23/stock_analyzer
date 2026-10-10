@@ -194,9 +194,9 @@ def test_select_queue_order_and_caps():
     today = date(2026, 10, 10)
     uni = _uni(("AAA", 1), ("BBB", 2), ("CCC", 3), ("DDD", 4), ("DDD2", 4))
     prof = {
-        "AAA": {"fetched_at": "2026-10-09T00:00:00+00:00", "status": "ok"},
-        "BBB": {"fetched_at": "2026-01-01T00:00:00+00:00", "status": "ok"},      # 古い
-        "DDD": {"fetched_at": "2026-10-01T00:00:00+00:00", "status": "ok"},
+        "AAA": {"fetched_at": "2026-10-09T00:00:00+00:00", "status": "ok", "facts_loaded_at": "x"},
+        "BBB": {"fetched_at": "2026-01-01T00:00:00+00:00", "status": "ok", "facts_loaded_at": "x"},      # 古い
+        "DDD": {"fetched_at": "2026-10-01T00:00:00+00:00", "status": "ok", "facts_loaded_at": "x"},
     }
     q = u.select_queue(uni, prof, {1}, today, "update")
     assert [(x["cik"], x["reason"]) for x in q] == [(1, "new_filing"), (3, "never_fetched"), (4, "never_fetched"), (2, "stale_rotation")]
@@ -248,3 +248,78 @@ def test_judge_never_reports_total_failure_as_success():
     assert u.judge({**base, "ok": 30, "error": 2, "attempted": 32})[0] == "warn"
     assert u.judge({"ok": 5, "no_facts": 1, "error": 0, "attempted": 6, "aborted": ""})[0] == "success"
     assert u.judge({"ok": 0, "no_facts": 0, "error": 0, "attempted": 0, "aborted": ""})[0] == "success"  # 対象なし
+
+
+# ---- 全タグの縦持ち表 ---------------------------------------------------------
+
+def _facts_payload():
+    def en(end, val, filed, accn, start=None, form="10-K", frame=None):
+        d = {"end": end, "val": val, "filed": filed, "accn": accn, "form": form, "fy": 2025, "fp": "FY"}
+        if start:
+            d["start"] = start
+        if frame:
+            d["frame"] = frame
+        return d
+    return {"facts": {
+        "us-gaap": {"Revenues": {"units": {"USD": [
+            en("2024-12-31", 100.0, "2025-02-01", "A1", "2024-01-01"),
+            en("2024-12-31", 100.0, "2026-02-01", "A2", "2024-01-01", frame="CY2024"),    # 翌年の10-Kの比較列（同値）
+            en("2024-12-31", 101.0, "2026-03-01", "A3", "2024-01-01", form="10-K/A"),     # 訂正（値が違う）
+            en("2015-12-31", 5.0, "2016-02-01", "A0", "2015-01-01"),                      # 5年より古い
+            en("2026-09-30", 7.0, "2026-10-10", "A9", "2026-07-01", form="10-Q"),         # 当日提出は取り込まない
+        ]}}},
+        "dei": {"EntityCommonStockSharesOutstanding": {"units": {"shares": [en("2026-01-31", 1e6, "2026-02-01", "A2")]}}},
+    }}
+
+
+def test_fact_rows_dedupe_keep_first_filing_and_drop_old_and_today():
+    rows, wm = u.build_fact_rows(1, _facts_payload(), date(2026, 10, 10))
+    rev = [r for r in rows if r["tag"] == "Revenues"]
+    assert sorted((r["val"], r["accn"]) for r in rev) == [(100.0, "A1"), (101.0, "A3")]
+    assert next(r for r in rev if r["accn"] == "A1")["frame"] == "CY2024"          # 重複側の frame を引き継ぐ
+    assert {r["taxonomy"] for r in rows} == {"us-gaap", "dei"}                      # 全 namespace
+    assert wm == "2026-03-01"                                                       # 当日(10/10)分は含めない
+
+
+def test_fact_rows_incremental_does_not_reinsert_restated_comparatives():
+    rows, _ = u.build_fact_rows(1, _facts_payload(), date(2026, 10, 10), filed_after="2026-02-01")
+    # 2026-02-01 提出の再掲（同値）は最初の提出(2025-02-01)に畳まれているので新しい行にならない
+    assert [(r["tag"], r["accn"]) for r in rows] == [("Revenues", "A3")]
+
+
+def test_fact_rows_empty_and_bad_values():
+    assert u.build_fact_rows(1, None, date(2026, 10, 10)) == ([], None)
+    f = {"facts": {"us-gaap": {"X": {"units": {"USD": [{"end": "2025-12-31", "val": "n/a", "filed": "2026-01-01"}]}}}}}
+    assert u.build_fact_rows(1, f, date(2026, 10, 10))[0] == []
+
+
+def test_facts_job_id_is_stable_and_order_free():
+    a = u.facts_job_id([(2, None, "2026-01-01"), (1, "2025-01-01", "2026-01-01")])
+    assert a == u.facts_job_id([(1, "2025-01-01", "2026-01-01"), (2, None, "2026-01-01")])
+    assert a != u.facts_job_id([(1, "2025-01-01", "2026-01-02"), (2, None, "2026-01-01")])
+
+
+def test_submissions_summary_takes_everything_flat():
+    subs = {"entityType": "operating", "category": "Large accelerated filer", "stateOfIncorporation": "CA",
+            "tickers": ["AAPL"], "exchanges": ["Nasdaq"], "addresses": {"business": {"city": "CUPERTINO", "stateOrCountry": "CA"}},
+            "formerNames": [{"name": "APPLE COMPUTER INC", "from": "1994-01-26T05:00:00.000Z", "to": "2007-01-04T05:00:00.000Z"}],
+            "filings": {"recent": {"form": ["10-Q", "8-K", "10-K", "10-Q"], "filingDate": ["2026-07-31", "2026-08-01", "2025-10-31", "2026-05-01"],
+                                   "accessionNumber": ["q", "k8", "k", "q0"]}}}
+    s = u.submissions_summary(subs)
+    assert s["category"] == "Large accelerated filer" and s["business_city"] == "CUPERTINO"
+    assert s["latest_10k_filed"] == "2025-10-31" and s["latest_10k_accn"] == "k" and s["latest_10q_filed"] == "2026-07-31"
+    assert s["latest_filing_any"] == "2026-08-01" and '"2007-01-04"' in s["former_names"]
+    assert u.submissions_summary(None)["entity_type"] is None
+
+
+def test_legacy_profile_without_facts_is_requeued():
+    uni = _uni(("AAA", 1))
+    prof = {"AAA": {"fetched_at": "2026-10-09T00:00:00+00:00", "status": "ok"}}     # 全タグ表の導入前の行
+    assert [x["reason"] for x in u.select_queue(uni, prof, set(), date(2026, 10, 10), "backfill")] == ["never_fetched"]
+
+
+def test_extra_annual_columns_present():
+    f = facts(GrossProfit={"USD": [e("2025-12-31", 40.0, "2025-01-01")]},
+              AssetsCurrent={"USD": [e("2025-12-31", 70.0)]}, Assets={"USD": [e("2025-12-31", 100.0)]})
+    r = u.build_annual_rows("A", 1, f, "now", date(2026, 10, 10))[0]
+    assert r["gross_profit"] == 40.0 and r["assets_current"] == 70.0

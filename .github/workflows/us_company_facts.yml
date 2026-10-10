@@ -43,6 +43,16 @@ jobs:
           ALERT_GMAIL_PASSWORD: ${{ secrets.ALERT_GMAIL_PASSWORD }}
           ALERT_GMAIL_TO: ${{ secrets.ALERT_GMAIL_TO }}
         run: python -u us_company_facts.py --mode update --budget-minutes 25
+      - name: Segment revenue and operating income (SEC Financial Statement Data Sets)
+        if: always()
+        env:
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+          ALERT_GMAIL_FROM: ${{ secrets.ALERT_GMAIL_FROM }}
+          ALERT_GMAIL_PASSWORD: ${{ secrets.ALERT_GMAIL_PASSWORD }}
+          ALERT_GMAIL_TO: ${{ secrets.ALERT_GMAIL_TO }}
+        run: python -u us_segments.py
       - name: Commit state
         if: always()
         run: |

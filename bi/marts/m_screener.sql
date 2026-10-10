@@ -13,6 +13,14 @@
 -- 営業利益・純利益の成長率は前年値が正のときだけ計算する（赤字からの回復を％で表すと意味が逆転するため）。
 -- 有利子負債は financials の値を優先し、無ければ細目の合計（interest_bearing_debt_basis='reported'）、さらに無ければ
 -- 借入金・社債・CPの合計（'estimated'。リース負債は含まない概算）。
+-- 多面的な指標（式・単位・注意の正本は SPEC_bi_marts §11）:
+--   資本効率 roic（NOPAT÷(有利子負債＋純資産)の期末ベース。税率は effective_tax_rate が 5〜50% なら報告値、無ければ法定実効税率の近似 30.6%）・営業CF率・FCF率・粗利率の前年差、
+--   企業価値倍率 ev（時価総額＋有利子負債−現金）・ev_ebitda（EBITDA＝営業利益＋減価償却費）・ev_sales・psr・peg（PER÷純利益3年CAGR%）・fcf_yield・earnings_yield、
+--   資産の裏付け re_*（bi.m_re_holdings_pref の最新年度を会社で合計した土地の含み益目安。施設ごとの簿価20倍超除外はそちらで適用済み）・adj_pbr・asset_value_ratio、
+--   安全性と質 interest_coverage・current_ratio・goodwill_to_equity・accrual_ratio・f_score（ピオトロスキー。前年が取れる項目だけ）、
+--   還元 buyback_est（自己株式簿価の増加＋消却額。簿価は会社により負値（純資産の控除）で入るので絶対値で比べる。下限寄りの推定）・total_payout_yield・doe、成長の質 op_income_cagr_3y・net_income_cagr_3y・consec_up_years。
+-- 含み益が時価総額の3倍超の会社は re_gain_flag='gt_3x_mcap' とし、含み益を使う派生列（adj_pbr・asset_value_ratio・re_gain_after_tax）を空にする（再取得・単位違いの疑い）。
+-- bi.m_re_holdings_pref は bi_export が前回実体化した表を読む（数MB。マート名順で m_re_holdings_pref が先に作られるので通常は当日分）。
 -- PER・PBR・配当利回りが意味を持たない会社は valuation_flag で理由を示し、per・pbr・dividend_yield を NULL にする（規則は SPEC_bi_marts §11）。
 WITH items_raw AS (
   SELECT edinet_code, fiscal_year,
@@ -37,13 +45,23 @@ WITH items_raw AS (
     MAX(IF(item = 'bonds_payable', value, NULL)) AS bonds_payable,
     MAX(IF(item = 'current_portion_bonds_payable', value, NULL)) AS current_portion_bonds_payable,
     MAX(IF(item = 'short_term_bonds_payable', value, NULL)) AS short_term_bonds_payable,
-    MAX(IF(item = 'commercial_papers', value, NULL)) AS commercial_papers
+    MAX(IF(item = 'commercial_papers', value, NULL)) AS commercial_papers,
+    MAX(IF(item = 'effective_tax_rate', value, NULL)) AS effective_tax_rate,
+    MAX(IF(item = 'interest_expenses', value, NULL)) AS interest_expenses,
+    MAX(IF(item = 'current_assets', value, NULL)) AS current_assets,
+    MAX(IF(item = 'current_liabilities', value, NULL)) AS current_liabilities,
+    MAX(IF(item = 'goodwill', value, NULL)) AS goodwill,
+    MAX(IF(item = 'cash_dividends_paid', value, NULL)) AS cash_dividends_paid,
+    MAX(IF(item = 'treasury_stock', value, NULL)) AS treasury_stock,
+    MAX(IF(item = 'treasury_cancelled_amount', value, NULL)) AS treasury_cancelled
   FROM `stock-analyzer-edinet.edinet.financial_items`
   WHERE item IN ('gross_profit', 'rnd_expenses', 'eps', 'adjusted_eps', 'bps', 'adjusted_bps', 'dividend_per_share',
                  'adjusted_dividend_per_share', 'payout_ratio',
                  'num_employees', 'shares_issued', 'treasury_end_period_holding_count', 'ibd_current', 'ibd_noncurrent',
                  'ibd_total_unsplit_ifrs', 'short_term_loans', 'long_term_loans', 'current_portion_lt_loans', 'bonds_payable',
-                 'current_portion_bonds_payable', 'short_term_bonds_payable', 'commercial_papers')
+                 'current_portion_bonds_payable', 'short_term_bonds_payable', 'commercial_papers',
+                 'effective_tax_rate', 'interest_expenses', 'current_assets', 'current_liabilities', 'goodwill',
+                 'cash_dividends_paid', 'treasury_stock', 'treasury_cancelled_amount')
   GROUP BY edinet_code, fiscal_year
 ),
 items AS (
@@ -59,8 +77,35 @@ items AS (
 ),
 fin AS (
   SELECT edinet_code, fiscal_year, fiscal_year_end, net_sales, operating_income, ordinary_income, net_income,
-         total_assets, equity, interest_bearing_debt, cash_and_equiv, employee_count, avg_annual_salary, roe, roa, operating_margin
+         total_assets, equity, interest_bearing_debt, cash_and_equiv, employee_count, avg_annual_salary, roe, roa, operating_margin,
+         operating_cf, capex, depreciation
   FROM `stock-analyzer-edinet.edinet.financials`
+),
+-- 増収増益（売上・営業利益がともに前年超え。前年がちょうど1年前の年度にあるときだけ）が何期続いているか。途切れた期の翌期から数える
+grow_flag AS (
+  SELECT edinet_code, fiscal_year,
+    COALESCE(fiscal_year - LAG(fiscal_year) OVER w = 1
+             AND net_sales > LAG(net_sales) OVER w
+             AND operating_income > LAG(operating_income) OVER w, FALSE) AS up
+  FROM fin
+  WINDOW w AS (PARTITION BY edinet_code ORDER BY fiscal_year)
+),
+grow AS (
+  SELECT edinet_code, fiscal_year,
+    IF(up, fiscal_year - MAX(IF(NOT up, fiscal_year, NULL)) OVER (PARTITION BY edinet_code ORDER BY fiscal_year ROWS UNBOUNDED PRECEDING), 0) AS streak
+  FROM grow_flag
+),
+-- 土地の含み益目安は最新年度を会社で合計（円）。unrealized は土地簿価のある施設だけの（時価目安−簿価）なので、簿価の無い施設（不動産業の販売用不動産など）は入らない
+re AS (
+  SELECT edinet_code,
+    fiscal_year AS re_fiscal_year,
+    SUM(facility_count) AS re_facility_count,
+    SUM(est_excluded_count) AS re_est_excluded_count,
+    SUM(land_value_est_m_yen) * 1e6 AS re_land_value_est,
+    SUM(unrealized_gain_est_m_yen) * 1e6 AS re_gain_raw
+  FROM `stock-analyzer-edinet.bi.m_re_holdings_pref`
+  GROUP BY edinet_code, fiscal_year
+  QUALIFY fiscal_year = MAX(fiscal_year) OVER (PARTITION BY edinet_code)
 ),
 latest AS (
   SELECT * FROM fin WHERE net_sales IS NOT NULL
@@ -181,11 +226,43 @@ j AS (
     s.quality_score AS quality_score,
     t.rsi14 AS rsi14,
     t.above_ma200 AS above_ma200,
-    t.snapshot_date AS technical_date
+    t.snapshot_date AS technical_date,
+    l.operating_cf AS operating_cf,
+    l.capex AS capex,
+    l.depreciation AS depreciation,
+    IF(i.effective_tax_rate BETWEEN 0.05 AND 0.5, i.effective_tax_rate, NULL) AS tax_rate_reported,
+    i.interest_expenses AS interest_expenses,
+    i.current_assets AS current_assets,
+    i.current_liabilities AS current_liabilities,
+    i.goodwill AS goodwill,
+    i.cash_dividends_paid AS cash_dividends_paid,
+    i.treasury_stock AS treasury_stock,
+    ip1.treasury_stock AS treasury_stock_p1,
+    i.treasury_cancelled AS treasury_cancelled,
+    i.gross_profit AS gp,
+    ip1.gross_profit AS gp_p1,
+    p1.net_sales AS sales_p1,
+    p1.net_income AS ni_p1,
+    p1.total_assets AS ta_p1,
+    ip1.current_assets AS ca_p1,
+    ip1.current_liabilities AS cl_p1,
+    ip1.shares_issued AS shares_issued_p1,
+    COALESCE(p1.interest_bearing_debt, ip1.ibd_current + ip1.ibd_noncurrent, ip1.ibd_total, ip1.loan_debt) AS ibd_p1,
+    IF(p3.operating_income > 0 AND l.operating_income > 0, POWER(l.operating_income / p3.operating_income, 1.0 / 3) - 1, NULL) AS op_income_cagr_3y,
+    IF(p3.net_income > 0 AND l.net_income > 0, POWER(l.net_income / p3.net_income, 1.0 / 3) - 1, NULL) AS net_income_cagr_3y,
+    gr.streak AS consec_up_years,
+    r.re_fiscal_year AS re_fiscal_year,
+    r.re_facility_count AS re_facility_count,
+    r.re_est_excluded_count AS re_est_excluded_count,
+    r.re_land_value_est AS re_land_value_est,
+    r.re_gain_raw AS re_gain_raw
   FROM latest AS l
   JOIN `stock-analyzer-edinet.edinet.company` AS c ON c.edinet_code = l.edinet_code
   LEFT JOIN items AS i ON i.edinet_code = l.edinet_code AND i.fiscal_year = l.fiscal_year
   CROSS JOIN UNNEST([STRUCT(COALESCE(l.interest_bearing_debt, i.ibd_current + i.ibd_noncurrent, i.ibd_total, i.loan_debt) AS v, CASE WHEN l.interest_bearing_debt IS NOT NULL OR i.ibd_current + i.ibd_noncurrent IS NOT NULL OR i.ibd_total IS NOT NULL THEN 'reported' WHEN i.loan_debt IS NOT NULL THEN 'estimated' END AS basis)]) AS ibd
+  LEFT JOIN items AS ip1 ON ip1.edinet_code = l.edinet_code AND ip1.fiscal_year = l.fiscal_year - 1
+  LEFT JOIN grow AS gr ON gr.edinet_code = l.edinet_code AND gr.fiscal_year = l.fiscal_year
+  LEFT JOIN re AS r ON r.edinet_code = l.edinet_code
   LEFT JOIN fin AS p1 ON p1.edinet_code = l.edinet_code AND p1.fiscal_year = l.fiscal_year - 1
   LEFT JOIN fin AS p3 ON p3.edinet_code = l.edinet_code AND p3.fiscal_year = l.fiscal_year - 3
   LEFT JOIN snap AS s ON s.ticker = CONCAT(SUBSTR(c.sec_code, 1, 4), '.T')
@@ -200,6 +277,54 @@ v AS (
     IF(current_price IS NOT NULL AND dividend_per_share IS NOT NULL, dividend_per_share / current_price, NULL) AS yield_raw
   FROM j
 ),
+d1 AS (
+  SELECT *,
+    COALESCE(tax_rate_reported, 0.306) AS tax_rate,
+    IF(tax_rate_reported IS NOT NULL, 'reported', 'assumed') AS roic_tax_basis,
+    operating_income + depreciation AS ebitda,
+    operating_cf - capex AS fcf,
+    mcap + interest_bearing_debt - cash_and_equiv AS ev,
+    COALESCE(cash_dividends_paid, dividend_per_share * shares_out) AS dividends_paid,
+    IF(treasury_stock IS NOT NULL AND treasury_stock_p1 IS NOT NULL, GREATEST(0, ABS(treasury_stock) - ABS(treasury_stock_p1) + ABS(COALESCE(treasury_cancelled, 0))), NULL) AS buyback_est,
+    IF(re_gain_raw IS NOT NULL AND mcap > 0 AND re_gain_raw > 3 * mcap, 'gt_3x_mcap', NULL) AS re_gain_flag,
+    IF(re_gain_raw IS NOT NULL AND NOT (mcap > 0 AND re_gain_raw > 3 * mcap), re_gain_raw, NULL) AS re_gain_use,
+    IF(interest_bearing_debt IS NOT NULL AND interest_bearing_debt + equity > 0, interest_bearing_debt + equity, NULL) AS invested_capital
+  FROM v
+),
+d2 AS (
+  SELECT *,
+    operating_income * (1 - tax_rate) AS nopat,
+    operating_income * (1 - tax_rate) / invested_capital AS roic,
+    operating_cf / NULLIF(net_sales, 0) AS ocf_margin,
+    fcf / NULLIF(net_sales, 0) AS fcf_margin,
+    gp / NULLIF(net_sales, 0) - gp_p1 / NULLIF(sales_p1, 0) AS gross_margin_chg_1y,
+    IF(ev > 0 AND ebitda > 0, ev / ebitda, NULL) AS ev_ebitda,
+    IF(ev > 0, ev / NULLIF(net_sales, 0), NULL) AS ev_sales,
+    IF(mcap > 0, mcap / NULLIF(net_sales, 0), NULL) AS psr,
+    IF(mcap > 0, fcf / mcap, NULL) AS fcf_yield,
+    IF(interest_expenses > 0, operating_income / interest_expenses, NULL) AS interest_coverage,
+    current_assets / NULLIF(current_liabilities, 0) AS current_ratio,
+    IF(equity > 0, goodwill / equity, NULL) AS goodwill_to_equity,
+    (net_income - operating_cf) / NULLIF(total_assets, 0) AS accrual_ratio,
+    IF(equity > 0, dividends_paid / equity, NULL) AS doe,
+    IF(mcap > 0, buyback_est / mcap, NULL) AS buyback_yield,
+    IF(mcap > 0 AND dividends_paid IS NOT NULL, (dividends_paid + COALESCE(buyback_est, 0)) / mcap, NULL) AS total_payout_yield,
+    IF(mcap > 0, re_gain_raw / mcap, NULL) AS re_gain_to_mcap,
+    IF(mcap > 0, re_land_value_est / mcap, NULL) AS re_land_value_to_mcap,
+    re_gain_use * (1 - 0.306) AS re_gain_after_tax,
+    IF(mcap > 0 AND equity + re_gain_use * (1 - 0.306) > 0, equity + re_gain_use * (1 - 0.306), NULL) AS adj_equity,
+    IF(mcap > 0 AND re_gain_use IS NOT NULL AND net_cash IS NOT NULL, (net_cash + re_gain_use * (1 - 0.306)) / mcap, NULL) AS asset_value_ratio,
+    CAST(net_income / NULLIF(total_assets, 0) > 0 AS INT64) AS f1,
+    CAST(operating_cf > 0 AS INT64) AS f2,
+    CAST(net_income / NULLIF(total_assets, 0) > ni_p1 / NULLIF(ta_p1, 0) AS INT64) AS f3,
+    CAST(operating_cf > net_income AS INT64) AS f4,
+    CAST(interest_bearing_debt / NULLIF(total_assets, 0) <= ibd_p1 / NULLIF(ta_p1, 0) AS INT64) AS f5,
+    CAST(current_assets / NULLIF(current_liabilities, 0) > ca_p1 / NULLIF(cl_p1, 0) AS INT64) AS f6,
+    CAST(shares_issued / NULLIF(shares_issued_p1, 0) <= 1.01 OR shares_issued / NULLIF(shares_issued_p1, 0) >= 1.2 AS INT64) AS f7,
+    CAST(gp / NULLIF(net_sales, 0) > gp_p1 / NULLIF(sales_p1, 0) AS INT64) AS f8,
+    CAST(net_sales / NULLIF(total_assets, 0) > sales_p1 / NULLIF(ta_p1, 0) AS INT64) AS f9
+  FROM d1
+),
 f AS (
   SELECT *,
     CASE
@@ -210,7 +335,15 @@ f AS (
       -- 配当利回り15%超は特別配当・単位違いの疑い
       WHEN yield_raw > 0.15 THEN 'yield_outlier'
     END AS valuation_flag
-  FROM v
+  FROM d2
+),
+g AS (
+  SELECT *,
+    IF(valuation_flag IN ('eps_mismatch', 'one_off_profit'), NULL, per_raw) AS per_final,
+    IF(adj_equity > 0, mcap / adj_equity, NULL) AS adj_pbr,
+    IF(f1 IS NULL, 0, 1) + IF(f2 IS NULL, 0, 1) + IF(f3 IS NULL, 0, 1) + IF(f4 IS NULL, 0, 1) + IF(f5 IS NULL, 0, 1) + IF(f6 IS NULL, 0, 1) + IF(f7 IS NULL, 0, 1) + IF(f8 IS NULL, 0, 1) + IF(f9 IS NULL, 0, 1) AS f_items,
+    COALESCE(f1, 0) + COALESCE(f2, 0) + COALESCE(f3, 0) + COALESCE(f4, 0) + COALESCE(f5, 0) + COALESCE(f6, 0) + COALESCE(f7, 0) + COALESCE(f8, 0) + COALESCE(f9, 0) AS f_sum
+  FROM f
 )
 SELECT
   edinet_code,
@@ -276,5 +409,48 @@ SELECT
   quality_score,
   rsi14,
   above_ma200,
-  technical_date
-FROM f
+  technical_date,
+  nopat,
+  invested_capital,
+  tax_rate,
+  roic_tax_basis,
+  roic,
+  ocf_margin,
+  fcf_margin,
+  gross_margin_chg_1y,
+  operating_cf,
+  fcf,
+  ebitda,
+  ev,
+  ev_ebitda,
+  ev_sales,
+  psr,
+  IF(per_final > 0 AND net_income_cagr_3y > 0, per_final / (net_income_cagr_3y * 100), NULL) AS peg,
+  fcf_yield,
+  IF(valuation_flag IN ('eps_mismatch', 'one_off_profit') OR current_price IS NULL, NULL, eps / current_price) AS earnings_yield,
+  re_fiscal_year,
+  re_facility_count,
+  re_est_excluded_count,
+  re_land_value_est,
+  re_gain_raw AS re_unrealized_gain,
+  re_gain_flag,
+  re_gain_to_mcap,
+  re_land_value_to_mcap,
+  re_gain_after_tax,
+  adj_equity,
+  adj_pbr,
+  asset_value_ratio,
+  interest_coverage,
+  current_ratio,
+  goodwill_to_equity,
+  accrual_ratio,
+  IF(f_items >= 7, f_sum, NULL) AS f_score,
+  f_items AS f_score_items,
+  buyback_est,
+  buyback_yield,
+  total_payout_yield,
+  doe,
+  op_income_cagr_3y,
+  net_income_cagr_3y,
+  consec_up_years
+FROM g

@@ -18,7 +18,7 @@ bi_export.py — BI基盤のマートを BigQuery から書き出す
 これを怠ると毎日 parquet がコミットされて git が肥大する。
 
 実行は4段階（1回の bi_export で全マートを一斉に進める）:
-  0. テンプレートを検査（NGなら何もせず失敗）。location が違う元表（US の ontology.signal_event・us.fundamentals）は
+  0. テンプレートを検査（NGなら何もせず失敗）。location が違う元表（US の ontology.signal_event・us.company_profile・us.financials_annual）は
      `list_rows`（無料）→ load job（無料）で asia-northeast1 の `bi.src_*` へ写す
   1. 全マートについて `CREATE OR REPLACE TABLE bi.<mart>__next AS <マートSQL>` … 元表を読むのはここだけ
   2. 全マートの行数検査（0行・前回の半分未満は失敗）と `list_rows` での中身の読み出し（tabledata.list は課金されない）
@@ -90,6 +90,22 @@ SOURCES = [
         "source": "stock-analyzer-edinet.us.fundamentals",
         "dest": "src_us_fundamentals",
         "columns": ["ticker", "cik", "period_end", "revenue", "operating_income", "net_income", "eps_diluted", "fcf", "buyback"],
+    },
+    {
+        "source": "stock-analyzer-edinet.us.company_profile",
+        "dest": "src_us_company_profile",
+        "columns": ["ticker", "cik", "name", "exchange", "sic", "sic_description", "shares_outstanding", "shares_as_of", "shares_source",
+                    "bs_period_end", "bs_total_assets", "bs_total_liabilities", "bs_equity", "bs_cash", "bs_debt_short", "bs_debt_long",
+                    "ttm_period_end", "ttm_revenue", "ttm_operating_income", "ttm_net_income", "ttm_eps_diluted", "ttm_operating_cf", "ttm_capex"],
+    },
+    {
+        "source": "stock-analyzer-edinet.us.financials_annual",
+        "dest": "src_us_financials_annual",
+        "columns": ["ticker", "cik", "period_end", "revenue", "operating_income", "net_income", "eps_diluted",
+                    "operating_cf", "capex", "buyback", "dividends_paid"],
+        "optional_columns": ["total_assets", "total_liabilities", "equity", "cash", "debt_short", "debt_long",
+                             "gross_profit", "depreciation", "income_tax", "pretax_income", "interest_expense",
+                             "shares_diluted", "assets_current", "liabilities_current"],
     },
 ]
 
@@ -267,7 +283,12 @@ def refresh_source(client, src: dict) -> int:
     """location が違う元表を bi.<dest> へ写す（list_rows と load job はどちらも無料）。0行は失敗。"""
     from google.cloud import bigquery
 
-    table = client.list_rows(src["source"]).to_arrow(create_bqstorage_client=False).select(src["columns"])
+    table = client.list_rows(src["source"]).to_arrow(create_bqstorage_client=False)
+    # optional_columns は元表に後から足す列。元表の書き換え前でも写しの列をそろえるため、無ければ空の FLOAT64 列にする
+    for col in src.get("optional_columns", []):
+        if col not in table.column_names:
+            table = table.append_column(pa.field(col, pa.float64()), pa.nulls(table.num_rows, pa.float64()))
+    table = table.select(src["columns"] + src.get("optional_columns", []))
     if table.num_rows == 0:
         raise RuntimeError(f"{src['source']}: 0行（元表が空。写しを更新しない）")
     buf = pa.BufferOutputStream()

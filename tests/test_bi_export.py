@@ -372,13 +372,16 @@ def test_refresh_source_rejects_empty_source():
         bi_export.refresh_source(Client(), {"source": "p.o.t", "dest": "src_t", "columns": ["ticker"]})
 
 
-def test_us_fundamentals_source_is_copied_only_for_us_screener():
-    """us.fundamentals（location=US）は m_screener_us が読むときだけ bi.src_us_fundamentals へ写す。"""
+def test_us_company_sources_are_copied_only_for_us_screener():
+    """us.company_profile / us.financials_annual（location=US）は m_screener_us が読むときだけ bi.src_* へ写す。"""
     dests = {s["dest"]: s for s in bi_export.SOURCES}
-    assert dests["src_us_fundamentals"]["source"] == "stock-analyzer-edinet.us.fundamentals"
-    for col in ("ticker", "period_end", "revenue", "net_income", "eps_diluted", "fcf", "buyback"):
-        assert col in dests["src_us_fundamentals"]["columns"]
-    assert [s["dest"] for s in bi_export.sources_for(["m_screener_us"])] == ["src_us_fundamentals"]
+    assert dests["src_us_company_profile"]["source"] == "stock-analyzer-edinet.us.company_profile"
+    assert dests["src_us_financials_annual"]["source"] == "stock-analyzer-edinet.us.financials_annual"
+    for col in ("ticker", "name", "sic_description", "shares_outstanding", "bs_equity", "ttm_revenue"):
+        assert col in dests["src_us_company_profile"]["columns"]
+    for col in ("ticker", "period_end", "revenue", "net_income", "operating_cf", "capex", "dividends_paid"):
+        assert col in dests["src_us_financials_annual"]["columns"]
+    assert sorted(s["dest"] for s in bi_export.sources_for(["m_screener_us"])) == ["src_us_company_profile", "src_us_financials_annual"]
     assert bi_export.sources_for(["m_screener"]) == []
     assert bi_export.MART_KEYS["m_screener_us"] == ["ticker"]
     assert "m_screener_us" in bi_export.mart_names()
