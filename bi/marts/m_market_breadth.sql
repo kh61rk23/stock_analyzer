@@ -76,16 +76,16 @@ SELECT
   n_up,
   n_down,
   n_flat,
-  n_up / NULLIF(n_up + n_down, 0) AS up_ratio,
-  IF(days25 >= 20, up25 / NULLIF(down25, 0) * 100, NULL) AS ad_ratio_25d,
+  ROUND(n_up / NULLIF(n_up + n_down, 0), 4) AS up_ratio,
+  IF(days25 >= 20, ROUND(up25 / NULLIF(down25, 0) * 100, 2), NULL) AS ad_ratio_25d,
   n_hl_base,
   n_new_high,
   n_new_low,
   n_ma50,
-  n_above_ma50 / NULLIF(n_ma50, 0) AS pct_above_ma50,
+  ROUND(n_above_ma50 / NULLIF(n_ma50, 0), 4) AS pct_above_ma50,
   n_ma200,
-  n_above_ma200 / NULLIF(n_ma200, 0) AS pct_above_ma200,
-  ret_ew,
-  idx_ew,
-  turnover
+  ROUND(n_above_ma200 / NULLIF(n_ma200, 0), 4) AS pct_above_ma200,
+  ROUND(ret_ew, 5) AS ret_ew,
+  ROUND(idx_ew, 4) AS idx_ew,
+  ROUND(turnover, 0) AS turnover
 FROM b

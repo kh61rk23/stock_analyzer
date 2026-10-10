@@ -8,6 +8,7 @@
 --   is_partial は月がまだ終わっていない（当月）か、取得期間の頭で月の途中から始まる月。TRUE の月の騰落率・売買代金は他の月と比べない。
 --   turnover＝月内の 終値×出来高 の合計。turnover_ratio_3m＝その月の turnover ÷ 直前3か月の turnover の平均（3か月そろうときだけ。当月は日数が少ないので小さく出る）。
 --   month_high／month_low は日足の高値・安値（無ければ終値）。range_pct＝month_high÷month_low－1。
+-- 価格・騰落率は小数4桁、売買代金は整数に丸めて持つ（日々 parquet をコミットするので、有効桁を落としてファイルを小さくする）。
 -- name・industry は日本株が edinet.company、米国株は stock_snapshot の最新行（約400銘柄だけ。無ければ NULL）。
 WITH px_raw AS (
   SELECT ticker, trade_date, high, low, close, volume,
@@ -69,17 +70,17 @@ SELECT
   w.month_end_date AS month_end_date,
   w.trading_days AS trading_days,
   (w.month = DATE_TRUNC(CURRENT_DATE('Asia/Tokyo'), MONTH) OR w.month < DATE_TRUNC(w.data_start, MONTH) OR (w.month = DATE_TRUNC(w.data_start, MONTH) AND EXTRACT(DAY FROM w.data_start) > 5)) AS is_partial,
-  w.close AS close,
-  w.c1 AS prev_month_close,
-  IF(w.m1 = DATE_SUB(w.month, INTERVAL 1 MONTH), w.close / w.c1 - 1, NULL) AS return_1m,
-  IF(w.m3 = DATE_SUB(w.month, INTERVAL 3 MONTH), w.close / w.c3 - 1, NULL) AS return_3m,
-  IF(w.m6 = DATE_SUB(w.month, INTERVAL 6 MONTH), w.close / w.c6 - 1, NULL) AS return_6m,
-  w.month_high AS month_high,
-  w.month_low AS month_low,
-  w.month_high / NULLIF(w.month_low, 0) - 1 AS range_pct,
-  w.turnover AS turnover,
+  ROUND(w.close, 4) AS close,
+  ROUND(w.c1, 4) AS prev_month_close,
+  IF(w.m1 = DATE_SUB(w.month, INTERVAL 1 MONTH), ROUND(w.close / w.c1 - 1, 4), NULL) AS return_1m,
+  IF(w.m3 = DATE_SUB(w.month, INTERVAL 3 MONTH), ROUND(w.close / w.c3 - 1, 4), NULL) AS return_3m,
+  IF(w.m6 = DATE_SUB(w.month, INTERVAL 6 MONTH), ROUND(w.close / w.c6 - 1, 4), NULL) AS return_6m,
+  ROUND(w.month_high, 4) AS month_high,
+  ROUND(w.month_low, 4) AS month_low,
+  ROUND(w.month_high / NULLIF(w.month_low, 0) - 1, 4) AS range_pct,
+  ROUND(w.turnover, 0) AS turnover,
   w.volume_sum AS volume,
-  IF(w.t_n3 = 3 AND w.m3 = DATE_SUB(w.month, INTERVAL 3 MONTH), w.turnover / NULLIF(w.t_avg3, 0), NULL) AS turnover_ratio_3m
+  IF(w.t_n3 = 3 AND w.m3 = DATE_SUB(w.month, INTERVAL 3 MONTH), ROUND(w.turnover / NULLIF(w.t_avg3, 0), 2), NULL) AS turnover_ratio_3m
 FROM w
 LEFT JOIN jp ON jp.ticker = w.ticker
 LEFT JOIN us ON us.ticker = w.ticker
