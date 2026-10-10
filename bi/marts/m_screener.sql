@@ -19,7 +19,7 @@
 --   資産の裏付け re_*（bi.m_re_holdings_pref の最新年度を会社で合計した土地の含み益目安。施設ごとの簿価20倍超除外はそちらで適用済み）・adj_pbr・asset_value_ratio、
 --   安全性と質 interest_coverage・current_ratio・goodwill_to_equity・accrual_ratio・f_score（ピオトロスキー。前年が取れる項目だけ）、
 --   還元 buyback_est（自己株式簿価の増加＋消却額。簿価は会社により負値（純資産の控除）で入るので絶対値で比べる。下限寄りの推定）・total_payout_yield・doe、成長の質 op_income_cagr_3y・net_income_cagr_3y・consec_up_years。
--- 含み益が時価総額の3倍超の会社は re_gain_flag='gt_3x_mcap' とし、含み益を使う派生列（adj_pbr・asset_value_ratio・re_gain_after_tax）を空にする（再取得・単位違いの疑い）。
+-- 含み益が時価総額の3倍超の会社は re_gain_flag='gt_3x_mcap' とし、含み益を使う派生列（re_gain_to_mcap・re_land_value_to_mcap・adj_pbr・asset_value_ratio・re_gain_after_tax）を空にする（再取得・単位違いの疑い）。re_unrealized_gain は元の値のまま残す。
 -- bi.m_re_holdings_pref は bi_export が前回実体化した表を読む（数MB。マート名順で m_re_holdings_pref が先に作られるので通常は当日分）。
 -- PER・PBR・配当利回りが意味を持たない会社は valuation_flag で理由を示し、per・pbr・dividend_yield を NULL にする（規則は SPEC_bi_marts §11）。
 WITH items_raw AS (
@@ -309,8 +309,8 @@ d2 AS (
     IF(equity > 0, dividends_paid / equity, NULL) AS doe,
     IF(mcap > 0, buyback_est / mcap, NULL) AS buyback_yield,
     IF(mcap > 0 AND dividends_paid IS NOT NULL, (dividends_paid + COALESCE(buyback_est, 0)) / mcap, NULL) AS total_payout_yield,
-    IF(mcap > 0, re_gain_raw / mcap, NULL) AS re_gain_to_mcap,
-    IF(mcap > 0, re_land_value_est / mcap, NULL) AS re_land_value_to_mcap,
+    IF(mcap > 0, re_gain_use / mcap, NULL) AS re_gain_to_mcap,
+    IF(mcap > 0 AND re_gain_use IS NOT NULL, re_land_value_est / mcap, NULL) AS re_land_value_to_mcap,
     re_gain_use * (1 - 0.306) AS re_gain_after_tax,
     IF(mcap > 0 AND equity + re_gain_use * (1 - 0.306) > 0, equity + re_gain_use * (1 - 0.306), NULL) AS adj_equity,
     IF(mcap > 0 AND re_gain_use IS NOT NULL AND net_cash IS NOT NULL, (net_cash + re_gain_use * (1 - 0.306)) / mcap, NULL) AS asset_value_ratio,
