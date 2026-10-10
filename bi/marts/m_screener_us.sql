@@ -18,7 +18,7 @@
 -- 多面的な指標（通期ベース。式は日本版 m_screener とそろえる。正本は SPEC_bi_marts §11）:
 --   roic＝営業利益×(1−税率)÷(有利子負債＋株主資本)（通期の期末。税率は 法人税等÷税引前利益 が5〜50%ならその値、無ければ25%＝連邦21%＋州の近似）、
 --   ev＝時価総額＋有利子負債−現金（最新の貸借）、ev_ebitda（EBITDA＝営業利益＋減価償却費）、ev_sales、peg（PER÷EPS3年CAGR%）、earnings_yield、
---   interest_coverage・current_ratio・accrual_ratio・gross_margin、total_payout_yield（配当＋自社株買い）、3年CAGR（売上・営業利益・EPS）、
+--   interest_coverage・current_ratio・accrual_ratio・gross_margin、total_payout_yield（配当＋自社株買い。支払額の符号が会社で逆のことがあるので絶対値。時価総額の100%超は時価総額側の誤りとみて空）、3年CAGR（売上・営業利益・EPS）、
 --   f_score（ピオトロスキー9項目。前年の通期が取れる項目が7つ以上のときだけ）。
 --   減価償却・税・利払い・流動資産負債・粗利・希薄化株数は取得側で後から足した列のため、取り直しが済むまで空の会社がある。
 WITH ann AS (
@@ -317,7 +317,7 @@ SELECT
   IF(interest_expense > 0, operating_income_usd / interest_expense, NULL) AS interest_coverage,
   current_ratio,
   accrual_ratio,
-  IF(mcap_ok > 0 AND dividends_paid_usd IS NOT NULL OR mcap_ok > 0 AND buyback_usd IS NOT NULL, (COALESCE(dividends_paid_usd, 0) + COALESCE(buyback_usd, 0)) / mcap_ok, NULL) AS total_payout_yield,
+  IF(mcap_ok > 0 AND (dividends_paid_usd IS NOT NULL OR buyback_usd IS NOT NULL) AND (ABS(COALESCE(dividends_paid_usd, 0)) + ABS(COALESCE(buyback_usd, 0))) / mcap_ok <= 1, (ABS(COALESCE(dividends_paid_usd, 0)) + ABS(COALESCE(buyback_usd, 0))) / mcap_ok, NULL) AS total_payout_yield,
   IF(per_ok IS NOT NULL AND current_price_usd > 0, 1 / per_ok, NULL) AS earnings_yield,
   IF(per_ok > 0 AND eps_cagr_3y > 0, per_ok / (eps_cagr_3y * 100), NULL) AS peg,
   sales_cagr_3y,
