@@ -450,6 +450,10 @@ const SCR_SETS_US = {
   "収益性": ["ticker","name","revenue_usd","operating_income_usd","net_income_usd","operating_margin","net_margin","fcf_margin","roe"],
   "成長": ["ticker","name","revenue_usd","sales_growth_1y","op_income_growth_1y","net_income_growth_1y","eps_growth_1y"],
   "株価": ["ticker","name","current_price_usd","return_1m","return_3m","return_1y","high_52w_usd","low_52w_usd","week52_position_pct","avg_turnover_20d_usd"],
+  "資本効率": ["ticker","name","industry","market_cap_bn_usd","roic","roe","ev_ebitda","ev_sales","per","peg","fcf_yield"],
+  "財務の質": ["ticker","name","industry","f_score","f_score_items","interest_coverage","current_ratio","accrual_ratio","gross_margin"],
+  "株主還元": ["ticker","name","market_cap_bn_usd","dividend_yield","buyback_yield","total_payout_yield","fcf_yield"],
+  "成長の質": ["ticker","name","sales_cagr_3y","op_income_cagr_3y","eps_cagr_3y","sales_growth_1y","roic","peg"],
 };
 const SCR_PRESETS_US = {
   "FCF利回り割安": [["fcf_yield",">=",0.06],["per",">",0]],
@@ -458,6 +462,10 @@ const SCR_PRESETS_US = {
   "52週高値圏": [["week52_position_pct",">=",90]],
   "黒字の割安": [["per",">",0],["per","<=",15],["net_margin",">=",0.05]],
   "自社株買い": [["buyback_yield",">=",0.03]],
+  "高ROIC×EV/EBITDA割安": [["roic",">=",0.15],["ev_ebitda",">",0],["ev_ebitda","<=",12]],
+  "Fスコア7以上": [["f_score",">=",7],["current_ratio",">=",1.2]],
+  "総還元5%以上": [["total_payout_yield",">=",0.05],["fcf_yield",">",0]],
+  "成長に割安（PEG）": [["peg",">",0],["peg","<=",1],["eps_cagr_3y",">=",0.1]],
 };
 let SCR_MKT = "jp";
 function scrMart(){ return SCR_MKT === "us" ? "m_screener_us" : "m_screener"; }
@@ -471,6 +479,11 @@ const SCR_SETS = {
   "財務健全性": ["sec_code4","name","equity_ratio","de_ratio","interest_bearing_debt","cash_and_equiv","net_cash","free_cf"],
   "配当": ["sec_code4","name","dividend_yield","dividend_per_share","payout_ratio","eps"],
   "株価": ["sec_code4","name","current_price","return_1m","return_3m","return_1y","high_52w","low_52w","week52_position_pct","avg_turnover_20d"],
+  "資本効率": ["sec_code4","name","industry","market_cap","roic","roic_tax_basis","roe","ev_ebitda","ev_sales","psr","peg","fcf_yield"],
+  "資産の裏付け": ["sec_code4","name","industry","market_cap","pbr","re_unrealized_gain","re_gain_to_mcap","adj_pbr","asset_value_ratio","net_cash_to_mcap"],
+  "財務の質": ["sec_code4","name","industry","f_score","f_score_items","interest_coverage","current_ratio","accrual_ratio","goodwill_to_equity","ocf_margin"],
+  "株主還元": ["sec_code4","name","market_cap","dividend_yield","buyback_yield","total_payout_yield","doe","payout_ratio"],
+  "成長の質": ["sec_code4","name","sales_cagr_3y","op_income_cagr_3y","net_income_cagr_3y","consec_up_years","roic","peg"],
 };
 const SCR_PRESETS = {
   "割安高配当": [["pbr","<=",1],["dividend_yield",">=",0.03]],
@@ -481,6 +494,13 @@ const SCR_PRESETS = {
   "高配当": [["dividend_yield",">=",0.04]],
   "3か月モメンタム": [["return_3m",">=",0.2]],
   "売買代金が大きい割安株": [["avg_turnover_20d",">=",1e9],["pbr","<=",1]],
+  "高ROIC×EV/EBITDA割安": [["roic",">=",0.1],["ev_ebitda",">",0],["ev_ebitda","<=",8]],
+  "土地含み益に対して割安": [["re_gain_to_mcap",">=",0.3]],
+  "資産バリュー1倍超": [["asset_value_ratio",">=",1]],
+  "Fスコア7以上×安全": [["f_score",">=",7],["current_ratio",">=",1.5],["accrual_ratio","<=",0]],
+  "FCF×総還元": [["fcf_yield",">=",0.06],["total_payout_yield",">=",0.04]],
+  "成長に割安（PEG）": [["peg",">",0],["peg","<=",0.8],["net_income_cagr_3y",">=",0.1]],
+  "増収増益が3期以上": [["consec_up_years",">=",3],["roic",">=",0.08]],
 };
 let SCR = {filters:[], set:"概要", sort:"market_cap", dir:"DESC", page:0, industries:[]};
 function scrCols(){ return martCols(scrMart()); }
@@ -492,7 +512,7 @@ function buildScreener(){
   el.innerHTML = `
     <div class="row"><p class="q" style="margin:0">企業スクリーナー</p>
       <label class="f">市場<select id="scrMkt"><option value="jp" ${SCR_MKT==="jp"?"selected":""}>日本株</option><option value="us" ${SCR_MKT==="us"?"selected":""}>米国株（USD）</option></select></label></div>
-    <p class="note">${SCR_MKT==="us" ? "NYSE・Nasdaq の普通株（最新の決算×最新の終値）。財務が付くのは一部の銘柄のみ。金額は USD。" : "全上場企業（最新の決算期×最新の終値）。"}比率は % で入れてください（例 ROE 15 → 15%）。52週位置は 0〜100。</p>
+    <p class="note">${SCR_MKT==="us" ? "NYSE・Nasdaq の普通株（SEC の財務×最新の終値）。金額は USD。EV/EBITDA・Fスコアは取り直しが済んだ銘柄から入る。" : "全上場企業（最新の決算期×最新の終値）。"}比率は % で入れてください（例 ROE 15 → 15%）。52週位置は 0〜100。</p>
     <div class="chips">${Object.keys(scrPresets()).map(k=>`<button class="ghost" data-pre="${esc(k)}">${esc(k)}</button>`).join("")}<button class="ghost" id="scrClear">条件をすべて外す</button></div>
     <div class="chips" id="scrChips">${SCR.filters.map((f,i)=>`<span class="chip">${lab(f[0])} ${esc(f[1])} ${esc(fmtIn(f[0],f[2]))}<button data-fdel="${i}" aria-label="条件を外す">×</button></span>`).join("") || `<span class="note" style="margin:0">条件なし（全社）</span>`}</div>
     <div class="row">
@@ -523,7 +543,7 @@ function buildScreener(){
   $("scrGo").onclick = () => { SCR.page=0; runScreener(); };
   $("scrSave").onclick = async () => { try{ const q = screenerSql(); $("slotMsg").textContent=""; await saveSlot($("scrName").value, q); $("scrMsg").textContent = $("slotMsg").textContent || "保存しました"; }catch(e){ $("scrMsg").textContent = e.message; } };
 }
-function isRatio(n){ return /margin|ratio|roe|roa|yield|growth|cagr|return_|payout|to_mcap/.test(n) && !/de_ratio/.test(n); }
+function isRatio(n){ return /margin|ratio|roe|roa|roic|yield|growth|cagr|return_|payout|to_mcap|to_equity|^doe$|^tax_rate$|_chg_1y$/.test(n) && !/de_ratio|current_ratio|asset_value_ratio/.test(n); }
 function fmtIn(n, v){ return isRatio(n) ? (v*100).toFixed(1).replace(/\.0$/,"")+"%" : Number(v).toLocaleString("ja-JP"); }
 function screenerSql(){
   const names = scrCols().map(c=>c.name);

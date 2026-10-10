@@ -20,11 +20,11 @@ PROJECT = "stock-analyzer-edinet"
 DOMAINS = {"finance": "財務・業績", "geo": "地政学", "realestate": "不動産", "taxonomy": "技術分類",
            "theme": "テーマ株", "market": "株価・スクリーニング", "us": "米国株"}
 MART_DESC = {
-    "m_screener_us": "米国株スクリーナー。1銘柄1行（NYSE・Nasdaq）。金額はUSD、財務が付くのは一部の銘柄のみ",
+    "m_screener_us": "米国株スクリーナー。1銘柄1行（NYSE・Nasdaq）。金額はUSD。SEC の財務×株価、ROIC・EV/EBITDA・Fスコア・総還元など多面指標つき",
     "m_theme": "テーマ×銘柄。業種ごとの代表銘柄にその業種のテーマが付く（同じ業種のテーマは同じ銘柄集合）",
     "m_theme_def": "テーマ定義。業種サブテーマの一覧（米国を含む）",
     "m_theme_signal": "テーマ×日×シグナル種別。days_before_latest で直近N日に絞れる",
-    "m_screener": "企業スクリーナー。1社1行（最新の決算期×最新の株価）。株価系の列は約700社のみ",
+    "m_screener": "企業スクリーナー。1社1行（最新の決算期×全上場の最新株価）。ROIC・EV/EBITDA・土地含み益倍率・Fスコア・総還元など多面指標つき",
     "m_tax_node": "技術分類ツリー。1ノード1行（階層・領域・紐づく企業数）",
     "m_company_tax": "企業×技術分類。1社1ノード1行＋直近年度の財務（紐づくのは一部の会社のみ・自動推定）",
     "m_company": "上場会社マスタ。1社1行",
@@ -37,6 +37,18 @@ MART_DESC = {
     "m_re_holdings_pref": "企業の保有不動産の都道府県別集約。1社×都道府県×年度1行",
 }
 LABELS = {
+    "roic": "ROIC", "roic_tax_basis": "ROICの税率の出所", "tax_rate": "税率", "nopat": "NOPAT", "invested_capital": "投下資本",
+    "ev": "EV（企業価値）", "ebitda": "EBITDA", "ev_ebitda": "EV/EBITDA", "ev_sales": "EV/売上", "psr": "PSR", "peg": "PEG",
+    "fcf": "フリーCF", "earnings_yield": "益回り", "ocf_margin": "営業CF率", "gross_margin_chg_1y": "粗利率の前年差",
+    "re_fiscal_year": "不動産の年度", "re_facility_count": "主要設備数", "re_est_excluded_count": "目安を除いた施設数",
+    "re_land_value_est": "土地の時価目安", "re_unrealized_gain": "土地含み益(目安)", "re_gain_flag": "含み益の注記",
+    "re_gain_to_mcap": "含み益÷時価総額", "re_land_value_to_mcap": "土地時価÷時価総額", "re_gain_after_tax": "税引後含み益",
+    "adj_equity": "修正純資産", "adj_pbr": "修正PBR", "asset_value_ratio": "資産バリュー倍率", "interest_coverage": "インタレストカバレッジ",
+    "current_ratio": "流動比率", "goodwill_to_equity": "のれん÷純資産", "accrual_ratio": "アクルーアル", "f_score": "Fスコア",
+    "f_score_items": "Fスコア算出項目数", "buyback_est": "自社株買い(推定)", "total_payout_yield": "総還元利回り", "doe": "DOE",
+    "op_income_cagr_3y": "営業益CAGR(3年)", "net_income_cagr_3y": "純益CAGR(3年)", "eps_cagr_3y": "EPS CAGR(3年)",
+    "consec_up_years": "増収増益の連続期数", "ebitda_usd": "EBITDA(USD)", "ev_usd": "EV(USD)", "invested_capital_usd": "投下資本(USD)",
+    "dividends_paid_usd": "配当支払額(USD)", "shares_outstanding": "発行済株式数", "total_assets_usd": "総資産(USD)", "equity_usd": "株主資本(USD)",
     "cik": "CIK", "has_fundamentals": "財務あり", "revenue_usd": "売上(USD)", "operating_income_usd": "営業利益(USD)",
     "net_income_usd": "純利益(USD)", "fcf_usd": "フリーCF(USD)", "buyback_usd": "自社株買い(USD)", "eps_usd": "EPS(USD)",
     "fcf_margin": "FCFマージン", "eps_growth_1y": "EPS成長率(1年)", "shares_est": "推定株数", "current_price_usd": "株価(USD)",
