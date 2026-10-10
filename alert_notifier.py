@@ -1905,8 +1905,13 @@ def extract_alerts(cfg, results: dict) -> list:
             _web = _jl(_dd / "edinetdb_web_last.json")
             if str(_web.get("date", "")) != _today:
                 _web = {}
+            try:
+                import api_call_log
+                _calls = api_call_log.summarize("edinetdb", _today, _dd)
+            except Exception:
+                _calls = None
             alerts.append(build_edinetdb_ingest_alert(
-                ing, _web, _jl(_dd / "edinetdb_cache" / f"daily_{_today}.json"), 100))
+                ing, _web, _jl(_dd / "edinetdb_cache" / f"daily_{_today}.json"), 100, _calls))
 
         # 国債利回り（日米 10/5/3年・前日比/前週比）と政策金利（米・欧・日）
     if getattr(cfg, "ALERT_ON_RATES", True):
@@ -2101,8 +2106,52 @@ def build_seisakudb_alert(sk: dict) -> dict | None:
             "body": "\n".join(lines), "severity": "info", "channel": "gmail"}
 
 
+_CAP_JA = {"config": "設定の日次予算", "daily_remaining": "EdinetDB 側の本日の残り",
+           "monthly_remaining": "EdinetDB 側の今月の残り", "monthly_guard": "月の上限（設定）−今月の使用"}
+
+
+def api_usage_lines(calls: dict | None, caps: dict | None, used: int, ing: dict | None = None) -> tuple[list, list]:
+    """API の使い道（呼び出し元・種類・結果）と、本日の枠を決めた理由の行（純関数）。
+
+    Returns: (lines, warnings)。warnings は件名・重要度を上げるための短い文。
+    """
+    lines, warns = [], []
+    calls = calls or {}
+    if calls.get("total"):
+        lines.append(f"  【API の使い道】記録 {calls['total']}回（{calls.get('first') or '—'}〜{calls.get('last') or '—'}）")
+        lines.append("    呼び出し元: " + " / ".join(f"{k} {v}回" for k, v in (calls.get("by_caller") or [])[:8]))
+        lines.append("    種類: " + " / ".join(f"{k} {v}回" for k, v in (calls.get("by_path") or [])[:8]))
+        lines.append("    結果: " + " / ".join(f"HTTP {k}×{v}" for k, v in (calls.get("by_status") or [])))
+        n429 = sum(v for k, v in (calls.get("by_status") or []) if str(k) == "429")
+        if n429:
+            warns.append(f"HTTP 429（回数制限）{n429}回")
+    caps = caps or {}
+    if caps.get("caps"):
+        c = caps["caps"]
+        lines.append("  【本日の枠の内訳】" + " / ".join(f"{_CAP_JA.get(k, k)} {v}" for k, v in c.items())
+                     + f" → 本日の枠 {caps.get('final')}回（決めたもの: {_CAP_JA.get(caps.get('limiter'), caps.get('limiter'))}）")
+        if caps.get("monthly_used") is not None:
+            lines.append(f"    今月の使用 {caps['monthly_used']}回 / 月の上限（設定）{caps.get('monthly_guard')}回")
+        if caps.get("limiter") in ("monthly_remaining", "monthly_guard"):
+            warns.append(f"月の上限に近いため本日の枠を {caps.get('final')}回に抑えた")
+        elif caps.get("limiter") == "daily_remaining" and c.get("daily_remaining", 0) < c.get("config", 0):
+            warns.append(f"本日すでに他で使われ、残り {c.get('daily_remaining')}回から開始")
+        final = int(caps.get("final") or 0)
+        if final and used < final * 0.5:
+            why = []
+            wsk = len((ing or {}).get("web_skipped") or [])
+            if wsk:
+                why.append(f"Web確認で財務なしの会社 {wsk}社を除いて候補が {len((ing or {}).get('targets') or []) if isinstance((ing or {}).get('targets'), list) else (ing or {}).get('targets', '?')}社に減った")
+            if (ing or {}).get("missing"):
+                why.append(f"EdinetDB にデータの無い会社 {ing['missing']}社")
+            warns.append(f"枠 {final}回に対し {used}回しか使っていない" + (f"（{'・'.join(why)}）" if why else ""))
+    for w in warns:
+        lines.append(f"  ⚠️ {w}")
+    return lines, warns
+
+
 def build_edinetdb_ingest_alert(ing: dict, web: dict | None = None, ledger: dict | None = None,
-                                daily_limit: int = 100) -> dict:
+                                daily_limit: int = 100, calls: dict | None = None) -> dict:
     """EdinetDB の日次結果をメール用アラート1件にまとめる（純関数）。
 
     年次財務は会社ページ（Web）、API は有報本文・セグメント・四半期財務と役割が分かれているので、
@@ -2142,13 +2191,16 @@ def build_edinetdb_ingest_alert(ing: dict, web: dict | None = None, ledger: dict
     rem = (ledger or {}).get("remote_daily_remaining")
     lines.append(f"  【API使用】{used}/{daily_limit}回" + (f"（EdinetDB側の残り {rem}回）" if rem is not None else "")
                  + f" / 書類一覧 {ing.get('doc_index_rows', 0)}件")
+    u_lines, warns = api_usage_lines(calls, ing.get("budget_caps"), int(used or 0), ing)
+    lines += u_lines
     n = len(done) + int(web.get("ok", 0) or 0)
     return {
         "trigger":  "edinetdb_ingest",
-        "title":    f"🗂 EDINET DB 本日 年次{web.get('ok', 0)}社・本文{len(done)}社・四半期{ing.get('quarterly_companies', 0)}社"
-                    + ("（0社・要確認）" if n == 0 and ing.get("targets") else ""),
+        "title":    f"🗂 EDINET DB 本日 年次{web.get('ok', 0)}社・本文{len(done)}社・四半期{ing.get('quarterly_companies', 0)}社・API {used}/{daily_limit}回"
+                    + ("（0社・要確認）" if n == 0 and ing.get("targets") else "")
+                    + (f"（⚠️ {warns[0]}）" if warns else ""),
         "body":     "\n".join(lines),
-        "severity": "medium" if (n == 0 and ing.get("targets")) or ing.get("failure") else "info",
+        "severity": "medium" if (n == 0 and ing.get("targets")) or ing.get("failure") or warns else "info",
         "channel":  "gmail",
     }
 

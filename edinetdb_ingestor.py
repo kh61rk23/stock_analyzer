@@ -778,7 +778,56 @@ def prefilter_targets(candidates: list[str], want: int, meta: dict, cfg,
     return selected, skipped
 
 
+def budget_cap_breakdown(config_budget: int, usage: dict | None, monthly_guard: int) -> dict:
+    """その日の API 枠を何が決めたか（純関数）。
+
+    設定の日次予算・EdinetDB 側の日次残り・月次残り・月次ガード（設定の月上限−今月の使用）の
+    最小が当日の枠。メールで「月の上限に近いので抑えた」などを説明するために内訳を返す。
+    """
+    usage = usage or {}
+    caps = {"config": max(0, int(config_budget))}
+
+    def num(key):
+        try:
+            return max(0, int(usage[key])) if usage.get(key) is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    if num("daily_remaining") is not None:
+        caps["daily_remaining"] = num("daily_remaining")
+    if num("monthly_remaining") is not None:
+        caps["monthly_remaining"] = num("monthly_remaining")
+    if num("monthly_used") is not None:
+        caps["monthly_guard"] = max(0, int(monthly_guard) - num("monthly_used"))
+    limiter = min(caps, key=lambda k: (caps[k], k != "config"))
+    return {"caps": caps, "final": caps[limiter], "limiter": limiter,
+            "monthly_used": num("monthly_used"), "monthly_guard": int(monthly_guard)}
+
+
+def recent_web_nodata(meta: dict, recheck_days: int, today: date | None = None) -> set:
+    """Web確認で「財務なし」と分かってから recheck_days 日以内の会社（純関数）。
+
+    これを候補の計画から外さないと、財務の無い会社が優先順の上位に居座り、
+    Web確認で飛ばしたあとに採用できる会社がほとんど残らない（API枠が余る）。
+    """
+    today = today or date.today()
+    out = set()
+    for code, info in (meta or {}).items():
+        wc = (info or {}).get("web_check") or {}
+        if wc.get("has") is not False:
+            continue
+        try:
+            if (today - date.fromisoformat(str(wc.get("date", ""))[:10])).days < recheck_days:
+                out.add(code)
+        except ValueError:
+            continue
+    return out
+
+
 def _plan_targets(companies: list[dict], cfg, meta: dict, budget: int) -> list[str]:
+    skip = (recent_web_nodata(meta, int(getattr(cfg, "EDINETDB_WEB_RECHECK_DAYS", 7)))
+            if getattr(cfg, "EDINETDB_WEB_PRECHECK", False) else set())
+    companies = [c for c in companies if str(c.get("edinet_code")) not in skip]
     by_sec = {
         _sec4(company.get("sec_code")): company
         for company in companies if _sec4(company.get("sec_code"))
@@ -880,22 +929,10 @@ def run_edinetdb_ingest(
         data_dir / "edinetdb_cache", daily_budget, "edinetdb",
     )
     usage = client.usage() or {}
-    remote_caps = []
-    for key in ("daily_remaining", "monthly_remaining"):
-        try:
-            if usage.get(key) is not None:
-                remote_caps.append(max(0, int(usage[key])))
-        except (TypeError, ValueError):
-            pass
-    try:
-        monthly_used = int(usage.get("monthly_used"))
-        remote_caps.append(max(
-            0, int(getattr(cfg, "EDINETDB_MONTHLY_GUARD", 1450)) - monthly_used
-        ))
-    except (TypeError, ValueError):
-        pass
-    if remote_caps:
-        daily_budget = min(daily_budget, *remote_caps)
+    budget_caps = budget_cap_breakdown(
+        daily_budget, usage, int(getattr(cfg, "EDINETDB_MONTHLY_GUARD", 1450)))
+    if budget_caps["final"] < daily_budget:
+        daily_budget = budget_caps["final"]
         client.daily_budget = daily_budget
     try:
         from edinet_bq_client import EDINETBQClient
@@ -1262,6 +1299,7 @@ def run_edinetdb_ingest(
         "items_rows": items_merged, "items_companies": len(items_done),
         "items_backfilled": backfilled,
         "quarterly_companies": len(q_done), "quarterly_rows": len(q_rows),
+        "budget_caps": budget_caps, "usage": usage,
     }
 
 

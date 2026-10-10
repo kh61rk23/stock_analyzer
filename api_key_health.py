@@ -231,6 +231,11 @@ def _probe_edinetdb(key: str) -> dict:
             headers={"X-API-Key": key, "User-Agent": "StockAnalyzer/3.0"},
             timeout=PROBE_TIMEOUT,
         )
+        try:
+            import api_call_log
+            api_call_log.note("edinetdb", "/companies/E03606/analysis", resp.status_code)
+        except Exception:
+            pass
         state = classify_edinetdb(resp.status_code)
         if resp.status_code == 429:
             return _entry(STATE_LIMITED, "HTTP 429（レート制限・失効ではない）")

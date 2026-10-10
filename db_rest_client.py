@@ -15,6 +15,8 @@ from typing import Any
 
 import requests
 
+import api_call_log
+
 
 MAX_RETRIES = 2
 from config_sync import sync_module_constants
@@ -229,6 +231,7 @@ class DBRestClient:
                     timeout=self.timeout * (2 ** attempt),
                 )
             except requests.Timeout as exc:
+                api_call_log.note(self.source_name, path, "timeout", data_dir=self.cache_dir.parent)
                 # 重い応答（segments 等）は20秒を超えることがある。待ち時間を倍にして取り直す
                 self._last_request_at = time.monotonic()
                 if attempt < MAX_RETRIES:
@@ -245,6 +248,8 @@ class DBRestClient:
                 self.last_error = "network"
                 return None
             self._last_request_at = time.monotonic()
+            api_call_log.note(self.source_name, path, response.status_code,
+                              data_dir=self.cache_dir.parent)
 
             if response.status_code == 429:
                 # 429は「速すぎる」の合図。間隔を広げて数回だけ待ち、

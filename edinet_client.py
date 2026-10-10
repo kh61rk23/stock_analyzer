@@ -42,6 +42,16 @@ from pathlib import Path
 from typing import Optional
 
 EDINETDB_BASE = "https://edinetdb.jp/v1"
+
+
+def _note_db(resp) -> None:
+    """EdinetDB への直接の GET を呼び出し元つきで記録する（日次メールの「API の使い道」）。"""
+    try:
+        if "edinetdb.jp" in str(resp.url):
+            import api_call_log
+            api_call_log.note("edinetdb", str(resp.url), resp.status_code)
+    except Exception:
+        pass
 GOV_EDINET_BASE = "https://disclosure.edinet-fsa.go.jp/api/v2"
 
 # 1日あたりの最大APIコール数（民間EdinetDB）
@@ -165,6 +175,7 @@ def search_company(sec_code: str, api_key: str,
             headers=headers,
             timeout=15,
         )
+        _note_db(resp)
         if resp.status_code != 200:
             return None
         data = resp.json().get("data", [])
@@ -203,6 +214,7 @@ def _fetch_analysis(edinet_code: str, api_key: str) -> Optional[dict]:
             headers=_headers_db(api_key),
             timeout=20,
         )
+        _note_db(resp)
         if resp.status_code == 429:
             print("      ⚠️  EdinetDB レート制限（100回/日）に達しました")
             return None
@@ -272,6 +284,7 @@ def _fetch_financials(edinet_code: str, api_key: str) -> Optional[dict]:
             headers=_headers_db(api_key),
             timeout=20,
         )
+        _note_db(resp)
         if resp.status_code == 429:
             print("      ⚠️  EdinetDB レート制限（100回/日）に達しました")
             return None
@@ -589,6 +602,7 @@ def _fetch_earnings(edinet_code: str, api_key: str) -> Optional[dict]:
             params={"limit": 1},
             timeout=20,
         )
+        _note_db(resp)
         if resp.status_code != 200:
             return None
         data = resp.json().get("data", [])
@@ -908,6 +922,7 @@ def fetch_rankings(metric: str, api_key: str,
             params={"limit": limit},
             timeout=20,
         )
+        _note_db(resp)
         if resp.status_code != 200:
             return []
 
