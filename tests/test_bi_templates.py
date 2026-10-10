@@ -27,6 +27,7 @@ STRING_COLS = {
     "parent_id", "domain_id", "domain_name_ja", "path_name", "confidence_type",
     "price_source", "interest_bearing_debt_basis", "valuation_flag", "roic_tax_basis", "re_gain_flag", "exchange", "sic", "shares_source",
     "theme_name", "sector_code", "sector_name_ja", "supply_chain_position", "source", "signal_category", "direction",
+    "tickers_all", "axis", "axis_ja", "member", "segment_name",
 }
 INT_COLS = {
     "fiscal_year", "employee_count", "foreign_ministry_level", "state_dept_level", "exposure_type_count",
@@ -39,10 +40,11 @@ INT_COLS = {
 }
 DATE_COLS = {"fiscal_year_end", "risk_date", "latest_risk_date", "price_date", "price_break_date", "snapshot_date", "technical_date", "fired_at",
              "month", "month_end_date", "trade_date", "ttm_period_end", "balance_date", "shares_as_of"}
-BOOL_COLS = {"is_delisted", "sanction_flag", "is_landlocked", "review_flag", "auto_derived", "verified_flag", "above_ma200", "has_fundamentals", "is_partial", "is_complete"}
+BOOL_COLS = {"is_delisted", "sanction_flag", "is_landlocked", "review_flag", "auto_derived", "verified_flag", "above_ma200", "has_fundamentals", "is_partial", "is_complete", "is_latest"}
 ALL_MARTS = ("m_company", "m_fin_annual", "m_country_profile", "m_country_risk", "m_company_country",
              "m_re_area", "m_re_holdings", "m_re_holdings_pref", "m_tax_node", "m_company_tax", "m_screener", "m_screener_us",
-             "m_theme", "m_theme_def", "m_theme_signal", "m_price_monthly", "m_sector_perf", "m_market_breadth")
+             "m_theme", "m_theme_def", "m_theme_signal", "m_price_monthly", "m_sector_perf", "m_market_breadth",
+             "m_us_fin_annual", "m_us_segments")
 
 
 def mart_columns(mart: str) -> list[str]:
@@ -348,6 +350,51 @@ def _load_screener(c) -> None:
         })
         _insert(c, "m_screener", row)
     _load_screener_us(c)
+    _load_us(c)
+
+
+# 米国株の通期財務（20銘柄×5期）とセグメント（AAPL・MSFT の事業／製品／地域）
+def _load_us(c) -> None:
+    import datetime as dt
+    inds = ["Electronic Computers", "Services-Prepackaged Software", None]
+    for i in range(20):
+        tk = ["AAPL", "MSFT"][i] if i < 2 else f"U{i:02d}"
+        for k, fy in enumerate(range(2021, 2026)):
+            rev = (50 + i * 20) * 1e9 * (1 + 0.08 * k)
+            op = rev * (0.05 + i * 0.03)
+            ni = op * 0.8
+            eq = rev * 0.5
+            ocf = op * 1.1
+            capex = rev * 0.04
+            row = {
+                "ticker": tk, "cik": 100 + i, "name": f"Corp {i}", "exchange": "Nasdaq", "sic": "3571", "industry": inds[i % 3],
+                "fiscal_year_end": dt.date(fy, 9, 30), "fiscal_year": fy, "revenue_usd": rev, "gross_profit_usd": rev * 0.4,
+                "operating_income_usd": op, "net_income_usd": ni, "eps_usd": ni / 1e9, "operating_cf_usd": ocf,
+                "capex_usd": capex, "fcf_usd": ocf - capex, "depreciation_usd": rev * 0.03, "buyback_usd": ni * 0.5,
+                "dividends_paid_usd": ni * 0.2 if i % 2 else None, "total_assets_usd": rev * 1.5, "total_liabilities_usd": rev,
+                "equity_usd": eq, "cash_usd": rev * 0.2, "debt_usd": rev * 0.3, "gross_margin": 0.4, "operating_margin": op / rev,
+                "net_margin": ni / rev, "fcf_margin": (ocf - capex) / rev, "roe": ni / eq, "equity_ratio": eq / (rev * 1.5),
+                "sales_growth_1y": 0.08 if k else None, "op_income_growth_1y": 0.08 if k else None,
+                "net_income_growth_1y": 0.08 if k else None, "eps_growth_1y": 0.08 if k else None,
+            }
+            _insert(c, "m_us_fin_annual", row)
+    segs = {
+        "AAPL": [("ProductOrService", "製品・サービス", ["IPhoneMember", "MacMember", "ServicesMember"]),
+                 ("Geographical", "地域", ["AmericasSegmentMember", "GreaterChinaSegmentMember", "EuropeSegmentMember"])],
+        "MSFT": [("BusinessSegments", "事業", ["IntelligentCloudMember", "ProductivityAndBusinessProcessesMember"])],
+    }
+    for ci, (tk, axes) in enumerate(segs.items()):
+        for axis, axis_ja, members in axes:
+            for k, fy in enumerate(range(2022, 2026)):
+                for m, mem in enumerate(members):
+                    rev = (30 + m * 10) * 1e9 * (1 + 0.1 * k)
+                    op = rev * 0.3 if axis == "BusinessSegments" else None
+                    _insert(c, "m_us_segments", {
+                        "ticker": tk, "cik": 100 + ci, "tickers_all": tk, "name": f"Corp {ci}", "industry": "Electronic Computers",
+                        "axis": axis, "axis_ja": axis_ja, "member": mem, "segment_name": mem.replace("Member", ""),
+                        "fiscal_year_end": dt.date(fy, 9, 30), "fiscal_year": fy, "is_latest": fy == 2025,
+                        "revenue_usd": rev, "operating_income_usd": op, "operating_margin": 0.3 if op else None,
+                        "company_revenue_usd": rev * len(members), "revenue_share": 1 / len(members), "revenue_growth_1y": 0.1 if k else None})
 
 
 # 米国株: 1銘柄1行。i%4==3 は財務なし（株価のみ）、i%5==4 は株価なし
@@ -528,6 +575,7 @@ def test_template_count_and_unique_ids():
         assert sum(1 for t in TEMPLATES if t["domain"] == domain) >= 8, domain
     assert sum(1 for t in TEMPLATES if t["domain"] == "screener_us") >= 6
     assert sum(1 for t in TEMPLATES if t["domain"] == "market") >= 10
+    assert sum(1 for t in TEMPLATES if t["domain"] == "us") >= 10
     ids = [t["id"] for t in TEMPLATES]
     assert len(ids) == len(set(ids))
 

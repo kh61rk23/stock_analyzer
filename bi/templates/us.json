@@ -1,0 +1,394 @@
+[
+  {
+    "id": "us_company_5y",
+    "domain": "us",
+    "title": "米国企業の5年推移",
+    "question": "この米国企業の売上・営業利益・純利益・FCF は直近5年でどう動いたか",
+    "mart": "m_us_fin_annual",
+    "sql": "SELECT fiscal_year, fiscal_year_end, name,\n       ROUND(revenue_usd / 1e6, 0) AS revenue_musd, ROUND(operating_income_usd / 1e6, 0) AS operating_income_musd,\n       ROUND(net_income_usd / 1e6, 0) AS net_income_musd, ROUND(fcf_usd / 1e6, 0) AS fcf_musd,\n       ROUND(operating_margin * 100, 1) AS operating_margin_pct, ROUND(sales_growth_1y * 100, 1) AS sales_growth_pct\nFROM m_us_fin_annual\nWHERE ticker = {{ticker}}\nORDER BY fiscal_year_end",
+    "params": [
+      {
+        "name": "ticker",
+        "label": "ティッカー",
+        "type": "string",
+        "default": "AAPL"
+      }
+    ],
+    "chart": {
+      "type": "line",
+      "x": "fiscal_year",
+      "y": [
+        "revenue_musd",
+        "operating_income_musd",
+        "net_income_musd",
+        "fcf_musd"
+      ],
+      "series": null
+    },
+    "note": "金額は百万ドル。年度は期末日の年。"
+  },
+  {
+    "id": "us_industry_margin",
+    "domain": "us",
+    "title": "業種別の営業利益率（米国）",
+    "question": "米国の業種（SIC）ごとに営業利益率はどれくらいか",
+    "mart": "m_us_fin_annual",
+    "sql": "SELECT COALESCE(industry, '(不明)') AS industry_name, COUNT(*) AS companies,\n       ROUND(AVG(operating_margin) * 100, 1) AS avg_operating_margin_pct,\n       ROUND(SUM(operating_income_usd) / NULLIF(SUM(revenue_usd), 0) * 100, 1) AS weighted_margin_pct\nFROM m_us_fin_annual\nWHERE fiscal_year = {{fiscal_year}} AND revenue_usd > 0 AND operating_margin BETWEEN -1 AND 1\nGROUP BY industry_name\nHAVING COUNT(*) >= {{min_companies}}\nORDER BY weighted_margin_pct DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "fiscal_year",
+        "label": "年度（期末の年）",
+        "type": "int",
+        "default": 2025,
+        "min": 2015,
+        "max": 2030
+      },
+      {
+        "name": "min_companies",
+        "label": "業種の最少社数",
+        "type": "int",
+        "default": 5,
+        "min": 1,
+        "max": 500
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "industry_name",
+      "y": "weighted_margin_pct",
+      "series": null
+    },
+    "note": "weighted は業種の営業利益合計÷売上合計（大企業の影響が大きい）。avg は会社ごとの単純平均。"
+  },
+  {
+    "id": "us_industry_growth",
+    "domain": "us",
+    "title": "業種別の売上成長率（米国）",
+    "question": "米国のどの業種が売上を伸ばしているか",
+    "mart": "m_us_fin_annual",
+    "sql": "SELECT COALESCE(industry, '(不明)') AS industry_name, COUNT(*) AS companies,\n       ROUND(AVG(sales_growth_1y) * 100, 1) AS avg_sales_growth_pct,\n       ROUND(SUM(CASE WHEN sales_growth_1y > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 0) AS growing_share_pct\nFROM m_us_fin_annual\nWHERE fiscal_year = {{fiscal_year}} AND sales_growth_1y BETWEEN -0.9 AND 3\nGROUP BY industry_name\nHAVING COUNT(*) >= {{min_companies}}\nORDER BY avg_sales_growth_pct DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "fiscal_year",
+        "label": "年度（期末の年）",
+        "type": "int",
+        "default": 2025,
+        "min": 2015,
+        "max": 2030
+      },
+      {
+        "name": "min_companies",
+        "label": "業種の最少社数",
+        "type": "int",
+        "default": 5,
+        "min": 1,
+        "max": 500
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "industry_name",
+      "y": "avg_sales_growth_pct",
+      "series": null
+    },
+    "note": "前年比は前の通期が330〜400日前にある会社だけ。−90%〜+300%の外は外れ値として除く。"
+  },
+  {
+    "id": "us_revenue_rank",
+    "domain": "us",
+    "title": "売上高ランキング（米国）",
+    "question": "米国で売上が大きい会社はどこか",
+    "mart": "m_us_fin_annual",
+    "sql": "SELECT ticker, name, industry, ROUND(revenue_usd / 1e9, 1) AS revenue_busd, ROUND(operating_margin * 100, 1) AS operating_margin_pct,\n       ROUND(sales_growth_1y * 100, 1) AS sales_growth_pct\nFROM m_us_fin_annual\nWHERE fiscal_year = {{fiscal_year}} AND revenue_usd > 0\nORDER BY revenue_usd DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "fiscal_year",
+        "label": "年度（期末の年）",
+        "type": "int",
+        "default": 2025,
+        "min": 2015,
+        "max": 2030
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "ticker",
+      "y": "revenue_busd",
+      "series": null
+    },
+    "note": "売上は十億ドル。"
+  },
+  {
+    "id": "us_fcf_margin_rank",
+    "domain": "us",
+    "title": "FCFマージンの高い会社（米国）",
+    "question": "売上に対してフリーCFを多く生む米国企業はどこか",
+    "mart": "m_us_fin_annual",
+    "sql": "SELECT ticker, name, industry, ROUND(revenue_usd / 1e9, 1) AS revenue_busd, ROUND(fcf_margin * 100, 1) AS fcf_margin_pct,\n       ROUND(operating_margin * 100, 1) AS operating_margin_pct\nFROM m_us_fin_annual\nWHERE fiscal_year = {{fiscal_year}} AND revenue_usd >= {{min_revenue_busd}} * 1e9 AND fcf_margin BETWEEN -1 AND 1\nORDER BY fcf_margin DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "fiscal_year",
+        "label": "年度（期末の年）",
+        "type": "int",
+        "default": 2025,
+        "min": 2015,
+        "max": 2030
+      },
+      {
+        "name": "min_revenue_busd",
+        "label": "売上の下限（十億ドル）",
+        "type": "number",
+        "default": 1,
+        "min": 0,
+        "max": 1000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "ticker",
+      "y": "fcf_margin_pct",
+      "series": null
+    },
+    "note": "FCF＝営業CF−設備投資。"
+  },
+  {
+    "id": "us_shareholder_return_rank",
+    "domain": "us",
+    "title": "株主還元額ランキング（米国）",
+    "question": "配当と自社株買いで株主に多く返している米国企業はどこか",
+    "mart": "m_us_fin_annual",
+    "sql": "SELECT ticker, name, ROUND((COALESCE(dividends_paid_usd, 0) + COALESCE(buyback_usd, 0)) / 1e9, 1) AS total_return_busd,\n       ROUND(COALESCE(dividends_paid_usd, 0) / 1e9, 1) AS dividends_busd, ROUND(COALESCE(buyback_usd, 0) / 1e9, 1) AS buyback_busd,\n       ROUND((COALESCE(dividends_paid_usd, 0) + COALESCE(buyback_usd, 0)) / NULLIF(fcf_usd, 0) * 100, 0) AS payout_of_fcf_pct\nFROM m_us_fin_annual\nWHERE fiscal_year = {{fiscal_year}} AND (dividends_paid_usd IS NOT NULL OR buyback_usd IS NOT NULL)\nORDER BY total_return_busd DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "fiscal_year",
+        "label": "年度（期末の年）",
+        "type": "int",
+        "default": 2025,
+        "min": 2015,
+        "max": 2030
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "ticker",
+      "y": [
+        "dividends_busd",
+        "buyback_busd"
+      ],
+      "series": null
+    },
+    "note": "payout_of_fcf は還元額÷FCF（100%超は FCF 以上を返している）。"
+  },
+  {
+    "id": "us_roe_distribution",
+    "domain": "us",
+    "title": "ROEの分布（米国）",
+    "question": "米国企業のROEはどう分布しているか",
+    "mart": "m_us_fin_annual",
+    "sql": "SELECT CASE WHEN roe < 0 THEN '1 赤字' WHEN roe < 0.05 THEN '2 0〜5%' WHEN roe < 0.10 THEN '3 5〜10%' WHEN roe < 0.15 THEN '4 10〜15%' WHEN roe < 0.25 THEN '5 15〜25%' ELSE '6 25%以上' END AS roe_band,\n       COUNT(*) AS companies\nFROM m_us_fin_annual\nWHERE fiscal_year = {{fiscal_year}} AND roe IS NOT NULL\nGROUP BY roe_band\nORDER BY roe_band",
+    "params": [
+      {
+        "name": "fiscal_year",
+        "label": "年度（期末の年）",
+        "type": "int",
+        "default": 2025,
+        "min": 2015,
+        "max": 2030
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "roe_band",
+      "y": "companies",
+      "series": null
+    },
+    "note": "ROE＝純利益÷株主資本（株主資本が正の会社だけ）。"
+  },
+  {
+    "id": "us_seg_company",
+    "domain": "us",
+    "title": "米国企業のセグメント別売上の推移",
+    "question": "この米国企業の売上は、事業・製品・地域ごとにどう動いたか",
+    "mart": "m_us_segments",
+    "sql": "SELECT fiscal_year, segment_name, ROUND(revenue_usd / 1e6, 0) AS revenue_musd, ROUND(operating_income_usd / 1e6, 0) AS operating_income_musd,\n       ROUND(revenue_share * 100, 1) AS revenue_share_pct, ROUND(revenue_growth_1y * 100, 1) AS revenue_growth_pct\nFROM m_us_segments\nWHERE ticker = {{ticker}} AND axis_ja = {{axis_ja}}\nORDER BY fiscal_year, revenue_usd DESC",
+    "params": [
+      {
+        "name": "ticker",
+        "label": "ティッカー",
+        "type": "string",
+        "default": "AAPL"
+      },
+      {
+        "name": "axis_ja",
+        "label": "軸（事業／製品・サービス／地域）",
+        "type": "string",
+        "default": "製品・サービス"
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "fiscal_year",
+      "y": "revenue_musd",
+      "series": "segment_name"
+    },
+    "note": "SEC の決算データ（Financial Statement Data Sets）。会社が開示した軸だけ。比率は全社売上に対する割合。製品・サービスの軸には「Product」「Service」のような合計の行と内訳の行が並ぶ会社があり、足すと100%を超えることがある。"
+  },
+  {
+    "id": "us_seg_latest_mix",
+    "domain": "us",
+    "title": "最新期のセグメント構成（米国）",
+    "question": "この米国企業の最新期の売上は、どのセグメントにどれだけ依存しているか",
+    "mart": "m_us_segments",
+    "sql": "SELECT axis_ja, segment_name, ROUND(revenue_usd / 1e6, 0) AS revenue_musd, ROUND(revenue_share * 100, 1) AS revenue_share_pct,\n       ROUND(operating_margin * 100, 1) AS operating_margin_pct, ROUND(revenue_growth_1y * 100, 1) AS revenue_growth_pct\nFROM m_us_segments\nWHERE ticker = {{ticker}} AND is_latest\nORDER BY axis_ja, revenue_usd DESC",
+    "params": [
+      {
+        "name": "ticker",
+        "label": "ティッカー",
+        "type": "string",
+        "default": "AAPL"
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "segment_name",
+      "y": "revenue_share_pct",
+      "series": "axis_ja"
+    },
+    "note": "営業利益をセグメント別に開示するのは主に事業セグメント。"
+  },
+  {
+    "id": "us_seg_fastest",
+    "domain": "us",
+    "title": "伸びているセグメント（米国）",
+    "question": "売上の大きいセグメントのうち、前年比で最も伸びているのはどれか",
+    "mart": "m_us_segments",
+    "sql": "SELECT ticker, name, axis_ja, segment_name, fiscal_year, ROUND(revenue_usd / 1e6, 0) AS revenue_musd,\n       ROUND(revenue_growth_1y * 100, 1) AS revenue_growth_pct, ROUND(revenue_share * 100, 1) AS revenue_share_pct\nFROM m_us_segments\nWHERE is_latest AND revenue_usd >= {{min_revenue_musd}} * 1e6 AND revenue_growth_1y IS NOT NULL AND revenue_growth_1y <= 10\nORDER BY revenue_growth_1y DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "min_revenue_musd",
+        "label": "セグメント売上の下限（百万ドル）",
+        "type": "number",
+        "default": 1000,
+        "min": 0,
+        "max": 1000000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "segment_name",
+      "y": "revenue_growth_pct",
+      "series": null
+    },
+    "note": "セグメント名の付け替え（再編）があると前年が無く空になる。"
+  },
+  {
+    "id": "us_seg_margin",
+    "domain": "us",
+    "title": "事業セグメントの利益率（米国）",
+    "question": "この米国企業の事業セグメントごとの営業利益率は",
+    "mart": "m_us_segments",
+    "sql": "SELECT fiscal_year, segment_name, ROUND(revenue_usd / 1e6, 0) AS revenue_musd, ROUND(operating_income_usd / 1e6, 0) AS operating_income_musd,\n       ROUND(operating_margin * 100, 1) AS operating_margin_pct\nFROM m_us_segments\nWHERE ticker = {{ticker}} AND axis = 'BusinessSegments' AND operating_income_usd IS NOT NULL\nORDER BY fiscal_year, revenue_usd DESC",
+    "params": [
+      {
+        "name": "ticker",
+        "label": "ティッカー",
+        "type": "string",
+        "default": "MSFT"
+      }
+    ],
+    "chart": {
+      "type": "line",
+      "x": "fiscal_year",
+      "y": "operating_margin_pct",
+      "series": "segment_name"
+    },
+    "note": "営業利益を事業セグメント別に開示している会社だけ。"
+  },
+  {
+    "id": "us_seg_region_exposure",
+    "domain": "us",
+    "title": "特定地域への売上依存（米国）",
+    "question": "ある地域（例: China）の売上比率が高い米国企業はどこか",
+    "mart": "m_us_segments",
+    "sql": "SELECT ticker, name, industry, segment_name, fiscal_year, ROUND(revenue_usd / 1e6, 0) AS revenue_musd,\n       ROUND(revenue_share * 100, 1) AS revenue_share_pct\nFROM m_us_segments\nWHERE is_latest AND axis = 'Geographical' AND member LIKE {{member_like}} AND revenue_usd >= {{min_revenue_musd}} * 1e6\nORDER BY revenue_share DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "member_like",
+        "label": "地域名の一部（英語・% で前後を囲む）",
+        "type": "string",
+        "default": "%China%"
+      },
+      {
+        "name": "min_revenue_musd",
+        "label": "その地域の売上の下限（百万ドル）",
+        "type": "number",
+        "default": 100,
+        "min": 0,
+        "max": 1000000
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "ticker",
+      "y": "revenue_share_pct",
+      "series": null
+    },
+    "note": "地域名は会社ごとの表記（China・CN・GreaterChina など）。大文字小文字を区別する。比率は全社売上に対する割合。"
+  }
+]

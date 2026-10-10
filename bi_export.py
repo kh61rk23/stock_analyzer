@@ -67,6 +67,8 @@ MART_KEYS = {
     "m_theme_signal": ["theme_name", "sector_code", "fired_at", "signal_category", "direction"],
     "m_screener": ["edinet_code"],
     "m_screener_us": ["ticker"],
+    "m_us_fin_annual": ["ticker", "fiscal_year_end"],
+    "m_us_segments": ["cik", "axis", "member", "fiscal_year_end"],
     "m_price_monthly": ["ticker", "month"],
     "m_sector_perf": ["industry", "trade_date"],
     "m_market_breadth": ["market", "trade_date"],
@@ -106,6 +108,11 @@ SOURCES = [
         "optional_columns": ["total_assets", "total_liabilities", "equity", "cash", "debt_short", "debt_long",
                              "gross_profit", "depreciation", "income_tax", "pretax_income", "interest_expense",
                              "shares_diluted", "assets_current", "liabilities_current"],
+    },
+    {
+        "source": "stock-analyzer-edinet.us.segment_financials",
+        "dest": "src_us_segments",
+        "columns": ["cik", "axis", "member", "tag", "period_end", "qtrs", "val", "filed"],
     },
 ]
 
