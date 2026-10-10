@@ -20,6 +20,7 @@ PROJECT = "stock-analyzer-edinet"
 DOMAINS = {"finance": "財務・業績", "geo": "地政学", "realestate": "不動産", "taxonomy": "技術分類",
            "theme": "テーマ株", "market": "株価・スクリーニング", "us": "米国株"}
 MART_DESC = {
+    "m_stock_snapshot": "スクリーナー通過銘柄の日次記録（銘柄レポート md の正本・2026-09-09〜）。1日1銘柄1行。スコア・財務・テクニカル・シグナル文と5/20営業日後のリターン",
     "m_us_fin_annual": "米国株の通期財務。1銘柄1通期1行（直近5年・USD）。売上・利益・FCF・還元・貸借と前年比",
     "m_us_segments": "米国株のセグメント別売上・営業利益。1社×軸（事業／製品・サービス／地域）×セグメント×通期1行。構成比は全社売上に対する比率（合計行が混ざることがある）",
     "m_screener_us": "米国株スクリーナー。1銘柄1行（NYSE・Nasdaq）。金額はUSD。SEC の財務×株価、ROIC・EV/EBITDA・Fスコア・総還元など多面指標つき",
@@ -39,6 +40,7 @@ MART_DESC = {
     "m_re_holdings_pref": "企業の保有不動産の都道府県別集約。1社×都道府県×年度1行",
 }
 LABELS = {
+    "snapshot_date": "記録日", "fwd_return_5d": "5営業日後リターン", "fwd_return_20d": "20営業日後リターン", "signal_text": "シグナル", "technical_score": "テクニカルスコア", "base_close": "起点の終値",
     "axis_ja": "軸", "segment_name": "セグメント", "member": "セグメント（原名）", "is_latest": "最新期", "revenue_share": "売上構成比",
     "revenue_growth_1y": "売上成長率(1年)", "company_revenue_usd": "全社売上(USD)", "tickers_all": "ティッカー（全種類）",
     "gross_profit_usd": "売上総利益(USD)", "operating_cf_usd": "営業CF(USD)", "capex_usd": "設備投資(USD)", "depreciation_usd": "減価償却(USD)",
