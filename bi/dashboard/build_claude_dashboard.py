@@ -18,8 +18,11 @@ OUT = Path(__file__).with_name("株式DWH分析室.html")
 PROJECT = "stock-analyzer-edinet"
 
 DOMAINS = {"finance": "財務・業績", "geo": "地政学", "realestate": "不動産", "taxonomy": "技術分類",
-           "theme": "テーマ株", "market": "株価・スクリーニング", "us": "米国株", "research": "論文（arXiv）", "macro": "マクロ・業種レポート"}
+           "theme": "テーマ株", "market": "株価・スクリーニング", "us": "米国株", "research": "論文（arXiv）", "macro": "マクロ・業種レポート", "news": "ニュース・テーマETF"}
 MART_DESC = {
+    "m_news": "ニュース記事（直近60日・1記事1行・要約先頭300字）。取得元・業種・重要度・センチメント。全期間は analytics.news_articles",
+    "m_etf_themes": "テーマETFの熱量の日次（ETF モメンタム＋arXiv 論文の伸び）。順位・5日差",
+    "m_etf_daily": "テーマETFの個別 ETF の日次（価格・1か月/3か月騰落率・50日線乖離・出来高前月比）",
     "m_sector_scores": "業種スコアの日次推移（日本33業種＋米国11セクター・2026-07〜）。前日差・5日差・順位つき",
     "m_macro_indicators": "マクロ指標（ドル円・米10年債・原油・金・VIX・S&P500・日経平均）と米国債の年限別利回りの日次",
     "m_macro_signals": "マクロシグナル（金利上昇・円安など）×業種の追い風／逆風／注意の日次",
@@ -46,6 +49,7 @@ MART_DESC = {
     "m_re_holdings_pref": "企業の保有不動産の都道府県別集約。1社×都道府県×年度1行",
 }
 LABELS = {
+    "first_seen": "初出日", "last_seen": "最終取得日", "summary_head": "要約（先頭）", "source": "取得元", "matched_sectors": "関係する業種", "importance_score": "重要度", "investment_relevant": "投資関連", "sentiment_label": "センチメント", "sentiment_score": "センチメント値", "theme_name": "テーマ", "heat_score": "熱量", "heat_rank": "順位", "etf_momentum_score": "ETFモメンタム", "arxiv_growth_rate": "論文の伸び率(%)", "ma50_ratio": "50日線乖離(%)", "vol_ratio": "出来高前月比(%)",
     "report_date": "日付", "sector_code": "業種コード", "sector_name": "業種", "score": "スコア", "risk_level": "リスク", "score_chg_1d": "前日差", "score_chg_5d": "5日差", "score_rank": "順位", "indicator": "指標", "value": "値", "change_1d": "前日差", "change_1m": "1か月差", "signal": "シグナル", "trigger_value": "きっかけ", "judgement_ja": "判定", "reason": "理由", "report_type": "種類", "body_head": "本文（先頭）",
     "paper_id": "arXiv ID", "title_ja": "日本語タイトル", "title_ja_or_en": "タイトル", "investment_score": "点数", "is_idea": "投資アイデア候補", "keywords": "キーワード", "keyword": "キーワード", "primary_category": "分野", "fetched_date": "取得日", "published_date": "公開日", "summary": "要旨", "authors": "著者",
     "snapshot_date": "記録日", "fwd_return_5d": "5営業日後リターン", "fwd_return_20d": "20営業日後リターン", "signal_text": "シグナル", "technical_score": "テクニカルスコア", "base_close": "起点の終値",
