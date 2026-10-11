@@ -70,6 +70,8 @@ MART_KEYS = {
     "m_us_fin_annual": ["ticker", "fiscal_year_end"],
     "m_us_segments": ["cik", "axis", "member", "fiscal_year_end"],
     "m_stock_snapshot": ["snapshot_date", "ticker"],
+    "m_arxiv_papers": ["paper_id"],
+    "m_arxiv_keywords": ["paper_id", "keyword"],
     "m_price_monthly": ["ticker", "month"],
     "m_sector_perf": ["industry", "trade_date"],
     "m_market_breadth": ["market", "trade_date"],

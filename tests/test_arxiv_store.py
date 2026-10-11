@@ -60,3 +60,15 @@ def test_translate_titles_only_with_free_key_and_survives_errors():
     assert st.translate_titles([_p("a", "x"), _p("b", "y")], "k:fx", post=ok) == {"a": "訳:Tail risk of X", "b": "訳:Tail risk of X"}
     assert calls[0].startswith("https://api-free.deepl.com")
     assert st.translate_titles([_p("a", "x")], "k:fx", post=lambda *a, **k: R(456)) == {}
+
+
+def test_entries_to_papers_strips_version_and_whitespace():
+    e = {"id": "http://arxiv.org/abs/2610.03369v2", "title": "Mixture  of\n Experts", "summary": "Deep\nRL.",
+         "authors": [{"name": "A"}, {"name": "B"}], "published": "2026-10-03T00:00:00Z", "tags": [{"term": "q-fin.TR"}]}
+    p = st.entries_to_papers([e])["2610.03369"]
+    assert p["title"] == "Mixture of Experts" and p["summary"] == "Deep RL." and p["category"] == "q-fin.TR" and p["authors"] == "A, B"
+
+
+def test_enrich_job_id_differs_from_backfill():
+    rows = st.build_rows([_p("a", "x")], 3, "2026-10-05")
+    assert st.job_id_for(rows) != st.job_id_for(rows, "enrich")

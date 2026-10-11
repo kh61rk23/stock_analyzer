@@ -133,12 +133,12 @@ def schema():
     ]
 
 
-def job_id_for(rows: list) -> str:
-    raw = "|".join(sorted(f"{r['fetched_date']}:{r['paper_id']}" for r in rows))
+def job_id_for(rows: list, salt: str = "") -> str:
+    raw = salt + "|".join(sorted(f"{r['fetched_date']}:{r['paper_id']}" for r in rows))
     return "arxiv_" + hashlib.sha1(raw.encode()).hexdigest()[:24]
 
 
-def write_rows(client, rows: list, tmp_dir: Path) -> int:
+def write_rows(client, rows: list, tmp_dir: Path, salt: str = "") -> int:
     """analytics.arxiv_papers へ load job で追記する。行数を返す。失敗は例外。"""
     if not rows:
         return 0
@@ -157,7 +157,7 @@ def write_rows(client, rows: list, tmp_dir: Path) -> int:
     tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
     cfg = bigquery.LoadJobConfig(source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON, schema=schema(),
                                  write_disposition=bigquery.WriteDisposition.WRITE_APPEND)
-    jid = job_id_for(rows)
+    jid = job_id_for(rows, salt)
     try:
         with open(tmp, "rb") as fh:
             client.load_table_from_file(fh, ref, job_id=jid, job_config=cfg, location=LOCATION).result()
@@ -234,11 +234,71 @@ def backfill(cfg) -> dict:
     return {"rows": total}
 
 
+def entries_to_papers(entries: list) -> dict:
+    """arXiv API（Atom）の entry から {arXiv ID: 論文 dict}（純関数。ID の版番号 vN は外す）。"""
+    out = {}
+    for e in entries or []:
+        m = re.search(r"abs/(.+?)(?:v\d+)?$", str(e.get("id", "")))
+        if not m:
+            continue
+        pid = m.group(1).strip()
+        authors = ", ".join(a.get("name", "") for a in (e.get("authors") or [])[:3])
+        tags = [t.get("term") for t in (e.get("tags") or []) if t.get("term")]
+        out[pid] = {"id": pid, "title": re.sub(r"\s+", " ", e.get("title", "")).strip(),
+                    "summary": re.sub(r"\s+", " ", e.get("summary", "")).strip(), "authors": authors,
+                    "published": e.get("published", ""), "url": f"https://arxiv.org/abs/{pid}",
+                    "category": tags[0] if tags else ""}
+    return out
+
+
+def enrich(cfg, sleep_sec: float = 3.0) -> dict:
+    """md から取り込んだ論文のうち要旨の無いものを arXiv API（無料）で取り直し、日本語タイトルをつけて追記する。
+    取得日（fetched_date）と点数は md のまま、fetched_at を今にするので m_arxiv_papers ではこちらが採られる。"""
+    import time
+    import feedparser
+    import requests
+    threshold = int(getattr(cfg, "ARXIV_INVESTMENT_THRESHOLD", 3))
+    todo = {}
+    for path in sorted(Path(cfg.ARXIV_DIR).glob("arxiv_report_*.md")):
+        d = re.search(r"(\d{4}-\d{2}-\d{2})", path.name).group(1)
+        for p in parse_report(path.read_text(encoding="utf-8")):
+            if not p.get("summary"):
+                todo.setdefault(p["id"], (d, p))
+    ids = list(todo)
+    meta = {}
+    for i in range(0, len(ids), 50):
+        r = requests.get("https://export.arxiv.org/api/query",
+                         params={"id_list": ",".join(ids[i:i + 50]), "max_results": 50}, timeout=60)
+        r.raise_for_status()
+        meta.update(entries_to_papers(feedparser.parse(r.text).entries))
+        time.sleep(sleep_sec)   # arXiv API の利用規約（3秒に1回まで）
+    papers_by_date: dict = {}
+    for pid, (d, p) in todo.items():
+        m = meta.get(pid)
+        if not m:
+            continue
+        merged = dict(m, category=p.get("category") or m["category"], investment_score=p.get("investment_score", 0),
+                      matched_keywords=p.get("matched_keywords") or [])
+        papers_by_date.setdefault(d, []).append(merged)
+    titles = translate_titles([x for v in papers_by_date.values() for x in v], str(getattr(cfg, "DEEPL_API_KEY", "") or ""))
+    from edinet_bq_client import EDINETBQClient
+    client = EDINETBQClient().client
+    total, now = 0, datetime.now(timezone.utc).isoformat()
+    for d, ps in sorted(papers_by_date.items()):
+        rows = build_rows(ps, threshold, d, fetched_at=now, titles_ja=titles, source="arxiv_api_backfill")
+        total += write_rows(client, rows, Path(cfg.DATA_DIR) / "cache", salt="enrich")
+    print(f"  要旨なし {len(ids)}本 → arXiv から {len(meta)}本取得・{total}行追記・日本語タイトル {len(titles)}件")
+    return {"todo": len(ids), "fetched": len(meta), "rows": total, "translated": len(titles)}
+
+
 if __name__ == "__main__":
     import argparse
     import config as _cfg
     ap = argparse.ArgumentParser()
     ap.add_argument("--backfill", action="store_true", help="過去の md レポートを取り込む")
+    ap.add_argument("--enrich", action="store_true", help="要旨の無い論文を arXiv API で取り直し、日本語タイトルをつける")
     a = ap.parse_args()
     if a.backfill:
         print(backfill(_cfg))
+    if a.enrich:
+        print(enrich(_cfg))

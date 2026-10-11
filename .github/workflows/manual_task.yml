@@ -20,6 +20,7 @@ on:
           - us_company_facts_backfill
           - us_company_facts_segments
           - arxiv_backfill
+          - arxiv_enrich
 
 permissions:
   contents: write
@@ -55,6 +56,7 @@ jobs:
           ALERT_GMAIL_TO: ${{ secrets.ALERT_GMAIL_TO }}
           SEISAKUDB_API_KEY: ${{ secrets.SEISAKUDB_API_KEY }}
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+          DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
           STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
         run: |
           case "${{ inputs.task }}" in
@@ -70,6 +72,7 @@ jobs:
             us_company_facts_backfill) python -u us_company_facts.py --mode backfill --budget-minutes 100 ;;
             us_company_facts_segments) python -u us_segments.py ;;
             arxiv_backfill) python -u arxiv_store.py --backfill ;;
+            arxiv_enrich) python -u arxiv_store.py --enrich ;;
           esac
       - name: Commit state
         if: always()

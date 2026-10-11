@@ -29,6 +29,7 @@ STRING_COLS = {
     "theme_name", "sector_code", "sector_name_ja", "supply_chain_position", "source", "signal_category", "direction",
     "tickers_all", "axis", "axis_ja", "member", "segment_name",
     "sector_name", "accrual_tier", "size_tier", "strategy_label", "analyst_reco", "signal_text",
+    "paper_id", "primary_category", "categories", "title", "title_ja", "summary", "authors", "url", "keywords", "keyword",
 }
 INT_COLS = {
     "fiscal_year", "employee_count", "foreign_ministry_level", "state_dept_level", "exposure_type_count",
@@ -36,16 +37,16 @@ INT_COLS = {
     "municipality_count", "population_current", "population_2050", "est_excluded_count",
     "node_level", "child_count", "company_count", "company_count_rollup",
     "theme_order", "days_before_latest", "price_days", "cik", "signal_count", "ticker_signal_count", "ticker_count",
-    "re_fiscal_year", "re_facility_count", "re_est_excluded_count", "f_score", "f_score_items", "consec_up_years",
+    "investment_score", "re_fiscal_year", "re_facility_count", "re_est_excluded_count", "f_score", "f_score_items", "consec_up_years",
     "trading_days", "n_stocks", "n_up", "n_down", "n_flat", "n_hl_base", "n_new_high", "n_new_low", "n_ma50", "n_ma200",
 }
 DATE_COLS = {"fiscal_year_end", "risk_date", "latest_risk_date", "price_date", "price_break_date", "snapshot_date", "technical_date", "fired_at",
-             "month", "month_end_date", "trade_date", "ttm_period_end", "balance_date", "shares_as_of", "base_trade_date"}
-BOOL_COLS = {"is_delisted", "sanction_flag", "is_landlocked", "review_flag", "auto_derived", "verified_flag", "above_ma200", "has_fundamentals", "is_partial", "is_complete", "is_latest", "macd_crossup", "above_vwap"}
+             "month", "month_end_date", "trade_date", "ttm_period_end", "balance_date", "shares_as_of", "base_trade_date", "fetched_date", "fetched_month", "published_date"}
+BOOL_COLS = {"is_delisted", "sanction_flag", "is_landlocked", "review_flag", "auto_derived", "verified_flag", "above_ma200", "has_fundamentals", "is_partial", "is_complete", "is_latest", "macd_crossup", "above_vwap", "is_idea"}
 ALL_MARTS = ("m_company", "m_fin_annual", "m_country_profile", "m_country_risk", "m_company_country",
              "m_re_area", "m_re_holdings", "m_re_holdings_pref", "m_tax_node", "m_company_tax", "m_screener", "m_screener_us",
              "m_theme", "m_theme_def", "m_theme_signal", "m_price_monthly", "m_sector_perf", "m_market_breadth",
-             "m_us_fin_annual", "m_us_segments", "m_stock_snapshot")
+             "m_us_fin_annual", "m_us_segments", "m_stock_snapshot", "m_arxiv_papers", "m_arxiv_keywords")
 
 
 def mart_columns(mart: str) -> list[str]:
@@ -353,6 +354,29 @@ def _load_screener(c) -> None:
     _load_screener_us(c)
     _load_us(c)
     _load_snapshot(c)
+    _load_arxiv(c)
+
+
+# arXiv：3回の取得×各20本。2610.03369 は詳細を引くテンプレの既定値
+def _load_arxiv(c) -> None:
+    import datetime as dt
+    cats = ["q-fin.PM", "q-fin.TR", "q-fin.ST", "q-fin.RM", "econ.EM"]
+    kws = ["tail risk", "volatility", "portfolio", "news"]
+    for w in range(3):
+        d = dt.date(2026, 9, 21) + dt.timedelta(days=7 * w)
+        for i in range(20):
+            pid = "2610.03369" if (w, i) == (2, 0) else f"26{w}9.{i:05d}"
+            score = (i * 3 + w) % 7
+            kk = [kws[i % 4], kws[(i + 1) % 4]] if i % 3 else []
+            _insert(c, "m_arxiv_papers", {
+                "paper_id": pid, "fetched_date": d, "fetched_month": d.replace(day=1), "published_date": d - dt.timedelta(days=2),
+                "primary_category": cats[i % 5], "categories": cats[i % 5], "title": f"Tail risk and volatility {i}",
+                "title_ja": f"テールリスクとボラティリティ{i}" if i % 2 else None, "summary": "We study volatility of portfolios.",
+                "authors": "A, B", "url": f"https://arxiv.org/abs/{pid}", "investment_score": score, "is_idea": score >= 3,
+                "keywords": "|".join(kk) or None, "source": "monitor"})
+            for k in kk:
+                _insert(c, "m_arxiv_keywords", {"paper_id": pid, "fetched_date": d, "fetched_month": d.replace(day=1),
+                                                "primary_category": cats[i % 5], "keyword": k, "investment_score": score, "is_idea": score >= 3})
 
 
 # スクリーナー通過の日次記録（JP/US 各8銘柄×30日。最新日だけ新規の銘柄 NEW.T を足す）
@@ -600,6 +624,7 @@ def test_template_count_and_unique_ids():
     assert sum(1 for t in TEMPLATES if t["domain"] == "screener_us") >= 6
     assert sum(1 for t in TEMPLATES if t["domain"] == "market") >= 10
     assert sum(1 for t in TEMPLATES if t["domain"] == "us") >= 10
+    assert sum(1 for t in TEMPLATES if t["domain"] == "research") >= 5
     ids = [t["id"] for t in TEMPLATES]
     assert len(ids) == len(set(ids))
 

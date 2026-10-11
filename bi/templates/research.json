@@ -1,0 +1,200 @@
+[
+  {
+    "id": "arxiv_latest_ideas",
+    "domain": "research",
+    "title": "最近の投資アイデア候補の論文",
+    "question": "直近N日に取得した論文のうち、点数が高いものは何か（日本語タイトルつき）",
+    "mart": "m_arxiv_papers",
+    "sql": "SELECT fetched_date, investment_score, COALESCE(title_ja, title) AS title_ja_or_en, title, keywords, primary_category, url\nFROM m_arxiv_papers\nWHERE fetched_date >= (SELECT MAX(fetched_date) FROM m_arxiv_papers) - {{days}} AND investment_score >= {{min_score}}\nORDER BY investment_score DESC, fetched_date DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "days",
+        "label": "遡る日数",
+        "type": "int",
+        "default": 30,
+        "min": 0,
+        "max": 3650
+      },
+      {
+        "name": "min_score",
+        "label": "点数の下限",
+        "type": "int",
+        "default": 3,
+        "min": 0,
+        "max": 100
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "table",
+      "x": "title_ja_or_en",
+      "y": "investment_score",
+      "series": null
+    },
+    "note": "title_ja は DeepL 無料枠の訳（無いときは英語）。url から arXiv の本文へ。"
+  },
+  {
+    "id": "arxiv_search",
+    "domain": "research",
+    "title": "論文をキーワードで探す",
+    "question": "題名か要旨にある言葉を含む論文はどれか",
+    "mart": "m_arxiv_papers",
+    "sql": "SELECT fetched_date, investment_score, COALESCE(title_ja, title) AS title_ja_or_en, keywords, primary_category, url\nFROM m_arxiv_papers\nWHERE title LIKE {{pattern}} OR summary LIKE {{pattern}} OR title_ja LIKE {{pattern}}\nORDER BY fetched_date DESC, investment_score DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "pattern",
+        "label": "探す言葉（% で前後を囲む・英語は大文字小文字を区別）",
+        "type": "string",
+        "default": "%volatility%"
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "table",
+      "x": "title_ja_or_en",
+      "y": "investment_score",
+      "series": null
+    },
+    "note": "英語の題名・要旨と日本語タイトルの両方を探す。過去の md から取り込んだ回（2026-10-11 より前）は要旨が候補の論文にしか無い。"
+  },
+  {
+    "id": "arxiv_weekly_counts",
+    "domain": "research",
+    "title": "取得回ごとの論文数と候補数",
+    "question": "毎回何本の論文が入り、そのうち投資アイデア候補は何本か",
+    "mart": "m_arxiv_papers",
+    "sql": "SELECT fetched_date, COUNT(*) AS papers, SUM(CASE WHEN is_idea THEN 1 ELSE 0 END) AS ideas, ROUND(AVG(investment_score), 2) AS avg_score\nFROM m_arxiv_papers\nGROUP BY fetched_date\nORDER BY fetched_date",
+    "params": [],
+    "chart": {
+      "type": "bar",
+      "x": "fetched_date",
+      "y": [
+        "papers",
+        "ideas"
+      ],
+      "series": null
+    },
+    "note": "取得は週1回（arxiv_monitor）。"
+  },
+  {
+    "id": "arxiv_category_score",
+    "domain": "research",
+    "title": "カテゴリ別の論文数と点数",
+    "question": "どの分野（q-fin.PM・q-fin.TR など）から投資アイデアになりそうな論文が多く出ているか",
+    "mart": "m_arxiv_papers",
+    "sql": "SELECT primary_category, COUNT(*) AS papers, SUM(CASE WHEN is_idea THEN 1 ELSE 0 END) AS ideas, ROUND(AVG(investment_score), 2) AS avg_score\nFROM m_arxiv_papers\nWHERE fetched_date >= (SELECT MAX(fetched_date) FROM m_arxiv_papers) - {{days}}\nGROUP BY primary_category\nORDER BY ideas DESC, papers DESC",
+    "params": [
+      {
+        "name": "days",
+        "label": "遡る日数",
+        "type": "int",
+        "default": 180,
+        "min": 0,
+        "max": 3650
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "primary_category",
+      "y": [
+        "papers",
+        "ideas"
+      ],
+      "series": null
+    },
+    "note": "q-fin.PM＝ポートフォリオ、TR＝売買、ST＝統計、RM＝リスク管理、econ.EM＝計量経済。"
+  },
+  {
+    "id": "arxiv_keyword_top",
+    "domain": "research",
+    "title": "よく当たるキーワード",
+    "question": "直近N日の論文で、採点キーワードのどれが多く出ているか",
+    "mart": "m_arxiv_keywords",
+    "sql": "SELECT keyword, COUNT(*) AS papers, SUM(CASE WHEN is_idea THEN 1 ELSE 0 END) AS ideas, ROUND(AVG(investment_score), 2) AS avg_score\nFROM m_arxiv_keywords\nWHERE fetched_date >= (SELECT MAX(fetched_date) FROM m_arxiv_keywords) - {{days}}\nGROUP BY keyword\nORDER BY papers DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "days",
+        "label": "遡る日数",
+        "type": "int",
+        "default": 90,
+        "min": 0,
+        "max": 3650
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "keyword",
+      "y": "papers",
+      "series": null
+    },
+    "note": "キーワードは config.py の ARXIV_KEYWORDS。"
+  },
+  {
+    "id": "arxiv_keyword_trend",
+    "domain": "research",
+    "title": "キーワードの月ごとの件数",
+    "question": "あるキーワードを含む論文は月ごとに増えているか",
+    "mart": "m_arxiv_keywords",
+    "sql": "SELECT fetched_month, keyword, COUNT(*) AS papers\nFROM m_arxiv_keywords\nWHERE keyword LIKE {{pattern}}\nGROUP BY fetched_month, keyword\nORDER BY fetched_month, papers DESC",
+    "params": [
+      {
+        "name": "pattern",
+        "label": "キーワード（% で前後を囲む）",
+        "type": "string",
+        "default": "%risk%"
+      }
+    ],
+    "chart": {
+      "type": "line",
+      "x": "fetched_month",
+      "y": "papers",
+      "series": "keyword"
+    },
+    "note": ""
+  },
+  {
+    "id": "arxiv_paper_detail",
+    "domain": "research",
+    "title": "論文1本の中身",
+    "question": "この論文（arXiv ID）の要旨・著者・点数の内訳は",
+    "mart": "m_arxiv_papers",
+    "sql": "SELECT paper_id, fetched_date, published_date, investment_score, title, title_ja, authors, categories, keywords, summary, url\nFROM m_arxiv_papers\nWHERE paper_id = {{paper_id}}",
+    "params": [
+      {
+        "name": "paper_id",
+        "label": "arXiv ID（例 2610.03369）",
+        "type": "string",
+        "default": "2610.03369"
+      }
+    ],
+    "chart": {
+      "type": "table",
+      "x": "title",
+      "y": "investment_score",
+      "series": null
+    },
+    "note": ""
+  }
+]
