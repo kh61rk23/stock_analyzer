@@ -49,6 +49,9 @@ def test_report_kind():
     assert rs.report_kind(Path("x/macro/macro_report_2026-10-09.md")) == ("macro_report", "", "2026-10-09")
     assert rs.report_kind(Path("x/macro/policy_changes_2026-10.md")) == ("policy_changes", "", "2026-10-01")
     assert rs.report_kind(Path("x/us_sectors/us_sector_scores_2026-10-09.json")) is None
+    assert rs.report_kind(Path("x/ideas/weekly_summary_2026-W37.md")) == ("weekly_summary", "", "2026-09-07")
+    assert rs.report_kind(Path("x/commodity_alloc_202610.md")) == ("commodity_alloc", "", "2026-10-01")
+    assert rs.report_kind(Path("x/tax_report_2026.md")) == ("tax_report", "", "2026-01-01")
 
 
 def test_parse_jp_sector():
@@ -75,7 +78,7 @@ def test_build_all_routes_files(tmp_path):
                             ("us_sectors", "us_sector_scores_2026-10-09.json", "{}")):
         (tmp_path / sub).mkdir(exist_ok=True)
         (tmp_path / sub / name).write_text(body, encoding="utf-8")
-    b = rs.build_all(rs.collect(tmp_path, "2026-10-09"), "2026-10-11T00:00:00+00:00")
+    b = rs.build_all(rs.collect(tmp_path), "2026-10-11T00:00:00+00:00")
     assert len(b["report_texts"]) == 3
     assert {(r["market"], r["sector_code"]) for r in b["sector_scores_daily"]} == {("JP", "1033"), ("US", "XLK")}
     assert len(b["macro_indicators_daily"]) == 4 and len(b["macro_signals_daily"]) == 2
@@ -121,3 +124,37 @@ def test_news_rows_dedupe_and_zero_score():
                          {"url": "u1", "title": "A again"}, {"url": "", "title": "no url"}], "2026-10-09", "t")
     assert len(rows) == 1 and rows[0]["importance_score"] == 0.0 and rows[0]["matched_sectors"] == "1016,macro"
     assert rows[0]["investment_relevant"] is False
+
+
+IMF = """## 実質GDP成長率(%) (NGDP_RPCH)
+
+| 国 | 2024 | 2025 | 2026 |
+|---|---|---|---|
+| 日本(JPN) | -0.2 | 1.2 | 0.7 |
+| 世界(W) | — | — | — |
+"""
+GOV = """| 統計名 | 最新値 | 前月比 | 前年比 | シグナル |
+|--------|--------|--------|--------|---------|
+| 消費者物価指数（CPI） | 102.5（2020年=100） (2026-09) | +0.2% | +2.7% | 📉 逆風 |
+| 建設工事着工統計 | 17,043.0（戸） (2026-07) | +61.5% | +10.8% | 📈 追い風 |
+"""
+
+
+def test_parse_imf_and_gov():
+    assert rs.parse_imf(IMF) == [("NGDP_RPCH", "実質GDP成長率(%)", "日本(JPN)", 2024, -0.2), ("NGDP_RPCH", "実質GDP成長率(%)", "日本(JPN)", 2025, 1.2),
+                                 ("NGDP_RPCH", "実質GDP成長率(%)", "日本(JPN)", 2026, 0.7)]
+    g = rs.parse_gov(GOV)
+    assert g[0] == ("消費者物価指数（CPI）", 102.5, "（2020年=100） (2026-09)", "2026-09", 0.2, 2.7, "headwind")
+    assert g[1][1] == 17043.0 and g[1][6] == "tailwind"
+
+
+def test_pending_only_new_or_changed(tmp_path):
+    (tmp_path / "macro").mkdir()
+    a = tmp_path / "macro" / "macro_report_2026-10-09.md"
+    b = tmp_path / "macro" / "macro_report_2026-10-10.md"
+    a.write_text("A", encoding="utf-8")
+    b.write_text("B", encoding="utf-8")
+    state = {"macro/macro_report_2026-10-09.md": rs.file_sha(a)}
+    assert rs.pending(rs.collect(tmp_path), tmp_path, state) == [b]
+    a.write_text("A2", encoding="utf-8")
+    assert set(rs.pending(rs.collect(tmp_path), tmp_path, state)) == {a, b}

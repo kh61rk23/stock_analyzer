@@ -386,8 +386,8 @@ jobs:
           ALERT_GMAIL_TO:       ${{ secrets.ALERT_GMAIL_TO }}
         run: python -u monthly_runner.py 2>&1
 
-      # マクロ・業種の md レポートを読んで BigQuery analytics（report_texts・sector_scores_daily・
-      # macro_indicators_daily・macro_signals_daily）に追記する（load job・無料）。BI export より前に置き、当日分をマートに載せる。
+      # insights 以下の md レポート（マクロ・業種・ニュース・ETF・IMF・政府統計・週次ほか全部）を読んで BigQuery analytics に追記する
+      # （load job・無料）。取り込み記録 data/report_store_state.json と違うファイルだけ。BI export より前に置き、当日分をマートに載せる。
       - name: 📚 Reports to BigQuery
         if: steps.set-mode.outputs.mode != 'single'
         continue-on-error: true

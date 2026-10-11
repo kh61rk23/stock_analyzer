@@ -14,6 +14,12 @@
 #   news_articles        … ニュース記事（data/news_cache/news_{date}.json の全記事。md は上位10本と業種ごと3本しか出ない）
 #   etf_theme_daily      … テーマETFの熱量（data/etf_cache/thematic_{date}.json、無い日は etf/thematic_{date}.md のランキング表）
 #   etf_daily            … テーマETFの個別 ETF（同 JSON、無い日は md の詳細＝上位テーマ分のみ）
+#   imf_forecasts        … IMF の見通し（国×指標×年。imf/imf_{date}.md の表）
+#   gov_stats            … 政府統計の最新値・前月比・前年比・シグナル（gov/gov_report_{date}.md の表）
+#   上記以外の md（週次・アイデア・事業概要・米国スクリーナー・銘柄詳細・月次の配分提案や税務など）も report_texts に全文を入れる。
+# 【どれを入れるか】
+#   取り込み記録 data/report_store_state.json（insights からの相対パス→内容の sha1）と違うファイル＝新しいファイルと中身が変わったファイルだけ。
+#   週次・月次・*_latest.md のように日付の付き方がまちまちでも、日次処理で取りこぼさない。
 # 【重複】
 #   load job の job_id は「表・内容」から決めるので、同じ内容の再実行は二重に入らない。
 #   同じ日のレポートが作り直されて内容が変わったときは行が増えるので、読む側（BI マート）で fetched_at が新しい行を採る。
@@ -36,23 +42,47 @@ _JUDGE = {"💚": "tailwind", "🔴": "headwind", "🟡": "watch"}
 
 
 # ── 解析（純関数） ────────────────────────────────────────────
+_D_PATTERNS = (
+    (re.compile(r"(\d{4}-\d{2}-\d{2})"), lambda m: m.group(1)),
+    (re.compile(r"(\d{4})-W(\d{2})"), lambda m: date.fromisocalendar(int(m.group(1)), int(m.group(2)), 1).isoformat()),
+    (re.compile(r"(\d{4}-\d{2})(?!-?\d)"), lambda m: m.group(1) + "-01"),
+    (re.compile(r"(?<!\d)(\d{4})(\d{2})(?!\d)"), lambda m: f"{m.group(1)}-{m.group(2)}-01"),
+    (re.compile(r"(?<!\d)(20\d{2})(?!\d)"), lambda m: f"{m.group(1)}-01-01"),
+)
+
+
+def _date_token(name: str):
+    """ファイル名の日付（日・ISO週・月・年の順に探す）。(日付, 一致) か (None, None)。"""
+    for rx, f in _D_PATTERNS:
+        m = rx.search(name)
+        if m:
+            try:
+                return f(m), m
+            except ValueError:
+                continue
+    return None, None
+
+
 def report_kind(path: Path) -> tuple:
-    """(種類, キー, 日付)。対象外は None。"""
-    name = path.name
-    parent = path.parent.name
-    m = _DATE_RE.search(name)
-    if not m or path.suffix not in (".md", ".csv"):
+    """(種類, キー, 日付)。対象外は None。日付の無い *_latest.md などは更新日時の日付。"""
+    if path.suffix != ".md":
         return None
-    d = m.group(1)
-    if len(d) == 7:           # 月次（policy_changes_2026-10 など）は月初で持つ
-        d += "-01"
+    name, parent = path.name, path.parent.name
     if parent == "sectors":
         code = name.split("_")[0]
-        return ("sector", code, d) if code.isdigit() and path.suffix == ".md" else None
-    stem = name[: m.start()].rstrip("_")
-    if parent in ("macro", "us_sectors", "news", "etf") and path.suffix == ".md":
-        return (stem, "", d)
-    return None
+        d, _ = _date_token(name)
+        return ("sector", code, d) if code.isdigit() and d else None
+    if parent.startswith("detail_"):           # screener/detail_{date}/{ticker}.md（銘柄レポート）
+        d, _ = _date_token(parent)
+        d = d or datetime.fromtimestamp(path.stat().st_mtime).date().isoformat()
+        return ("stock_detail", path.stem.replace("_", "."), d)
+    d, m = _date_token(name)
+    if m:
+        kind = name[: m.start()].rstrip("_-") or path.stem
+    else:
+        kind = re.sub(r"_latest$", "", path.stem)
+        d = datetime.fromtimestamp(path.stat().st_mtime).date().isoformat()
+    return (kind, "", d)
 
 
 def _num(s):
@@ -199,10 +229,40 @@ def etf_rows_from_md(md: str, d: str, fetched_at: str) -> tuple:
     return themes, etfs
 
 
+def parse_imf(md: str) -> list:
+    """IMF レポートの指標表から [(指標コード, 指標名, 国, 年, 値)]（「—」は飛ばす）。"""
+    out = []
+    for m in re.finditer(r"^## ([^\n]+?) \(([A-Z_]+)\)\n\n(\|.*?)(?=\n\n|\Z)", md, re.M | re.S):
+        lines = [l for l in m.group(3).splitlines() if l.startswith("|")]
+        if len(lines) < 3:
+            continue
+        years = [c.strip() for c in lines[0].strip().strip("|").split("|")][1:]
+        for line in lines[2:]:
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            for y, v in zip(years, cells[1:]):
+                val = _num(v)
+                if val is not None and y.isdigit():
+                    out.append((m.group(2), m.group(1).strip(), cells[0], int(y), val))
+    return out
+
+
+def parse_gov(md: str) -> list:
+    """政府統計レポートの取得統計サマリー表から [(統計名, 最新値, 単位と期間, 前月比%, 前年比%, シグナル)]。"""
+    out = []
+    for c in _rows(md, "| 統計名 | 最新値 |"):
+        if len(c) >= 5:
+            v = re.match(r"(-?[\d,]+(?:\.\d+)?)\s*(.*)$", c[1])
+            per = re.search(r"\((\d{4}-\d{2})\)", c[1])
+            sig = "tailwind" if "追い風" in c[4] else "headwind" if "逆風" in c[4] else (c[4] or None)
+            out.append((c[0], _num(v.group(1)) if v else None, (v.group(2).strip() if v else c[1])[:100],
+                        per.group(1) if per else None, _num(c[2]), _num(c[3]), sig))
+    return out
+
+
 def build_all(paths: list, fetched_at: str, data_dir: Path | None = None) -> dict:
     """md/csv のパス一覧（と data_dir のニュース・ETF の JSON）から各表の行を作る。"""
     out = {"report_texts": [], "sector_scores_daily": [], "macro_indicators_daily": [], "macro_signals_daily": [],
-           "news_articles": [], "etf_theme_daily": [], "etf_daily": []}
+           "news_articles": [], "etf_theme_daily": [], "etf_daily": [], "imf_forecasts": [], "gov_stats": []}
     for p in sorted(paths):
         k = report_kind(p)
         csv_us = p.parent.name == "us_sectors" and p.name.startswith("us_sector_scores_") and p.suffix == ".csv"
@@ -243,6 +303,14 @@ def build_all(paths: list, fetched_at: str, data_dir: Path | None = None) -> dic
             js = (data_dir / "news_cache" / f"news_{d}.json") if data_dir else None
             if js and js.exists():
                 out["news_articles"] += news_rows(json.loads(js.read_text(encoding="utf-8")), d, fetched_at)
+        elif kind == "imf":
+            for code, name, country, yr, v in parse_imf(text):
+                out["imf_forecasts"].append({"report_date": d, "indicator_code": code, "indicator_name": name, "country": country,
+                                             "year": yr, "value": v, "fetched_at": fetched_at})
+        elif kind == "gov_report":
+            for name, v, unit, per, mom, yoy, sig in parse_gov(text):
+                out["gov_stats"].append({"report_date": d, "stat_name": name, "value": v, "unit": unit, "period": per,
+                                         "mom_pct": mom, "yoy_pct": yoy, "signal": sig, "fetched_at": fetched_at})
         elif kind == "bond_commodity":
             for name, v, chg in parse_bond_yields(text):
                 out["macro_indicators_daily"].append({"report_date": d, "source": "bond_commodity", "indicator": name,
@@ -276,6 +344,10 @@ def schemas():
                             F("signal", "STRING")] + ts,
         "etf_daily": [F("report_date", "DATE", "REQUIRED"), F("theme_name", "STRING"), F("ticker", "STRING"), F("price", "FLOAT64"),
                       F("ret_1m", "FLOAT64"), F("ret_3m", "FLOAT64"), F("ma50_ratio", "FLOAT64"), F("vol_ratio", "FLOAT64")] + ts,
+        "imf_forecasts": [F("report_date", "DATE", "REQUIRED"), F("indicator_code", "STRING"), F("indicator_name", "STRING"),
+                          F("country", "STRING"), F("year", "INT64"), F("value", "FLOAT64")] + ts,
+        "gov_stats": [F("report_date", "DATE", "REQUIRED"), F("stat_name", "STRING"), F("value", "FLOAT64"), F("unit", "STRING"),
+                      F("period", "STRING"), F("mom_pct", "FLOAT64"), F("yoy_pct", "FLOAT64"), F("signal", "STRING")] + ts,
     }
 
 
@@ -322,39 +394,61 @@ def write(client, built: dict, tmp_dir: Path) -> dict:
     return counts
 
 
-SUBDIRS = ("macro", "sectors", "us_sectors", "news", "etf")
+STATE_NAME = "report_store_state.json"
 
 
-def collect(insight_dir: Path, day: str | None, subdirs=SUBDIRS) -> list:
-    """対象ファイル。day を渡すとその日付（月次は月）を名前に含むものだけ。"""
+def collect(insight_dir: Path, subdirs: tuple | None = None) -> list:
+    """insights 以下の md（と米国セクターの csv）。subdirs で最上位フォルダを絞れる。"""
     out = []
-    for sub in subdirs:
-        for p in (insight_dir / sub).glob("*"):
-            if p.is_file() and (day is None or day in p.name or day[:7] + ".md" in p.name):
-                out.append(p)
+    for p in sorted(insight_dir.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(insight_dir)
+        if subdirs and rel.parts[0] not in subdirs:
+            continue
+        if p.suffix == ".md" or (p.suffix == ".csv" and rel.parts[0] == "us_sectors" and p.name.startswith("us_sector_scores_")):
+            out.append(p)
     return out
 
 
-def run(cfg, day: str | None = None, backfill: bool = False, subdirs=SUBDIRS) -> dict:
+def file_sha(p: Path) -> str:
+    return hashlib.sha1(p.read_bytes()).hexdigest()
+
+
+def pending(paths: list, insight_dir: Path, state: dict) -> list:
+    """取り込み記録（相対パス→内容の sha1）と違うファイルだけ（新しいファイル・中身が変わったファイル）。"""
+    return [p for p in paths if state.get(p.relative_to(insight_dir).as_posix()) != file_sha(p)]
+
+
+def run(cfg, subdirs: tuple | None = None, init_state: bool = False) -> dict:
     insight = Path(getattr(cfg, "INSIGHT_DIR", "stock_data/insights"))
-    day = None if backfill else (day or date.today().isoformat())
-    paths = collect(insight, day, subdirs)
-    built = build_all(paths, datetime.now(timezone.utc).isoformat(), Path(getattr(cfg, "DATA_DIR", "stock_data/data")))
-    from edinet_bq_client import EDINETBQClient
-    client = EDINETBQClient().client
-    tmp = Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / "cache"
-    if backfill:
-        # 1回の load を小さく保つため月ごとに分ける
+    data_dir = Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
+    state_p = data_dir / STATE_NAME
+    try:
+        state = json.loads(state_p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        state = {}
+    todo = pending(collect(insight, subdirs), insight, state)
+    if init_state:
+        # 既に BigQuery に入っているファイルを「取り込み済み」として記録だけする（初回の切り替え用）
         counts: dict = {}
+    else:
+        built = build_all(todo, datetime.now(timezone.utc).isoformat(), data_dir)
+        from edinet_bq_client import EDINETBQClient
+        client = EDINETBQClient().client
+        counts = {}
+        # 1回の load を小さく保つため月ごとに分ける
         months = sorted({r["report_date"][:7] for rows in built.values() for r in rows})
         for m in months:
             part = {t: [r for r in rows if r["report_date"].startswith(m)] for t, rows in built.items()}
-            for t, n in write(client, part, tmp).items():
+            for t, n in write(client, part, data_dir / "cache").items():
                 counts[t] = counts.get(t, 0) + n
-    else:
-        counts = write(client, built, tmp)
-    print(f"📚 report_store: ファイル {len(paths)} → " + " / ".join(f"{t} {n}行" for t, n in counts.items()))
-    return {"files": len(paths), **counts}
+    for p in todo:
+        state[p.relative_to(insight).as_posix()] = file_sha(p)
+    state_p.parent.mkdir(parents=True, exist_ok=True)
+    state_p.write_text(json.dumps(state, ensure_ascii=False, indent=0, sort_keys=True), encoding="utf-8")
+    print(f"📚 report_store: 新規・変更 {len(todo)}ファイル → " + (" / ".join(f"{t} {n}行" for t, n in counts.items() if n) or "（記録のみ）"))
+    return {"files": len(todo), **counts}
 
 
 if __name__ == "__main__":
@@ -362,12 +456,11 @@ if __name__ == "__main__":
     import sys
     import config as _cfg
     ap = argparse.ArgumentParser()
-    ap.add_argument("--date", help="YYYY-MM-DD（既定は今日）")
-    ap.add_argument("--backfill", action="store_true", help="insights にある全日付を取り込む")
-    ap.add_argument("--only", help="対象フォルダを絞る（カンマ区切り。例 news,etf）")
+    ap.add_argument("--only", help="insights 直下のフォルダを絞る（カンマ区切り。例 news,etf）")
+    ap.add_argument("--init-state", action="store_true", help="BQ に入れずに取り込み記録だけ作る（既に入っている分の印付け）")
     a = ap.parse_args()
     try:
-        res = run(_cfg, a.date, a.backfill, tuple(a.only.split(",")) if a.only else SUBDIRS)
+        res = run(_cfg, tuple(a.only.split(",")) if a.only else None, a.init_state)
         status, note = "success", json.dumps(res, ensure_ascii=False)
     except Exception as exc:
         status, note = "error", f"{type(exc).__name__}: {str(exc)[:150]}"
