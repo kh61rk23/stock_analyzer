@@ -138,6 +138,7 @@ ARXIV_RETRY_COUNT          = 3     # 1 URL あたりのリトライ回数（v1.0
 ARXIV_RETRY_WAIT_SEC       = 5     # リトライ間隔秒（指数バックオフ: 5s, 10s）
 ARXIV_REQUEST_TIMEOUT      = 20    # HTTP タイムアウト（秒）
 ARXIV_INVESTMENT_THRESHOLD = 3     # このスコア以上を「投資アイデア候補」とする
+ARXIV_TRANSLATE_TITLES = True      # DeepL 無料キー（:fx）があればタイトルを日本語に訳して analytics.arxiv_papers に残す
 
 # HTTP リクエストヘッダー（ArXiv が UA を検査するため必須）
 # v1.0 では UA を指定していなかったため弾かれる場合があった

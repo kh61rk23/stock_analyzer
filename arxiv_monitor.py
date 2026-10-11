@@ -920,8 +920,15 @@ def run_monitor(investment_threshold: int | None = None) -> dict:
         report_path = str(rp)
         update_idea_index()
 
-    seen.update(p["id"] for p in new_papers)
-    save_seen_papers(seen)
+    # 正本は BigQuery analytics.arxiv_papers（md は閲覧用）。保存できなかった回は既読にしない（次回もう一度保存を試みる）
+    bq_result = {}
+    if new_papers:
+        import arxiv_store
+        bq_result = arxiv_store.store(new_papers, threshold, cfg)
+
+    if not bq_result.get("error"):
+        seen.update(p["id"] for p in new_papers)
+        save_seen_papers(seen)
 
     print(f"\n  ✅ ArXiv 監視完了: 新着 {len(new_papers)} 件 | 候補 {len(high_score)} 件")
     if high_score:
@@ -932,6 +939,7 @@ def run_monitor(investment_threshold: int | None = None) -> dict:
         "investment_ideas_found": len(high_score),
         "report_path":            report_path,
         "fetch_log":              fetch_log._records,
+        "bq":                     bq_result,         # {"rows": n} / {"error": 理由}
         "papers":                 new_papers,        # thematic_etf_tracker連携用
         "all_papers":             list(all_papers),  # 全論文（キャッシュ済み含む）
     }

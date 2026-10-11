@@ -19,6 +19,7 @@ on:
           - us_company_facts_update
           - us_company_facts_backfill
           - us_company_facts_segments
+          - arxiv_backfill
 
 permissions:
   contents: write
@@ -68,6 +69,7 @@ jobs:
             us_company_facts_update) python -u us_company_facts.py --mode update ;;
             us_company_facts_backfill) python -u us_company_facts.py --mode backfill --budget-minutes 100 ;;
             us_company_facts_segments) python -u us_segments.py ;;
+            arxiv_backfill) python -u arxiv_store.py --backfill ;;
           esac
       - name: Commit state
         if: always()

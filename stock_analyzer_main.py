@@ -1181,8 +1181,13 @@ def run_arxiv_monitor():
 
         n        = arxiv_result.get("investment_ideas_found", 0)
         n_papers = arxiv_result.get("new_papers", 0)
-        logger.add("arxiv_monitor", "success",
-                   f"新着{n_papers}件, 候補{n}件")
+        bq_err   = (arxiv_result.get("bq") or {}).get("error")
+        if bq_err:
+            # 取れたのに BQ に書けなかった回は失敗として残す（既読にもしていないので次回再保存される）
+            logger.add("arxiv_monitor", "error", f"新着{n_papers}件, 候補{n}件 / BQ保存失敗: {bq_err}")
+        else:
+            logger.add("arxiv_monitor", "success",
+                       f"新着{n_papers}件, 候補{n}件 / BQ {(arxiv_result.get('bq') or {}).get('rows', 0)}行")
         return arxiv_result
 
     except Exception as e:
