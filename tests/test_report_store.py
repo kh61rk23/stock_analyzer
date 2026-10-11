@@ -190,3 +190,23 @@ def test_screener_trace_rows_pure():
                           [{"ticker": "B.T", "reasons": [], "composite_score": 40}])
     assert rows[0]["passed"] and rows[0]["kpi_pbr"] == 0.9 and rows[0]["score_path"].startswith("70.0")
     assert rows[1]["passed"] is False and rows[1]["reasons"] == "（フィルター以外）"
+
+
+def test_us_trace_rows_and_ingest(tmp_path):
+    import json
+    import screener_trace as stc
+    res = {"us_screener": {"candidates": [
+        {"ticker": "AAPL", "name": "Apple", "sector": "Technology", "business_model": "platform", "fetch_ok": True,
+         "pass_filters": True, "composite_score": 81, "per": 29.1},
+        {"ticker": "XOM", "name": "Exxon", "fetch_ok": True, "pass_filters": False, "fail_reasons": ["PER=35.0 > 25", "ROE=5.0% < 10%"]},
+        {"ticker": "ZZZ", "fetch_ok": False}]}}
+    rows = stc.us_trace_rows(res)
+    assert [(r["ticker"], r["passed"], r["reasons"]) for r in rows] == [
+        ("AAPL", True, None), ("XOM", False, "PER=35.0 > 25 / ROE=5.0% < 10%"), ("ZZZ", False, "データ取得失敗")]
+    (tmp_path / "ins" / "us_screener").mkdir(parents=True)
+    (tmp_path / "ins" / "us_screener" / "us_screener_2026-10-13.md").write_text("# 米国", encoding="utf-8")
+    (tmp_path / "data" / "screener_trace").mkdir(parents=True)
+    (tmp_path / "data" / "screener_trace" / "trace_us_2026-10-13.json").write_text(json.dumps({"rows": rows}), encoding="utf-8")
+    b = rs.build_all(rs.collect(tmp_path / "ins"), "t", tmp_path / "data")
+    tr = b["screener_trace_daily"]
+    assert len(tr) == 3 and {r["market"] for r in tr} == {"US"} and tr[0]["kpi_per"] == 29.1

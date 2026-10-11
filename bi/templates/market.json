@@ -651,8 +651,15 @@
     "title": "スクリーナーの通過・落選の数（日次）",
     "question": "毎日、何銘柄が通過し、何銘柄が落ちたか",
     "mart": "m_screener_trace",
-    "sql": "SELECT report_date, SUM(CASE WHEN passed THEN 1 ELSE 0 END) AS passed, SUM(CASE WHEN passed THEN 0 ELSE 1 END) AS rejected\nFROM m_screener_trace\nGROUP BY report_date\nORDER BY report_date",
-    "params": [],
+    "sql": "SELECT report_date, SUM(CASE WHEN passed THEN 1 ELSE 0 END) AS passed, SUM(CASE WHEN passed THEN 0 ELSE 1 END) AS rejected\nFROM m_screener_trace\nWHERE market = {{market}}\nGROUP BY report_date\nORDER BY report_date",
+    "params": [
+      {
+        "name": "market",
+        "label": "市場（JP / US）",
+        "type": "string",
+        "default": "JP"
+      }
+    ],
     "chart": {
       "type": "bar",
       "x": "report_date",
@@ -662,7 +669,7 @@
       ],
       "series": null
     },
-    "note": "日本株スクリーナー（記録は 2026-09-30 から）。"
+    "note": "日本株は 2026-09-30 から、米国株は 2026-10-13 から。"
   },
   {
     "id": "trace_reject_reasons",
@@ -670,8 +677,14 @@
     "title": "落ちた理由の内訳",
     "question": "直近N日、どのフィルターで落ちた銘柄が多いか",
     "mart": "m_screener_trace",
-    "sql": "SELECT CASE WHEN reasons LIKE 'PER%' OR reasons LIKE '% PER%' THEN 'PER' WHEN reasons LIKE '%PBR%' THEN 'PBR' WHEN reasons LIKE '%ROE%' THEN 'ROE'\n            WHEN reasons LIKE '%時価総額%' THEN '時価総額' WHEN reasons LIKE '%出来高%' THEN '出来高' ELSE 'その他' END AS reason,\n       COUNT(*) AS rejections, COUNT(DISTINCT ticker) AS tickers\nFROM m_screener_trace\nWHERE NOT passed AND report_date >= (SELECT MAX(report_date) FROM m_screener_trace) - {{days}}\nGROUP BY reason\nORDER BY rejections DESC",
+    "sql": "SELECT CASE WHEN reasons LIKE 'PER%' OR reasons LIKE '% PER%' THEN 'PER' WHEN reasons LIKE '%PBR%' THEN 'PBR' WHEN reasons LIKE '%ROE%' THEN 'ROE'\n            WHEN reasons LIKE '%時価総額%' THEN '時価総額' WHEN reasons LIKE '%出来高%' THEN '出来高'\n            WHEN reasons LIKE '%OPM%' THEN '営業利益率' WHEN reasons LIKE '%D/E%' THEN 'D/E' WHEN reasons LIKE '%FCF%' THEN 'FCF'\n            WHEN reasons LIKE '%RevGrowth%' THEN '売上成長' WHEN reasons LIKE '%Rec=%' THEN 'アナリスト推奨' WHEN reasons LIKE '%データ取得失敗%' THEN 'データ取得失敗' ELSE 'その他' END AS reason,\n       COUNT(*) AS rejections, COUNT(DISTINCT ticker) AS tickers\nFROM m_screener_trace\nWHERE market = {{market}} AND NOT passed AND report_date >= (SELECT MAX(report_date) FROM m_screener_trace WHERE market = {{market}}) - {{days}}\nGROUP BY reason\nORDER BY rejections DESC",
     "params": [
+      {
+        "name": "market",
+        "label": "市場（JP / US）",
+        "type": "string",
+        "default": "JP"
+      },
       {
         "name": "days",
         "label": "遡る日数",
@@ -687,7 +700,7 @@
       "y": "rejections",
       "series": null
     },
-    "note": "複数のフィルターで落ちた銘柄は最初に当たった理由で数える。"
+    "note": "複数のフィルターで落ちた銘柄は最初に当たった理由で数える。米国はビジネスモデル別の条件（PER・PBR・ROE・営業利益率・D/E・FCF・売上成長・アナリスト推奨）。"
   },
   {
     "id": "trace_near_miss",
@@ -695,8 +708,14 @@
     "title": "惜しくも落ちた銘柄",
     "question": "最新日に落ちた銘柄のうち、総合点が高いのはどれか（条件を少し緩めれば通る候補）",
     "mart": "m_screener_trace",
-    "sql": "SELECT ticker, name, sector_name, composite_score, reasons\nFROM m_screener_trace\nWHERE NOT passed AND report_date = (SELECT MAX(report_date) FROM m_screener_trace) AND composite_score IS NOT NULL\nORDER BY composite_score DESC\nLIMIT {{limit}}",
+    "sql": "SELECT ticker, name, sector_name, composite_score, reasons\nFROM m_screener_trace\nWHERE market = {{market}} AND NOT passed AND report_date = (SELECT MAX(report_date) FROM m_screener_trace WHERE market = {{market}}) AND composite_score IS NOT NULL\nORDER BY composite_score DESC\nLIMIT {{limit}}",
     "params": [
+      {
+        "name": "market",
+        "label": "市場（JP / US）",
+        "type": "string",
+        "default": "JP"
+      },
       {
         "name": "limit",
         "label": "表示件数",
@@ -743,8 +762,14 @@
     "title": "加点で大きく押し上げられた銘柄",
     "question": "最新日の通過銘柄のうち、政策・決算サプライズなどの加点で総合点が大きく上がったのはどれか",
     "mart": "m_screener_trace",
-    "sql": "SELECT ticker, name, base_score, composite_score, bonus, score_path\nFROM m_screener_trace\nWHERE passed AND report_date = (SELECT MAX(report_date) FROM m_screener_trace) AND bonus IS NOT NULL\nORDER BY bonus DESC\nLIMIT {{limit}}",
+    "sql": "SELECT ticker, name, base_score, composite_score, bonus, score_path\nFROM m_screener_trace\nWHERE market = {{market}} AND passed AND report_date = (SELECT MAX(report_date) FROM m_screener_trace WHERE market = {{market}}) AND bonus IS NOT NULL\nORDER BY bonus DESC\nLIMIT {{limit}}",
     "params": [
+      {
+        "name": "market",
+        "label": "市場（JP / US）",
+        "type": "string",
+        "default": "JP"
+      },
       {
         "name": "limit",
         "label": "表示件数",

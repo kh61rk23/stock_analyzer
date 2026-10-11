@@ -154,6 +154,38 @@ def trace_rows(passed: list[dict], rejected: list[dict]) -> list[dict]:
     return out
 
 
+def us_trace_rows(results: dict) -> list[dict]:
+    """米国株スクリーナーの全候補を1銘柄1行に（純関数）。落選理由は us_stock_screener._apply_filter の fail_reasons、
+    データが取れなかった銘柄は「データ取得失敗」。フィルター条件はビジネスモデル別（business_model）。"""
+    out = []
+    for c in ((results or {}).get("us_screener") or {}).get("candidates") or []:
+        if not isinstance(c, dict) or not c.get("ticker"):
+            continue
+        fetched = bool(c.get("fetch_ok"))
+        ok = bool(c.get("pass_filters")) and fetched
+        reasons = None if ok else (" / ".join(c.get("fail_reasons") or []) or ("（フィルター以外）" if fetched else "データ取得失敗"))
+        out.append({"ticker": c.get("ticker"), "name": c.get("name"), "sector_code": c.get("business_model"),
+                     "sector_name": c.get("sector") or c.get("category"), "passed": ok,
+                     "composite_score": c.get("composite_score") if ok else None, "base_score": None,
+                     "score_path": None, "trail": None, "reasons": reasons,
+                     "kpi_pbr": c.get("pbr"), "kpi_per": c.get("per"), "kpi_roic": None})
+    return out
+
+
+def save_us_trace_json(cfg, results: dict, today: str) -> int:
+    """data/screener_trace/trace_us_{日付}.json。report_store.py が us_screener のレポートと一緒に BigQuery へ入れる。"""
+    rows = us_trace_rows(results)
+    if not rows:
+        return 0
+    try:
+        p = Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / "screener_trace" / f"trace_us_{today}.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"date": today, "market": "US", "rows": rows}, ensure_ascii=False, default=str), encoding="utf-8")
+    except Exception as e:
+        print(f"  ⚠️ [screener_trace] 米国の JSON 保存失敗: {str(e)[:80]}")
+    return len(rows)
+
+
 def save_trace_json(cfg, passed: list[dict], rejected: list[dict], today: str) -> None:
     """data/screener_trace/trace_{日付}.json。md より詳しい（経路の全段・9指標の生の値）。失敗しても本処理は止めない。"""
     try:
@@ -177,9 +209,10 @@ def run(cfg, results: dict) -> dict:
     md = md_dir / f"screener_trace_{today}.md"
     md.write_text(build_md(passed, rejected, today, cfg), encoding="utf-8")
     save_trace_json(cfg, passed, rejected, today)
+    n_us = save_us_trace_json(cfg, results, today)
     capped = sum(1 for c in passed if any("切り捨て" in (t.get("note") or "")
                                            for t in c.get("score_trail") or []))
     print(f"  🧭 [screener_trace] 通過{len(passed)} / 落選{len(rejected)} / "
           f"上限で切り捨て{capped}銘柄 → {md.name}")
-    return {"passed": len(passed), "rejected": len(rejected), "capped": capped,
+    return {"passed": len(passed), "rejected": len(rejected), "capped": capped, "us_rows": n_us,
             "path": str(md)}

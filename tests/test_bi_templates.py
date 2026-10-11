@@ -375,8 +375,9 @@ def _load_trace(c) -> None:
         for i in range(10):
             tk = "6501.T" if i == 0 else f"{7000 + i}.T"
             ok = (i < 6) if i else (k % 2 == 0)
-            _insert(c, "m_screener_trace", {
-                "report_date": d, "market": "JP", "ticker": tk, "name": f"銘柄{i}", "sector_code": "1016", "sector_name": "電気機器",
+            for mk in ("JP", "US"):
+              _insert(c, "m_screener_trace", {
+                "report_date": d, "market": mk, "ticker": tk, "name": f"銘柄{i}", "sector_code": "1016", "sector_name": "電気機器",
                 "passed": ok, "composite_score": 60.0 + i * 3, "base_score": 55.0 + i * 2 if ok else None,
                 "bonus": 5.0 + i if ok else None, "score_path": "55.0 →政策+5.0→ 60.0" if ok else None,
                 "reasons": None if ok else ["PER 31.1（条件 0超〜30倍）", "ROE 5.0%（条件 8%以上）"][i % 2],

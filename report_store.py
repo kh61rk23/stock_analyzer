@@ -14,8 +14,9 @@
 #   news_articles        … ニュース記事（data/news_cache/news_{date}.json の全記事。md は上位10本と業種ごと3本しか出ない）
 #   etf_theme_daily      … テーマETFの熱量（data/etf_cache/thematic_{date}.json、無い日は etf/thematic_{date}.md のランキング表）
 #   etf_daily            … テーマETFの個別 ETF（同 JSON、無い日は md の詳細＝上位テーマ分のみ）
-#   screener_trace_daily … 日本株スクリーナーの全候補（通過＝点数の経路・9指標、落選＝理由）。data/screener_trace/trace_{date}.json、
-#                          無い日は screener/screener_trace_{date}.md（＋data/screener_rejections.json の落選）
+#   screener_trace_daily … スクリーナーの全候補（通過・落選と理由）。日本株＝data/screener_trace/trace_{date}.json
+#                          （無い日は screener/screener_trace_{date}.md＋data/screener_rejections.json）、
+#                          米国株＝data/screener_trace/trace_us_{date}.json（us_screener のレポートと一緒に入れる・2026-10-13 から）
 #   imf_forecasts        … IMF の見通し（国×指標×年。imf/imf_{date}.md の表）
 #   gov_stats            … 政府統計の最新値・前月比・前年比・シグナル（gov/gov_report_{date}.md の表）
 #   上記以外の md（週次・アイデア・事業概要・米国スクリーナー・銘柄詳細・月次の配分提案や税務など）も report_texts に全文を入れる。
@@ -347,6 +348,15 @@ def build_all(paths: list, fetched_at: str, data_dir: Path | None = None) -> dic
                           "kpi_net_cash_ratio", "kpi_irr"):
                     row[k] = _num(row[k])
                 out["screener_trace_daily"].append(dict(row, report_date=d, market="JP", fetched_at=fetched_at))
+        elif kind == "us_screener":
+            js = (data_dir / "screener_trace" / f"trace_us_{d}.json") if data_dir else None
+            if js and js.exists():
+                for r in json.loads(js.read_text(encoding="utf-8")).get("rows", []):
+                    row = {k: r.get(k) for k in TRACE_COLS}
+                    for k in ("composite_score", "base_score", "kpi_pbr", "kpi_per", "kpi_fcf_yield", "kpi_ev_ebitda", "kpi_roic",
+                              "kpi_net_cash_ratio", "kpi_irr"):
+                        row[k] = _num(row[k])
+                    out["screener_trace_daily"].append(dict(row, report_date=d, market="US", fetched_at=fetched_at))
         elif kind == "imf":
             for code, name, country, yr, v in parse_imf(text):
                 out["imf_forecasts"].append({"report_date": d, "indicator_code": code, "indicator_name": name, "country": country,
