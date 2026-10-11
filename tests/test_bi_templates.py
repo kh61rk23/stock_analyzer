@@ -32,6 +32,7 @@ STRING_COLS = {
     "paper_id", "primary_category", "categories", "title", "title_ja", "summary", "authors", "url", "keywords", "keyword",
     "risk_level", "signals", "indicator", "signal", "trigger_value", "judgement", "judgement_ja", "reason",
     "report_type", "report_key", "body_head", "source_path",
+    "summary_head", "priority", "lang", "pub_date", "matched_sectors", "sentiment_label", "etfs",
 }
 INT_COLS = {
     "fiscal_year", "employee_count", "foreign_ministry_level", "state_dept_level", "exposure_type_count",
@@ -39,17 +40,18 @@ INT_COLS = {
     "municipality_count", "population_current", "population_2050", "est_excluded_count",
     "node_level", "child_count", "company_count", "company_count_rollup",
     "theme_order", "days_before_latest", "price_days", "cik", "signal_count", "ticker_signal_count", "ticker_count",
-    "investment_score", "score_rank", "chars", "re_fiscal_year", "re_facility_count", "re_est_excluded_count", "f_score", "f_score_items", "consec_up_years",
+    "investment_score", "score_rank", "chars", "heat_rank", "re_fiscal_year", "re_facility_count", "re_est_excluded_count", "f_score", "f_score_items", "consec_up_years",
     "trading_days", "n_stocks", "n_up", "n_down", "n_flat", "n_hl_base", "n_new_high", "n_new_low", "n_ma50", "n_ma200",
 }
 DATE_COLS = {"fiscal_year_end", "risk_date", "latest_risk_date", "price_date", "price_break_date", "snapshot_date", "technical_date", "fired_at",
-             "month", "month_end_date", "trade_date", "ttm_period_end", "balance_date", "shares_as_of", "base_trade_date", "fetched_date", "fetched_month", "published_date", "report_date"}
-BOOL_COLS = {"is_delisted", "sanction_flag", "is_landlocked", "review_flag", "auto_derived", "verified_flag", "above_ma200", "has_fundamentals", "is_partial", "is_complete", "is_latest", "macd_crossup", "above_vwap", "is_idea"}
+             "month", "month_end_date", "trade_date", "ttm_period_end", "balance_date", "shares_as_of", "base_trade_date", "fetched_date", "fetched_month", "published_date", "report_date", "first_seen", "last_seen"}
+BOOL_COLS = {"is_delisted", "sanction_flag", "is_landlocked", "review_flag", "auto_derived", "verified_flag", "above_ma200", "has_fundamentals", "is_partial", "is_complete", "is_latest", "macd_crossup", "above_vwap", "is_idea", "investment_relevant"}
 ALL_MARTS = ("m_company", "m_fin_annual", "m_country_profile", "m_country_risk", "m_company_country",
              "m_re_area", "m_re_holdings", "m_re_holdings_pref", "m_tax_node", "m_company_tax", "m_screener", "m_screener_us",
              "m_theme", "m_theme_def", "m_theme_signal", "m_price_monthly", "m_sector_perf", "m_market_breadth",
              "m_us_fin_annual", "m_us_segments", "m_stock_snapshot", "m_arxiv_papers", "m_arxiv_keywords",
-             "m_sector_scores", "m_macro_indicators", "m_macro_signals", "m_reports")
+             "m_sector_scores", "m_macro_indicators", "m_macro_signals", "m_reports",
+             "m_news", "m_etf_themes", "m_etf_daily")
 
 
 def mart_columns(mart: str) -> list[str]:
@@ -359,6 +361,29 @@ def _load_screener(c) -> None:
     _load_snapshot(c)
     _load_arxiv(c)
     _load_reports(c)
+    _load_news_etf(c)
+
+
+# ニュース（14日×10本・業種 1016 と macro）とテーマETF（20日×3テーマ・各1ETF）
+def _load_news_etf(c) -> None:
+    import datetime as dt
+    for k in range(14):
+        d = dt.date(2026, 9, 26) + dt.timedelta(days=k)
+        for i in range(10):
+            _insert(c, "m_news", {"url": f"https://ex.com/{k}/{i}", "first_seen": d, "last_seen": d, "title": f"半導体ニュース{i}",
+                                  "summary_head": "半導体の需要が拡大", "source": ["NHK ビジネス", "CNBC Finance"][i % 2], "priority": "A",
+                                  "lang": "ja", "pub_date": f"{d} 10:00", "matched_sectors": "1016,macro" if i % 2 else "macro",
+                                  "importance_score": float(i % 4), "investment_relevant": i % 3 != 0,
+                                  "sentiment_label": "NEUTRAL", "sentiment_score": 0.4 + (i % 3) * 0.1})
+    for k in range(20):
+        d = dt.date(2026, 9, 20) + dt.timedelta(days=k)
+        for i, (th, etf) in enumerate((("サイバーセキュリティ", "CIBR"), ("量子コンピュータ", "QTUM"), ("水素・クリーンエネルギー", "ICLN"))):
+            _insert(c, "m_etf_themes", {"report_date": d, "theme_name": th, "etfs": etf, "heat_score": 60.0 - i * 12 + k % 3,
+                                        "etf_momentum_score": 70.0 - i * 15, "arxiv_trend_score": 55.0, "arxiv_growth_rate": 30.0 - i * 20,
+                                        "arxiv_recent_4w": 100.0, "arxiv_prev_4w": 80.0, "signal": "warming",
+                                        "heat_chg_5d": 1.0 if k >= 5 else None, "heat_rank": i + 1})
+            _insert(c, "m_etf_daily", {"report_date": d, "theme_name": th, "ticker": etf, "price": 100.0 + k, "ret_1m": 5.0 - i * 3,
+                                       "ret_3m": 8.0 - i * 4, "ma50_ratio": 2.0, "vol_ratio": 10.0})
 
 
 # マクロ・業種レポート：20記録日。日本3業種・米国2セクター、マクロ指標3つ・米国債3年限、シグナル2つ

@@ -1,0 +1,218 @@
+[
+  {
+    "id": "news_latest_important",
+    "domain": "news",
+    "title": "最新日の重要ニュース",
+    "question": "いちばん新しい日に取れた投資に関係するニュースのうち、重要度が高いものは",
+    "mart": "m_news",
+    "sql": "SELECT importance_score, priority, source, title, matched_sectors, sentiment_label, pub_date, url\nFROM m_news\nWHERE last_seen = (SELECT MAX(last_seen) FROM m_news) AND investment_relevant\nORDER BY importance_score DESC, priority\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 40,
+        "min": 1,
+        "max": 300
+      }
+    ],
+    "chart": {
+      "type": "table",
+      "x": "title",
+      "y": "importance_score",
+      "series": null
+    },
+    "note": "priority は取得元の優先度（S・A・B）。"
+  },
+  {
+    "id": "news_search",
+    "domain": "news",
+    "title": "ニュースを言葉で探す（直近60日）",
+    "question": "題名か要約にある言葉を含むニュースはどれか",
+    "mart": "m_news",
+    "sql": "SELECT last_seen, source, title, summary_head, matched_sectors, url\nFROM m_news\nWHERE title LIKE {{pattern}} OR summary_head LIKE {{pattern}}\nORDER BY last_seen DESC, importance_score DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "pattern",
+        "label": "探す言葉（% で前後を囲む・英語は大文字小文字を区別）",
+        "type": "string",
+        "default": "%半導体%"
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 40,
+        "min": 1,
+        "max": 300
+      }
+    ],
+    "chart": {
+      "type": "table",
+      "x": "title",
+      "y": "last_seen",
+      "series": null
+    },
+    "note": "要約は先頭300字。全期間・全文は BigQuery の analytics.news_articles。"
+  },
+  {
+    "id": "news_sector_counts",
+    "domain": "news",
+    "title": "業種ごとのニュース件数",
+    "question": "直近N日で、どの業種に関係するニュースが多いか",
+    "mart": "m_news",
+    "sql": "SELECT CASE WHEN matched_sectors LIKE {{sector_like}} THEN 'あり' ELSE 'なし' END AS hit, COUNT(*) AS articles,\n       ROUND(AVG(sentiment_score), 3) AS avg_sentiment\nFROM m_news\nWHERE last_seen >= (SELECT MAX(last_seen) FROM m_news) - {{days}} AND investment_relevant\nGROUP BY hit",
+    "params": [
+      {
+        "name": "sector_like",
+        "label": "業種コード（% で前後を囲む。例 %1016% ＝電気機器、%macro%＝マクロ全体）",
+        "type": "string",
+        "default": "%1016%"
+      },
+      {
+        "name": "days",
+        "label": "遡る日数",
+        "type": "int",
+        "default": 14,
+        "min": 1,
+        "max": 60
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "hit",
+      "y": "articles",
+      "series": null
+    },
+    "note": "業種コードは東証33業種の4桁（例 1016 電気機器・1029 銀行業）。"
+  },
+  {
+    "id": "news_daily_volume",
+    "domain": "news",
+    "title": "日ごとのニュース件数とセンチメント",
+    "question": "毎日何本のニュースが入り、投資に関係するものの平均センチメントはどう動いたか",
+    "mart": "m_news",
+    "sql": "SELECT first_seen, COUNT(*) AS articles, SUM(CASE WHEN investment_relevant THEN 1 ELSE 0 END) AS relevant,\n       ROUND(AVG(CASE WHEN investment_relevant THEN sentiment_score END), 3) AS avg_sentiment\nFROM m_news\nGROUP BY first_seen\nORDER BY first_seen",
+    "params": [],
+    "chart": {
+      "type": "line",
+      "x": "first_seen",
+      "y": [
+        "articles",
+        "relevant"
+      ],
+      "series": null
+    },
+    "note": "記事は初めて取れた日で数える。センチメントは 0〜1（0.5 が中立）。"
+  },
+  {
+    "id": "news_source_counts",
+    "domain": "news",
+    "title": "取得元ごとの件数",
+    "question": "どの取得元（NHK・CNBC・Nikkei Asia など）から何本入っているか",
+    "mart": "m_news",
+    "sql": "SELECT source, COUNT(*) AS articles, SUM(CASE WHEN investment_relevant THEN 1 ELSE 0 END) AS relevant\nFROM m_news\nWHERE last_seen >= (SELECT MAX(last_seen) FROM m_news) - {{days}}\nGROUP BY source\nORDER BY articles DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "days",
+        "label": "遡る日数",
+        "type": "int",
+        "default": 14,
+        "min": 1,
+        "max": 60
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 40,
+        "min": 1,
+        "max": 300
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "source",
+      "y": [
+        "articles",
+        "relevant"
+      ],
+      "series": null
+    },
+    "note": ""
+  },
+  {
+    "id": "etf_theme_ranking",
+    "domain": "news",
+    "title": "最新日のテーマ熱量ランキング",
+    "question": "いちばん新しい日に熱いテーマ（ETF の勢い＋arXiv 論文の伸び）はどれか",
+    "mart": "m_etf_themes",
+    "sql": "SELECT heat_rank, theme_name, etfs, heat_score, etf_momentum_score, arxiv_growth_rate, arxiv_recent_4w, signal, ROUND(heat_chg_5d, 1) AS heat_chg_5d\nFROM m_etf_themes\nWHERE report_date = (SELECT MAX(report_date) FROM m_etf_themes)\nORDER BY heat_score DESC",
+    "params": [],
+    "chart": {
+      "type": "bar",
+      "x": "theme_name",
+      "y": "heat_score",
+      "series": null
+    },
+    "note": "熱量＝ETF モメンタム60%＋arXiv トレンド40%。"
+  },
+  {
+    "id": "etf_theme_trend",
+    "domain": "news",
+    "title": "テーマ熱量の推移",
+    "question": "テーマの熱量は日ごとにどう動いてきたか",
+    "mart": "m_etf_themes",
+    "sql": "SELECT report_date, theme_name, heat_score\nFROM m_etf_themes\nWHERE theme_name LIKE {{theme_like}}\nORDER BY report_date",
+    "params": [
+      {
+        "name": "theme_like",
+        "label": "テーマ名の一部（% で前後を囲む。%% で全テーマ）",
+        "type": "string",
+        "default": "%%"
+      }
+    ],
+    "chart": {
+      "type": "line",
+      "x": "report_date",
+      "y": "heat_score",
+      "series": "theme_name"
+    },
+    "note": ""
+  },
+  {
+    "id": "etf_returns_latest",
+    "domain": "news",
+    "title": "テーマETFの騰落率（最新日）",
+    "question": "いちばん新しい日の各テーマETFの1か月・3か月騰落率と50日線からの乖離は",
+    "mart": "m_etf_daily",
+    "sql": "SELECT theme_name, ticker, price, ret_1m, ret_3m, ma50_ratio, vol_ratio\nFROM m_etf_daily\nWHERE report_date = (SELECT MAX(report_date) FROM m_etf_daily)\nORDER BY ret_1m DESC",
+    "params": [],
+    "chart": {
+      "type": "bar",
+      "x": "ticker",
+      "y": [
+        "ret_1m",
+        "ret_3m"
+      ],
+      "series": null
+    },
+    "note": "2026-10-11 より前は md に出ていた上位テーマの ETF だけ。"
+  },
+  {
+    "id": "etf_momentum_vs_arxiv",
+    "domain": "news",
+    "title": "ETFの勢いと論文の伸び",
+    "question": "市場の勢い（ETF）と研究の伸び（arXiv）がずれているテーマはどれか",
+    "mart": "m_etf_themes",
+    "sql": "SELECT theme_name, etf_momentum_score, arxiv_growth_rate, heat_score, signal\nFROM m_etf_themes\nWHERE report_date = (SELECT MAX(report_date) FROM m_etf_themes)\nORDER BY arxiv_growth_rate DESC",
+    "params": [],
+    "chart": {
+      "type": "scatter",
+      "x": "etf_momentum_score",
+      "y": "arxiv_growth_rate",
+      "series": null
+    },
+    "note": "論文が伸びているのに ETF の勢いが弱いテーマは、市場がまだ織り込んでいない候補。"
+  }
+]
