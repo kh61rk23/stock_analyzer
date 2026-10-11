@@ -18,8 +18,12 @@ OUT = Path(__file__).with_name("株式DWH分析室.html")
 PROJECT = "stock-analyzer-edinet"
 
 DOMAINS = {"finance": "財務・業績", "geo": "地政学", "realestate": "不動産", "taxonomy": "技術分類",
-           "theme": "テーマ株", "market": "株価・スクリーニング", "us": "米国株", "research": "論文（arXiv）"}
+           "theme": "テーマ株", "market": "株価・スクリーニング", "us": "米国株", "research": "論文（arXiv）", "macro": "マクロ・業種レポート"}
 MART_DESC = {
+    "m_sector_scores": "業種スコアの日次推移（日本33業種＋米国11セクター・2026-07〜）。前日差・5日差・順位つき",
+    "m_macro_indicators": "マクロ指標（ドル円・米10年債・原油・金・VIX・S&P500・日経平均）と米国債の年限別利回りの日次",
+    "m_macro_signals": "マクロシグナル（金利上昇・円安など）×業種の追い風／逆風／注意の日次",
+    "m_reports": "マクロ・業種の md レポート（直近31日・本文は先頭3,000字）。全期間・全文は analytics.report_texts",
     "m_arxiv_papers": "arXiv の論文（金融・計量経済の5分野・週1回取得・2026-07-27〜）。1論文1行。日本語タイトル・要旨・点数・キーワード・URL",
     "m_arxiv_keywords": "arXiv の論文×採点キーワード。キーワードの流行を見る",
     "m_stock_snapshot": "スクリーナー通過銘柄の日次記録（銘柄レポート md の正本・2026-09-09〜）。1日1銘柄1行。スコア・財務・テクニカル・シグナル文と5/20営業日後のリターン",
@@ -42,6 +46,7 @@ MART_DESC = {
     "m_re_holdings_pref": "企業の保有不動産の都道府県別集約。1社×都道府県×年度1行",
 }
 LABELS = {
+    "report_date": "日付", "sector_code": "業種コード", "sector_name": "業種", "score": "スコア", "risk_level": "リスク", "score_chg_1d": "前日差", "score_chg_5d": "5日差", "score_rank": "順位", "indicator": "指標", "value": "値", "change_1d": "前日差", "change_1m": "1か月差", "signal": "シグナル", "trigger_value": "きっかけ", "judgement_ja": "判定", "reason": "理由", "report_type": "種類", "body_head": "本文（先頭）",
     "paper_id": "arXiv ID", "title_ja": "日本語タイトル", "title_ja_or_en": "タイトル", "investment_score": "点数", "is_idea": "投資アイデア候補", "keywords": "キーワード", "keyword": "キーワード", "primary_category": "分野", "fetched_date": "取得日", "published_date": "公開日", "summary": "要旨", "authors": "著者",
     "snapshot_date": "記録日", "fwd_return_5d": "5営業日後リターン", "fwd_return_20d": "20営業日後リターン", "signal_text": "シグナル", "technical_score": "テクニカルスコア", "base_close": "起点の終値",
     "axis_ja": "軸", "segment_name": "セグメント", "member": "セグメント（原名）", "is_latest": "最新期", "revenue_share": "売上構成比",
