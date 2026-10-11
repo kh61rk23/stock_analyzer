@@ -158,3 +158,35 @@ def test_pending_only_new_or_changed(tmp_path):
     assert rs.pending(rs.collect(tmp_path), tmp_path, state) == [b]
     a.write_text("A2", encoding="utf-8")
     assert set(rs.pending(rs.collect(tmp_path), tmp_path, state)) == {a, b}
+
+
+TRACE_MD = """# 選別の経路（2026-10-09）
+
+## ✅ 通過 1銘柄（総合点順）
+
+| 銘柄 | 総合点 | 加点前 | 点数の経路 |
+|---|---|---|---|
+| 5021.T Cosmo Energy Holdi | 97.0 | 92.5 | 92.5 →政策+4.4 +4.4→ 97.0 |
+
+## ❌ 落ちた 1銘柄
+
+| 銘柄 | 業種 | 落ちた理由 |
+|---|---|---|
+| 6501.T Hitachi, Ltd. | 電気機器 | PER 31.1（条件 0超〜30倍） |
+"""
+
+
+def test_trace_rows_from_md():
+    rows = rs.trace_rows_from_md(TRACE_MD)
+    assert rows[0]["ticker"] == "5021.T" and rows[0]["passed"] and rows[0]["composite_score"] == 97.0 and rows[0]["base_score"] == 92.5
+    assert rows[1] == {"ticker": "6501.T", "name": "Hitachi, Ltd.", "sector_name": "電気機器", "passed": False, "composite_score": None,
+                       "base_score": None, "score_path": None, "reasons": "PER 31.1（条件 0超〜30倍）"}
+
+
+def test_screener_trace_rows_pure():
+    import screener_trace as stc
+    rows = stc.trace_rows([{"ticker": "A.T", "composite_score": 80, "base_score": 70, "kpi": {"pbr": 0.9, "roic": 0.12},
+                            "score_trail": [{"stage": "base", "score": 70, "delta": 0}, {"stage": "policy", "score": 80, "delta": 10, "note": "政策"}]}],
+                          [{"ticker": "B.T", "reasons": [], "composite_score": 40}])
+    assert rows[0]["passed"] and rows[0]["kpi_pbr"] == 0.9 and rows[0]["score_path"].startswith("70.0")
+    assert rows[1]["passed"] is False and rows[1]["reasons"] == "（フィルター以外）"

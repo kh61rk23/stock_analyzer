@@ -20,13 +20,16 @@ PROJECT = "stock-analyzer-edinet"
 DOMAINS = {"finance": "財務・業績", "geo": "地政学", "realestate": "不動産", "taxonomy": "技術分類",
            "theme": "テーマ株", "market": "株価・スクリーニング", "us": "米国株", "research": "論文（arXiv）", "macro": "マクロ・業種レポート", "news": "ニュース・テーマETF"}
 MART_DESC = {
+    "m_screener_trace": "日本株スクリーナーの全候補の日次（通過＝総合点・加点前・点数の経路・9指標、落選＝理由）。2026-09-30〜",
+    "m_imf_forecasts": "IMF の見通し（国×指標×年・取得日ごと）。GDP成長率・物価・失業率・経常収支・政府債務（%）と改定幅",
+    "m_gov_stats": "日本の政府統計（CPI・鉱工業生産・賃金・小売・失業率・住宅着工・機械受注・輸出）の最新値・前月比・前年比",
     "m_news": "ニュース記事（直近60日・1記事1行・要約先頭300字）。取得元・業種・重要度・センチメント。全期間は analytics.news_articles",
     "m_etf_themes": "テーマETFの熱量の日次（ETF モメンタム＋arXiv 論文の伸び）。順位・5日差",
     "m_etf_daily": "テーマETFの個別 ETF の日次（価格・1か月/3か月騰落率・50日線乖離・出来高前月比）",
     "m_sector_scores": "業種スコアの日次推移（日本33業種＋米国11セクター・2026-07〜）。前日差・5日差・順位つき",
     "m_macro_indicators": "マクロ指標（ドル円・米10年債・原油・金・VIX・S&P500・日経平均）と米国債の年限別利回りの日次",
     "m_macro_signals": "マクロシグナル（金利上昇・円安など）×業種の追い風／逆風／注意の日次",
-    "m_reports": "マクロ・業種の md レポート（直近31日・本文は先頭3,000字）。全期間・全文は analytics.report_texts",
+    "m_reports": "全レポート（マクロ・業種・ニュース・IMF・政府統計・週次・銘柄詳細ほか）の本文（直近31日・先頭3,000字）。全期間・全文は analytics.report_texts",
     "m_arxiv_papers": "arXiv の論文（金融・計量経済の5分野・週1回取得・2026-07-27〜）。1論文1行。日本語タイトル・要旨・点数・キーワード・URL",
     "m_arxiv_keywords": "arXiv の論文×採点キーワード。キーワードの流行を見る",
     "m_stock_snapshot": "スクリーナー通過銘柄の日次記録（銘柄レポート md の正本・2026-09-09〜）。1日1銘柄1行。スコア・財務・テクニカル・シグナル文と5/20営業日後のリターン",
@@ -49,6 +52,8 @@ MART_DESC = {
     "m_re_holdings_pref": "企業の保有不動産の都道府県別集約。1社×都道府県×年度1行",
 }
 LABELS = {
+    "passed": "通過", "base_score": "加点前", "bonus": "加点", "score_path": "点数の経路", "reasons": "落ちた理由",
+    "indicator_code": "指標コード", "indicator_name": "指標", "country": "国", "year": "年", "revision": "改定幅", "stat_name": "統計", "unit": "単位", "period": "対象月", "mom_pct": "前月比(%)", "yoy_pct": "前年比(%)",
     "first_seen": "初出日", "last_seen": "最終取得日", "summary_head": "要約（先頭）", "source": "取得元", "matched_sectors": "関係する業種", "importance_score": "重要度", "investment_relevant": "投資関連", "sentiment_label": "センチメント", "sentiment_score": "センチメント値", "theme_name": "テーマ", "heat_score": "熱量", "heat_rank": "順位", "etf_momentum_score": "ETFモメンタム", "arxiv_growth_rate": "論文の伸び率(%)", "ma50_ratio": "50日線乖離(%)", "vol_ratio": "出来高前月比(%)",
     "report_date": "日付", "sector_code": "業種コード", "sector_name": "業種", "score": "スコア", "risk_level": "リスク", "score_chg_1d": "前日差", "score_chg_5d": "5日差", "score_rank": "順位", "indicator": "指標", "value": "値", "change_1d": "前日差", "change_1m": "1か月差", "signal": "シグナル", "trigger_value": "きっかけ", "judgement_ja": "判定", "reason": "理由", "report_type": "種類", "body_head": "本文（先頭）",
     "paper_id": "arXiv ID", "title_ja": "日本語タイトル", "title_ja_or_en": "タイトル", "investment_score": "点数", "is_idea": "投資アイデア候補", "keywords": "キーワード", "keyword": "キーワード", "primary_category": "分野", "fetched_date": "取得日", "published_date": "公開日", "summary": "要旨", "authors": "著者",

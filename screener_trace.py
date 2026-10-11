@@ -134,6 +134,37 @@ def build_md(passed: list[dict], rejected: list[dict], today: str, cfg=None) -> 
     return "\n".join(L) + "\n"
 
 
+def trace_rows(passed: list[dict], rejected: list[dict]) -> list[dict]:
+    """通過（点数の経路・9指標の生の値）と落選（理由）を1銘柄1行にする（純関数）。report_store.py が BigQuery に入れる。"""
+    from score_trail import summary, slim
+    out = []
+    for c in passed:
+        k = c.get("kpi") or {}
+        out.append({"ticker": c.get("ticker"), "name": c.get("name"), "sector_code": c.get("sector_code"),
+                    "sector_name": c.get("sector_name"), "passed": True, "composite_score": c.get("composite_score"),
+                    "base_score": c.get("base_score"), "score_path": summary(c, width=50) or None, "trail": slim(c),
+                    "reasons": None, "kpi_pbr": k.get("pbr"), "kpi_per": k.get("per"), "kpi_fcf_yield": k.get("fcf_yield"),
+                    "kpi_ev_ebitda": k.get("ev_ebitda"), "kpi_roic": k.get("roic"),
+                    "kpi_net_cash_ratio": k.get("net_cash_ratio"), "kpi_irr": k.get("irr")})
+    for r in rejected:
+        out.append({"ticker": r.get("ticker"), "name": r.get("name"), "sector_code": r.get("sector_code"),
+                    "sector_name": r.get("sector_name"), "passed": False, "composite_score": r.get("composite_score"),
+                    "base_score": None, "score_path": None, "trail": None,
+                    "reasons": " / ".join(r.get("reasons") or []) or "（フィルター以外）"})
+    return out
+
+
+def save_trace_json(cfg, passed: list[dict], rejected: list[dict], today: str) -> None:
+    """data/screener_trace/trace_{日付}.json。md より詳しい（経路の全段・9指標の生の値）。失敗しても本処理は止めない。"""
+    try:
+        p = Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / "screener_trace" / f"trace_{today}.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"date": today, "rows": trace_rows(passed, rejected)}, ensure_ascii=False, default=str),
+                     encoding="utf-8")
+    except Exception as e:
+        print(f"  ⚠️ [screener_trace] JSON 保存失敗: {str(e)[:80]}")
+
+
 def run(cfg, results: dict) -> dict:
     """落選理由の保存と経路レポートの出力。"""
     today = date.today().isoformat()
@@ -145,6 +176,7 @@ def run(cfg, results: dict) -> dict:
     md_dir.mkdir(parents=True, exist_ok=True)
     md = md_dir / f"screener_trace_{today}.md"
     md.write_text(build_md(passed, rejected, today, cfg), encoding="utf-8")
+    save_trace_json(cfg, passed, rejected, today)
     capped = sum(1 for c in passed if any("切り捨て" in (t.get("note") or "")
                                            for t in c.get("score_trail") or []))
     print(f"  🧭 [screener_trace] 通過{len(passed)} / 落選{len(rejected)} / "

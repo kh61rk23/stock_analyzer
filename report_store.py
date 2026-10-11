@@ -14,6 +14,8 @@
 #   news_articles        … ニュース記事（data/news_cache/news_{date}.json の全記事。md は上位10本と業種ごと3本しか出ない）
 #   etf_theme_daily      … テーマETFの熱量（data/etf_cache/thematic_{date}.json、無い日は etf/thematic_{date}.md のランキング表）
 #   etf_daily            … テーマETFの個別 ETF（同 JSON、無い日は md の詳細＝上位テーマ分のみ）
+#   screener_trace_daily … 日本株スクリーナーの全候補（通過＝点数の経路・9指標、落選＝理由）。data/screener_trace/trace_{date}.json、
+#                          無い日は screener/screener_trace_{date}.md（＋data/screener_rejections.json の落選）
 #   imf_forecasts        … IMF の見通し（国×指標×年。imf/imf_{date}.md の表）
 #   gov_stats            … 政府統計の最新値・前月比・前年比・シグナル（gov/gov_report_{date}.md の表）
 #   上記以外の md（週次・アイデア・事業概要・米国スクリーナー・銘柄詳細・月次の配分提案や税務など）も report_texts に全文を入れる。
@@ -259,10 +261,30 @@ def parse_gov(md: str) -> list:
     return out
 
 
+def trace_rows_from_md(md: str) -> list:
+    """screener_trace の md から（通過＝総合点・加点前・経路、落選＝業種・理由）。"""
+    out = []
+    for c in _rows(md, "| 銘柄 | 総合点 | 加点前 | 点数の経路 |"):
+        if len(c) >= 4:
+            tk, _, nm = c[0].partition(" ")
+            out.append({"ticker": tk, "name": nm or None, "sector_name": None, "passed": True, "composite_score": _num(c[1]),
+                        "base_score": _num(c[2]), "score_path": c[3] if c[3] != "—" else None, "reasons": None})
+    for c in _rows(md, "| 銘柄 | 業種 | 落ちた理由 |"):
+        if len(c) >= 3:
+            tk, _, nm = c[0].partition(" ")
+            out.append({"ticker": tk, "name": nm or None, "sector_name": c[1] or None, "passed": False, "composite_score": None,
+                        "base_score": None, "score_path": None, "reasons": c[2]})
+    return out
+
+
+TRACE_COLS = ("ticker", "name", "sector_code", "sector_name", "passed", "composite_score", "base_score", "score_path", "reasons",
+              "kpi_pbr", "kpi_per", "kpi_fcf_yield", "kpi_ev_ebitda", "kpi_roic", "kpi_net_cash_ratio", "kpi_irr")
+
+
 def build_all(paths: list, fetched_at: str, data_dir: Path | None = None) -> dict:
     """md/csv のパス一覧（と data_dir のニュース・ETF の JSON）から各表の行を作る。"""
     out = {"report_texts": [], "sector_scores_daily": [], "macro_indicators_daily": [], "macro_signals_daily": [],
-           "news_articles": [], "etf_theme_daily": [], "etf_daily": [], "imf_forecasts": [], "gov_stats": []}
+           "news_articles": [], "etf_theme_daily": [], "etf_daily": [], "imf_forecasts": [], "gov_stats": [], "screener_trace_daily": []}
     for p in sorted(paths):
         k = report_kind(p)
         csv_us = p.parent.name == "us_sectors" and p.name.startswith("us_sector_scores_") and p.suffix == ".csv"
@@ -303,6 +325,28 @@ def build_all(paths: list, fetched_at: str, data_dir: Path | None = None) -> dic
             js = (data_dir / "news_cache" / f"news_{d}.json") if data_dir else None
             if js and js.exists():
                 out["news_articles"] += news_rows(json.loads(js.read_text(encoding="utf-8")), d, fetched_at)
+        elif kind == "screener_trace":
+            js = (data_dir / "screener_trace" / f"trace_{d}.json") if data_dir else None
+            if js and js.exists():
+                rows = json.loads(js.read_text(encoding="utf-8")).get("rows", [])
+            else:
+                rows = trace_rows_from_md(text)
+                rej = {}
+                try:
+                    rej = json.loads((data_dir / "screener_rejections.json").read_text(encoding="utf-8")).get(d) or [] if data_dir else []
+                except (OSError, ValueError):
+                    rej = []
+                if rej:   # 落選は JSON の方が業種コード・点数まである
+                    rows = [r for r in rows if r["passed"]] + [
+                        {"ticker": r.get("ticker"), "name": r.get("name") or None, "sector_code": r.get("sector_code") or None,
+                         "sector_name": r.get("sector_name") or None, "passed": False, "composite_score": _num(r.get("composite_score")),
+                         "reasons": " / ".join(r.get("reasons") or []) or "（フィルター以外）"} for r in rej]
+            for r in rows:
+                row = {k: r.get(k) for k in TRACE_COLS}
+                for k in ("composite_score", "base_score", "kpi_pbr", "kpi_per", "kpi_fcf_yield", "kpi_ev_ebitda", "kpi_roic",
+                          "kpi_net_cash_ratio", "kpi_irr"):
+                    row[k] = _num(row[k])
+                out["screener_trace_daily"].append(dict(row, report_date=d, market="JP", fetched_at=fetched_at))
         elif kind == "imf":
             for code, name, country, yr, v in parse_imf(text):
                 out["imf_forecasts"].append({"report_date": d, "indicator_code": code, "indicator_name": name, "country": country,
@@ -346,6 +390,11 @@ def schemas():
                       F("ret_1m", "FLOAT64"), F("ret_3m", "FLOAT64"), F("ma50_ratio", "FLOAT64"), F("vol_ratio", "FLOAT64")] + ts,
         "imf_forecasts": [F("report_date", "DATE", "REQUIRED"), F("indicator_code", "STRING"), F("indicator_name", "STRING"),
                           F("country", "STRING"), F("year", "INT64"), F("value", "FLOAT64")] + ts,
+        "screener_trace_daily": [F("report_date", "DATE", "REQUIRED"), F("market", "STRING"), F("ticker", "STRING"), F("name", "STRING"),
+                                 F("sector_code", "STRING"), F("sector_name", "STRING"), F("passed", "BOOL"),
+                                 F("composite_score", "FLOAT64"), F("base_score", "FLOAT64"), F("score_path", "STRING"),
+                                 F("reasons", "STRING")] + [F(k, "FLOAT64") for k in ("kpi_pbr", "kpi_per", "kpi_fcf_yield",
+                                 "kpi_ev_ebitda", "kpi_roic", "kpi_net_cash_ratio", "kpi_irr")] + ts,
         "gov_stats": [F("report_date", "DATE", "REQUIRED"), F("stat_name", "STRING"), F("value", "FLOAT64"), F("unit", "STRING"),
                       F("period", "STRING"), F("mom_pct", "FLOAT64"), F("yoy_pct", "FLOAT64"), F("signal", "STRING")] + ts,
     }

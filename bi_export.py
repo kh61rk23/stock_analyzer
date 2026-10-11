@@ -81,6 +81,7 @@ MART_KEYS = {
     "m_etf_daily": ["report_date", "theme_name", "ticker"],
     "m_imf_forecasts": ["report_date", "indicator_code", "country", "year"],
     "m_gov_stats": ["report_date", "stat_name"],
+    "m_screener_trace": ["report_date", "ticker"],
     "m_price_monthly": ["ticker", "month"],
     "m_sector_perf": ["industry", "trade_date"],
     "m_market_breadth": ["market", "trade_date"],

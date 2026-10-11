@@ -644,5 +644,122 @@
       "series": null
     },
     "note": "記録の始まり（2026-09-09）より前の通過は数えない。"
+  },
+  {
+    "id": "trace_daily_counts",
+    "domain": "market",
+    "title": "スクリーナーの通過・落選の数（日次）",
+    "question": "毎日、何銘柄が通過し、何銘柄が落ちたか",
+    "mart": "m_screener_trace",
+    "sql": "SELECT report_date, SUM(CASE WHEN passed THEN 1 ELSE 0 END) AS passed, SUM(CASE WHEN passed THEN 0 ELSE 1 END) AS rejected\nFROM m_screener_trace\nGROUP BY report_date\nORDER BY report_date",
+    "params": [],
+    "chart": {
+      "type": "bar",
+      "x": "report_date",
+      "y": [
+        "passed",
+        "rejected"
+      ],
+      "series": null
+    },
+    "note": "日本株スクリーナー（記録は 2026-09-30 から）。"
+  },
+  {
+    "id": "trace_reject_reasons",
+    "domain": "market",
+    "title": "落ちた理由の内訳",
+    "question": "直近N日、どのフィルターで落ちた銘柄が多いか",
+    "mart": "m_screener_trace",
+    "sql": "SELECT CASE WHEN reasons LIKE 'PER%' OR reasons LIKE '% PER%' THEN 'PER' WHEN reasons LIKE '%PBR%' THEN 'PBR' WHEN reasons LIKE '%ROE%' THEN 'ROE'\n            WHEN reasons LIKE '%時価総額%' THEN '時価総額' WHEN reasons LIKE '%出来高%' THEN '出来高' ELSE 'その他' END AS reason,\n       COUNT(*) AS rejections, COUNT(DISTINCT ticker) AS tickers\nFROM m_screener_trace\nWHERE NOT passed AND report_date >= (SELECT MAX(report_date) FROM m_screener_trace) - {{days}}\nGROUP BY reason\nORDER BY rejections DESC",
+    "params": [
+      {
+        "name": "days",
+        "label": "遡る日数",
+        "type": "int",
+        "default": 14,
+        "min": 0,
+        "max": 365
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "reason",
+      "y": "rejections",
+      "series": null
+    },
+    "note": "複数のフィルターで落ちた銘柄は最初に当たった理由で数える。"
+  },
+  {
+    "id": "trace_near_miss",
+    "domain": "market",
+    "title": "惜しくも落ちた銘柄",
+    "question": "最新日に落ちた銘柄のうち、総合点が高いのはどれか（条件を少し緩めれば通る候補）",
+    "mart": "m_screener_trace",
+    "sql": "SELECT ticker, name, sector_name, composite_score, reasons\nFROM m_screener_trace\nWHERE NOT passed AND report_date = (SELECT MAX(report_date) FROM m_screener_trace) AND composite_score IS NOT NULL\nORDER BY composite_score DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "ticker",
+      "y": "composite_score",
+      "series": null
+    },
+    "note": ""
+  },
+  {
+    "id": "trace_ticker_history",
+    "domain": "market",
+    "title": "銘柄の選別履歴",
+    "question": "この銘柄は毎日通過したか、落ちたならなぜか、点数はどう積み上がったか",
+    "mart": "m_screener_trace",
+    "sql": "SELECT report_date, passed, composite_score, base_score, score_path, reasons\nFROM m_screener_trace\nWHERE ticker = {{ticker}}\nORDER BY report_date",
+    "params": [
+      {
+        "name": "ticker",
+        "label": "ティッカー（例 6501.T）",
+        "type": "string",
+        "default": "6501.T"
+      }
+    ],
+    "chart": {
+      "type": "line",
+      "x": "report_date",
+      "y": "composite_score",
+      "series": null
+    },
+    "note": ""
+  },
+  {
+    "id": "trace_bonus_top",
+    "domain": "market",
+    "title": "加点で大きく押し上げられた銘柄",
+    "question": "最新日の通過銘柄のうち、政策・決算サプライズなどの加点で総合点が大きく上がったのはどれか",
+    "mart": "m_screener_trace",
+    "sql": "SELECT ticker, name, base_score, composite_score, bonus, score_path\nFROM m_screener_trace\nWHERE passed AND report_date = (SELECT MAX(report_date) FROM m_screener_trace) AND bonus IS NOT NULL\nORDER BY bonus DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "ticker",
+      "y": "bonus",
+      "series": null
+    },
+    "note": "bonus＝総合点−加点前。加点に頼った上位は点数の根拠を確認する。"
   }
 ]

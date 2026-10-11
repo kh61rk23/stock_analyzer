@@ -33,7 +33,7 @@ STRING_COLS = {
     "risk_level", "signals", "indicator", "signal", "trigger_value", "judgement", "judgement_ja", "reason",
     "report_type", "report_key", "body_head", "source_path",
     "summary_head", "priority", "lang", "pub_date", "matched_sectors", "sentiment_label", "etfs",
-    "indicator_code", "indicator_name", "stat_name", "unit", "period", "country",
+    "indicator_code", "indicator_name", "stat_name", "unit", "period", "country", "score_path", "reasons",
 }
 INT_COLS = {
     "fiscal_year", "employee_count", "foreign_ministry_level", "state_dept_level", "exposure_type_count",
@@ -46,13 +46,13 @@ INT_COLS = {
 }
 DATE_COLS = {"fiscal_year_end", "risk_date", "latest_risk_date", "price_date", "price_break_date", "snapshot_date", "technical_date", "fired_at",
              "month", "month_end_date", "trade_date", "ttm_period_end", "balance_date", "shares_as_of", "base_trade_date", "fetched_date", "fetched_month", "published_date", "report_date", "first_seen", "last_seen"}
-BOOL_COLS = {"is_delisted", "sanction_flag", "is_landlocked", "review_flag", "auto_derived", "verified_flag", "above_ma200", "has_fundamentals", "is_partial", "is_complete", "is_latest", "macd_crossup", "above_vwap", "is_idea", "investment_relevant"}
+BOOL_COLS = {"is_delisted", "sanction_flag", "is_landlocked", "review_flag", "auto_derived", "verified_flag", "above_ma200", "has_fundamentals", "is_partial", "is_complete", "is_latest", "macd_crossup", "above_vwap", "is_idea", "investment_relevant", "passed"}
 ALL_MARTS = ("m_company", "m_fin_annual", "m_country_profile", "m_country_risk", "m_company_country",
              "m_re_area", "m_re_holdings", "m_re_holdings_pref", "m_tax_node", "m_company_tax", "m_screener", "m_screener_us",
              "m_theme", "m_theme_def", "m_theme_signal", "m_price_monthly", "m_sector_perf", "m_market_breadth",
              "m_us_fin_annual", "m_us_segments", "m_stock_snapshot", "m_arxiv_papers", "m_arxiv_keywords",
              "m_sector_scores", "m_macro_indicators", "m_macro_signals", "m_reports",
-             "m_news", "m_etf_themes", "m_etf_daily", "m_imf_forecasts", "m_gov_stats")
+             "m_news", "m_etf_themes", "m_etf_daily", "m_imf_forecasts", "m_gov_stats", "m_screener_trace")
 
 
 def mart_columns(mart: str) -> list[str]:
@@ -364,6 +364,25 @@ def _load_screener(c) -> None:
     _load_reports(c)
     _load_news_etf(c)
     _load_imf_gov(c)
+    _load_trace(c)
+
+
+# スクリーナーの全候補：10日×（通過6・落選4）。6501.T は日によって通過と落選が入れ替わる
+def _load_trace(c) -> None:
+    import datetime as dt
+    for k in range(10):
+        d = dt.date(2026, 9, 30) + dt.timedelta(days=k)
+        for i in range(10):
+            tk = "6501.T" if i == 0 else f"{7000 + i}.T"
+            ok = (i < 6) if i else (k % 2 == 0)
+            _insert(c, "m_screener_trace", {
+                "report_date": d, "market": "JP", "ticker": tk, "name": f"銘柄{i}", "sector_code": "1016", "sector_name": "電気機器",
+                "passed": ok, "composite_score": 60.0 + i * 3, "base_score": 55.0 + i * 2 if ok else None,
+                "bonus": 5.0 + i if ok else None, "score_path": "55.0 →政策+5.0→ 60.0" if ok else None,
+                "reasons": None if ok else ["PER 31.1（条件 0超〜30倍）", "ROE 5.0%（条件 8%以上）"][i % 2],
+                "kpi_pbr": 1.0 if ok else None, "kpi_per": 12.0 if ok else None, "kpi_fcf_yield": 0.05 if ok else None,
+                "kpi_ev_ebitda": 7.0 if ok else None, "kpi_roic": 0.1 if ok else None, "kpi_net_cash_ratio": 0.2 if ok else None,
+                "kpi_irr": 0.08 if ok else None})
 
 
 # IMF（3取得日×2指標×2国×3年・2回目に改定）と政府統計（5取得日×2統計）
