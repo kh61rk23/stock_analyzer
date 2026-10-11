@@ -185,7 +185,7 @@
     "id": "report_search",
     "domain": "macro",
     "title": "レポートを言葉で探す（直近31日）",
-    "question": "マクロ・業種のレポートのうち、ある言葉を含むものはどれか",
+    "question": "レポート（マクロ・業種・ニュース・IMF・政府統計・週次・銘柄詳細ほか）のうち、ある言葉を含むものはどれか",
     "mart": "m_reports",
     "sql": "SELECT report_date, report_type, report_key, title, source_path\nFROM m_reports\nWHERE body_head LIKE {{pattern}} OR title LIKE {{pattern}}\nORDER BY report_date DESC\nLIMIT {{limit}}",
     "params": [
@@ -222,7 +222,7 @@
     "params": [
       {
         "name": "report_type",
-        "label": "種類（macro_report / sector / bond_commodity / daily_movers / anomaly / us_sector_report）",
+        "label": "種類（macro_report / sector / imf / gov_report / weekly / us_screener / biz_summary / stock_detail / news / thematic ほか）",
         "type": "string",
         "default": "macro_report"
       }
@@ -234,5 +234,92 @@
       "series": null
     },
     "note": "最新日のもの。本文は先頭3,000字。"
+  },
+  {
+    "id": "imf_latest",
+    "domain": "macro",
+    "title": "IMF の最新見通し",
+    "question": "IMF は各国の成長率・物価・失業率などを何年にどう見ているか（最新の取得日）",
+    "mart": "m_imf_forecasts",
+    "sql": "SELECT country, year, value, revision\nFROM m_imf_forecasts\nWHERE indicator_name LIKE {{indicator_like}} AND report_date = (SELECT MAX(report_date) FROM m_imf_forecasts)\nORDER BY country, year",
+    "params": [
+      {
+        "name": "indicator_like",
+        "label": "指標名の一部（% で前後を囲む。例 %GDP成長% / %物価% / %失業% / %経常収支% / %債務%）",
+        "type": "string",
+        "default": "%GDP成長%"
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "year",
+      "y": "value",
+      "series": "country"
+    },
+    "note": "値は %。revision は前の取得日からの改定幅。"
+  },
+  {
+    "id": "imf_revisions",
+    "domain": "macro",
+    "title": "IMF 見通しの改定",
+    "question": "IMF が見通しを上方・下方に改定したのはいつ、どの国・指標か",
+    "mart": "m_imf_forecasts",
+    "sql": "SELECT report_date, indicator_name, country, year, value, ROUND(revision, 2) AS revision\nFROM m_imf_forecasts\nWHERE revision IS NOT NULL AND revision != 0\nORDER BY report_date DESC, ABS(revision) DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 50,
+        "min": 1,
+        "max": 300
+      }
+    ],
+    "chart": {
+      "type": "table",
+      "x": "country",
+      "y": "revision",
+      "series": null
+    },
+    "note": "IMF の改定は年数回（4月・10月の WEO と 1月・7月の改訂）。"
+  },
+  {
+    "id": "gov_stats_latest",
+    "domain": "macro",
+    "title": "日本の政府統計（最新）",
+    "question": "CPI・鉱工業生産・賃金・小売・失業率・住宅着工・機械受注・輸出の最新値と前年比は",
+    "mart": "m_gov_stats",
+    "sql": "SELECT stat_name, value, unit, period, mom_pct, yoy_pct, signal\nFROM m_gov_stats\nWHERE report_date = (SELECT MAX(report_date) FROM m_gov_stats)\nORDER BY stat_name",
+    "params": [],
+    "chart": {
+      "type": "bar",
+      "x": "stat_name",
+      "y": "yoy_pct",
+      "series": null
+    },
+    "note": "signal は業種スコアへの影響の向き（tailwind＝追い風・headwind＝逆風）。"
+  },
+  {
+    "id": "gov_stats_trend",
+    "domain": "macro",
+    "title": "政府統計の前年比の推移",
+    "question": "ある政府統計の前年比は月ごとにどう動いてきたか",
+    "mart": "m_gov_stats",
+    "sql": "SELECT period, stat_name, MAX(yoy_pct) AS yoy_pct, MAX(value) AS value\nFROM m_gov_stats\nWHERE stat_name LIKE {{stat_like}} AND period IS NOT NULL\nGROUP BY period, stat_name\nORDER BY period",
+    "params": [
+      {
+        "name": "stat_like",
+        "label": "統計名の一部（% で前後を囲む。例 %CPI% / %機械受注% / %失業%）",
+        "type": "string",
+        "default": "%CPI%"
+      }
+    ],
+    "chart": {
+      "type": "line",
+      "x": "period",
+      "y": "yoy_pct",
+      "series": "stat_name"
+    },
+    "note": "同じ月の値は取得日が違っても同じなので、対象月（period）ごとに1点にまとめる。"
   }
 ]

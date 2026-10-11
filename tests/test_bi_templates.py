@@ -33,6 +33,7 @@ STRING_COLS = {
     "risk_level", "signals", "indicator", "signal", "trigger_value", "judgement", "judgement_ja", "reason",
     "report_type", "report_key", "body_head", "source_path",
     "summary_head", "priority", "lang", "pub_date", "matched_sectors", "sentiment_label", "etfs",
+    "indicator_code", "indicator_name", "stat_name", "unit", "period", "country",
 }
 INT_COLS = {
     "fiscal_year", "employee_count", "foreign_ministry_level", "state_dept_level", "exposure_type_count",
@@ -40,7 +41,7 @@ INT_COLS = {
     "municipality_count", "population_current", "population_2050", "est_excluded_count",
     "node_level", "child_count", "company_count", "company_count_rollup",
     "theme_order", "days_before_latest", "price_days", "cik", "signal_count", "ticker_signal_count", "ticker_count",
-    "investment_score", "score_rank", "chars", "heat_rank", "re_fiscal_year", "re_facility_count", "re_est_excluded_count", "f_score", "f_score_items", "consec_up_years",
+    "investment_score", "score_rank", "chars", "heat_rank", "year", "re_fiscal_year", "re_facility_count", "re_est_excluded_count", "f_score", "f_score_items", "consec_up_years",
     "trading_days", "n_stocks", "n_up", "n_down", "n_flat", "n_hl_base", "n_new_high", "n_new_low", "n_ma50", "n_ma200",
 }
 DATE_COLS = {"fiscal_year_end", "risk_date", "latest_risk_date", "price_date", "price_break_date", "snapshot_date", "technical_date", "fired_at",
@@ -51,7 +52,7 @@ ALL_MARTS = ("m_company", "m_fin_annual", "m_country_profile", "m_country_risk",
              "m_theme", "m_theme_def", "m_theme_signal", "m_price_monthly", "m_sector_perf", "m_market_breadth",
              "m_us_fin_annual", "m_us_segments", "m_stock_snapshot", "m_arxiv_papers", "m_arxiv_keywords",
              "m_sector_scores", "m_macro_indicators", "m_macro_signals", "m_reports",
-             "m_news", "m_etf_themes", "m_etf_daily")
+             "m_news", "m_etf_themes", "m_etf_daily", "m_imf_forecasts", "m_gov_stats")
 
 
 def mart_columns(mart: str) -> list[str]:
@@ -362,6 +363,24 @@ def _load_screener(c) -> None:
     _load_arxiv(c)
     _load_reports(c)
     _load_news_etf(c)
+    _load_imf_gov(c)
+
+
+# IMF（3取得日×2指標×2国×3年・2回目に改定）と政府統計（5取得日×2統計）
+def _load_imf_gov(c) -> None:
+    import datetime as dt
+    for k in range(3):
+        d = dt.date(2026, 7, 23) + dt.timedelta(days=30 * k)
+        for code, name in (("NGDP_RPCH", "実質GDP成長率(%)"), ("PCPIPCH", "消費者物価上昇率(%)")):
+            for country in ("日本(JPN)", "米国(USA)"):
+                for y in (2025, 2026, 2027):
+                    _insert(c, "m_imf_forecasts", {"report_date": d, "indicator_code": code, "indicator_name": name, "country": country,
+                                                   "year": y, "value": 1.0 + (0.2 if k >= 1 else 0.0), "revision": (0.2 if k == 1 else 0.0) if k else None})
+    for k in range(5):
+        d = dt.date(2026, 9, 1) + dt.timedelta(days=7 * k)
+        for name, v in (("消費者物価指数（CPI）", 102.5), ("機械受注統計（民需）", 4195744.3)):
+            _insert(c, "m_gov_stats", {"report_date": d, "stat_name": name, "value": v, "unit": "（2020年=100）", "period": f"2026-0{6 + k % 3}",
+                                       "mom_pct": 0.2, "yoy_pct": 2.7 + k * 0.1, "signal": "tailwind"})
 
 
 # ニュース（14日×10本・業種 1016 と macro）とテーマETF（20日×3テーマ・各1ETF）
