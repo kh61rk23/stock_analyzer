@@ -85,3 +85,39 @@ def test_job_id_ignores_fetched_at():
     a = [{"report_date": "2026-10-09", "x": 1, "fetched_at": "t1"}]
     b = [{"report_date": "2026-10-09", "x": 1, "fetched_at": "t2"}]
     assert rs.job_id_for("t", a) == rs.job_id_for("t", b) != rs.job_id_for("u", a)
+
+
+ETF_MD = """# テーマETFトラッキングレポート（2026-10-09）
+
+## 🌡️ テーマ熱量ランキング
+
+| テーマ | ETF | 熱量 | ETFモメンタム | ArXivトレンド | シグナル |
+|--------|-----|------|--------------|--------------|---------|
+| サイバーセキュリティ | CIBR | **66** | 75 | +29% | 📈 warming |
+| 水素・クリーンエネルギー | ICLN | **34** | 37 | +-25% | ❄️ cooling |
+
+## 📊 テーマ別詳細
+
+### 📈 サイバーセキュリティ（熱量スコア: 66）
+
+- **CIBR**: $106.2  1M:+12.4%  3M:+15.9%  MA50乖離:+7.5%  出来高前月比:+17.5%
+"""
+
+
+def test_etf_md_and_json():
+    th, et = rs.etf_rows_from_md(ETF_MD, "2026-10-09", "t")
+    assert [(t["theme_name"], t["heat_score"], t["arxiv_growth_rate"], t["signal"]) for t in th] == [
+        ("サイバーセキュリティ", 66.0, 29.0, "warming"), ("水素・クリーンエネルギー", 34.0, -25.0, "cooling")]
+    assert et == [{"report_date": "2026-10-09", "theme_name": "サイバーセキュリティ", "ticker": "CIBR", "price": 106.2, "ret_1m": 12.4,
+                   "ret_3m": 15.9, "ma50_ratio": 7.5, "vol_ratio": 17.5, "fetched_at": "t"}]
+    th, et = rs.etf_rows_from_json({"themes": [{"theme_name": "量子", "etfs": ["QTUM"], "heat_score": 58, "signal": "warming",
+                                                "arxiv_detail": {"growth_rate": 55.1, "recent_4w": 929, "prev_4w": 597},
+                                                "etf_details": [{"ticker": "QTUM", "price": 150.89, "ret_1m": 2.4}]}]}, "2026-10-09", "t")
+    assert th[0]["arxiv_recent_4w"] == 929 and et[0]["ticker"] == "QTUM"
+
+
+def test_news_rows_dedupe_and_zero_score():
+    rows = rs.news_rows([{"url": "u1", "title": "A", "importance_score": 0, "matched_sectors": ["1016", "macro"], "investment_relevant": False},
+                         {"url": "u1", "title": "A again"}, {"url": "", "title": "no url"}], "2026-10-09", "t")
+    assert len(rows) == 1 and rows[0]["importance_score"] == 0.0 and rows[0]["matched_sectors"] == "1016,macro"
+    assert rows[0]["investment_relevant"] is False

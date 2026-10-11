@@ -868,7 +868,26 @@ def run_thematic_etf_tracker(cfg, arxiv_result: Optional[dict] = None) -> dict:
     }
 
     _save_etf_report(output, cfg)
+    _save_etf_json(output, cfg)
     return output
+
+
+def _save_etf_json(result: dict, cfg) -> None:
+    """全テーマの結果を data/etf_cache/thematic_YYYY-MM-DD.json に残す。
+
+    md には上位テーマの ETF 詳細しか出ないため、report_store.py はこの JSON から全テーマ・全 ETF を BigQuery に入れる。
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+    try:
+        p = Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / "etf_cache" / f"thematic_{today}.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        keep = ("theme_id", "theme_name", "theme_name_en", "etfs", "etf_momentum_score", "arxiv_trend_score",
+                "heat_score", "etf_details", "signal")
+        themes = [{k: t.get(k) for k in keep} | {"arxiv_detail": {k: (t.get("arxiv_detail") or {}).get(k)
+                  for k in ("recent_4w", "prev_4w", "growth_rate", "source")}} for t in result.get("themes", [])]
+        p.write_text(json.dumps({"date": today, "themes": themes}, ensure_ascii=False, default=str), encoding="utf-8")
+    except Exception as e:
+        print(f"  ⚠️  テーマETFの JSON 保存失敗: {str(e)[:60]}")
 
 
 # ==============================================================
