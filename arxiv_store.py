@@ -252,7 +252,7 @@ def entries_to_papers(entries: list) -> dict:
 
 
 def enrich(cfg, sleep_sec: float = 3.0) -> dict:
-    """md から取り込んだ論文のうち要旨の無いものを arXiv API（無料）で取り直し、日本語タイトルをつけて追記する。
+    """md から取り込んだ論文を arXiv API（無料）で取り直し（要旨・全題名・著者）、日本語タイトルをつけて追記する。
     取得日（fetched_date）と点数は md のまま、fetched_at を今にするので m_arxiv_papers ではこちらが採られる。"""
     import time
     import feedparser
@@ -262,8 +262,7 @@ def enrich(cfg, sleep_sec: float = 3.0) -> dict:
     for path in sorted(Path(cfg.ARXIV_DIR).glob("arxiv_report_*.md")):
         d = re.search(r"(\d{4}-\d{2}-\d{2})", path.name).group(1)
         for p in parse_report(path.read_text(encoding="utf-8")):
-            if not p.get("summary"):
-                todo.setdefault(p["id"], (d, p))
+            todo.setdefault(p["id"], (d, p))
     ids = list(todo)
     meta = {}
     for i in range(0, len(ids), 50):
@@ -287,7 +286,7 @@ def enrich(cfg, sleep_sec: float = 3.0) -> dict:
     for d, ps in sorted(papers_by_date.items()):
         rows = build_rows(ps, threshold, d, fetched_at=now, titles_ja=titles, source="arxiv_api_backfill")
         total += write_rows(client, rows, Path(cfg.DATA_DIR) / "cache", salt="enrich")
-    print(f"  要旨なし {len(ids)}本 → arXiv から {len(meta)}本取得・{total}行追記・日本語タイトル {len(titles)}件")
+    print(f"  md の論文 {len(ids)}本 → arXiv から {len(meta)}本取得・{total}行追記・日本語タイトル {len(titles)}件")
     return {"todo": len(ids), "fetched": len(meta), "rows": total, "translated": len(titles)}
 
 
@@ -296,7 +295,7 @@ if __name__ == "__main__":
     import config as _cfg
     ap = argparse.ArgumentParser()
     ap.add_argument("--backfill", action="store_true", help="過去の md レポートを取り込む")
-    ap.add_argument("--enrich", action="store_true", help="要旨の無い論文を arXiv API で取り直し、日本語タイトルをつける")
+    ap.add_argument("--enrich", action="store_true", help="md から取り込んだ論文を arXiv API で取り直し、日本語タイトルをつける")
     a = ap.parse_args()
     if a.backfill:
         print(backfill(_cfg))
