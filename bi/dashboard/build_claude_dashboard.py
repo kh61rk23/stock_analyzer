@@ -18,8 +18,10 @@ OUT = Path(__file__).with_name("株式DWH分析室.html")
 PROJECT = "stock-analyzer-edinet"
 
 DOMAINS = {"finance": "財務・業績", "geo": "地政学", "realestate": "不動産", "taxonomy": "技術分類",
-           "theme": "テーマ株", "market": "株価・スクリーニング", "us": "米国株"}
+           "theme": "テーマ株", "market": "株価・スクリーニング", "us": "米国株", "research": "論文（arXiv）"}
 MART_DESC = {
+    "m_arxiv_papers": "arXiv の論文（金融・計量経済の5分野・週1回取得・2026-07-27〜）。1論文1行。日本語タイトル・要旨・点数・キーワード・URL",
+    "m_arxiv_keywords": "arXiv の論文×採点キーワード。キーワードの流行を見る",
     "m_stock_snapshot": "スクリーナー通過銘柄の日次記録（銘柄レポート md の正本・2026-09-09〜）。1日1銘柄1行。スコア・財務・テクニカル・シグナル文と5/20営業日後のリターン",
     "m_us_fin_annual": "米国株の通期財務。1銘柄1通期1行（直近5年・USD）。売上・利益・FCF・還元・貸借と前年比",
     "m_us_segments": "米国株のセグメント別売上・営業利益。1社×軸（事業／製品・サービス／地域）×セグメント×通期1行。構成比は全社売上に対する比率（合計行が混ざることがある）",
@@ -40,6 +42,7 @@ MART_DESC = {
     "m_re_holdings_pref": "企業の保有不動産の都道府県別集約。1社×都道府県×年度1行",
 }
 LABELS = {
+    "paper_id": "arXiv ID", "title_ja": "日本語タイトル", "title_ja_or_en": "タイトル", "investment_score": "点数", "is_idea": "投資アイデア候補", "keywords": "キーワード", "keyword": "キーワード", "primary_category": "分野", "fetched_date": "取得日", "published_date": "公開日", "summary": "要旨", "authors": "著者",
     "snapshot_date": "記録日", "fwd_return_5d": "5営業日後リターン", "fwd_return_20d": "20営業日後リターン", "signal_text": "シグナル", "technical_score": "テクニカルスコア", "base_close": "起点の終値",
     "axis_ja": "軸", "segment_name": "セグメント", "member": "セグメント（原名）", "is_latest": "最新期", "revenue_share": "売上構成比",
     "revenue_growth_1y": "売上成長率(1年)", "company_revenue_usd": "全社売上(USD)", "tickers_all": "ティッカー（全種類）",
