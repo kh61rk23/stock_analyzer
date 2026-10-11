@@ -4189,6 +4189,14 @@ def run_all_tasks(mode: str = "all") -> dict:
                            f"戦略:{len(_pb_accounts)}口座 "
                            f"約定:{sum(v.get('fills', 0) for v in _pb_accounts)}件 "
                            f"新規注文:{sum(v.get('new_orders', 0) for v in _pb_accounts)}件")
+                # 口座ごとの日次VaR95%（保有銘柄×過去1年の騰落）。リスク管制ボードが var_positions.json を読む
+                try:
+                    from paper import position_var as _pv
+                    _pv.run(cfg, _pb.load_accounts(cfg), _pb._paper_dir(cfg))
+                    logger.add("position_var", "success", "var_positions.json")
+                except Exception as _pve:
+                    logger.add("position_var", "error", str(_pve)[:100])
+                    print(f"  ⚠️  VaR（保有銘柄ベース）エラー: {str(_pve)[:80]}")
             else:
                 print("  ⚠️  paper/paper_broker.py が見つかりません")
                 logger.add("paper_broker", "warn", "paper_broker.py not found")
