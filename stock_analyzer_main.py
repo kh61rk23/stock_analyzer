@@ -1224,7 +1224,8 @@ def _save_macro_report(snapshot: dict, signals: list):
         if label == k and k not in labels:
             continue   # labelsに定義されていないキーはスキップ
         try:
-            val = f"{float(v):.3g}" if v is not None else "N/A"
+            # report_store.py がこの表を読んで BQ の macro_indicators_daily に入れるので、丸めすぎない（有効3桁だと日経が 6.91e+04 になる）
+            val = f"{float(v):,.2f}" if v is not None else "N/A"
         except (TypeError, ValueError):
             val = str(v)[:20] if v is not None else "N/A"
         md += f"| {label} | {val} |\n"

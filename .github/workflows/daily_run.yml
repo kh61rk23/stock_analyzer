@@ -386,6 +386,17 @@ jobs:
           ALERT_GMAIL_TO:       ${{ secrets.ALERT_GMAIL_TO }}
         run: python -u monthly_runner.py 2>&1
 
+      # マクロ・業種の md レポートを読んで BigQuery analytics（report_texts・sector_scores_daily・
+      # macro_indicators_daily・macro_signals_daily）に追記する（load job・無料）。BI export より前に置き、当日分をマートに載せる。
+      - name: 📚 Reports to BigQuery
+        if: steps.set-mode.outputs.mode != 'single'
+        continue-on-error: true
+        env:
+          STOCK_ANALYZER_BASE:  ${{ github.workspace }}/stock_data
+          BQ_PROJECT_ID:        ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS:       ${{ secrets.BQ_CREDENTIALS }}
+        run: python -u report_store.py 2>&1
+
       # BI基盤のマート（bi/marts/*.sql）を parquet にして stock_data/bi/ へ書き出す。
       # 1マート1クエリ。内容が前回と同じなら parquet は書き換えない（git肥大の防止）。
       # 失敗しても日次本体は止めないが、終了コード非0はログに ❌ で残す。
