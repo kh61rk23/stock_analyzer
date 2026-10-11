@@ -1,0 +1,238 @@
+[
+  {
+    "id": "sector_score_ranking",
+    "domain": "macro",
+    "title": "最新日の業種スコアランキング",
+    "question": "いちばん新しい日の業種スコアはどの業種が高いか（前日・5日前との差つき）",
+    "mart": "m_sector_scores",
+    "sql": "SELECT score_rank, sector_code, sector_name, score, risk_level, ROUND(score_chg_1d, 1) AS score_chg_1d, ROUND(score_chg_5d, 1) AS score_chg_5d, ret_1m, ret_12m, signals\nFROM m_sector_scores\nWHERE market = {{market}} AND report_date = (SELECT MAX(report_date) FROM m_sector_scores WHERE market = {{market}})\nORDER BY score DESC",
+    "params": [
+      {
+        "name": "market",
+        "label": "市場（JP / US）",
+        "type": "string",
+        "default": "JP"
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "sector_name",
+      "y": "score",
+      "series": null
+    },
+    "note": "日本＝33業種（業種別レポートの総合スコア）、米国＝11セクター（ETF）。"
+  },
+  {
+    "id": "sector_score_trend",
+    "domain": "macro",
+    "title": "業種スコアの推移",
+    "question": "ある業種のスコアは日ごとにどう動いてきたか",
+    "mart": "m_sector_scores",
+    "sql": "SELECT report_date, sector_name, score, risk_level\nFROM m_sector_scores\nWHERE market = {{market}} AND sector_name LIKE {{sector_like}}\nORDER BY report_date",
+    "params": [
+      {
+        "name": "market",
+        "label": "市場（JP / US）",
+        "type": "string",
+        "default": "JP"
+      },
+      {
+        "name": "sector_like",
+        "label": "業種名の一部（% で前後を囲む）",
+        "type": "string",
+        "default": "%銀行%"
+      }
+    ],
+    "chart": {
+      "type": "line",
+      "x": "report_date",
+      "y": "score",
+      "series": "sector_name"
+    },
+    "note": ""
+  },
+  {
+    "id": "sector_score_movers",
+    "domain": "macro",
+    "title": "スコアが大きく動いた業種",
+    "question": "直近N記録日でスコアが大きく上がった・下がった業種はどれか",
+    "mart": "m_sector_scores",
+    "sql": "SELECT sector_code, sector_name, MIN(score) AS min_score, MAX(score) AS max_score,\n       MAX(CASE WHEN report_date = (SELECT MAX(report_date) FROM m_sector_scores WHERE market = {{market}}) THEN score END) AS latest_score,\n       MAX(CASE WHEN report_date = (SELECT MAX(report_date) FROM m_sector_scores WHERE market = {{market}}) THEN score END)\n         - MAX(CASE WHEN report_date = (SELECT MIN(report_date) FROM m_sector_scores WHERE market = {{market}} AND report_date >= (SELECT MAX(report_date) FROM m_sector_scores WHERE market = {{market}}) - {{days}}) THEN score END) AS change\nFROM m_sector_scores\nWHERE market = {{market}} AND report_date >= (SELECT MAX(report_date) FROM m_sector_scores WHERE market = {{market}}) - {{days}}\nGROUP BY sector_code, sector_name\nORDER BY change DESC",
+    "params": [
+      {
+        "name": "market",
+        "label": "市場（JP / US）",
+        "type": "string",
+        "default": "JP"
+      },
+      {
+        "name": "days",
+        "label": "遡る日数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 365
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "sector_name",
+      "y": "change",
+      "series": null
+    },
+    "note": "change＝最新日のスコア −（期間の最初の日のスコア）。"
+  },
+  {
+    "id": "macro_indicator_trend",
+    "domain": "macro",
+    "title": "マクロ指標の推移",
+    "question": "ドル円・米10年債・原油・VIX・日経平均などは日ごとにどう動いたか",
+    "mart": "m_macro_indicators",
+    "sql": "SELECT report_date, indicator, value\nFROM m_macro_indicators\nWHERE source = 'macro_report' AND indicator LIKE {{indicator_like}}\nORDER BY report_date",
+    "params": [
+      {
+        "name": "indicator_like",
+        "label": "指標名の一部（% で前後を囲む。例 %USD% / %VIX% / %日経%）",
+        "type": "string",
+        "default": "%USD%"
+      }
+    ],
+    "chart": {
+      "type": "line",
+      "x": "report_date",
+      "y": "value",
+      "series": "indicator"
+    },
+    "note": "2026-10-11 より前は有効3桁に丸めた値。"
+  },
+  {
+    "id": "yield_curve",
+    "domain": "macro",
+    "title": "米国債のイールドカーブ（最新日と1か月差）",
+    "question": "いちばん新しい日の米国債の年限別利回りと、1か月前からの変化は",
+    "mart": "m_macro_indicators",
+    "sql": "SELECT indicator AS tenor, value AS yield_pct, change_1m\nFROM m_macro_indicators\nWHERE source = 'bond_commodity' AND report_date = (SELECT MAX(report_date) FROM m_macro_indicators WHERE source = 'bond_commodity')\nORDER BY CASE indicator WHEN '米1ヶ月' THEN 1 WHEN '米3ヶ月' THEN 2 WHEN '米6ヶ月' THEN 3 WHEN '米1年' THEN 4 WHEN '米2年' THEN 5 WHEN '米5年' THEN 6 WHEN '米10年' THEN 7 WHEN '米20年' THEN 8 WHEN '米30年' THEN 9 ELSE 10 END",
+    "params": [],
+    "chart": {
+      "type": "line",
+      "x": "tenor",
+      "y": "yield_pct",
+      "series": null
+    },
+    "note": "出どころは FRED（債券・コモディティ統合レポート）。"
+  },
+  {
+    "id": "yield_trend",
+    "domain": "macro",
+    "title": "米国債利回りの推移（年限別）",
+    "question": "米2年・10年などの利回りは日ごとにどう動いたか",
+    "mart": "m_macro_indicators",
+    "sql": "SELECT report_date, indicator AS tenor, value AS yield_pct\nFROM m_macro_indicators\nWHERE source = 'bond_commodity' AND indicator IN ('米2年', '米10年', '米30年')\nORDER BY report_date",
+    "params": [],
+    "chart": {
+      "type": "line",
+      "x": "report_date",
+      "y": "yield_pct",
+      "series": "tenor"
+    },
+    "note": ""
+  },
+  {
+    "id": "macro_signal_sector_balance",
+    "domain": "macro",
+    "title": "業種ごとの追い風・逆風の日数",
+    "question": "直近N日のマクロシグナルで、どの業種が追い風・逆風と判定された日が多いか",
+    "mart": "m_macro_signals",
+    "sql": "SELECT sector_name,\n       SUM(CASE WHEN judgement = 'tailwind' THEN 1 ELSE 0 END) AS tailwind,\n       SUM(CASE WHEN judgement = 'headwind' THEN 1 ELSE 0 END) AS headwind,\n       SUM(CASE WHEN judgement = 'watch' THEN 1 ELSE 0 END) AS watch\nFROM m_macro_signals\nWHERE report_date >= (SELECT MAX(report_date) FROM m_macro_signals) - {{days}}\nGROUP BY sector_name\nORDER BY tailwind - headwind DESC",
+    "params": [
+      {
+        "name": "days",
+        "label": "遡る日数",
+        "type": "int",
+        "default": 30,
+        "min": 1,
+        "max": 365
+      }
+    ],
+    "chart": {
+      "type": "bar",
+      "x": "sector_name",
+      "y": [
+        "tailwind",
+        "headwind"
+      ],
+      "series": null
+    },
+    "note": "1日に複数のシグナルがあれば、それぞれ数える。"
+  },
+  {
+    "id": "macro_signal_latest",
+    "domain": "macro",
+    "title": "最新日のマクロシグナル",
+    "question": "いちばん新しい日に出ているマクロシグナルと、業種への影響は",
+    "mart": "m_macro_signals",
+    "sql": "SELECT signal, trigger_value, sector_name, judgement_ja, reason\nFROM m_macro_signals\nWHERE report_date = (SELECT MAX(report_date) FROM m_macro_signals)\nORDER BY signal, judgement_ja",
+    "params": [],
+    "chart": {
+      "type": "table",
+      "x": "sector_name",
+      "y": "judgement_ja",
+      "series": null
+    },
+    "note": ""
+  },
+  {
+    "id": "report_search",
+    "domain": "macro",
+    "title": "レポートを言葉で探す（直近31日）",
+    "question": "マクロ・業種のレポートのうち、ある言葉を含むものはどれか",
+    "mart": "m_reports",
+    "sql": "SELECT report_date, report_type, report_key, title, source_path\nFROM m_reports\nWHERE body_head LIKE {{pattern}} OR title LIKE {{pattern}}\nORDER BY report_date DESC\nLIMIT {{limit}}",
+    "params": [
+      {
+        "name": "pattern",
+        "label": "探す言葉（% で前後を囲む）",
+        "type": "string",
+        "default": "%円安%"
+      },
+      {
+        "name": "limit",
+        "label": "表示件数",
+        "type": "int",
+        "default": 40,
+        "min": 1,
+        "max": 200
+      }
+    ],
+    "chart": {
+      "type": "table",
+      "x": "title",
+      "y": "report_date",
+      "series": null
+    },
+    "note": "本文の先頭3,000字だけを探す。全期間・全文は BigQuery の analytics.report_texts（分析室の SQL 欄で引ける）。"
+  },
+  {
+    "id": "report_read",
+    "domain": "macro",
+    "title": "レポートを読む",
+    "question": "ある日・ある種類のレポートの中身は（業種は report_key に業種コード）",
+    "mart": "m_reports",
+    "sql": "SELECT report_date, report_type, report_key, title, body_head\nFROM m_reports\nWHERE report_type = {{report_type}} AND report_date = (SELECT MAX(report_date) FROM m_reports WHERE report_type = {{report_type}})\nORDER BY report_key",
+    "params": [
+      {
+        "name": "report_type",
+        "label": "種類（macro_report / sector / bond_commodity / daily_movers / anomaly / us_sector_report）",
+        "type": "string",
+        "default": "macro_report"
+      }
+    ],
+    "chart": {
+      "type": "table",
+      "x": "title",
+      "y": "report_date",
+      "series": null
+    },
+    "note": "最新日のもの。本文は先頭3,000字。"
+  }
+]

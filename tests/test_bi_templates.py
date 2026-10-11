@@ -30,6 +30,8 @@ STRING_COLS = {
     "tickers_all", "axis", "axis_ja", "member", "segment_name",
     "sector_name", "accrual_tier", "size_tier", "strategy_label", "analyst_reco", "signal_text",
     "paper_id", "primary_category", "categories", "title", "title_ja", "summary", "authors", "url", "keywords", "keyword",
+    "risk_level", "signals", "indicator", "signal", "trigger_value", "judgement", "judgement_ja", "reason",
+    "report_type", "report_key", "body_head", "source_path",
 }
 INT_COLS = {
     "fiscal_year", "employee_count", "foreign_ministry_level", "state_dept_level", "exposure_type_count",
@@ -37,16 +39,17 @@ INT_COLS = {
     "municipality_count", "population_current", "population_2050", "est_excluded_count",
     "node_level", "child_count", "company_count", "company_count_rollup",
     "theme_order", "days_before_latest", "price_days", "cik", "signal_count", "ticker_signal_count", "ticker_count",
-    "investment_score", "re_fiscal_year", "re_facility_count", "re_est_excluded_count", "f_score", "f_score_items", "consec_up_years",
+    "investment_score", "score_rank", "chars", "re_fiscal_year", "re_facility_count", "re_est_excluded_count", "f_score", "f_score_items", "consec_up_years",
     "trading_days", "n_stocks", "n_up", "n_down", "n_flat", "n_hl_base", "n_new_high", "n_new_low", "n_ma50", "n_ma200",
 }
 DATE_COLS = {"fiscal_year_end", "risk_date", "latest_risk_date", "price_date", "price_break_date", "snapshot_date", "technical_date", "fired_at",
-             "month", "month_end_date", "trade_date", "ttm_period_end", "balance_date", "shares_as_of", "base_trade_date", "fetched_date", "fetched_month", "published_date"}
+             "month", "month_end_date", "trade_date", "ttm_period_end", "balance_date", "shares_as_of", "base_trade_date", "fetched_date", "fetched_month", "published_date", "report_date"}
 BOOL_COLS = {"is_delisted", "sanction_flag", "is_landlocked", "review_flag", "auto_derived", "verified_flag", "above_ma200", "has_fundamentals", "is_partial", "is_complete", "is_latest", "macd_crossup", "above_vwap", "is_idea"}
 ALL_MARTS = ("m_company", "m_fin_annual", "m_country_profile", "m_country_risk", "m_company_country",
              "m_re_area", "m_re_holdings", "m_re_holdings_pref", "m_tax_node", "m_company_tax", "m_screener", "m_screener_us",
              "m_theme", "m_theme_def", "m_theme_signal", "m_price_monthly", "m_sector_perf", "m_market_breadth",
-             "m_us_fin_annual", "m_us_segments", "m_stock_snapshot", "m_arxiv_papers", "m_arxiv_keywords")
+             "m_us_fin_annual", "m_us_segments", "m_stock_snapshot", "m_arxiv_papers", "m_arxiv_keywords",
+             "m_sector_scores", "m_macro_indicators", "m_macro_signals", "m_reports")
 
 
 def mart_columns(mart: str) -> list[str]:
@@ -355,6 +358,30 @@ def _load_screener(c) -> None:
     _load_us(c)
     _load_snapshot(c)
     _load_arxiv(c)
+    _load_reports(c)
+
+
+# マクロ・業種レポート：20記録日。日本3業種・米国2セクター、マクロ指標3つ・米国債3年限、シグナル2つ
+def _load_reports(c) -> None:
+    import datetime as dt
+    for k in range(20):
+        d = dt.date(2026, 9, 10) + dt.timedelta(days=k)
+        for mk, secs in (("JP", [("1001", "水産・農林業"), ("1029", "銀行業"), ("1033", "サービス業")]), ("US", [("XLK", "情報技術"), ("XLE", "エネルギー")])):
+            for i, (code, name) in enumerate(secs):
+                sc = 10.0 + i * 7 + (k % 5) * (1 if i % 2 else -1)
+                _insert(c, "m_sector_scores", {"report_date": d, "market": mk, "sector_code": code, "sector_name": name, "score": sc,
+                        "risk_level": "medium", "ret_1m": 1.0 if mk == "US" else None, "ret_3m": None, "ret_12m": 5.0 if mk == "US" else None,
+                        "signals": "金利上昇: 追い風", "score_chg_1d": 1.0 if k else None, "score_chg_5d": 2.0 if k >= 5 else None, "score_rank": i + 1})
+        for ind, v in (("USD/JPY", 150 + k * 0.3), ("VIX", 15 + k % 4), ("日経平均", 69000 + k * 50)):
+            _insert(c, "m_macro_indicators", {"report_date": d, "source": "macro_report", "indicator": ind, "value": v, "change_1m": None, "change_1d": 0.1})
+        for ind, v in (("米2年", 4.7), ("米10年", 5.2), ("米30年", 5.6)):
+            _insert(c, "m_macro_indicators", {"report_date": d, "source": "bond_commodity", "indicator": ind, "value": v, "change_1m": 0.3, "change_1d": 0.0})
+        for sig, sec, j, ja in (("金利上昇", "銀行業", "tailwind", "追い風"), ("金利上昇", "不動産業", "headwind", "逆風"), ("円安進行", "輸送用機器", "tailwind", "追い風")):
+            _insert(c, "m_macro_signals", {"report_date": d, "signal": sig, "trigger_value": "米10年債: 5.23%", "sector_name": sec,
+                                           "judgement": j, "judgement_ja": ja, "reason": "理由"})
+        for rt, key in (("macro_report", ""), ("sector", "1029"), ("bond_commodity", "")):
+            _insert(c, "m_reports", {"report_date": d, "report_type": rt, "report_key": key, "title": f"{rt} レポート",
+                                     "body_head": "円安進行と金利上昇", "chars": 3000, "source_path": f"macro/{rt}.md"})
 
 
 # arXiv：3回の取得×各20本。2610.03369 は詳細を引くテンプレの既定値
