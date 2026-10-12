@@ -19,10 +19,13 @@
 #   （ticker, trade_date ごとに ingested_at 最新）で除く。
 #
 # 【取得の作法】
-#   チャンク（既定300銘柄）に分け、チャンク間に間隔を空ける。チャンクの取得率が極端に低い
-#   ときは 429 などの一過性とみなして待って1回だけ再試行し、それでも駄目なチャンクが続けば
-#   当日の取得を打ち切る（連打して全件失敗する再発を防ぐ）。一過性の失敗で銘柄を「取れない」と
-#   記録しない。
+#   チャンク（既定300銘柄）に分け、チャンク間に間隔を空け、同時接続数（YF_THREADS）を絞る。
+#   Yahoo は数千銘柄を続けて取ると数分間まとめて弾く（チャンクの取得率が数%に落ちる）。
+#   取得率が CHUNK_FAIL_RATE 未満のチャンクは「制限中」とみなし、その場で1回だけ再試行したあと、
+#   取れなかった銘柄を後回しの列に入れ、待ち時間を倍々に延ばしながら先へ進む。
+#   本走のあと、後回しの銘柄を小さいチャンク（RETRY_CHUNK_SIZE）で RETRY_ROUNDS 回まで取り直す。
+#   全体は TIME_BUDGET_SEC で打ち切る（ジョブの timeout-minutes より短く）。
+#   制限中に取れなかった銘柄は「取れない」と記録しない（dead 判定に数えない）。
 #
 # 【取れない銘柄】
 #   連続 DEAD_AFTER_MISSES 回データが無い銘柄は dead として記録し、以後は取得対象から外す
@@ -46,8 +49,14 @@ from zoneinfo import ZoneInfo
 CHUNK_SIZE = 300
 CHUNK_PAUSE_SEC = 3.0
 CHUNK_RETRY_WAIT_SEC = 60.0
-CHUNK_FAIL_RATE = 0.2          # チャンクの取得率がこれ未満なら一過性の失敗とみなす
-MAX_FAILED_CHUNKS_IN_ROW = 3   # 連続で失敗したら当日の取得を打ち切る
+CHUNK_FAIL_RATE = 0.6          # チャンクの取得率がこれ未満なら制限中とみなす（平常時は9割超）
+MAX_FAILED_CHUNKS_IN_ROW = 6   # 待ちを延ばしても連続でこれだけ失敗したら本走をやめて後回し分の再取得へ進む
+COOLDOWN_MAX_SEC = 600.0       # 制限中の待ち時間の上限（CHUNK_RETRY_WAIT_SEC から倍々に延ばす）
+RETRY_CHUNK_SIZE = 100
+RETRY_ROUNDS = 2
+RETRY_ROUND_WAIT_SEC = 300.0   # 後回し分を取り直す前の待ち
+TIME_BUDGET_SEC = 3000.0       # 全体の時間予算（price_universe.yml の timeout-minutes 90 より十分短く）
+YF_THREADS = 8                 # yfinance の同時接続数（True＝無制限だと数千銘柄で制限に掛かる）
 MIN_RATE_JP = 0.90
 MIN_RATE_US = 0.85
 DEAD_AFTER_MISSES = 3
@@ -66,6 +75,12 @@ _CFG_CONST_MAP = {
     "B5_PRICE_UNIVERSE_CHUNK_RETRY_WAIT_SEC": "CHUNK_RETRY_WAIT_SEC",
     "B5_PRICE_UNIVERSE_CHUNK_FAIL_RATE": "CHUNK_FAIL_RATE",
     "B5_PRICE_UNIVERSE_MAX_FAILED_CHUNKS_IN_ROW": "MAX_FAILED_CHUNKS_IN_ROW",
+    "B5_PRICE_UNIVERSE_COOLDOWN_MAX_SEC": "COOLDOWN_MAX_SEC",
+    "B5_PRICE_UNIVERSE_RETRY_CHUNK_SIZE": "RETRY_CHUNK_SIZE",
+    "B5_PRICE_UNIVERSE_RETRY_ROUNDS": "RETRY_ROUNDS",
+    "B5_PRICE_UNIVERSE_RETRY_ROUND_WAIT_SEC": "RETRY_ROUND_WAIT_SEC",
+    "B5_PRICE_UNIVERSE_TIME_BUDGET_SEC": "TIME_BUDGET_SEC",
+    "B5_PRICE_UNIVERSE_YF_THREADS": "YF_THREADS",
     "B5_PRICE_UNIVERSE_MIN_RATE_JP": "MIN_RATE_JP",
     "B5_PRICE_UNIVERSE_MIN_RATE_US": "MIN_RATE_US",
     "B5_PRICE_UNIVERSE_DEAD_AFTER_MISSES": "DEAD_AFTER_MISSES",
@@ -426,7 +441,7 @@ def load_rows(client, rows: list[dict]) -> int:
 
 def download_chunk(yf, chunk: list[str], period: str):
     return yf.download(chunk, period=period, interval="1d", group_by="ticker",
-                       auto_adjust=False, threads=True, progress=False)
+                       auto_adjust=False, threads=YF_THREADS, progress=False)
 
 
 def run_market(market: str, cfg, client, backfill: bool = False, limit: int = 0,
@@ -463,45 +478,87 @@ def run_market(market: str, cfg, client, backfill: bool = False, limit: int = 0,
 
     hit: set = set()
     missed: set = set()
+    deferred: list[str] = []
     failed_chunks = 0
-    in_row = 0
     aborted = False
     buf: list[dict] = []
     loaded = 0
-    chunks = list(chunked(targets, CHUNK_SIZE))
-    for i, chunk in enumerate(chunks, 1):
-        frames = {}
+
+    def left() -> float:
+        return TIME_BUDGET_SEC - (time.time() - t0)
+
+    def fetch(chunk: list[str], label: str) -> dict:
+        """1チャンクを取る。取得率が低ければ1回だけ待って再試行する。"""
+        frames: dict = {}
         for attempt in (1, 2):
             try:
                 frames = extract_frames(download_chunk(yf, chunk, period), chunk)
             except Exception as e:
-                print(f"  chunk {i}/{len(chunks)} 例外 {type(e).__name__}: {str(e)[:80]}")
+                print(f"  {label} 例外 {type(e).__name__}: {str(e)[:80]}")
                 frames = {}
             if len(frames) / len(chunk) >= CHUNK_FAIL_RATE:
                 break
-            if attempt == 1:
-                print(f"  chunk {i}/{len(chunks)} 取得率{len(frames)}/{len(chunk)}。{CHUNK_RETRY_WAIT_SEC:.0f}秒待って再試行")
+            if attempt == 1 and left() > CHUNK_RETRY_WAIT_SEC:
+                print(f"  {label} 取得率{len(frames)}/{len(chunk)}。{CHUNK_RETRY_WAIT_SEC:.0f}秒待って再試行")
                 time.sleep(CHUNK_RETRY_WAIT_SEC)
-        if len(frames) / len(chunk) < CHUNK_FAIL_RATE:
-            # 一過性の失敗とみなし、銘柄の未取得（dead 判定）には数えない
-            failed_chunks += 1
-            in_row += 1
-            if in_row >= MAX_FAILED_CHUNKS_IN_ROW:
-                aborted = True
-                print(f"  ❌ チャンクが{in_row}回連続で失敗。残りの取得を打ち切る")
+            else:
                 break
-        else:
-            in_row = 0
+        return frames
+
+    def run_pass(queue: list[str], size: int, tag: str) -> list[str]:
+        """queue を size ごとに取る。制限中で取れなかった銘柄を返す（後回し）。"""
+        nonlocal failed_chunks, aborted, buf, loaded
+        later: list[str] = []
+        chunks = list(chunked(queue, size))
+        in_row = 0
+        for i, chunk in enumerate(chunks, 1):
+            label = f"{tag} {i}/{len(chunks)}"
+            if left() <= 0:
+                aborted = True
+                rest = [t for c in chunks[i - 1:] for t in c]
+                later.extend(rest)
+                print(f"  ⏱ 時間予算 {TIME_BUDGET_SEC:.0f}秒を使い切った。残り{len(rest)}銘柄は未取得のまま終える")
+                break
+            frames = fetch(chunk, label)
             got = set(frames)
-            hit |= got
-            missed |= set(chunk) - got
+            hit.update(got)
             buf.extend(rows_from_frames(frames, existing, cutoff, now_iso))
-        if len(buf) >= LOAD_BATCH_ROWS and not dry_run:
-            loaded += load_rows(client, buf)
-            buf = []
-        print(f"  chunk {i}/{len(chunks)}: 累計 取得{len(hit)} 未取得{len(missed)} 行{loaded + len(buf)}")
-        if i < len(chunks):
-            time.sleep(CHUNK_PAUSE_SEC)
+            if len(frames) / len(chunk) < CHUNK_FAIL_RATE:
+                failed_chunks += 1
+                in_row += 1
+                later.extend(t for t in chunk if t not in got)
+                if in_row >= MAX_FAILED_CHUNKS_IN_ROW:
+                    rest = [t for c in chunks[i:] for t in c]
+                    later.extend(rest)
+                    print(f"  ❌ {in_row}回連続で制限中。本走をやめ、残り{len(rest)}銘柄も後回しにする")
+                    break
+                wait = min(COOLDOWN_MAX_SEC, CHUNK_RETRY_WAIT_SEC * (2 ** in_row))
+            else:
+                in_row = 0
+                missed.update(t for t in chunk if t not in got)
+                wait = CHUNK_PAUSE_SEC
+            if len(buf) >= LOAD_BATCH_ROWS and not dry_run:
+                loaded += load_rows(client, buf)
+                buf = []
+            print(f"  {label}: 累計 取得{len(hit)} 未取得{len(missed)} 後回し{len(later)} 行{loaded + len(buf)}")
+            if i < len(chunks):
+                if in_row:
+                    wait = min(wait, max(0.0, left()))
+                    print(f"    制限中とみなし {wait:.0f}秒待つ")
+                time.sleep(wait)
+        return later
+
+    deferred = run_pass(targets, CHUNK_SIZE, "chunk")
+    for rnd in range(1, RETRY_ROUNDS + 1):
+        if not deferred or aborted:
+            break
+        if left() < RETRY_ROUND_WAIT_SEC + 60:
+            aborted = True
+            print(f"  ⏱ 時間予算が足りず、後回し{len(deferred)}銘柄の取り直しをしない")
+            break
+        print(f"  後回し{len(deferred)}銘柄を {RETRY_ROUND_WAIT_SEC:.0f}秒待ってから取り直す（{rnd}/{RETRY_ROUNDS}回目）")
+        time.sleep(RETRY_ROUND_WAIT_SEC)
+        deferred = run_pass(deferred, RETRY_CHUNK_SIZE, f"retry{rnd}")
     if buf and not dry_run:
         loaded += load_rows(client, buf)
     rows_total = loaded + (len(buf) if dry_run else 0)
@@ -511,6 +568,7 @@ def run_market(market: str, cfg, client, backfill: bool = False, limit: int = 0,
     cov = coverage(len(targets), len(hit), MIN_RATE_JP if market == "jp" else MIN_RATE_US)
     info.update(cov)
     info.update({"rows": rows_total, "failed_chunks": failed_chunks, "aborted": aborted,
+                 "deferred_left": len(deferred), "no_data": len(missed),
                  "dead_total": sum(1 for e in dead.values() if e.get("dead")),
                  "elapsed_sec": round(time.time() - t0, 1)})
     if aborted:
@@ -521,6 +579,7 @@ def run_market(market: str, cfg, client, backfill: bool = False, limit: int = 0,
 def _note(info: dict) -> str:
     return (f"{info['market']} 取得{info['hit']}/{info['attempted']}（{info['rate']:.1%}・下限{info['min_rate']:.0%}）"
             f" 未取得{info['missed']} dead{info['dead_total']} 行{info['rows']} {info['elapsed_sec']}秒"
+            + (f" 制限で取れず{info['deferred_left']}" if info.get("deferred_left") else "")
             + (" 打ち切り" if info.get("aborted") else ""))
 
 

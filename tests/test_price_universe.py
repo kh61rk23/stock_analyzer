@@ -147,19 +147,63 @@ class _FakeYF:
         return pd.DataFrame()
 
 
-def test_run_market_aborts_after_consecutive_failed_chunks(monkeypatch, tmp_path):
-    """チャンクが連続で失敗したら打ち切り、alert にする。未取得を dead と記録しない。"""
+def _fast(monkeypatch, tmp_path, n=50):
     class Cfg:
         DRIVE_BASE = tmp_path
-    monkeypatch.setattr(pu, "load_us_universe", lambda cfg, today: ([f"T{i}" for i in range(50)], {}))
-    monkeypatch.setattr(pu, "CHUNK_SIZE", 5)
-    monkeypatch.setattr(pu, "CHUNK_PAUSE_SEC", 0)
-    monkeypatch.setattr(pu, "CHUNK_RETRY_WAIT_SEC", 0)
-    yf = _FakeYF()
+    monkeypatch.setattr(pu, "load_us_universe", lambda cfg, today: ([f"T{i}" for i in range(n)], {}))
+    for name, v in {"CHUNK_SIZE": 5, "RETRY_CHUNK_SIZE": 5, "CHUNK_PAUSE_SEC": 0, "CHUNK_RETRY_WAIT_SEC": 0,
+                    "COOLDOWN_MAX_SEC": 0, "RETRY_ROUND_WAIT_SEC": 0}.items():
+        monkeypatch.setattr(pu, name, v)
+    monkeypatch.setattr(pu.time, "sleep", lambda s: None)
+    return Cfg
+
+
+def _frame(tickers):
+    idx = pd.to_datetime(["2026-10-01"])
+    cols = pd.MultiIndex.from_product([tickers, ["Open", "High", "Low", "Close", "Adj Close", "Volume"]])
+    return pd.DataFrame([[1.0] * len(cols)], index=idx, columns=cols)
+
+
+class _LimitedYF:
+    """呼び出し first_ok 回までは平常（1銘柄だけ欠ける）、そのあと blocked 回は全滅、以後は平常。"""
+    def __init__(self, first_ok, blocked):
+        self.calls, self.first_ok, self.blocked = 0, first_ok, blocked
+
+    def download(self, chunk, **kw):
+        self.calls += 1
+        if self.first_ok < self.calls <= self.first_ok + self.blocked:
+            return pd.DataFrame()
+        return _frame([t for t in chunk if t != "T0"])
+
+
+def test_run_market_defers_rate_limited_chunks_and_retries(monkeypatch, tmp_path):
+    """途中で制限が掛かっても打ち切らず、後回しにした銘柄を後で取り直す。制限中の銘柄は dead に数えない。"""
+    Cfg = _fast(monkeypatch, tmp_path)
+    yf = _LimitedYF(first_ok=3, blocked=6)
     info = pu.run_market("us", Cfg, None, dry_run=True, yf=yf)
-    assert info["status"] == "alert" and info["aborted"]
-    assert info["hit"] == 0 and info["failed_chunks"] == pu.MAX_FAILED_CHUNKS_IN_ROW
-    assert yf.calls == pu.MAX_FAILED_CHUNKS_IN_ROW * 2        # 各チャンク1回だけ再試行
+    assert info["status"] == "success" and not info["aborted"]
+    assert info["hit"] == 49 and info["no_data"] == 1         # T0 だけが本当に無い
+    assert info["deferred_left"] == 0 and info["failed_chunks"] >= 3
+
+
+def test_run_market_gives_up_after_retries_without_marking_dead(monkeypatch, tmp_path):
+    """ずっと制限中なら alert。取れなかった銘柄は未取得（dead 候補）に数えない。"""
+    Cfg = _fast(monkeypatch, tmp_path)
+    yf = _LimitedYF(first_ok=0, blocked=10 ** 6)
+    info = pu.run_market("us", Cfg, None, dry_run=True, yf=yf)
+    assert info["status"] == "alert"
+    assert info["hit"] == 0 and info["no_data"] == 0 and info["deferred_left"] == 50
+    # 本走は MAX_FAILED_CHUNKS_IN_ROW 個で止め、後回しの取り直しも同じ回数で止める（各チャンク再試行1回）
+    assert yf.calls == pu.MAX_FAILED_CHUNKS_IN_ROW * 2 * (1 + pu.RETRY_ROUNDS)
+
+
+def test_run_market_stops_at_time_budget(monkeypatch, tmp_path):
+    """時間予算を使い切ったら残りを取らずに alert で終える。"""
+    Cfg = _fast(monkeypatch, tmp_path)
+    monkeypatch.setattr(pu, "TIME_BUDGET_SEC", -1)
+    yf = _LimitedYF(first_ok=10 ** 6, blocked=0)
+    info = pu.run_market("us", Cfg, None, dry_run=True, yf=yf)
+    assert info["aborted"] and info["status"] == "alert" and yf.calls == 0
 
 
 def test_record_external_flows_into_daily_ledger(tmp_path):
