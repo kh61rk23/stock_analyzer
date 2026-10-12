@@ -957,21 +957,30 @@ def build_result(
                 f"{str(_gse)[:60]}"
             )
 
+    # 不動産ボーナスは銘柄ごとに出し、業種スコアには足さない（割安さは銘柄の性質で、業種平均にすると薄まる）。
+    # 銘柄の値は score_calculator が real_estate_by_ticker から読んで銘柄の総合点に足す。
+    # 業種の real_estate_bonus は表示用の平均（通知の上位業種一覧が読む）。
     _real_estate_bonus = 0.0
+    _real_estate_by_ticker: dict = {}
     if getattr(cfg, "ENABLE_REAL_ESTATE_SIGNAL", True):
         try:
-            from real_estate_signal import calc_real_estate_bonus
+            from real_estate_signal import calc_stock_real_estate_bonus
             _bq_re = _BQClient()
-            _values = []
-            for company in [c for c in companies if c.get("fetch_ok")][:5]:
+            for company in [c for c in companies if c.get("fetch_ok")]:
                 ticker = str(company.get("ticker", company.get("code", "")) or "")
                 if not ticker:
                     continue
                 holdings = _bq_re.get_real_estate_holdings(ticker)
                 if holdings:
-                    _values.append(calc_real_estate_bonus(holdings, cfg))
-            if _values:
-                _real_estate_bonus = round(sum(_values) / len(_values), 4)
+                    _re = calc_stock_real_estate_bonus(holdings, company, cfg)
+                    _re["name"] = company.get("name")
+                    _real_estate_by_ticker[ticker] = _re
+                    company["real_estate_bonus"] = _re["bonus"]
+                    company["adj_pbr"] = _re["adj_pbr"]
+                    company["asset_value_ratio"] = _re["asset_value_ratio"]
+            if _real_estate_by_ticker:
+                _vals = [v["bonus"] for v in _real_estate_by_ticker.values()]
+                _real_estate_bonus = round(sum(_vals) / len(_vals), 4)
         except Exception as exc:
             print(f"    ⚠️  不動産ボーナス取得エラー（スキップ）: {str(exc)[:60]}")
 
@@ -985,7 +994,6 @@ def build_result(
         _edinet_text_risk_bonus,      # E4: テキストリスクボーナス
         _geo_impact_bonus,            # G-X: 地政学×権益統合シグナル
         _cluster_phase_bonus,         # B: 技術クラスターフェーズボーナス
-        _real_estate_bonus,
     )
 
     # ── EdinetDB only ───────────────────────────────────────────
@@ -1054,7 +1062,8 @@ def build_result(
         "geo_impact_bonus":      _geo_impact_bonus,   # G-X: 地政学×権益
         # ── B フィールド ────────────────────────
         "cluster_phase_bonus":   _cluster_phase_bonus, # B: 技術クラスターフェーズボーナス
-        "real_estate_bonus":     _real_estate_bonus,
+        "real_estate_bonus":     _real_estate_bonus,      # 表示用の平均（composite には入れない）
+        "real_estate_by_ticker": _real_estate_by_ticker,  # 銘柄ごとの不動産ボーナスと修正PBR等
     }
 
     # score_explainer 連携

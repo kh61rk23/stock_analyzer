@@ -4499,6 +4499,7 @@ UNIFIED_SCORE_PHASE_B_ENABLED: bool = True
 UNIFIED_SCORE_DCF_MAX_ADJ:  float = 5.0   # DCF調整の上限（±pt）
 UNIFIED_SCORE_TECH_MAX_ADJ: float = 5.0   # テクニカル調整の上限（±pt）
 UNIFIED_SCORE_GEO_MAX_ADJ:  float = 3.0   # 地政学調整の上限（±pt）
+UNIFIED_SCORE_RE_MAX_ADJ:   float = 3.0   # 不動産調整の上限（±pt・銘柄単位の不動産ボーナス -2..3 を受ける）
 
 # ==============================================================
 # BLOCK 57: APIキー生存判定設定（Issue J-2 / api_key_health）

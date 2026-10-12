@@ -21,9 +21,12 @@ def test_real_estate_alert():
     import alert_notifier as an
     a = an.build_real_estate_alert(
         {"skipped": False, "success": 45, "holdings": 3601, "area_profiles": 6, "targets": ["E02086"]},
-        {"1032": {"real_estate_bonus": 2.6}, "1021": {"real_estate_bonus": -1.2}})
-    assert "保有不動産 3,601件" in a["body"] and "不動産業（1032）: +2.60点" in a["body"]
-    assert a["body"].count("陸運業") == 1
+        {"1032": {"real_estate_bonus": 2.6, "real_estate_by_ticker": {
+            "8801.T": {"bonus": 2.6, "name": "三井不動産", "adj_pbr": 0.82, "asset_value_ratio": 0.4}}},
+         "1021": {"real_estate_by_ticker": {"9020.T": {"bonus": -1.2, "adj_pbr": None}}}})
+    assert "保有不動産 3,601件" in a["body"]
+    assert "8801.T 三井不動産: +2.60点（修正PBR 0.82・資産バリュー倍率 0.40）" in a["body"]
+    assert "▼ 9020.T: -1.20点" in a["body"] and "銘柄反映2" in a["title"]
 
 
 def test_scenario_portfolio_value_does_not_apply_fx_to_yen_fallback():

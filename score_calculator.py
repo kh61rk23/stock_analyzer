@@ -10,20 +10,21 @@
 #   US は us_screener の算出済みスコアを adapter が共通スキーマへ写像する
 #   （= base）。ここで二重実装すると SSOT が割れる。
 # 【Phase B（U-9）】base に共通成分の調整を載せる:
-#     composite = clamp(base + dcf_adj + tech_adj + geo_adj, 0, 100)
+#     composite = clamp(base + dcf_adj + tech_adj + geo_adj + re_adj, 0, 100)
 #   各成分は results を「読むだけ」で取得する（データ源は下表）。
 #   ⚠️ score_calculator は yfinance / BigQuery / 外部APIを一切叩かない。
 #     日次バッチ終盤（run_all_tasks の後半）で走るため。
 #   ┌ 成分     │ 一次ソース                                   │ 代替
 #   │ tech_adj │ results["technical_scorer"]["results"][t]["score"] │ 候補の technical_score
 #   │ dcf_adj  │ results["dcf_valuation"]["results"][t]["dcf_bonus"]│ 候補の dcf_bonus
-#   └ geo_adj  │ 候補の geo_impact_bonus                       │ results["sectors"][業種]["geo_impact_bonus"]
+#   │ geo_adj  │ 候補の geo_impact_bonus                       │ results["sectors"][業種]["geo_impact_bonus"]
+#   └ re_adj   │ 候補の real_estate_bonus                      │ results["sectors"][業種]["real_estate_by_ticker"][t]["bonus"]
 #   取得できない成分は「未算出」として 0 扱い → その銘柄は Phase A と同値。
 #   ⚠️ base に既に含まれている成分は加算しない（二重計上の排除）。
 #     どの成分を加算するかは score_source 単位で _PHASE_B_APPLICABLE が決める:
-#       jp_screener        → なし（tech/dcf/geo とも base に含む＝Phase A と同値）
-#       jp_sector_fallback → tech / dcf（geo は業種 composite に含む）
-#       us_screener        → tech / dcf / geo（base はいずれも含まない）
+#       jp_screener        → re（tech/dcf/geo は base に含む）
+#       jp_sector_fallback → tech / dcf / re（geo は業種 composite に含む）
+#       us_screener        → tech / dcf / geo / re（base はいずれも含まない。US は保有不動産データが無く re は未算出）
 #       未知の score_source → なし（安全側）
 #   config.UNIFIED_SCORE_PHASE_B_ENABLED=False で Phase A 出力へ完全復帰。
 # 共通出力スキーマ（1銘柄・Phase A から変えない）:
@@ -224,6 +225,37 @@ def calc_geo_adj(ticker: str, market: str, sector_code: str, results: dict,
     return round(_clamp(b, -max_adj, max_adj), 2)
 
 
+def extract_re_bonus(ticker: str, market: str, sector_code: str,
+                     results: dict) -> float | None:
+    """
+    銘柄単位の不動産ボーナス（pt・RE_BONUS_MIN..MAX = -2..3）を取得する。
+    ① screener候補の "real_estate_bonus"
+    ② results["sectors"][業種コード]["real_estate_by_ticker"][ticker]["bonus"]（base_agent が格納）
+    業種の real_estate_bonus（平均）は銘柄の値ではないので使わない。
+    """
+    v = _candidate_field(ticker, market, results, "real_estate_bonus")
+    if v is not None:
+        return v
+    sec = (results.get("sectors") or {}).get(str(sector_code))
+    entry = ((sec or {}).get("real_estate_by_ticker") or {}).get(ticker) if isinstance(sec, dict) else None
+    if isinstance(entry, dict):
+        return _num(entry.get("bonus"))
+    for other in (results.get("sectors") or {}).values():
+        entry = ((other or {}).get("real_estate_by_ticker") or {}).get(ticker) if isinstance(other, dict) else None
+        if isinstance(entry, dict):
+            return _num(entry.get("bonus"))
+    return None
+
+
+def calc_re_adj(ticker: str, market: str, sector_code: str, results: dict,
+                max_adj: float) -> float | None:
+    """不動産調整。ボーナスは pt 単位なので上限でクリップするだけ。"""
+    b = extract_re_bonus(ticker, market, sector_code, results)
+    if b is None:
+        return None
+    return round(_clamp(b, -max_adj, max_adj), 2)
+
+
 # ── Phase B 適用可否テーブル（二重計上の防止） ──
 #
 # 【なぜ要るか】base（＝Phase A の写像元）に既に織り込まれている成分を
@@ -249,14 +281,18 @@ def calc_geo_adj(ticker: str, market: str, sector_code: str, results: dict,
 #     contraction 等で、technical_scorer・DCF・geo_impact_bonus はいずれも
 #     composite に入っていない（US候補は生の geo_exposures を持つだけ）。
 #     → 3成分とも加算する。
+#   re（不動産）:
+#     base_agent は不動産ボーナスを業種 composite に入れず、銘柄ごとに
+#     real_estate_by_ticker へ置くだけ。stock_screener / us_stock_screener も使っていない。
+#     → どの score_source でも base に含まれないので加算する。
 #
 # 【将来 base の計算式を変えたときは必ずここを更新すること】
 _PHASE_B_APPLICABLE: dict[str, frozenset] = {
-    "jp_screener":        frozenset(),
-    "jp_sector_fallback": frozenset({"tech", "dcf"}),
-    "us_screener":        frozenset({"tech", "dcf", "geo"}),
+    "jp_screener":        frozenset({"re"}),
+    "jp_sector_fallback": frozenset({"tech", "dcf", "re"}),
+    "us_screener":        frozenset({"tech", "dcf", "geo", "re"}),
 }
-_ADJ_KEYS = ("dcf_adj", "tech_adj", "geo_adj")
+_ADJ_KEYS = ("dcf_adj", "tech_adj", "geo_adj", "re_adj")
 _SKIP_ALREADY_IN_BASE = "already_in_base"
 _SKIP_UNKNOWN_SOURCE = "unknown_score_source"
 
@@ -293,6 +329,9 @@ def calc_phase_b_adjustments(ticker: str, market: str, sector_code: str,
         ("geo", "geo_adj",
          lambda: calc_geo_adj(ticker, market, str(sector_code), results,
                               _max_adj(cfg, "UNIFIED_SCORE_GEO_MAX_ADJ", 3.0))),
+        ("re", "re_adj",
+         lambda: calc_re_adj(ticker, market, str(sector_code), results,
+                             _max_adj(cfg, "UNIFIED_SCORE_RE_MAX_ADJ", 3.0))),
     ):
         if name not in allowed:
             adj[f"{key}_skipped"] = _SKIP_ALREADY_IN_BASE
@@ -319,7 +358,7 @@ def calc_composite_score(ticker: str, market: str, sector_code: str,
     """
     1銘柄の共通composite（SPEC_core §8-2）。
 
-        composite = clamp(base + dcf_adj + tech_adj + geo_adj, 0, 100)
+        composite = clamp(base + dcf_adj + tech_adj + geo_adj + re_adj, 0, 100)
 
     base は Phase A の adapter 写像＋正規化。加算するのは
     「base に含まれていない」かつ「results から読める」成分だけ

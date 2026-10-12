@@ -2022,7 +2022,7 @@ def build_high_dividend_alert(cfg, results: dict, sector_results: dict | None = 
 def build_real_estate_alert(fudo: dict, sector_results: dict) -> dict | None:
     """不動産DB（fudosandb.jp）の取り込み結果と、業種スコアへの反映をメール1件にまとめる（純関数）。
 
-    不動産ボーナス（含み益・災害/人口リスクから −2〜+3点）が付いた業種も出す。
+    不動産ボーナス（修正PBR・資産バリュー倍率・災害/人口リスクから −2〜+3点）が付いた銘柄も出す。
     """
     from name_resolver import edinet_cols, sector_name
     lines = []
@@ -2037,20 +2037,31 @@ def build_real_estate_alert(fudo: dict, sector_results: dict) -> dict | None:
                          + ("…" if len(fudo.get("targets") or []) > 12 else ""))
     bon = []
     for code, r in (sector_results or {}).items():
-        if isinstance(r, dict) and r.get("real_estate_bonus"):
-            bon.append((float(r["real_estate_bonus"]), code))
+        if not isinstance(r, dict):
+            continue
+        for tk, v in (r.get("real_estate_by_ticker") or {}).items():
+            if isinstance(v, dict) and v.get("bonus"):
+                bon.append((float(v["bonus"]), tk, v))
     if bon:
-        bon.sort(reverse=True)
-        lines.append(f"  【業種スコアへの反映】不動産ボーナスが付いた業種 {len(bon)}")
-        for v, code in [b for b in bon if b[0] > 0][:5]:
-            lines.append(f"    ▲ {sector_name(code)}（{code}）: {v:+.2f}点")
-        neg = [b for b in bon if b[0] < 0][-3:]
-        for v, code in neg:
-            lines.append(f"    ▼ {sector_name(code)}（{code}）: {v:+.2f}点")
-        lines.append("    ※ 保有不動産の含み益（時価−簿価）と、浸水・土砂・人口減少リスクから算出（−2〜+3点）")
+        bon.sort(key=lambda b: b[0], reverse=True)
+        lines.append(f"  【銘柄スコアへの反映】不動産ボーナスが付いた銘柄 {len(bon)}")
+
+        def _fmt(v, tk, d):
+            extra = []
+            if d.get("adj_pbr") is not None:
+                extra.append(f"修正PBR {d['adj_pbr']:.2f}")
+            if d.get("asset_value_ratio") is not None:
+                extra.append(f"資産バリュー倍率 {d['asset_value_ratio']:.2f}")
+            label = f"{tk} {d['name']}" if d.get("name") and d.get("name") != tk else tk
+            return f"{label}: {v:+.2f}点" + (f"（{'・'.join(extra)}）" if extra else "")
+        for v, tk, d in [b for b in bon if b[0] > 0][:5]:
+            lines.append(f"    ▲ {_fmt(v, tk, d)}")
+        for v, tk, d in [b for b in bon if b[0] < 0][-3:]:
+            lines.append(f"    ▼ {_fmt(v, tk, d)}")
+        lines.append("    ※ 修正PBR・資産バリュー倍率（土地の含み益を税引後で足す）と、浸水・人口減少リスクから算出（−2〜+3点）")
     if not lines:
         return None
-    return {"trigger": "real_estate", "title": f"🏢 不動産DB 取り込み{(fudo or {}).get('success', 0)}社・業種反映{len(bon)}",
+    return {"trigger": "real_estate", "title": f"🏢 不動産DB 取り込み{(fudo or {}).get('success', 0)}社・銘柄反映{len(bon)}",
             "body": "\n".join(lines), "severity": "info", "channel": "gmail"}
 
 

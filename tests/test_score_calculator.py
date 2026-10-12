@@ -200,7 +200,7 @@ class TestPhaseBEscapeHatch:
         out = run_score_calculator(_A(), _results_b())
         assert out["phase"] == "A"
         assert out["component_coverage"] == {"dcf_adj": 0, "tech_adj": 0,
-                                             "geo_adj": 0}
+                                             "geo_adj": 0, "re_adj": 0}
         # Phase A の実測値（既存 test_end_to_end と同じ写像結果）
         assert out["scores"]["4005.T"]["composite_score"] == 68.5
         assert out["scores"]["5401.T"]["composite_score"] == 55.0
@@ -321,7 +321,8 @@ class TestPhaseBApplicability:
         assert not any(isinstance(v, float) for v in adj.values())
         assert adj == {"dcf_adj_skipped": "unknown_score_source",
                        "tech_adj_skipped": "unknown_score_source",
-                       "geo_adj_skipped": "unknown_score_source"}
+                       "geo_adj_skipped": "unknown_score_source",
+                       "re_adj_skipped": "unknown_score_source"}
 
     def test_default_score_source_is_treated_as_unknown(self):
         # 呼び出し側が score_source を渡し忘れても安全側（何も加算しない）
@@ -409,7 +410,7 @@ class TestPhaseBRun:
         # 4005.T: なし（3成分とも base 済） / 5401.T: dcf+tech /
         # NVDA: dcf+tech（geoデータなし） / KO: データなし
         assert out["component_coverage"] == {"dcf_adj": 2, "tech_adj": 2,
-                                             "geo_adj": 0}
+                                             "geo_adj": 0, "re_adj": 0}
         assert out["scores"]["4005.T"]["composite_score"] == 68.5   # Phase A
         assert out["scores"]["5401.T"]["composite_score"] == 60.0
         assert out["scores"]["NVDA"]["composite_score"] == 75.0
@@ -453,3 +454,32 @@ class TestPhaseBRun:
                 == {t: s["composite_score"] for t, s in a.items()})
         for s in b.values():
             assert "+phaseB" not in s["score_source"]
+
+
+import score_calculator as sc  # noqa: E402
+
+
+class TestRealEstateAdj:
+    """不動産ボーナスは業種 composite に入らないので、どの score_source でも銘柄単位で加算する。"""
+
+    def _results(self):
+        return {"screener": {"candidates": [
+                    {"ticker": "8801.T", "composite_score": 60.0}]},
+                "sectors": {"1032": {"composite_score": 40.0, "real_estate_bonus": 9.9,
+                                     "real_estate_by_ticker": {
+                                         "8801.T": {"bonus": 2.5}, "8802.T": {"bonus": -1.0}}}}}
+
+    def test_jp_screener_adds_stock_re_bonus(self):
+        s = sc.calc_composite_score("8801.T", "JP", "1032", self._results())
+        assert s["components"]["re_adj"] == 2.5 and s["composite_score"] == 62.5
+
+    def test_sector_fallback_uses_ticker_value_not_sector_average(self):
+        s = sc.calc_composite_score("8802.T", "JP", "1032", self._results())
+        assert s["components"]["re_adj"] == -1.0
+        assert s["score_source"] == "jp_sector_fallback+phaseB"
+
+    def test_no_re_value_leaves_score_unchanged(self):
+        r = self._results()
+        r["sectors"]["1032"]["real_estate_by_ticker"] = {}
+        s = sc.calc_composite_score("8801.T", "JP", "1032", r)
+        assert "re_adj" not in s["components"] and s["composite_score"] == 60.0
