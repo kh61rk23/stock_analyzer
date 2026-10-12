@@ -721,26 +721,25 @@ def report_due(info: dict, today: date | None = None, grace_days: int = 100,
     return held < expected
 
 
-def prefilter_targets(candidates: list[str], want: int, meta: dict, cfg,
-                      checker=None, today: date | None = None,
-                      sleep=None) -> tuple[list[str], list[str]]:
-    """Webで財務が確認できた会社を want 社まで選ぶ（財務なしは飛ばして次へ）。
+def web_checked(candidates: list[str], meta: dict, cfg, skipped: list, checker=None,
+                today: date | None = None, sleep=None, max_checks: int | None = None):
+    """候補を順に Web で確かめ、財務がある（か判定できない）会社だけを1社ずつ返す（ジェネレータ）。
 
-    確認結果は meta[code]["web_check"]={"date","has"} に残す。
-    財務なしは RECHECK 日後に再確認（後から載ることがある）、財務ありは30日有効。
-    判定不能（通信失敗）は API で取りに行く。
-    Returns: (selected, skipped_no_data)
+    財務なしの会社は skipped に足して飛ばす。呼び出し側が API の枠を使い切るまで次の会社を取りに来るので、
+    財務なしの会社が続いても、枠が残っている限り先の候補を確かめ続ける。
+    確認結果は meta[code]["web_check"]={"date","has",...} に残す。財務なしは RECHECK 日後に再確認
+    （後から載ることがある）、財務ありは30日有効。判定不能（通信失敗）は API で取りに行く。
+    Web 確認は相手サイトに配慮して1秒に1回・1日 max_checks 回まで（超えたら確認済みの会社だけ返す）。
     """
     import time as _t
     today = today or date.today()
     checker = checker or (lambda c: _web_check(c, cfg))
     sleep = sleep or _t.sleep
     recheck = int(getattr(cfg, "EDINETDB_WEB_RECHECK_DAYS", 7))
-    max_checks = max(want, int(getattr(cfg, "EDINETDB_WEB_MAX_CHECKS", want * 5)))
-    selected, skipped, checks = [], [], 0
+    if max_checks is None:
+        max_checks = int(getattr(cfg, "EDINETDB_WEB_MAX_CHECKS", 300))
+    checks = 0
     for code in candidates:
-        if len(selected) >= want:
-            break
         info = dict(meta.get(code) or {})
         wc = info.get("web_check") or {}
         try:
@@ -752,13 +751,12 @@ def prefilter_targets(candidates: list[str], want: int, meta: dict, cfg,
             continue
         # 決算月が未記録の旧形式は、ついでに読み直す
         if wc.get("has") is True and age < 30 and "fy_month" in wc:
-            selected.append(code)
+            yield code
             continue
         if checks >= max_checks:
             if wc.get("has") is True:
-                selected.append(code)
-                continue
-            break
+                yield code
+            continue
         if checks:
             sleep(1.0)          # 相手サイトへの配慮（1秒に1回まで）
         checks += 1
@@ -774,7 +772,21 @@ def prefilter_targets(candidates: list[str], want: int, meta: dict, cfg,
         if has is False:
             skipped.append(code)
         else:
-            selected.append(code)
+            yield code
+
+
+def prefilter_targets(candidates: list[str], want: int, meta: dict, cfg,
+                      checker=None, today: date | None = None,
+                      sleep=None) -> tuple[list[str], list[str]]:
+    """Webで財務が確認できた会社を want 社まで選ぶ（web_checked の先頭 want 社）。Returns: (selected, skipped_no_data)"""
+    skipped: list = []
+    gen = web_checked(candidates, meta, cfg, skipped, checker, today, sleep,
+                      max(want, int(getattr(cfg, "EDINETDB_WEB_MAX_CHECKS", want * 5))))
+    selected = []
+    for code in gen:
+        selected.append(code)
+        if len(selected) >= want:
+            break
     return selected, skipped
 
 
@@ -974,15 +986,16 @@ def run_edinetdb_ingest(
     # 予備の候補を後ろに足しておき、ループ側で「残り枠が1社分(3回)を切るまで」回す。
     reserve_calls = (max(0, int(getattr(cfg, "EDINETDB_DOC_INDEX_RESERVE", 11)))
                      if budget is None else 0)
+    lazy_targets = False
     if target_limit is None and targets:
         # 全社が2回/社で済んだ場合でも枠を埋められる数まで候補を広げる
         pool = _plan_targets(companies, cfg, meta, company_budget * 3 // 2 + 3)
         if getattr(cfg, "EDINETDB_WEB_PRECHECK", False):
-            # 候補を多めに選び、Webで財務が確認できた会社だけで枠を埋める
-            wide = _plan_targets(companies, cfg, meta, company_budget * 5)
-            targets, web_skipped = prefilter_targets(wide, len(pool), meta, cfg)
-            print(f"    🔎 [edinetdb] Web事前確認: 採用{len(targets)}社 / "
-                  f"財務なしで対象外{len(web_skipped)}社")
+            # 候補を全部並べ、API の枠を使い切るまで「次の会社を Web で確かめ、財務があれば取る」を続ける。
+            # 先に社数を決めて確かめると、財務なしの会社が多い日に候補が尽きて枠が余る（2026-10-10 は 27/100回）
+            wide = _plan_targets(companies, cfg, meta, max(company_budget * 5, len(companies) * 3))
+            targets = web_checked(wide, meta, cfg, web_skipped)
+            lazy_targets = True
         else:
             targets = pool
     success = failure = missing = 0
@@ -1093,7 +1106,12 @@ def run_edinetdb_ingest(
                 q_done = []
         print(f"    📅 [edinetdb] 四半期財務: {len(q_done)}社 / {len(q_rows)}行（候補{len(q_targets)}社）")
 
+    adopted: list[str] = []
     for code in targets:
+        # 枠の残りが最小の1社分（2回）を切ったら、それ以上 Web 確認も続けない
+        if lazy_targets and getattr(client, "daily_budget", daily_budget) - client.calls - reserve_calls < 2:
+            break
+        adopted.append(code)
         company = by_edinet.get(code, {})
         company_code = _sec4(company.get("sec_code"))
         # 予算枯渇・レート制限に入ったら以降の企業は必ず失敗するので打ち切る。
@@ -1225,6 +1243,10 @@ def run_edinetdb_ingest(
             reasons["bq_merge"] += 1
             failure += 1
             _note_attempt(code, company_code, missing=False)
+    if lazy_targets:
+        targets = adopted
+        print(f"    🔎 [edinetdb] Web事前確認: 採用{len(adopted)}社 / 財務なしで対象外{len(web_skipped)}社 "
+              f"（API {client.calls}/{getattr(client, 'daily_budget', daily_budget)}回まで確認を続けた）")
     # 取得済みでも細目（financial_items）が未格納の会社がある。残り枠で
     # /financials だけ（1社1回）取り直して埋める。最近取った会社から順に。
     backfilled = 0

@@ -75,3 +75,28 @@ def test_usage_lines_explain_monthly_cap_and_underuse():
     alert = an.build_edinetdb_ingest_alert({"ingested": [], "targets": ["E2"], "budget_caps": caps}, {}, {"calls_used": 5}, 100,
                                            {"total": 0})
     assert "API 5/100回" in alert["title"] and alert["severity"] == "medium"
+
+
+def test_web_checked_keeps_going_while_consumer_wants_more():
+    """財務なしが続いても、呼び出し側が次を求める限り先の候補を確かめる（枠を使い切るまで止まらない）"""
+    import types
+    cfg = types.SimpleNamespace(EDINETDB_WEB_RECHECK_DAYS=7, EDINETDB_WEB_MAX_CHECKS=300)
+    has = {f"E{i:05d}": (i % 10 == 9) for i in range(100)}     # 10社に1社だけ財務あり
+    checked = []
+    def checker(c):
+        checked.append(c)
+        return {"has": has[c], "latest_fy": None, "fy_month": 3}
+    skipped, meta = [], {}
+    gen = ei.web_checked(list(has), meta, cfg, skipped, checker=checker, today=date(2026, 10, 13), sleep=lambda s: None)
+    got = [next(gen) for _ in range(5)]
+    assert got == ["E00009", "E00019", "E00029", "E00039", "E00049"]
+    assert len(checked) == 50 and len(skipped) == 45              # 求めた5社に届くまで50社を確かめた
+    assert meta["E00000"]["web_check"]["has"] is False
+
+
+def test_web_checked_respects_daily_check_cap():
+    import types
+    cfg = types.SimpleNamespace(EDINETDB_WEB_RECHECK_DAYS=7)
+    gen = ei.web_checked([f"E{i}" for i in range(10)], {}, cfg, [], checker=lambda c: {"has": False},
+                         today=date(2026, 10, 13), sleep=lambda s: None, max_checks=3)
+    assert list(gen) == []

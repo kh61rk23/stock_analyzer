@@ -1284,7 +1284,7 @@ EDINETDB_BASE_URL: str = os.getenv("EDINETDB_BASE_URL", "https://edinetdb.jp/v1"
 EDINETDB_WEB_PRECHECK: bool = True
 EDINETDB_WEB_BASE: str = "https://edinetdb.jp/company/"
 EDINETDB_WEB_RECHECK_DAYS: int = 7     # 財務なしの会社を再確認するまでの日数
-EDINETDB_WEB_MAX_CHECKS: int = 80  # 1日のWeb確認の上限（1秒に1回）
+EDINETDB_WEB_MAX_CHECKS: int = 300  # 1日のWeb確認の上限（1秒に1回＝最大約5分）。API 枠を使い切るまで次の候補を確かめ続けるための安全上限
 EDINETDB_LOOKBACK_DAYS: int = 7
 # EdinetDB の上限は「1日100回・月は100×在籍日数」（edinetdb.jp/pricing）。
 # 日次予算は手動確認用に少し残して使い切る。月の実残量は /usage の monthly_remaining で抑える。
