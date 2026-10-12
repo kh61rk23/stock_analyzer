@@ -78,7 +78,7 @@ jobs:
             arxiv_enrich) python -u arxiv_store.py --enrich ;;
             report_backfill) python -u report_store.py ;;
             # 日次処理の EdinetDB 関連だけ（会社ページの年次財務 → API の本文・セグメント・四半期 → 書類一覧）。その日の残り枠を使う
-            edinetdb_ingest) python -u edinetdb_web_backfill.py --scope due --years 3 --time-budget-min 15 && python -u edinetdb_ingestor.py && python -u -c "import config as c, edinet_doc_indexer as d; print(d.run_doc_indexer(cfg=c))" ;;
+            edinetdb_ingest) python -u edinetdb_web_backfill.py --scope due --years 3 --time-budget-min 15; python -u edinetdb_ingestor.py; python -u -c "import config as c, edinet_doc_indexer as d; print(d.run_doc_indexer(cfg=c))" ;;
           esac
       - name: Commit state
         if: always()
