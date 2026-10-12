@@ -210,3 +210,7 @@ def test_us_trace_rows_and_ingest(tmp_path):
     b = rs.build_all(rs.collect(tmp_path / "ins"), "t", tmp_path / "data")
     tr = b["screener_trace_daily"]
     assert len(tr) == 3 and {r["market"] for r in tr} == {"US"} and tr[0]["kpi_per"] == 29.1
+
+
+def test_num_drops_nan_and_inf():
+    assert rs._num(float("inf")) is None and rs._num(float("nan")) is None and rs._num("Infinity") is None and rs._num(1) == 1.0

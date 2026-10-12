@@ -33,6 +33,7 @@ import csv
 import hashlib
 import io
 import json
+import math
 import re
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -92,13 +93,15 @@ def _num(s):
     if isinstance(s, bool):
         return None
     if isinstance(s, (int, float)):
-        return float(s)
+        # NaN・無限大は JSON に書けず（BigQuery の load が1行で全体を止める）、値としても意味がないので空にする
+        return float(s) if math.isfinite(s) else None
     s = str(s or "").replace(",", "").replace("%", "").replace("$", "").replace("円", "").strip()
     s = s.replace("＋", "+").replace("−", "-")
     try:
-        return float(s)
+        v = float(s)
     except ValueError:
         return None
+    return v if math.isfinite(v) else None
 
 
 def _rows(md: str, header_startswith: str) -> list:
