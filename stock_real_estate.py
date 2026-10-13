@@ -12,7 +12,8 @@
 # 【業種コード】
 #   edinet.company.industry（東証33業種の名前）を config.JAPAN_SECTORS のコード（1001〜1033）へ直す。
 #   EdinetDB の銘柄マスタは新規上場（英字入りコード等）の業種名が空のことがあるため、JPX の上場銘柄一覧
-#   （data_j.xls・33業種区分つき・無料公開）で補う。一覧は UNIVERSE_JPX_REFRESH_DAYS ごとに取り直す。
+#   （data_j.xlsx・33業種区分つき・無料公開）で補う。一覧は UNIVERSE_JPX_REFRESH_DAYS ごとに取り直す。
+#   ファイルの URL と形式（xls→xlsx）は JPX 側で変わるため、掲載ページ（JPX_PAGE）からリンクをたどる。
 #   BQ にも edinet.sector_master（33行）・edinet.sector_jpx（JPX一覧の 証券コード→33業種名）を load job で置き換え、
 #   銘柄マスタに業種コードを付けたビュー edinet.company_master を用意する（DB 側の読み手が全銘柄の業種コードを引けるように）。
 # 【費用】
@@ -63,7 +64,8 @@ LEFT JOIN `{project}.edinet.sector_master` AS m
   ON REPLACE(COALESCE(c.industry, j.sector_name), '、', '・') = m.sector_name
 """
 _VIEW_MARK = "sector_jpx"
-JPX_URL = "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls"
+JPX_PAGE = "https://www.jpx.co.jp/markets/statistics-equities/misc/01.html"
+JPX_FALLBACK_URL = "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xlsx"
 UNIVERSE_JPX_REFRESH_DAYS = 7
 
 
@@ -113,9 +115,20 @@ def load_jpx_sectors(cfg) -> dict:
         import io
         import pandas as pd
         import requests
-        resp = requests.get(JPX_URL, timeout=60, headers={"User-Agent": "Mozilla/5.0"})
+        import re
+        headers = {"User-Agent": "Mozilla/5.0"}
+        url = JPX_FALLBACK_URL
+        try:
+            page = requests.get(JPX_PAGE, timeout=30, headers=headers).text
+            m = re.search(r'href="([^"]*data_j\.xlsx?)"', page)
+            if m:
+                url = requests.compat.urljoin(JPX_PAGE, m.group(1))
+        except Exception:
+            pass
+        resp = requests.get(url, timeout=60, headers=headers)
         resp.raise_for_status()
-        sectors = parse_jpx_listing(pd.read_excel(io.BytesIO(resp.content), engine="xlrd"))
+        engine = "xlrd" if url.endswith(".xls") else "openpyxl"
+        sectors = parse_jpx_listing(pd.read_excel(io.BytesIO(resp.content), engine=engine))
         if len(sectors) > 3000:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps({"date": date.today().isoformat(), "sectors": sectors},
