@@ -1417,6 +1417,14 @@ def run_all_tasks(mode: str = "all") -> dict:
 
     # ── [DB統合 W3] EdinetDBを唯一のEDINET一次取得元としてBQへ格納 ──
     if getattr(cfg, "ENABLE_EDINETDB_INGEST", True) and _in_mode("edinetdb_ingest"):
+        # 賃貸等不動産（EdinetDB real-estate）の応答の形を保存するまで、取り込みの前に1回だけ試し取りする
+        try:
+            import rental_property_ingestor as _rpi
+            _rp = _rpi.probe_once(cfg)
+            if _rp != "exists":
+                print(f"  🏢 賃貸等不動産の試し取り: {_rp}")
+        except Exception as _rpe:
+            print(f"  ⚠️  賃貸等不動産の試し取りエラー（スキップ）: {str(_rpe)[:80]}")
         try:
             _edi = _load_local_module("edinetdb_ingestor", "/content/edinetdb_ingestor.py", cfg.DRIVE_BASE / "edinetdb_ingestor.py")
             if _edi:

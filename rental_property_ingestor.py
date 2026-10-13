@@ -14,6 +14,7 @@
 #   EdinetDB の日次枠（EDINETDB_DAILY_BUDGET）を日次取り込みと共有する。DBRestClient の台帳と
 #   送信間隔の制御をそのまま使い、枠切れ（last_error="budget"）なら何もせず失敗で返す。
 # 【実行】 python3 rental_property_ingestor.py --probe E03856
+#   日次処理は probe_once を EdinetDB 取り込みの直前に呼び、応答の形を保存するまで1日1回だけ試す。
 # ==============================================================
 from __future__ import annotations
 
@@ -54,6 +55,21 @@ def probe(cfg, edinet_code: str) -> int:
     print(f"✅ 保存: {out}（最上位キー: {keys}）")
     print(json.dumps(data, ensure_ascii=False)[:3000])
     return 0
+
+
+PROBE_CODE = "E03856"
+
+
+def probe_once(cfg) -> str:
+    """応答の形を保存したファイルが無ければ1社分だけ試し取りする（日次処理の EdinetDB 取り込みの直前に呼ぶ）。
+
+    EdinetDB の日次枠は日次取り込みで使い切るため、手動実行では枠が残っていないことが多い。
+    保存できた日以降は何もしない（枠を使わない）。
+    """
+    out = Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / f"edinetdb_real_estate_probe_{PROBE_CODE}.json"
+    if out.exists():
+        return "exists"
+    return "saved" if probe(cfg, PROBE_CODE) == 0 else "failed"
 
 
 def main(argv=None) -> int:
