@@ -67,3 +67,4 @@ google-cloud-bigquery-storage  # 2026-07-12: 未導入だとBQ読取のたびUse
 google-auth
 pyarrow>=14.0.0  # bi_export.py の parquet 書き出し
 duckdb>=1.0.0      # tests/test_bi_templates.py（BIテンプレのSQL検査）
+xlrd>=2.0.1          # JPX 上場銘柄一覧（data_j.xls・旧Excel形式）を読む（stock_real_estate）

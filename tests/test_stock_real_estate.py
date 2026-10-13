@@ -25,3 +25,18 @@ def test_build_by_ticker_keeps_alphanumeric_codes_and_sector():
     assert out["136A.T"] == {**out["136A.T"], "bonus": -0.5, "basis": "area_only", "sector_code": "1029"}
     s = sre.summarize(out)
     assert s["count"] == 2 and s["basis_counts"] == {"valuation": 1, "area_only": 1} and s["nonzero"] == 2
+
+
+def test_parse_jpx_listing_skips_etf_and_keeps_alphanumeric():
+    import pandas as pd
+    df = pd.DataFrame({"コード": [1301, "130A", 1305, 8801.0],
+                       "33業種区分": ["水産・農林業", "証券、商品先物取引業", "-", "不動産業"]})
+    assert sre.parse_jpx_listing(df) == {"1301": "水産・農林業", "130A": "証券・商品先物取引業", "8801": "不動産業"}
+    assert sre.parse_jpx_listing(pd.DataFrame({"x": [1]})) == {}
+
+
+def test_missing_industry_is_filled_from_jpx():
+    rows = [{"ticker": "139A.T", "sec_code4": "139A", "industry": None, "adj_pbr": None,
+             "asset_value_ratio": None, "re_unrealized_gain": None, "re_gain_flag": None, "area_risk": 0.2}]
+    out = sre.build_by_ticker(rows, CFG, {"139A": "不動産業"})
+    assert out["139A.T"]["sector_code"] == "1032" and out["139A.T"]["industry"] == "不動産業"

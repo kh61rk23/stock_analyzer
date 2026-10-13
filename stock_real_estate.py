@@ -11,8 +11,10 @@
 #   bi.m_screener は日次処理の最後（bi_export）で作り直すため、日次処理の中で読む値は前日分になる。
 # 【業種コード】
 #   edinet.company.industry（東証33業種の名前）を config.JAPAN_SECTORS のコード（1001〜1033）へ直す。
-#   BQ にも edinet.sector_master（33行・load job で毎回置き換え）と、銘柄マスタに業種コードを付けた
-#   ビュー edinet.company_master を用意する（DB 側の読み手が全銘柄の業種コードを引けるように）。
+#   EdinetDB の銘柄マスタは新規上場（英字入りコード等）の業種名が空のことがあるため、JPX の上場銘柄一覧
+#   （data_j.xls・33業種区分つき・無料公開）で補う。一覧は UNIVERSE_JPX_REFRESH_DAYS ごとに取り直す。
+#   BQ にも edinet.sector_master（33行）・edinet.sector_jpx（JPX一覧の 証券コード→33業種名）を load job で置き換え、
+#   銘柄マスタに業種コードを付けたビュー edinet.company_master を用意する（DB 側の読み手が全銘柄の業種コードを引けるように）。
 # 【費用】
 #   読み取りは1実行1クエリ（プロセス内でキャッシュ）。sector_master は load job（無料）、ビューは無い時だけ作る。
 # 【出力】
@@ -49,14 +51,20 @@ WHERE s.re_unrealized_gain IS NOT NULL OR a.area_risk IS NOT NULL OR s.re_gain_f
 """
 
 _VIEW_SQL = """
-CREATE VIEW IF NOT EXISTS `{project}.edinet.company_master`
-OPTIONS (description = '銘柄マスタ（edinet.company）に東証33業種コードを付けたビュー。業種名の「、」と「・」の表記ゆれを吸収して突き合わせる')
+CREATE OR REPLACE VIEW `{project}.edinet.company_master`
+OPTIONS (description = '銘柄マスタ（edinet.company）に東証33業種コードを付けたビュー。業種名は EdinetDB → JPX上場銘柄一覧の順。「、」と「・」の表記ゆれを吸収する')
 AS
-SELECT c.*, m.sector_code, m.sector_name, m.sector_group
+SELECT c.*, m.sector_code, m.sector_name, m.sector_group,
+       IF(c.industry IS NULL AND j.sector_name IS NOT NULL, 'jpx', IF(c.industry IS NULL, NULL, 'edinetdb')) AS sector_source
 FROM `{project}.edinet.company` AS c
+LEFT JOIN `{project}.edinet.sector_jpx` AS j
+  ON j.code4 = SUBSTR(c.sec_code, 1, 4)
 LEFT JOIN `{project}.edinet.sector_master` AS m
-  ON REPLACE(c.industry, '、', '・') = m.sector_name
+  ON REPLACE(COALESCE(c.industry, j.sector_name), '、', '・') = m.sector_name
 """
+_VIEW_MARK = "sector_jpx"
+JPX_URL = "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls"
+UNIVERSE_JPX_REFRESH_DAYS = 7
 
 
 def _norm_name(name) -> str:
@@ -73,10 +81,57 @@ def sector_code_of(industry, cfg) -> str | None:
     return sector_code_map(cfg).get(_norm_name(industry))
 
 
-def build_by_ticker(rows, cfg) -> dict:
-    """クエリの行 → {ticker: {...}}（純関数）。"""
+def parse_jpx_listing(df) -> dict:
+    """JPX 上場銘柄一覧（data_j.xls を読んだ DataFrame）→ {証券コード4文字: 33業種区分}（純関数）。
+
+    ETF・REIT 等は 33業種区分が「-」なので入れない。
+    """
+    out = {}
+    if df is None or "コード" not in getattr(df, "columns", []) or "33業種区分" not in df.columns:
+        return out
+    for code, name in zip(df["コード"], df["33業種区分"]):
+        c = str(code).strip().upper()
+        if c.endswith(".0"):
+            c = c[:-2]
+        n = _norm_name(name)
+        if len(c) == 4 and n and n not in ("-", "nan"):
+            out[c] = n
+    return out
+
+
+def load_jpx_sectors(cfg) -> dict:
+    """{証券コード4文字: 33業種名}。UNIVERSE_JPX_REFRESH_DAYS 日以内のキャッシュがあればそれを使う。"""
+    path = Path(getattr(cfg, "DRIVE_BASE", ".")) / "data" / "jpx_sectors.json"
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        age = (date.today() - date.fromisoformat(saved.get("date", "1970-01-01"))).days
+        if age < UNIVERSE_JPX_REFRESH_DAYS and saved.get("sectors"):
+            return saved["sectors"]
+    except Exception:
+        saved = {}
+    try:
+        import io
+        import pandas as pd
+        import requests
+        resp = requests.get(JPX_URL, timeout=60, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        sectors = parse_jpx_listing(pd.read_excel(io.BytesIO(resp.content), engine="xlrd"))
+        if len(sectors) > 3000:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({"date": date.today().isoformat(), "sectors": sectors},
+                                       ensure_ascii=False), encoding="utf-8")
+            return sectors
+        print(f"    ⚠️  JPX上場銘柄一覧が{len(sectors)}件しかない（前回分を使う）")
+    except Exception as e:
+        print(f"    ⚠️  JPX上場銘柄一覧の取得失敗（前回分を使う）: {str(e)[:80]}")
+    return (saved or {}).get("sectors") or {}
+
+
+def build_by_ticker(rows, cfg, jpx: dict | None = None) -> dict:
+    """クエリの行 → {ticker: {...}}（純関数）。業種名が空なら JPX 一覧の業種で補う。"""
     from real_estate_signal import stock_bonus
     names = sector_code_map(cfg)
+    jpx = jpx or {}
     out = {}
     for r in rows or []:
         r = dict(r)
@@ -90,8 +145,8 @@ def build_by_ticker(rows, cfg) -> dict:
             "adj_pbr": r.get("adj_pbr"), "asset_value_ratio": r.get("asset_value_ratio"),
             "gain_to_mcap": r.get("re_gain_to_mcap"), "flag": r.get("re_gain_flag"),
             "area_risk": r.get("area_risk"), "re_fiscal_year": r.get("re_fiscal_year"),
-            "name": r.get("name"), "industry": r.get("industry"),
-            "sector_code": names.get(_norm_name(r.get("industry"))),
+            "name": r.get("name"), "industry": r.get("industry") or jpx.get(str(r.get("sec_code4") or "")),
+            "sector_code": names.get(_norm_name(r.get("industry") or jpx.get(str(r.get("sec_code4") or "")))),
         }
     return out
 
@@ -110,7 +165,7 @@ def load(cfg, client=None) -> dict:
         try:
             client = client or _client()
             rows = client.query(_SQL.format(project=client.project)).result()
-            _CACHE = build_by_ticker(rows, cfg)
+            _CACHE = build_by_ticker(rows, cfg, load_jpx_sectors(cfg))
             print(f"    🏢 銘柄単位の不動産ボーナス: {len(_CACHE)}銘柄（bi.m_screener・1クエリ）")
         except Exception as e:
             print(f"    ⚠️  銘柄単位の不動産ボーナス取得失敗（加点なしで続行）: {str(e)[:100]}")
@@ -119,7 +174,8 @@ def load(cfg, client=None) -> dict:
 
 
 def ensure_sector_master(cfg, client=None) -> int:
-    """edinet.sector_master を config.JAPAN_SECTORS で置き換え、company_master ビューが無ければ作る。"""
+    """edinet.sector_master（config.JAPAN_SECTORS）と edinet.sector_jpx（JPX一覧）を置き換え、
+    company_master ビューが無いか古い定義なら作り直す。"""
     from google.cloud import bigquery
     client = client or _client()
     rows = [{"sector_code": code, "sector_name": _norm_name(v.get("name_ja")),
@@ -131,11 +187,21 @@ def ensure_sector_master(cfg, client=None) -> int:
         rows, f"{client.project}.edinet.sector_master",
         job_config=bigquery.LoadJobConfig(schema=schema, write_disposition="WRITE_TRUNCATE"))
     job.result()
+    jpx_rows = [{"code4": c, "sector_name": n} for c, n in sorted(load_jpx_sectors(cfg).items())]
+    jpx_schema = [bigquery.SchemaField("code4", "STRING", mode="REQUIRED"),
+                  bigquery.SchemaField("sector_name", "STRING")]
+    client.create_table(bigquery.Table(f"{client.project}.edinet.sector_jpx", schema=jpx_schema), exists_ok=True)
+    if jpx_rows:
+        client.load_table_from_json(
+            jpx_rows, f"{client.project}.edinet.sector_jpx",
+            job_config=bigquery.LoadJobConfig(schema=jpx_schema, write_disposition="WRITE_TRUNCATE")).result()
     try:
-        client.get_table(f"{client.project}.edinet.company_master")
+        current = client.get_table(f"{client.project}.edinet.company_master").view_query or ""
     except Exception:
+        current = ""
+    if _VIEW_MARK not in current:
         client.query(_VIEW_SQL.format(project=client.project)).result()
-        print("    🗂 edinet.company_master ビューを作成")
+        print("    🗂 edinet.company_master ビューを作成・更新")
     return len(rows)
 
 
