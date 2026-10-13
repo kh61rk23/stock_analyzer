@@ -24,6 +24,7 @@ on:
           - report_backfill
           - edinetdb_ingest
           - stock_real_estate
+          - rental_property_probe
 
 permissions:
   contents: write
@@ -82,6 +83,8 @@ jobs:
             edinetdb_ingest) python -u edinetdb_web_backfill.py --scope due --years 3 --time-budget-min 15; python -u edinetdb_ingestor.py; python -u -c "import config as c, edinet_doc_indexer as d; print(d.run_doc_indexer(cfg=c))" ;;
             # 銘柄単位の不動産ボーナス（bi.m_screener から全上場分）と業種マスタ・company_master ビューだけを作り直す
             stock_real_estate) python -u stock_real_estate.py ;;
+            # EdinetDB の賃貸等不動産（real-estate）の応答の形を1社分だけ保存する（EdinetDB の日次枠を1回使う）
+            rental_property_probe) python -u rental_property_ingestor.py --probe E03856 ;;
           esac
       - name: Commit state
         if: always()
