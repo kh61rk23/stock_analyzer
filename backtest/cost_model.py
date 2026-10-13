@@ -16,8 +16,9 @@ from __future__ import annotations
 
 def is_jp_ticker(ticker: str) -> bool:
     """東証ティッカー（.T / 4桁数字）判定。それ以外はUS扱い。"""
+    import re
     t = ticker.upper()
-    return t.endswith(".T") or (t.isdigit() and len(t) == 4)
+    return t.endswith(".T") or bool(re.fullmatch(r"\d[0-9A-Z]\d[0-9A-Z]", t))
 
 
 def slippage_bps(ticker: str, cfg=None) -> int:

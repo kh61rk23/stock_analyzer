@@ -104,13 +104,23 @@ def _safe_int(v) -> Optional[int]:
         return None
 
 
+# 東証の証券コード。4桁数字に加え、2桁目と4桁目に英字が入る新しい形（130A・1A2B 等）がある。
+_JP_CODE_RE = r"\d[0-9A-Z]\d[0-9A-Z]"
+
+
+def is_jp_code(code: str) -> bool:
+    """4文字の東証証券コード（英字入りを含む）か。"""
+    import re
+    return bool(re.fullmatch(_JP_CODE_RE, str(code or "").strip().upper()))
+
+
 def normalize_ticker(raw: str) -> str:
     """
     入力ティッカーを正規化する。
-    数字のみ（日本株コード）→ 末尾に .T を付与してTOKYO市場扱い
+    東証の証券コード（4桁数字・英字入りの新コード）→ 末尾に .T を付与してTOKYO市場扱い
     """
     s = raw.strip().upper()
-    return f"{s}.T" if s.isdigit() else s
+    return f"{s}.T" if s.isdigit() or is_jp_code(s) else s
 
 
 
@@ -132,6 +142,8 @@ def validate_ticker(raw: str) -> tuple:
     if len(s) > 16:
         return False, False, "", f"ティッカーが長すぎます（{len(s)}文字 / 最大16文字）"
     clean = s.replace(".T", "")
+    if is_jp_code(clean):
+        return True, True, f"{clean}.T", ""
     if clean.isdigit():
         if len(clean) != 4:
             return False, False, "", f"日本株コードは4桁です（入力: {clean}、{len(clean)}桁）"
@@ -157,8 +169,8 @@ def roe_source_label(roe_source: str) -> str:
 
 
 def is_japan_stock(ticker: str) -> bool:
-    """ティッカーが日本株（.T 末尾 or 数字のみ）かどうかを判定"""
-    return ticker.upper().endswith(".T") or ticker.isdigit()
+    """ティッカーが日本株（.T 末尾・数字のみ・英字入りの東証コード）かどうかを判定"""
+    return ticker.upper().endswith(".T") or ticker.isdigit() or is_jp_code(ticker)
 
 
 # ==============================================================

@@ -13,6 +13,7 @@
 #           EDINET DB（財務指標・セクター等）→ マージ後キャッシュ
 # ==============================================================
 
+import re
 import json
 import os
 import time
@@ -383,7 +384,7 @@ def _fetch_edinet_db(ticker: str) -> Optional[dict]:
     """
     # ── STEP 1: 4桁証券コードの抽出 ─────────────────────────────
     raw = ticker.upper().replace(".T", "").strip()
-    if not raw.isdigit():
+    if not re.fullmatch(r"\d[0-9A-Z]\d[0-9A-Z]", raw):
         # 数字のみでない（米国株等）は呼び出し不可
         return None
 
@@ -1258,7 +1259,7 @@ def fetch_edinet_text_blocks(ticker: str) -> Optional[dict]:
     import requests
 
     raw = ticker.upper().replace(".T", "").strip()
-    if not raw.isdigit():
+    if not re.fullmatch(r"\d[0-9A-Z]\d[0-9A-Z]", raw):
         return None
 
     edinet_code = _resolve_edinet_code(raw)

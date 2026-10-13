@@ -181,3 +181,15 @@ def test_alphanumeric_securities_codes():
     import edinet_bq_client as ebc
     assert [edi._sec4(x) for x in ["624A0", "39830", "154A.T", "ABCD"]] == ["624A", "3983", "154A", ""]
     assert [ebc._fin_code(x) for x in ["624A.T", "7203.T", "285A0"]] == ["624A", "7203", "285A"]
+
+
+def test_alphanumeric_jp_codes_are_kept_everywhere():
+    """英字入りの東証コード（130A・1A2B）を数字だけに削らない。"""
+    import edinet_bq_client as ebc
+    import finance_logic as fl
+    from backtest.cost_model import is_jp_ticker
+    assert [ebc._fin_code(x) for x in ["136A.T", "1A2B", "7203.T", "285A0"]] == ["136A", "1A2B", "7203", "285A"]
+    assert fl.normalize_ticker("136a") == "136A.T" and fl.normalize_ticker("AAPL") == "AAPL"
+    assert fl.validate_ticker("1A2B")[:3] == (True, True, "1A2B.T")
+    assert fl.is_japan_stock("136A") and not fl.is_japan_stock("AAPL")
+    assert is_jp_ticker("136A") and not is_jp_ticker("ABCD")

@@ -61,11 +61,12 @@ _BUNDLE_LOCK = threading.Lock()
 def _fin_code(securities_code) -> str:
     """証券コードを financials.company_code の表記（4桁）へ揃える。
 
-    英字入りの新しい証券コード（624A 等）は数字だけ拾うと「624」になり該当行に
-    当たらない。先頭4文字が「数字3桁＋英数字」ならそのまま使う。
+    英字入りの新しい証券コード（624A・1A2B 等。2桁目と4桁目に英字が入りうる）は
+    数字だけ拾うと「624」になり該当行に当たらない。英字入りの形ならそのまま使う。
+    末尾の0（5桁表記の 285A0）は落とす。
     """
     head = str(securities_code or "").split(".")[0].strip().upper()
-    if re.fullmatch(r"\d{3}[0-9A-Z]0?", head):
+    if re.fullmatch(r"\d[0-9A-Z]\d[0-9A-Z]0?", head):
         return head[:4]
     return "".join(ch for ch in head if ch.isdigit())[:4]
 
@@ -556,7 +557,7 @@ class EDINETBQClient:
         seen = set()
         for raw in (tickers or []):
             ticker = str(raw or "").strip()
-            code = "".join(ch for ch in ticker.split(".")[0] if ch.isdigit())[:4]
+            code = _fin_code(ticker)
             if len(code) != 4 or code in seen:
                 continue
             seen.add(code)
@@ -783,9 +784,7 @@ class EDINETBQClient:
         最新年度の抽出は相関サブクエリから QUALIFY へ置き換える
         （サブクエリ側のスキャンが1回分まるごと減る）。
         """
-        code = "".join(
-            char for char in str(securities_code).split(".")[0] if char.isdigit()
-        )[:4]
+        code = _fin_code(securities_code)
         if not code:
             return []
 
@@ -834,9 +833,7 @@ class EDINETBQClient:
         """
         codes = []
         for raw in (securities_codes or []):
-            code = "".join(
-                ch for ch in str(raw).split(".")[0] if ch.isdigit()
-            )[:4]
+            code = _fin_code(raw)
             if code:
                 codes.append(code)
         codes = sorted(set(codes))
@@ -1505,9 +1502,7 @@ class EDINETBQClient:
 
     def get_xbrl_text_sections(self, securities_code: str) -> list[dict]:
         """EdinetDB由来の最新raw textをtext_extractor互換形で返す。"""
-        code = "".join(
-            char for char in str(securities_code).split(".")[0] if char.isdigit()
-        )[:4]
+        code = _fin_code(securities_code)
         if not code:
             return []
         sql = f"""
@@ -1541,9 +1536,7 @@ class EDINETBQClient:
         limit: int = 50,
     ) -> list[dict]:
         """BQへ保存した有報全文を、個社内キーワードで安全に検索する。"""
-        code = "".join(
-            char for char in str(securities_code).split(".")[0] if char.isdigit()
-        )[:4]
+        code = _fin_code(securities_code)
         keyword = str(query or "").strip()
         if not code or not keyword:
             return []
