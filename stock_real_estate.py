@@ -171,3 +171,11 @@ def run(cfg, results: dict, out_dir: Path | None = None) -> dict:
         print(f"    ⚠️  stock_real_estate.json 書き込み失敗: {str(e)[:80]}")
     results["stock_real_estate"] = info
     return info
+
+
+if __name__ == "__main__":
+    import sys
+    import config
+    _info = run(config, {})
+    print(json.dumps({k: v for k, v in _info.items() if k != "by_ticker"}, ensure_ascii=False, default=str))
+    sys.exit(0 if _info.get("count") and "sector_master_error" not in _info else 1)
