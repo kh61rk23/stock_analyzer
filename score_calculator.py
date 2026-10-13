@@ -18,7 +18,7 @@
 #   │ tech_adj │ results["technical_scorer"]["results"][t]["score"] │ 候補の technical_score
 #   │ dcf_adj  │ results["dcf_valuation"]["results"][t]["dcf_bonus"]│ 候補の dcf_bonus
 #   │ geo_adj  │ 候補の geo_impact_bonus                       │ results["sectors"][業種]["geo_impact_bonus"]
-#   └ re_adj   │ 候補の real_estate_bonus                      │ results["sectors"][業種]["real_estate_by_ticker"][t]["bonus"]
+#   └ re_adj   │ results["stock_real_estate"]["by_ticker"][t]  │ 候補の real_estate_bonus → sectors[業種].real_estate_by_ticker
 #   取得できない成分は「未算出」として 0 扱い → その銘柄は Phase A と同値。
 #   ⚠️ base に既に含まれている成分は加算しない（二重計上の排除）。
 #     どの成分を加算するかは score_source 単位で _PHASE_B_APPLICABLE が決める:
@@ -229,10 +229,14 @@ def extract_re_bonus(ticker: str, market: str, sector_code: str,
                      results: dict) -> float | None:
     """
     銘柄単位の不動産ボーナス（pt・RE_BONUS_MIN..MAX = -2..3）を取得する。
-    ① screener候補の "real_estate_bonus"
-    ② results["sectors"][業種コード]["real_estate_by_ticker"][ticker]["bonus"]（base_agent が格納）
+    ① results["stock_real_estate"]["by_ticker"][ticker]["bonus"]（全上場の日本株。stock_real_estate が格納）
+    ② screener候補の "real_estate_bonus"
+    ③ results["sectors"][業種コード]["real_estate_by_ticker"][ticker]["bonus"]（base_agent が格納）
     業種の real_estate_bonus（平均）は銘柄の値ではないので使わない。
     """
+    entry = ((results.get("stock_real_estate") or {}).get("by_ticker") or {}).get(ticker)
+    if isinstance(entry, dict) and _num(entry.get("bonus")) is not None:
+        return _num(entry.get("bonus"))
     v = _candidate_field(ticker, market, results, "real_estate_bonus")
     if v is not None:
         return v

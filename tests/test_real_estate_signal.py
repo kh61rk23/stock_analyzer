@@ -46,7 +46,7 @@ def test_total_bonus_always_within_contract():
     assert -2.0 <= calc_real_estate_bonus(rows, CFG) <= 3.0
 
 
-from real_estate_signal import calc_stock_real_estate_bonus, stock_valuation, summarize_holdings
+from real_estate_signal import stock_bonus, summarize_holdings
 
 
 def test_unbooked_facility_does_not_inflate_gain():
@@ -75,35 +75,21 @@ def test_reference_price_prefers_industrial_then_commercial_then_residential():
     assert summarize_holdings([row2])["unrealized_gain_m_yen"] == 70.0
 
 
-def test_stock_valuation_matches_mart_formula():
-    """adj_pbr = 時価総額 ÷（純資産＋税引後含み益）、asset_value_ratio =（現金−負債＋税引後含み益）÷ 時価総額。"""
-    s = {"unrealized_gain_m_yen": 10_000}                  # 含み益 100億円
-    v = stock_valuation(s, market_cap=20e9, pbr=1.25, total_cash=5e9, total_debt=1e9)
-    after_tax = 10e9 * (1 - 0.306)
-    assert v["adj_pbr"] == round(20e9 / (16e9 + after_tax), 4)
-    assert v["asset_value_ratio"] == round((4e9 + after_tax) / 20e9, 4)
-    assert stock_valuation({"unrealized_gain_m_yen": 70_000}, 20e9, 1.0)["flag"] == "gt_3x_mcap"
-
-
 def test_stock_bonus_rewards_hidden_cheap_stock():
-    holdings = [{"land_area_m2": 10_000, "commercial_land_price_per_m2": 1_500_000, "book_value_land_m_yen": 1_000}]
-    cheap = calc_stock_real_estate_bonus(holdings, {"market_cap": 20e9, "pbr": 1.1,
-                                                    "total_cash": 5e9, "total_debt": 0}, CFG)
-    pricey = calc_stock_real_estate_bonus(holdings, {"market_cap": 500e9, "pbr": 4.0,
-                                                     "total_cash": 5e9, "total_debt": 0}, CFG)
-    assert cheap["basis"] == "valuation" and cheap["adj_pbr"] < 1.0
-    assert cheap["bonus"] > pricey["bonus"] >= 0.0
-    assert -2.0 <= cheap["bonus"] <= 3.0
-
-
-def test_stock_bonus_falls_back_without_market_cap():
-    holdings = [{"land_area_m2": 10_000, "commercial_land_price_per_m2": 300_000, "book_value_land_m_yen": 1_000}]
-    r = calc_stock_real_estate_bonus(holdings, {}, CFG)
-    assert r["basis"] == "gain_rate" and r["bonus"] == calc_real_estate_bonus(holdings, CFG)
+    cheap, basis = stock_bonus(0.6, 1.2, 5e10, None, 0.1, CFG)
+    pricey, _ = stock_bonus(1.8, 0.05, 5e10, None, 0.1, CFG)
+    assert basis == "valuation"
+    assert cheap == round(1.5 * 0.8 + 1.5 - 0.1, 4)
+    assert cheap > pricey and -2.0 <= pricey <= 3.0
 
 
 def test_no_pbr_credit_when_land_is_underwater():
-    holdings = [{"land_area_m2": 1_000, "commercial_land_price_per_m2": 50_000, "book_value_land_m_yen": 100,
-                 "book_value_buildings_m_yen": 0}]
-    r = calc_stock_real_estate_bonus(holdings, {"market_cap": 1e9, "pbr": 0.5}, CFG)
-    assert r["adj_pbr"] < 1.0 and r["bonus"] == 0.0
+    bonus, _ = stock_bonus(0.5, None, -1e9, None, 0.0, CFG)
+    assert bonus == 0.0
+
+
+def test_flagged_or_missing_valuation_uses_area_risk_only():
+    assert stock_bonus(None, None, 9e12, "gt_3x_mcap", 0.4, CFG) == (-0.4, "area_only")
+    assert stock_bonus(None, None, None, None, 0.3, CFG) == (-0.3, "area_only")
+    assert stock_bonus(None, None, None, None, None, CFG) == (0.0, "none")
+    assert stock_bonus(0.2, 5.0, 1e12, None, 0.0, CFG)[0] == 3.0

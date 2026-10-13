@@ -957,23 +957,20 @@ def build_result(
                 f"{str(_gse)[:60]}"
             )
 
-    # 不動産ボーナスは銘柄ごとに出し、業種スコアには足さない（割安さは銘柄の性質で、業種平均にすると薄まる）。
-    # 銘柄の値は score_calculator が real_estate_by_ticker から読んで銘柄の総合点に足す。
-    # 業種の real_estate_bonus は表示用の平均（通知の上位業種一覧が読む）。
+    # 不動産ボーナスは銘柄ごとの値（stock_real_estate が bi.m_screener から全上場分を1クエリで読む）を使い、
+    # 業種スコアには足さない（割安さは銘柄の性質で、業種平均にすると薄まる）。銘柄の総合点へは
+    # score_calculator が results["stock_real_estate"] から足す。ここで持つ real_estate_by_ticker と
+    # 業種の real_estate_bonus（平均）は、業種レポートと通知の表示用。
     _real_estate_bonus = 0.0
     _real_estate_by_ticker: dict = {}
     if getattr(cfg, "ENABLE_REAL_ESTATE_SIGNAL", True):
         try:
-            from real_estate_signal import calc_stock_real_estate_bonus
-            _bq_re = _BQClient()
+            import stock_real_estate
+            _re_all = stock_real_estate.load(cfg)
             for company in [c for c in companies if c.get("fetch_ok")]:
                 ticker = str(company.get("ticker", company.get("code", "")) or "")
-                if not ticker:
-                    continue
-                holdings = _bq_re.get_real_estate_holdings(ticker)
-                if holdings:
-                    _re = calc_stock_real_estate_bonus(holdings, company, cfg)
-                    _re["name"] = company.get("name")
+                _re = _re_all.get(ticker) or _re_all.get(f"{ticker.split('.')[0].upper()}.T")
+                if _re:
                     _real_estate_by_ticker[ticker] = _re
                     company["real_estate_bonus"] = _re["bonus"]
                     company["adj_pbr"] = _re["adj_pbr"]
@@ -1272,12 +1269,12 @@ def _prefetch_ticker_scoped_bq(sector_tickers: dict, cfg, bq) -> None:
     if not all_tickers:
         return
 
-    try:
-        n = bq.prefetch_real_estate_holdings(all_tickers)
-        if n:
-            print(f"    🏢 保有不動産を一括先読み: {n}銘柄（1クエリ）")
-    except Exception as exc:
-        print(f"    ⚠️  保有不動産の一括先読み失敗（個別取得へ）: {str(exc)[:60]}")
+    if getattr(cfg, "ENABLE_REAL_ESTATE_SIGNAL", True):
+        try:
+            import stock_real_estate
+            stock_real_estate.load(cfg, client=getattr(bq, "client", None))
+        except Exception as exc:
+            print(f"    ⚠️  銘柄単位の不動産ボーナスの先読み失敗: {str(exc)[:60]}")
 
     try:
         n = bq.prefetch_latest_financials(all_tickers)

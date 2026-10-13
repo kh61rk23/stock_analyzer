@@ -1,14 +1,14 @@
-"""企業保有不動産から含み益・修正PBR・資産バリュー倍率・エリアリスク補正を算出する純関数。
+"""企業保有不動産の含み益・エリアリスクと、銘柄単位の不動産ボーナスへの換算（純関数）。
 
-含み益の定義は BI マート（bi/marts/m_re_holdings.sql・m_screener.sql）と同じにする。
-スコアとスクリーナー表示で同じ会社の含み益が食い違わないようにするため。
+銘柄単位のボーナスは stock_bonus が BI マート（bi.m_screener）の修正PBR・資産バリュー倍率から出す
+（読み込みは stock_real_estate.py）。summarize_holdings は施設行から同じ定義で含み益を出すもので、
+マートの定義（bi/marts/m_re_holdings.sql・m_screener.sql）と一致させておく。
   - 時価の目安＝土地面積 × 参照地価（工業地→商業地→住宅地の順で最初にある値。円/m2）。
   - 含み益＝土地簿価がある施設だけの（時価の目安 − 土地簿価）の合計。簿価が無い施設は比べられないので入れない。
   - 土地簿価がある施設で時価の目安が簿価の EXCLUDE_MULTIPLE 倍を超えるものは、本社欄に会社全体の面積が
     入っているなどの紐づけ違いとみなして時価・含み益から除く（出光興産の本社欄で 22兆円になる例がある）。
-  - 含み益が時価総額の GAIN_MCAP_CAP 倍を超える会社は単位違い・再取得の疑いとして、含み益を使う値を出さない。
-  - 税効果は TAX_RATE（実効税率の目安）で差し引く。
-金額の単位は、保有不動産（BQ契約）が百万円、時価総額・現金・負債（yfinance）が円。
+  - 含み益が時価総額の3倍を超える会社は、マート側で単位違い・再取得の疑いの印（gt_3x_mcap）が付く。
+金額の単位は、保有不動産（BQ契約）が百万円。
 """
 
 from __future__ import annotations
@@ -16,8 +16,6 @@ from __future__ import annotations
 import math
 
 EXCLUDE_MULTIPLE = 20.0
-GAIN_MCAP_CAP = 3.0
-TAX_RATE = 0.306
 _PRICE_KEYS = ("industrial_land_price_per_m2", "commercial_land_price_per_m2",
                "residential_land_price_per_m2")
 
@@ -107,7 +105,8 @@ def _clip(cfg, value: float) -> float:
 def calc_real_estate_bonus(holdings: list[dict], cfg) -> float:
     """時価総額を使わない版（含み益率＋エリアリスク）。``RE_BONUS_MIN..MAX`` に収める。
 
-    含み益率＝含み益 ÷ 比べた施設の土地簿価。銘柄の時価総額が無いときの代わりに使う。
+    含み益率＝含み益 ÷ 比べた施設の土地簿価。日次のスコアは stock_bonus を使い、これは施設行だけから
+    目安を出したいとき（時価総額や財務が手元に無いとき）のためのもの。
     算出できる保有不動産が無ければ0.0。
     """
     s = summarize_holdings(holdings)
@@ -120,66 +119,28 @@ def calc_real_estate_bonus(holdings: list[dict], cfg) -> float:
     return _clip(cfg, hidden - s["area_risk"])
 
 
-def stock_valuation(summary: dict, market_cap, pbr, total_cash=None, total_debt=None) -> dict:
-    """含み益を時価総額・PBR と合わせて銘柄の割安さに直す（m_screener と同じ式）。
+def stock_bonus(adj_pbr, asset_value_ratio, unrealized_gain, flag, area_risk, cfg) -> tuple[float, str]:
+    """銘柄単位の不動産ボーナス（``RE_BONUS_MIN..MAX``）と根拠の種類を返す。
 
-    adj_pbr           = 時価総額 ÷（純資産 ＋ 税引後含み益）。純資産＝時価総額 ÷ PBR。
-    asset_value_ratio = （現金 − 有利子負債 ＋ 税引後含み益）÷ 時価総額。
-    """
-    out = {"gain_to_mcap": None, "adj_pbr": None, "asset_value_ratio": None, "flag": None}
-    mcap = _number(market_cap)
-    gain_m = summary.get("unrealized_gain_m_yen")
-    if not mcap or mcap <= 0 or gain_m is None:
-        return out
-    gain = gain_m * 1_000_000.0
-    if gain > GAIN_MCAP_CAP * mcap:
-        out["flag"] = "gt_3x_mcap"
-        return out
-    after_tax = gain * (1 - TAX_RATE)
-    out["gain_to_mcap"] = round(gain / mcap, 4)
-    p = _number(pbr)
-    if p and p > 0:
-        adj_equity = mcap / p + after_tax
-        if adj_equity > 0:
-            out["adj_pbr"] = round(mcap / adj_equity, 4)
-    cash, debt = _number(total_cash), _number(total_debt)
-    if cash is not None:
-        out["asset_value_ratio"] = round((cash - (debt or 0.0) + after_tax) / mcap, 4)
-    return out
-
-
-def calc_stock_real_estate_bonus(holdings: list[dict], company: dict, cfg) -> dict:
-    """銘柄単位の不動産ボーナス（``RE_BONUS_MIN..MAX``）と根拠の値を返す。
-
+    入力は BI マート bi.m_screener の値（adj_pbr・asset_value_ratio・含み益・gt_3x_mcap の印）と、
+    保有不動産のエリアリスク（0..2）。マートが正本で、ここでは点数への換算だけをする。
     割安の加点（0..3）：
       - 含み益があり修正PBR が1未満なら最大 1.5（0.5以下で満点）。含み損の会社は PBR が低くても加点しない
         （不動産の効果ではないため）。
-      - 資産バリュー倍率（ネットキャッシュ＋税引後含み益が時価総額の何倍か）が最大 1.5（1倍以上で満点）。
-    エリアリスクの減点（−2..0）：簿価で重みづけした洪水リスク割合＋2050年までの人口減少率。
-    時価総額が無い銘柄は calc_real_estate_bonus（含み益率）で代える。
+      - 資産バリュー倍率（ネットキャッシュ＋税引後含み益が時価総額の何倍か）で最大 1.5（1倍以上で満点）。
+    エリアリスクの減点（−2..0）。
+    basis: valuation（加点あり得る）／area_only（時価総額の3倍超の印か、修正PBR等が無い）／none（データなし）。
     """
-    s = summarize_holdings(holdings)
-    company = company or {}
-    v = stock_valuation(s, company.get("market_cap"), company.get("pbr"),
-                        company.get("total_cash"), company.get("total_debt"))
-    out = {"bonus": 0.0, **v, "area_risk": s["area_risk"],
-           "unrealized_gain_m_yen": s["unrealized_gain_m_yen"],
-           "excluded_count": s["excluded_count"], "basis": "none"}
-    if not s["has_data"]:
-        return out
-    if v["flag"] is None and (v["adj_pbr"] is not None or v["asset_value_ratio"] is not None):
+    adj, avr, risk = _number(adj_pbr), _number(asset_value_ratio), _number(area_risk)
+    risk = max(0.0, min(2.0, risk or 0.0))
+    gain = _number(unrealized_gain)
+    if flag is None and (adj is not None or avr is not None):
         value = 0.0
-        has_gain = (s["unrealized_gain_m_yen"] or 0.0) > 0
-        if has_gain and v["adj_pbr"] is not None and v["adj_pbr"] < 1.0:
-            value += 1.5 * min(1.0, (1.0 - v["adj_pbr"]) / 0.5)
-        if v["asset_value_ratio"] is not None:
-            value += 1.5 * min(1.0, max(0.0, v["asset_value_ratio"]))
-        out["bonus"] = _clip(cfg, value - s["area_risk"])
-        out["basis"] = "valuation"
-    elif v["flag"] is not None:
-        out["bonus"] = _clip(cfg, -s["area_risk"])
-        out["basis"] = "area_only"
-    else:
-        out["bonus"] = calc_real_estate_bonus(holdings, cfg)
-        out["basis"] = "gain_rate"
-    return out
+        if (gain or 0.0) > 0 and adj is not None and adj < 1.0:
+            value += 1.5 * min(1.0, (1.0 - adj) / 0.5)
+        if avr is not None:
+            value += 1.5 * min(1.0, max(0.0, avr))
+        return _clip(cfg, value - risk), "valuation"
+    if flag is not None or risk > 0 or gain is not None:
+        return _clip(cfg, -risk), "area_only"
+    return 0.0, "none"

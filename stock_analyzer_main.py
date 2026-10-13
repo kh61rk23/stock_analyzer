@@ -5279,6 +5279,16 @@ def run_all_tasks(mode: str = "all") -> dict:
                 cfg.DRIVE_BASE / "score_calculator.py",
             )
             if _scu:
+                if getattr(cfg, "ENABLE_REAL_ESTATE_SIGNAL", True):
+                    try:
+                        import stock_real_estate
+                        _sre = stock_real_estate.run(cfg, results)
+                        logger.add("stock_real_estate", "success" if _sre.get("count") else "warn",
+                                   f"不動産ボーナス{_sre.get('count', 0)}銘柄（非0 {_sre.get('nonzero', 0)}）"
+                                   f" / 業種マスタ{_sre.get('sector_master_rows', 0)}行")
+                    except Exception as e:
+                        logger.add("stock_real_estate", "error", str(e)[:100])
+                        print(f"  ⚠️  銘柄単位の不動産ボーナス失敗: {str(e)[:80]}")
                 _us_result = _scu.run_score_calculator(cfg, results)
                 results["unified_scores"] = _us_result
                 if _us_result.get("skipped"):
