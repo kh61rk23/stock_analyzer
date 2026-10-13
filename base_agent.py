@@ -258,6 +258,15 @@ def _safe_avg(values: list) -> Optional[float]:
 # BLOCK 3: マクロシグナル評価
 # ==============================================================
 
+def _mcap_weighted_avg(companies: list, key: str) -> Optional[float]:
+    """時価総額（market_cap）加重平均。重みが1社も無ければ単純平均。"""
+    pts = [(c.get(key), c.get("market_cap")) for c in companies if c.get(key) is not None]
+    w = [(float(v), float(m)) for v, m in pts if m and m > 0]
+    if w:
+        return sum(v * m for v, m in w) / sum(m for _, m in w)
+    return _safe_avg([v for v, _ in pts])
+
+
 def build_macro_signals(sector_code: str, cfg,
                         macro_snapshot: dict = None) -> list:
     """
@@ -315,6 +324,7 @@ def calc_composite_score(
     geo_impact_bonus:         float = 0.0,   # G-X: 地政学×権益統合シグナル
     cluster_phase_bonus:      float = 0.0,   # B: 技術クラスターフェーズボーナス
     real_estate_bonus:        float = 0.0,   # D-②-2: corporate property enrichment
+    sector_fundamentals:      dict | None = None,
 ) -> tuple:
     """
     財務スコア(40) + マクロスコア(30) + アナリストスコア(5) + EDINET信用ボーナス(最大+5/-5)
@@ -334,11 +344,16 @@ def calc_composite_score(
     macro_score   = 0.0
     analyst_score = 0.0
 
+    # 財務4指標は、業種の全銘柄の時価総額加重平均（sector_fundamentals）があればそれを使い、
+    # 無いときだけ代表銘柄（yfinance で取れた数社）の単純平均に戻る。
+    # アナリスト評価は代表銘柄にしか無いため、代表銘柄の時価総額で重みづけする。
+    sf = sector_fundamentals or {}
     ok_companies = [c for c in companies if c.get("fetch_ok")]
-    if ok_companies:
-        avg_roe = _safe_avg([c.get("roe") for c in ok_companies])
-        avg_roa = _safe_avg([c.get("roa") for c in ok_companies])
-        avg_opm = _safe_avg([c.get("op_margin") for c in ok_companies])
+    if ok_companies or any(sf.get(k) is not None for k in ("roe", "roa", "op_margin", "accrual_ratio")):
+        avg_roe = sf.get("roe") if sf.get("roe") is not None else _safe_avg([c.get("roe") for c in ok_companies])
+        avg_roa = sf.get("roa") if sf.get("roa") is not None else _safe_avg([c.get("roa") for c in ok_companies])
+        avg_opm = (sf.get("op_margin") if sf.get("op_margin") is not None
+                   else _safe_avg([c.get("op_margin") for c in ok_companies]))
 
         if avg_roe is not None:
             fin_score += 15 if avg_roe >= 0.10 else (8 if avg_roe >= 0.05 else 0)
@@ -350,15 +365,16 @@ def calc_composite_score(
         # viewerからデータが取れている場合のみ評価
         ok_accrual = [c.get("accrual_ratio") for c in ok_companies
                       if c.get("accrual_ratio") is not None]
-        if ok_accrual:
-            avg_accrual = sum(ok_accrual) / len(ok_accrual)
+        avg_accrual = (sf.get("accrual_ratio") if sf.get("accrual_ratio") is not None
+                       else (sum(ok_accrual) / len(ok_accrual) if ok_accrual else None))
+        if avg_accrual is not None:
             if avg_accrual < -0.02:    fin_score += 8   # 超優良
             elif avg_accrual < 0.02:   fin_score += 4   # 良好
             elif avg_accrual > 0.05:   fin_score -= 8   # 利益水増し疑い
 
-        # アナリスト推奨（平均）
-        avg_rec    = _safe_avg([c.get("rec_mean") for c in ok_companies])
-        avg_upside = _safe_avg([c.get("analyst_upside") for c in ok_companies])
+        # アナリスト推奨（代表銘柄の時価総額加重。時価総額が無ければ単純平均）
+        avg_rec    = _mcap_weighted_avg(ok_companies, "rec_mean")
+        avg_upside = _mcap_weighted_avg(ok_companies, "analyst_upside")
         if avg_rec is not None:
             analyst_score += 5 if avg_rec <= 2.0 else (3 if avg_rec <= 2.5 else 0)
         if avg_upside is not None and avg_upside >= 0.20:
@@ -961,6 +977,16 @@ def build_result(
     # 業種スコアには足さない（割安さは銘柄の性質で、業種平均にすると薄まる）。銘柄の総合点へは
     # score_calculator が results["stock_real_estate"] から足す。ここで持つ real_estate_by_ticker と
     # 業種の real_estate_bonus（平均）は、業種レポートと通知の表示用。
+    _sector_fundamentals = None
+    try:
+        import sector_constituents
+        _sector_fundamentals = sector_constituents.fundamentals_for(sector_code, cfg)
+        if _sector_fundamentals:
+            print(f"    🏭 業種の財務（全{_sector_fundamentals['n']}銘柄・時価総額加重）: "
+                  f"ROE {_sector_fundamentals.get('roe') or 0:.1%} / 営業利益率 {_sector_fundamentals.get('op_margin') or 0:.1%}")
+    except Exception as exc:
+        print(f"    ⚠️  業種の全構成銘柄の財務取得エラー（代表銘柄で代用）: {str(exc)[:60]}")
+
     _real_estate_bonus = 0.0
     _real_estate_by_ticker: dict = {}
     if getattr(cfg, "ENABLE_REAL_ESTATE_SIGNAL", True):
@@ -991,6 +1017,7 @@ def build_result(
         _edinet_text_risk_bonus,      # E4: テキストリスクボーナス
         _geo_impact_bonus,            # G-X: 地政学×権益統合シグナル
         _cluster_phase_bonus,         # B: 技術クラスターフェーズボーナス
+        sector_fundamentals=_sector_fundamentals,
     )
 
     # ── EdinetDB only ───────────────────────────────────────────
@@ -1061,6 +1088,7 @@ def build_result(
         "cluster_phase_bonus":   _cluster_phase_bonus, # B: 技術クラスターフェーズボーナス
         "real_estate_bonus":     _real_estate_bonus,      # 表示用の平均（composite には入れない）
         "real_estate_by_ticker": _real_estate_by_ticker,  # 銘柄ごとの不動産ボーナスと修正PBR等
+        "sector_fundamentals":   _sector_fundamentals,    # 業種の全銘柄の時価総額加重 ROE・ROA・営業利益率・アクルーアル
     }
 
     # score_explainer 連携
@@ -1302,10 +1330,11 @@ def _prefetch_ticker_scoped_bq(sector_tickers: dict, cfg, bq) -> None:
 
 def resolve_sector_tickers(sector_code: str, cfg, limit: int = 5) -> list[str]:
     """
-    業種別 ticker 解決（3段フォールバック）:
-      1. BQ ticker_subtheme_mapping
-      2. edinet_rotation meta.json（sector_code 付き）
-      3. config.SECTOR_REPRESENTATIVE_TICKERS
+    業種別 ticker 解決（代表銘柄＝yfinance で個社データを取る銘柄）:
+      1. 業種の全構成銘柄（sector_constituents）を時価総額の大きい順に limit 件
+      2. BQ ticker_subtheme_mapping
+      3. edinet_rotation meta.json（sector_code 付き）
+      4. config.SECTOR_REPRESENTATIVE_TICKERS
     """
     sector_code = str(sector_code)
     limit = max(1, min(int(limit), 10))
@@ -1316,8 +1345,11 @@ def resolve_sector_tickers(sector_code: str, cfg, limit: int = 5) -> list[str]:
         bq = _BQClient()
         with _SECTOR_TICKER_LOCK:
             if _SECTOR_TICKER_CACHE is None:
+                import sector_constituents
+                _cons = sector_constituents.load(cfg, client=getattr(bq, "client", None))
                 _SECTOR_TICKER_CACHE = (
-                    bq.get_tickers_by_sector_bulk(limit=10) or {})
+                    {code: [r["ticker"] for r in rows[:10]] for code, rows in _cons.items()}
+                    or bq.get_tickers_by_sector_bulk(limit=10) or {})
                 # 全業種のtickerが確定した“この瞬間”だけが、1実行で触る
                 # 銘柄を全部知っている場所。以降の銘柄別BQ参照は
                 # ここでまとめて先読みしておく（N+1の解消）。
