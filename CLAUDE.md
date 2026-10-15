@@ -1,9 +1,9 @@
 # stock_analyzer — AIエージェント保守手順書（AGENT-1）
 
 このリポジトリで Claude Code 等のAIエージェントが作業する際の標準手順。
-設計の正本は `../統合ファイルなど/02_ファイル構成/`
+設計の正本は `../02_Configuration_Management/02_ファイル構成/`
 （SPEC_core.md / SPEC_db_schema.md / SPEC_investment_dept.md / MODULE_INDEX.md）。
-進捗管理・引き継ぎ資料は `../統合ファイルなど/01_最新版ロードマップ・必要書類/`
+進捗管理・引き継ぎ資料は `../02_Configuration_Management/01_最新版ロードマップ・必要書類/`
 （TODO_LIST.md / SESSION_PACKET.md 等。CHANGELOG.md は2026-09-26に凍結し、変更履歴は board の開発ログ台帳へ移設）。
 
 ## 絶対禁止
@@ -11,6 +11,7 @@
 - **`../stock_analyzer-main_bk` を変更しない**（バックアップ。読むのは可）
 - APIキー・トークンのコード内ハードコード（`os.getenv()` + GitHub Secrets 経由のみ）
 ※資料に記載は可とする。
+- 認証情報ファイル（`*_key.json`・`*pass.json`・`O-auth*`・`client_secret*`・`GITHUB_SECRETS_LEDGER.md`）を git 管理下（01_System 配下を含む）に置かない。同期は `tools/sync_config_docs.py` の除外リストを必ず通すこと
 - config.py のモジュールレベル重複定義（Pythonは後勝ち上書きで黙って壊れる。
   2026-06 に LEADING_INDICATOR_RULES 三重定義で先行指標7本が無効化されていた実害事例）
 
@@ -52,14 +53,19 @@ python3 maintenance_packet.py   # 全監査+台帳+直近変更を MAINTENANCE_P
 2. 開発ログ台帳に記録（2026-09-26〜。CHANGELOG.md は凍結）:
    `python3 ~/Documents/Obsidian_Local/Vault2_ClaudeCode_Local/board/devlog.py add --project stock_analyzer --kind 修正 --title "…" --detail "…" --files a.py --commit abc1234`
    （board「システム › 開発」/dev で全プロジェクト横断に見られる）
-3. **構成管理資料を必ず更新する**（2026-10-03 健太指示：改修のたびに更新）
-   - `02_ファイル構成/MODULE_INDEX.md`：追加・変更したモジュールとワークフローの行
-   - `02_ファイル構成/SPEC_db_schema.md`：テーブル・列・書き手・実測行数（§0-1）を変えたら必ず
-   - `02_ファイル構成/CONFIG_REFERENCE.md`：`python3 config_reference_gen.py` で再生成（手編集しない）
-   - `08_jsonファイル,テーブル定義/bq_all_schemas_<日付>.json`：BQの表・列を変えたら取り直す
+3. **構成管理資料を必ず更新する**（2026-10-03 健太指示：改修のたびに更新。正本は `../02_Configuration_Management/`。repo 内の `構成管理資料/` は手順5で同期する）
+   - `../02_Configuration_Management/02_ファイル構成/MODULE_INDEX.md`：追加・変更したモジュールとワークフローの行
+   - `../02_Configuration_Management/02_ファイル構成/SPEC_db_schema.md`：テーブル・列・書き手・実測行数（§0-1）を変えたら必ず
+   - `../02_Configuration_Management/02_ファイル構成/CONFIG_REFERENCE.md`：`python3 config_reference_gen.py` で再生成（手編集しない）
+   - `../02_Configuration_Management/08_jsonファイル,テーブル定義/bq_all_schemas_<日付>.json`：BQの表・列を変えたら取り直す
    - SPEC_core.md：処理の流れ・構造を変えたら
 4. **開発ダッシュボードを更新する**：board の G-dev `10_案件台帳.md` の stock_analyzer 行
    （概要・現在地／次アクション）を最新にする（開発ログ＝/dev の明細と、台帳＝現在地の両方）
+5. **構成管理資料を push する**（2026-10-15 健太指示：改修のたびに最新版を push）
+   - `python3 tools/sync_config_docs.py` で dry-run の内容を確認してから `python3 tools/sync_config_docs.py --apply` を実行する
+   - 02 → `構成管理資料/` へ同期し、commit して origin/main へ push する。対象は `構成管理資料/` のみ
+   - 認証情報らしいファイルは同期しない（除外リストは tools/sync_config_docs.py の EXCLUDE_NAME_PATTERNS）。秘密情報を検出したら何もコピーせず中止する
+   - 中止（exit 2〜6）したら表示された理由を健太に報告する。強制 push や除外リストの書き換えで通さない
 
 ## このシステムの構造（30秒）
 
