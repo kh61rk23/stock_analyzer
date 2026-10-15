@@ -8,7 +8,9 @@
 # 【表】analytics（asia-northeast1・report_date で月パーティション）
 #   alert_sections：1行＝1日×1節。section_key（見出しから件数等を除いた名前）・重要度・見出し・本文。
 #   alert_items   ：1行＝1日×1節×1銘柄。本文の各行から証券コード（7203.T・130A.T）と米国ティッカー（（MU））を拾う。
-#   書き込みは load job（無料）。job_id を内容から決めるので、同じ日の同じ内容を二度入れても重複しない。
+#   書き込みは load job（無料）。1日ずつ job_id を内容から決めるので、同じ日の同じ内容を二度入れても重複しない。
+#   読むときはビュー alert_sections_v / alert_items_v を使う（同じ日に送信時の保存（live）と過去メールからの
+#   取り込み（mail_backfill）の両方があれば live を採り、同じ行の重複を除く）。
 # 【過去分】
 #   送信済みの日次メール（件名「【投資AIエージェント】」）を Gmail の IMAP で読み、同じ形に直して入れる
 #   （python3 alert_store.py --backfill）。メール送信用のアプリパスワード（ALERT_GMAIL_*）を使う。
@@ -135,41 +137,82 @@ def _job_id(table: str, rows: list) -> str:
     return f"alert_{table}_" + hashlib.sha1(body.encode()).hexdigest()[:24]
 
 
+VIEWS = {
+    "alert_sections_v": """
+CREATE OR REPLACE VIEW `{project}.{ds}.alert_sections_v` AS
+SELECT * EXCEPT (rn) FROM (
+  SELECT s.*, ROW_NUMBER() OVER (PARTITION BY s.report_date, s.position ORDER BY s.fetched_at DESC) AS rn
+  FROM `{project}.{ds}.alert_sections` AS s
+  JOIN (SELECT report_date, IF(LOGICAL_OR(source = 'live'), 'live', 'mail_backfill') AS src
+        FROM `{project}.{ds}.alert_sections` GROUP BY report_date) AS d
+    ON d.report_date = s.report_date AND d.src = s.source
+) WHERE rn = 1""",
+    "alert_items_v": """
+CREATE OR REPLACE VIEW `{project}.{ds}.alert_items_v` AS
+SELECT * EXCEPT (rn) FROM (
+  SELECT i.*, ROW_NUMBER() OVER (PARTITION BY i.report_date, i.section_key, i.ticker, i.line ORDER BY i.fetched_at DESC) AS rn
+  FROM `{project}.{ds}.alert_items` AS i
+  JOIN (SELECT report_date, IF(LOGICAL_OR(source = 'live'), 'live', 'mail_backfill') AS src
+        FROM `{project}.{ds}.alert_items` GROUP BY report_date) AS d
+    ON d.report_date = i.report_date AND d.src = i.source
+) WHERE rn = 1""",
+}
+
+
+def ensure_views(client) -> None:
+    from google.api_core.exceptions import NotFound
+    for name, sql in VIEWS.items():
+        try:
+            client.get_table(f"{client.project}.{DATASET}.{name}")
+        except NotFound:
+            client.query(sql.format(project=client.project, ds=DATASET)).result()
+
+
 def write(client, tables: dict, tmp_dir: Path) -> dict:
-    """load job で追記する。同じ内容は同じ job_id になり二度入らない。"""
+    """1日ずつ load job で追記する。同じ日の同じ内容は同じ job_id になり二度入らない。"""
+    counts: dict = {}
+    for table, rows in tables.items():
+        by_day: dict = {}
+        for r in rows:
+            by_day.setdefault(r["report_date"], []).append(r)
+        counts[table] = sum(_write_one(client, table, day_rows, tmp_dir) for _, day_rows in sorted(by_day.items()))
+    try:
+        ensure_views(client)
+    except Exception as e:
+        print(f"    ⚠️ alert_*_v ビューの作成失敗: {str(e)[:100]}")
+    return counts
+
+
+def _write_one(client, table: str, rows: list, tmp_dir: Path) -> int:
     from google.api_core.exceptions import Conflict, NotFound
     from google.cloud import bigquery
     sch = _schemas()
-    counts = {}
+    if not rows:
+        return 0
     tmp_dir.mkdir(parents=True, exist_ok=True)
-    for table, rows in tables.items():
-        if not rows:
-            counts[table] = 0
-            continue
-        ref = f"{client.project}.{DATASET}.{table}"
-        try:
-            client.get_table(ref)
-        except NotFound:
-            t = bigquery.Table(ref, schema=sch[table])
-            t.time_partitioning = bigquery.TimePartitioning(type_=bigquery.TimePartitioningType.MONTH, field="report_date")
-            client.create_table(t)
-        tmp = tmp_dir / f"alert_store_{table}.ndjson"
-        tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
-        jid = _job_id(table, rows)
-        try:
-            with open(tmp, "rb") as fh:
-                client.load_table_from_file(fh, ref, job_id=jid, location=LOCATION, job_config=bigquery.LoadJobConfig(
-                    source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON, schema=sch[table],
-                    write_disposition=bigquery.WriteDisposition.WRITE_APPEND)).result()
-            counts[table] = len(rows)
-        except Conflict:
-            old = client.get_job(jid, location=LOCATION)
-            if not (old.state == "DONE" and not old.error_result):
-                raise RuntimeError(f"load job {jid} は既にあるが失敗している")
-            counts[table] = 0
-        finally:
-            tmp.unlink(missing_ok=True)
-    return counts
+    ref = f"{client.project}.{DATASET}.{table}"
+    try:
+        client.get_table(ref)
+    except NotFound:
+        t = bigquery.Table(ref, schema=sch[table])
+        t.time_partitioning = bigquery.TimePartitioning(type_=bigquery.TimePartitioningType.MONTH, field="report_date")
+        client.create_table(t)
+    tmp = tmp_dir / f"alert_store_{table}.ndjson"
+    tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+    jid = _job_id(table, rows)
+    try:
+        with open(tmp, "rb") as fh:
+            client.load_table_from_file(fh, ref, job_id=jid, location=LOCATION, job_config=bigquery.LoadJobConfig(
+                source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON, schema=sch[table],
+                write_disposition=bigquery.WriteDisposition.WRITE_APPEND)).result()
+        return len(rows)
+    except Conflict:
+        old = client.get_job(jid, location=LOCATION)
+        if not (old.state == "DONE" and not old.error_result):
+            raise RuntimeError(f"load job {jid} は既にあるが失敗している")
+        return 0
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _client():
@@ -209,7 +252,7 @@ def _html_of(msg) -> str:
     return ""
 
 
-def fetch_mails(user: str, password: str, since: str = "01-Jun-2026") -> list[dict]:
+def fetch_mails(user: str, password: str, since: str = "01-Jan-2026") -> list[dict]:
     """全メール（[Gmail]/All Mail 相当）から自分が送った日次メールを集める。"""
     import email
     import imaplib
@@ -259,7 +302,7 @@ def latest_per_day(mails: list[dict]) -> list[dict]:
     return [best[d] for d in sorted(best)]
 
 
-def backfill(cfg, since: str = "01-Jun-2026") -> dict:
+def backfill(cfg, since: str = "01-Jan-2026") -> dict:
     import os
     from zoneinfo import ZoneInfo
     user, pwd = os.environ.get("ALERT_GMAIL_FROM", ""), os.environ.get("ALERT_GMAIL_PASSWORD", "")
@@ -289,7 +332,7 @@ def backfill(cfg, since: str = "01-Jun-2026") -> dict:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--backfill", action="store_true", help="送信済みの日次メールから過去分を入れる")
-    ap.add_argument("--since", default="01-Jun-2026", help="IMAP の SINCE（例 01-Jun-2026）")
+    ap.add_argument("--since", default="01-Jan-2026", help="IMAP の SINCE（例 01-Jan-2026）")
     args = ap.parse_args(argv)
     import config
     if args.backfill:
