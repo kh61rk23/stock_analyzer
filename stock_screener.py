@@ -743,6 +743,39 @@ def _calc_accrual_tier(accrual: Optional[float]) -> tuple[str, float]:
             return label, bonus
     return "C", -15.0
 
+def _accrual_relative_bonus(accrual: Optional[float],
+                            sector_mean: Optional[float]) -> float:
+    """業種平均より2pt以上低い（相対的に利益品質が高い）ときの上乗せ点。"""
+    if accrual is not None and sector_mean is not None and accrual < sector_mean - 0.02:
+        return 5.0
+    return 0.0
+
+
+def accrual_adjustment(accrual: Optional[float],
+                       sector_mean: Optional[float] = None) -> tuple[str, float]:
+    """アクルーアルの (tier, 加点の合計)。_calc_scores と一次採点（screener_universe）で共用する。"""
+    tier, bonus = _calc_accrual_tier(accrual)
+    return tier, bonus + _accrual_relative_bonus(accrual, sector_mean)
+
+
+def _attach_universe(candidates: list, universe: dict | None, blend: float) -> None:
+    """二次評価の候補に一次の各観点スコアと final_score を付け、final_score の降順に並べ直す。
+
+    final_score は一次スコアがある銘柄だけブレンドし、無い銘柄（動的追加・潜伏昇格）は composite_score のまま。
+    """
+    from screener_universe import blend_final
+    by_ticker = {r["ticker"]: r for r in (universe or {}).get("records", [])}
+    for c in candidates:
+        r = by_ticker.get(c.get("ticker"))
+        if r:
+            c["universe_score"] = r["universe_score"]
+            c["universe_rank"] = r["universe_rank"]
+            c["universe_aspects"] = r["aspects"]
+            c["universe_coverage"] = r["coverage"]
+        c["final_score"] = blend_final(c.get("universe_score"), c.get("composite_score"), blend)
+    candidates.sort(key=lambda x: x.get("final_score", 0), reverse=True)
+
+
 def _apply_capped_adjustment(base_score: float, delta: float,
                              cap: float, label: str = "") -> tuple[float, float]:
     """
@@ -787,7 +820,7 @@ def _apply_filters(data: dict, cfg) -> tuple:
     per_max    = getattr(cfg, "SCREEN_PER_MAX",    30.0)
     pbr_max    = getattr(cfg, "SCREEN_PBR_MAX",     5.0)
     roe_min    = getattr(cfg, "SCREEN_ROE_MIN",     0.08)
-    mcap_min_b = getattr(cfg, "SCREEN_MCAP_MIN_B", 100.0)
+    mcap_min_b = getattr(cfg, "SCREEN_MCAP_MIN_B", 0.0)
     vol_min    = getattr(cfg, "SCREEN_VOL_MIN",    100_000)
 
     detail = {}
@@ -820,15 +853,25 @@ def _apply_filters(data: dict, cfg) -> tuple:
     else:
         detail["roe"] = f"OK({roe*100:.1f}%)"
 
-    mcap = data.get("market_cap_b", 0)
+    mcap = data.get("market_cap_b") or 0
     if mcap < mcap_min_b:
         detail["market_cap"] = f"NG({mcap:.0f}億)"
         fails.append("market_cap")
     else:
         detail["market_cap"] = f"OK({mcap:.0f}億)"
 
-    vol = data.get("avg_volume", 0)
-    if vol < vol_min:
+    # 出来高の下限は売買代金（円/日）で判定する。株価が取れない銘柄だけ株数（SCREEN_VOL_MIN）で見る
+    vol = data.get("avg_volume") or 0
+    price = data.get("current_price")
+    min_turnover = float(getattr(cfg, "SCREEN_UNIVERSE_MIN_TURNOVER", 0.0))
+    if price and min_turnover > 0:
+        turnover = vol * price
+        if turnover < min_turnover:
+            detail["volume"] = f"NG({turnover / 1e4:,.0f}万円/日)"
+            fails.append("volume")
+        else:
+            detail["volume"] = f"OK({turnover / 1e4:,.0f}万円/日)"
+    elif vol < vol_min:
         detail["volume"] = f"NG({vol:,})"
         fails.append("volume")
     else:
@@ -974,13 +1017,7 @@ def _calc_scores(
     # - 銘柄個別のアクルーアルtierでボーナス算出
     # - 業種平均より低い場合（=相対的に優良）はさらに+5pt上乗せ
     acr_tier, acr_bonus = _calc_accrual_tier(edinet_accrual)
-
-    relative_bonus = 0.0
-    if (edinet_accrual is not None
-            and sector_accrual_mean is not None
-            and edinet_accrual < sector_accrual_mean - 0.02):
-        # 業種平均より2pt以上低い = 相対的に利益品質が高い
-        relative_bonus = 5.0
+    relative_bonus = _accrual_relative_bonus(edinet_accrual, sector_accrual_mean)
 
         # ── [BM Ph2] bm_bonus 算出 ─────────────────────────
     _bm_bonus = 0.0
@@ -1940,11 +1977,14 @@ def _save_screener_report(result: dict, cfg) -> None:
 # ==============================================================
 
 def run_stock_screener(cfg, sector_results: dict,
-                       sector_tier_map: dict | None = None) -> dict:
+                       sector_tier_map: dict | None = None,
+                       all_sector_results: dict | None = None) -> dict:
     """
-    sector_tier_map : results["sector_tier"] の dict
-                      {sector_code: "TOP"/"MID"/"BOT"}
-                      省略時は全業種を "TOP" として扱う（後方互換）
+    sector_tier_map    : results["sector_tier"] の dict
+                         {sector_code: "TOP"/"MID"/"BOT"}
+                         省略時は全業種を "TOP" として扱う（後方互換）
+    all_sector_results : BOT_TIER を除く前の業種結果。一次採点（全上場）は BOT の業種も点数として扱うので
+                         省略時は sector_results を使う
     """
     sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     discovery_percentile = float(getattr(
@@ -2065,24 +2105,7 @@ def run_stock_screener(cfg, sector_results: dict,
             pass
 
     top_n_sectors = getattr(cfg, "SCREEN_TOP_N_SECTORS", 5)
-        # 対象は「BQに財務がある全社×全業種」。下位業種（BOT_TIER）は評価しない
     bq_sector_tickers: dict = {}
-    if getattr(cfg, "SCREEN_EXPAND_UNIVERSE", False):
-        try:
-            from edinet_bq_client import EDINETBQClient
-            by_ind = EDINETBQClient().get_tickers_with_financials_by_industry(
-                int(getattr(cfg, "SCREEN_EXPAND_PER_SECTOR", 25)))
-            name_to_code = {v.get("name_ja"): k
-                            for k, v in (getattr(cfg, "JAPAN_SECTORS", {}) or {}).items()}
-            for ind, ts in by_ind.items():
-                code = name_to_code.get(ind)
-                if code:
-                    bq_sector_tickers.setdefault(code, []).extend(ts)
-            top_n_sectors = max(top_n_sectors, len(sector_results))
-            print(f"  📚 対象拡大: BQに財務がある会社から業種ごとに売上上位 {sum(len(v) for v in bq_sector_tickers.values())}社"
-                  f"（{len(bq_sector_tickers)}業種）を業種の銘柄一覧に追加")
-        except Exception as e:
-            print(f"  ⚠️  対象拡大の取得失敗（従来の銘柄一覧で続行）: {str(e)[:80]}")
 
     if not sector_results:
         print("  ⚠️  sector_results が空のためスクリーニングをスキップ")
@@ -2122,6 +2145,48 @@ def run_stock_screener(cfg, sector_results: dict,
         edinet_accruals = _load_edinet_accruals(cfg)
     except Exception as e:
         print(f"  ⚠️  EDINET accrual ロード失敗（スキップ）: {e}")
+
+    # 一次採点（全上場）。失敗したら従来経路（業種上位＋売上上位）で続行し、台帳に warn を残す。
+    universe = None
+    universe_error = None
+    if getattr(cfg, "ENABLE_SCREENER_UNIVERSE", True):
+        try:
+            import screener_universe as _su
+            universe = _su.run_universe(
+                cfg, all_sector_results or sector_results,
+                caches={"sr": sr_cache, "vp": vp_cache, "edinet": edinet_quality_cache,
+                        "surprise": surprise_cache, "dcf": dcf_cache, "comps": comps_cache,
+                        "credit": credit_cache, "insider": insider_cache, "dividend": dividend_cache},
+                accruals=edinet_accruals)
+            _s = universe["summary"]
+            print(f"  🌐 一次採点: 対象{_s['universe_count']}社 / 除外{_s['excluded_count']}社 {_s['excluded']}"
+                  f" → 二次評価{_s['stage2_n']}社")
+            _seed = [r["ticker"] for r in universe["records"]
+                     if r["ticker"] not in _JP_TICKER_TO_SECTOR][:int(getattr(cfg, "SCREEN_UNIVERSE_SEED_N", 20))]
+            _su.save_seed(cfg, _seed)
+            cfg.__dict__["EDINET_SCREENER_CANDIDATES"] = list(dict.fromkeys(
+                _seed + list(getattr(cfg, "EDINET_SCREENER_CANDIDATES", []) or [])))
+        except Exception as e:
+            universe = None
+            universe_error = f"{type(e).__name__}: {str(e)[:150]}"
+            print(f"  ⚠️  一次採点に失敗（従来の対象選定で続行）: {universe_error}")
+    if universe is None and getattr(cfg, "SCREEN_EXPAND_UNIVERSE", False):
+        try:
+            from edinet_bq_client import EDINETBQClient
+            by_ind = EDINETBQClient().get_tickers_with_financials_by_industry(
+                int(getattr(cfg, "SCREEN_EXPAND_PER_SECTOR", 25)))
+            name_to_code = {v.get("name_ja"): k
+                            for k, v in (getattr(cfg, "JAPAN_SECTORS", {}) or {}).items()}
+            for ind, ts in by_ind.items():
+                code = name_to_code.get(ind)
+                if code:
+                    bq_sector_tickers.setdefault(code, []).extend(ts)
+            top_n_sectors = max(top_n_sectors, len(sector_results))
+            print(f"  📚 対象拡大: BQに財務がある会社から業種ごとに売上上位 {sum(len(v) for v in bq_sector_tickers.values())}社"
+                  f"（{len(bq_sector_tickers)}業種）を業種の銘柄一覧に追加")
+        except Exception as e:
+            print(f"  ⚠️  対象拡大の取得失敗（従来の銘柄一覧で続行）: {str(e)[:80]}")
+
         # [問題D] 全銘柄リストを業種代表銘柄から構築（正本は config.SECTOR_REPRESENTATIVE_TICKERS）。
     _jst_d = getattr(cfg, "SECTOR_REPRESENTATIVE_TICKERS", {}) or {}
     all_tickers: list = [t for tlist in _jst_d.values() for t in tlist]
@@ -2141,18 +2206,33 @@ def run_stock_screener(cfg, sector_results: dict,
                     dynamic_ticker_meta[t] = dynamic_meta[t]  # type: ignore
         print(f"    📋 [問題D] 動的銘柄を追加: "
               f"{len(dynamic_tickers) - len(base_set & set(dynamic_tickers))}社")
-    # セクタースコア上位 N 業種を選択
-    sorted_sectors = sorted(
-        sector_results.items(),
-        key=lambda x: x[1].get("composite_score", 0) if isinstance(x[1], dict) else 0,
-        reverse=True,
-    )[:top_n_sectors]
+    if universe is not None:
+        # 一次上位を業種ごとに束ねて渡す。業種の上位N制限はかけず、BOT_TIER の業種も対象にする
+        # （BOT は軽量評価の MID 扱い）。業種不明は "DYNAMIC"（スコア50）にまとめる
+        _all_sec = all_sector_results or sector_results
+        sorted_sectors = sorted(
+            ((c, _all_sec.get(c) if isinstance(_all_sec.get(c), dict)
+              else {"composite_score": 50.0, "sector_name_ja": "未分類" if c == "DYNAMIC" else c})
+             for c in universe["plan"]),
+            key=lambda x: x[1].get("composite_score", 0), reverse=True)
+        stage2_by_sector = universe["plan"]
+    else:
+        # セクタースコア上位 N 業種を選択
+        sorted_sectors = sorted(
+            sector_results.items(),
+            key=lambda x: x[1].get("composite_score", 0) if isinstance(x[1], dict) else 0,
+            reverse=True,
+        )[:top_n_sectors]
+        stage2_by_sector = None
 
     top_sector_names = [
         v.get("sector_name_ja", k) if isinstance(v, dict) else str(k)
         for k, v in sorted_sectors
     ]
-    print(f"  対象業種（上位{top_n_sectors}）: {' / '.join(top_sector_names)}")
+    if universe is not None:
+        print(f"  対象業種（一次上位{len(universe['stage2'])}社を束ねた{len(sorted_sectors)}業種）")
+    else:
+        print(f"  対象業種（上位{top_n_sectors}）: {' / '.join(top_sector_names)}")
 
     all_candidates  = []
     all_comp_scores = []   # [S-3] 全銘柄スコアを蓄積（閾値計算用）
@@ -2163,8 +2243,11 @@ def run_stock_screener(cfg, sector_results: dict,
             continue
         sector_score = sec_data.get("composite_score", 50.0)
         sector_name  = sec_data.get("sector_name_ja", code)
-        tickers      = list(dict.fromkeys(
-            JP_SECTOR_TICKERS.get(code, []) + bq_sector_tickers.get(code, [])))
+        if stage2_by_sector is not None:
+            tickers = list(stage2_by_sector.get(code, []))
+        else:
+            tickers = list(dict.fromkeys(
+                JP_SECTOR_TICKERS.get(code, []) + bq_sector_tickers.get(code, [])))
 
         if not tickers:
             print(f"    [{code}] {sector_name}: 銘柄マスタなし → スキップ")
@@ -2180,7 +2263,8 @@ def run_stock_screener(cfg, sector_results: dict,
                 tickers         = tickers,
                 cfg             = cfg,
                 market          = "JP",
-                sector_tier     = sector_tier_map.get(code, "TOP"),
+                sector_tier     = ("MID" if universe is not None and sector_tier_map.get(code) == "BOT"
+                                   else sector_tier_map.get(code, "TOP")),
                 edinet_accruals = edinet_accruals,
                 all_scores_ref  = all_comp_scores,
                 surprise_cache = surprise_cache,
@@ -2290,6 +2374,9 @@ def run_stock_screener(cfg, sector_results: dict,
         if disc_score >= 40:
             discovery_count += 1
 
+    _attach_universe(all_candidates, universe,
+                     float(getattr(cfg, "SCREEN_BLEND_UNIVERSE", 0.5)))
+
     # 結果集計
     passed = [c for c in all_candidates if c["pass_filters"]]
     discovery_top = sorted(
@@ -2316,7 +2403,7 @@ def run_stock_screener(cfg, sector_results: dict,
     longterm_top = sorted(
         [c for c in all_candidates
          if c.get("is_longterm_hold") and c.get("pass_filters")],
-        key=lambda x: x.get("composite_score", 0),
+        key=lambda x: x.get("final_score", 0),
         reverse=True,
     )[:10]
 
@@ -2337,11 +2424,11 @@ def run_stock_screener(cfg, sector_results: dict,
     _passed = [c for c in all_candidates if c.get("pass_filters")]
     core_top = sorted(
         [c for c in _passed if c.get("strategy_label") == "core"],
-        key=lambda x: x.get("composite_score", 0), reverse=True,
+        key=lambda x: x.get("final_score", 0), reverse=True,
     )[:15]
     satellite_event_top = sorted(
         [c for c in _passed if c.get("strategy_label") == "satellite_event"],
-        key=lambda x: x.get("composite_score", 0), reverse=True,
+        key=lambda x: x.get("final_score", 0), reverse=True,
     )[:10]
     satellite_smallcap_top = sorted(
         [c for c in _passed if c.get("strategy_label") == "satellite_smallcap"],
@@ -2357,7 +2444,9 @@ def run_stock_screener(cfg, sector_results: dict,
         "sector_errors":           screen_errors,   # 例外で飛ばした業種
         "screened_count":          len(all_candidates),
         "pass_count":              len(passed),
-        "top_sectors":             top_sector_names,
+        "top_sectors":             top_sector_names[:int(getattr(cfg, "SCREEN_TOP_N_SECTORS", 7))],
+        "universe":                (universe or {}).get("summary"),   # 一次採点の要約（失敗・無効なら None）
+        "universe_error":          universe_error,
         "discovery_top":           discovery_top,
         "activist_top":            activist_top,
         "net_cash_rich_top":       net_cash_rich_top,

@@ -3189,6 +3189,7 @@ def run_all_tasks(mode: str = "all") -> dict:
             )
             if _sc:
                 sector_res = results.get("sectors", {})
+                sector_res_all = dict(sector_res)   # 一次採点（全上場）は BOT 業種も点数に使う
                                 # GAP-2 の格付けは補正途中のスコアで計算されている。
                                 # スクリーナー対象を決める直前に、その時点のスコア順位で付け直す。
                 sector_tier = results.get("sector_tier", {})
@@ -3215,8 +3216,10 @@ def run_all_tasks(mode: str = "all") -> dict:
                 screen_result = _sc.run_stock_screener(
                     cfg, sector_res,
                     sector_tier_map = results.get("sector_tier", {}),
+                    all_sector_results = sector_res_all,
                 )
                 results["screener"] = screen_result
+                results["screener_universe"] = screen_result.get("universe")
                 try:   # 基本点を先に記録する（以降の加減点と区別するため）
                     import score_trail as _st_base
                     _st_base.checkpoint("stock_screener")
@@ -3252,8 +3255,13 @@ def run_all_tasks(mode: str = "all") -> dict:
                 except Exception as _se:
                     print(f"    ⚠️  セクター振り分けエラー: {_se}")
                 _serr = screen_result.get("sector_errors") or []
-                logger.add("stock_screener", "warn" if _serr else "success",
+                _uerr = screen_result.get("universe_error")
+                _usum = screen_result.get("universe") or {}
+                logger.add("stock_screener", "warn" if (_serr or _uerr or _usum.get("bq_write_error")) else "success",
                            f"通過:{screen_result.get('pass_count',0)}銘柄"
+                           + (f" / 一次採点{_usum.get('universe_count')}社→二次{_usum.get('stage2_n')}社" if _usum else "")
+                           + (f" / 一次採点失敗（従来経路で続行）: {_uerr}" if _uerr else "")
+                           + (f" / 一次採点のBQ書込失敗: {_usum.get('bq_write_error')}" if _usum.get("bq_write_error") else "")
                            + (f" / 例外で飛ばした業種{len(_serr)}: "
                               + "; ".join(f"{e['sector']} {e['where']}" for e in _serr)[:200]
                               if _serr else ""))

@@ -105,6 +105,24 @@ TDNET_PRIORITY_CATEGORIES = ("BUYBACK", "CANCEL", "DIV_UP", "MBO", "LARGE_HOLDIN
 TDNET_LOOKBACK_DAYS = 3
 
 
+def _load_universe_top_tickers(cfg) -> list[str]:
+    """一次採点（screener_universe）の上位のうち、静的リストに無い銘柄。
+
+    個別キャッシュ（edinet_quality・comps・dcf・earnings_surprise 等）は動的候補のぶんだけ育つので、
+    一次で浮上した小型株を翌日以降の動的候補に入れてキャッシュを広げる。3日より古い記録は使わない。
+    """
+    p = _data_dir(cfg) / "screener_universe_top.json"
+    try:
+        rec = json.loads(p.read_text(encoding="utf-8"))
+        age = (date.today() - date.fromisoformat(rec.get("date", "2000-01-01"))).days
+        return [t for t in rec.get("tickers", []) if isinstance(t, str)] if age <= 3 else []
+    except FileNotFoundError:
+        return []
+    except Exception as e:
+        print(f"    ⚠️ 一次採点の上位リストを読めない（スキップ）: {str(e)[:80]}")
+        return []
+
+
 def _load_tdnet_tickers(results: dict, cfg=None) -> list[str]:
     """
     TDnet の重要開示銘柄を返す。
@@ -238,6 +256,7 @@ def build_dynamic_screener_tickers(
           "edinet_tickers":  [ticker, ...],  # ② EDINET高credit
           "tdnet_tickers":   [ticker, ...],  # ③ TDnet重要開示
           "journal_tickers": [ticker, ...],  # ④ journalのwatch
+          "universe_tickers": [ticker, ...], # 一次採点の上位（静的リスト外）
           "us_bridge_tickers": [ticker, ...], # US波及シグナル関連
           "all_tickers":     [ticker, ...],  # 合算・重複除去済み
           "dynamic_added":   [ticker, ...],  # 動的追加分のみ
@@ -275,6 +294,11 @@ def build_dynamic_screener_tickers(
         if t not in base_set
     ]
 
+    universe_tickers = [
+        t for t in _load_universe_top_tickers(cfg)
+        if t not in base_set
+    ]
+
     # ── US波及シグナル関連 JP 代表銘柄 ────────────────────────
     us_bridge_tickers = [
         t for t in _load_us_bridge_jp_reps(results, cfg)
@@ -301,6 +325,7 @@ def build_dynamic_screener_tickers(
     # 優先順: TDnet（最速） > journal > EDINET > US波及
     _add_dynamic(tdnet_tickers,     source="tdnet",       disc_score=100)
     _add_dynamic(journal_tickers,   source="journal",     disc_score=80)
+    _add_dynamic(universe_tickers,  source="universe_top", disc_score=85)
     _add_dynamic(edinet_tickers,    source="edinet_high_credit", disc_score=90)
     _add_dynamic(us_bridge_tickers, source="us_bridge",   disc_score=70)
 
@@ -313,6 +338,7 @@ def build_dynamic_screener_tickers(
         "tdnet_count":     len(tdnet_tickers),
         "journal_count":   len(journal_tickers),
         "us_bridge_count": len(us_bridge_tickers),
+        "universe_count":  len(universe_tickers),
         "dynamic_added":   len(dynamic_added),
         "total":           len(all_tickers),
     }
@@ -331,6 +357,7 @@ def build_dynamic_screener_tickers(
         "edinet_tickers":    edinet_tickers,
         "tdnet_tickers":     tdnet_tickers,
         "journal_tickers":   journal_tickers,
+        "universe_tickers":  universe_tickers,
         "us_bridge_tickers": us_bridge_tickers,
         "all_tickers":       all_tickers,
         "dynamic_added":     dynamic_added,
@@ -362,6 +389,10 @@ def run_screener_candidate_builder(cfg, results: dict = None) -> dict:
     sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print("\n  📋 スクリーニング対象銘柄ビルダー 開始...")
     result = build_dynamic_screener_tickers(cfg, results)
+    # 個別キャッシュ（決算サプライズ・インサイダー等）の対象にも一次採点の上位を渡す
+    if result.get("universe_tickers"):
+        cfg.__dict__["EDINET_SCREENER_CANDIDATES"] = list(dict.fromkeys(
+            result["universe_tickers"] + list(getattr(cfg, "EDINET_SCREENER_CANDIDATES", []) or [])))
 
     stats = result["stats"]
     print(

@@ -303,6 +303,11 @@ def integrate_technical_score(candidate: dict, tech_result: dict) -> dict:
 # BLOCK 4: yfinance 取得
 # ==============================================================
 
+def weekly_closes(closes_d: list) -> list:
+    """日足終値から週足終値（5営業日ごと）を作る。yfinance 経路と一次採点（BQ の日足）で共用する。"""
+    return [closes_d[i] for i in range(4, len(closes_d), 5)]
+
+
 def _fetch_ohlc(ticker: str) -> Optional[dict]:
     try:
         import yf_cache as yf
@@ -313,7 +318,7 @@ def _fetch_ohlc(ticker: str) -> Optional[dict]:
         closes_d = hist["Close"].dropna().tolist()
         highs_d  = hist["High"].dropna().tolist()
         lows_d   = hist["Low"].dropna().tolist()
-        closes_w = [closes_d[i] for i in range(4, len(closes_d), 5)]
+        closes_w = weekly_closes(closes_d)
         return {"closes_d": closes_d, "highs_d": highs_d,
                 "lows_d": lows_d, "closes_w": closes_w}
     except Exception:

@@ -1521,7 +1521,7 @@ SCREEN_FETCH_WORKERS: int    = 5
 SCREEN_PER_MAX:       float = 30.0   # PER 上限
 SCREEN_PBR_MAX:       float = 5.0    # PBR 上限
 SCREEN_ROE_MIN:       float = 0.05   # ROE 下限（5% = 0.05）
-SCREEN_MCAP_MIN_B:    float = 80.0  # 時価総額下限（80億）
+SCREEN_MCAP_MIN_B:    float = 0.0   # 時価総額下限（0=足切りしない。小型株を構造的に落とさないため）
 SCREEN_VOL_MIN:       int   = 50_000 # 出来高下限（5万株/日）
 
 NEWS_TOP_N:  int  = 10            # アラートに表示する重要記事の最大件数
@@ -5198,3 +5198,36 @@ MARKET_PROFILE: dict = {
         "sector_taxonomy": "GICS11",
     },
 }
+
+# ==============================================================
+# BLOCK 62: 全上場2段階スクリーナー（screener_universe.py / stock_screener.py）
+# ==============================================================
+# 一次採点: BQ の全上場を既存の評価部品（テクニカル・不動産ボーナス・アクルーアル tier・各キャッシュの加点）で採点し、
+#   上位 SCREEN_STAGE2_TOP_N 社だけを従来の詳細評価（yfinance 等）に回す。規模（時価総額）はどの観点にも入れない。
+# 観点の重み（合計は実行時に1へ正規化）。値が無い観点は中立50で coverage に記録する（不利にしない）。
+ENABLE_SCREENER_UNIVERSE: bool = True
+SCREEN_UNIVERSE_WEIGHTS: dict = {
+    "move":      0.10,   # ① 前日の値動き（騰落・出来高倍率・20日高値との距離）
+    "momentum":  0.15,   # ② モメンタム（1か月・3か月・12か月−1か月・52週高値への近さ）
+    "technical": 0.10,   # ③ technical_scorer の採点（＋ SR/VP 加点はキャッシュのある銘柄だけ）
+    "asset":     0.10,   # ④ 簿価・資産の裏付け（stock_real_estate の不動産ボーナス・資産バリュー倍率・修正PBR）
+    "quality":   0.15,   # ⑤ 質（アクルーアル tier・EDINET品質・ROIC・CF率・F-score）
+    "growth":    0.15,   # ⑥ 成長・業績イベント（成長率・増益年数・決算サプライズ）
+    "value":     0.10,   # ⑦ 割安（益回り・FCF利回り・EV/EBITDA・総還元利回り・DCF・コンプス）
+    "flow":      0.05,   # ⑧ 需給・株主（信用残・インサイダー・配当）
+    "theme":     0.05,   # ⑨ テーマ（銘柄ごとの max(関与度×ノード熱度)）
+    "sector":    0.05,   # ⑩ 業種スコア（BOT_TIER の業種も点数としては入れる）
+}
+SCREEN_UNIVERSE_MIN_TURNOVER: float = 10_000_000.0  # 20日平均売買代金（円/日）の下限。時価総額では外さない
+SCREEN_UNIVERSE_STALE_DAYS: int = 14                # 最新株価が全体の最新日からこの日数より古い銘柄は対象外
+SCREEN_UNIVERSE_PRICE_DAYS: int = 440               # 日足を読む期間（暦日。祝日を除いて約270営業日＝12か月−1か月の騰落に要る253営業日を超える）
+SCREEN_UNIVERSE_LEADING_BONUS: float = 15.0         # 先行指標だけ点灯したノードの熱度に足す点（上限100）
+# 既存の加点（pt）を0〜100へ写すときの上限。50＋50×pt/上限（0ptが中立50）
+SCREEN_UNIVERSE_BONUS_CAPS: dict = {
+    "re": 3.0, "accrual": 20.0, "edinet": 10.0, "surprise": 10.0, "dcf": 10.0, "comps": 10.0,
+    "credit": 5.0, "insider": 10.0, "dividend": 5.0, "sr": 10.0, "vp": 10.0,
+}
+SCREEN_STAGE2_TOP_N: int = 200            # 一次上位のうち二次評価に回す社数
+SCREEN_BLEND_UNIVERSE: float = 0.5        # final_score = これ×一次スコア + (1−これ)×二次の composite_score
+SCREEN_UNIVERSE_SEED_N: int = 20          # 一次上位から EDINET_SCREENER_CANDIDATES（個別キャッシュの育成）へ渡す社数
+SCREEN_UNIVERSE_TOP_REPORT_N: int = 50    # results["screener_universe"] に載せる上位件数
