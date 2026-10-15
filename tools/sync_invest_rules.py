@@ -245,6 +245,13 @@ def main() -> int:
     if args.no_push:
         print("--no-push のため push していない。")
         return 0
+    # Actions が1日に何度も stock_data/ を自動コミットするので、先にリベースで取り込む
+    # （履歴は書き換えない。衝突したら中止して報告する）
+    pull = git("pull", "--rebase", "--autostash", "origin", "main")
+    if pull.returncode != 0:
+        git("rebase", "--abort")
+        print("push 前の取り込み（pull --rebase）に失敗:\n" + pull.stderr)
+        return 6
     push = git("-c", "http.postBuffer=524288000", "push", "origin", "main")
     if push.returncode != 0:
         print("push 失敗:\n" + push.stderr)
