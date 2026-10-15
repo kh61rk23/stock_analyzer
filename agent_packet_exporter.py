@@ -540,6 +540,15 @@ def build_packet(cfg, ticker: str) -> str:
     return "\n".join(lines)
 
 
+def build_packet_text(ticker: str, cfg=None) -> str:
+    """パケット全文を文字列で返す（vault・ファイル出力に依存しない）。
+
+    審議キューへ packet_md として保存するための入口。cfg を省略すると
+    run_headless と同じ規約（STOCK_ANALYZER_BASE → リポジトリ直下 stock_data）で解決する。
+    """
+    return build_packet(cfg if cfg is not None else _load_config(), ticker)
+
+
 def export(ticker: str, vault: str = "") -> Path:
     cfg = _load_config()
     # BLOCK 39 の ENABLE_INVESTMENT_DEPT=False で投資部連携を止める。
