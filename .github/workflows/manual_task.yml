@@ -25,6 +25,7 @@ on:
           - edinetdb_ingest
           - stock_real_estate
           - rental_property_ingest
+          - alert_backfill
 
 permissions:
   contents: write
@@ -47,7 +48,7 @@ jobs:
       - name: Install dependencies
         run: |
           case "${{ inputs.task }}" in
-            price_universe_*|us_company_facts_*|stock_real_estate) pip install -r requirements-prices.txt ;;
+            price_universe_*|us_company_facts_*|stock_real_estate|alert_backfill) pip install -r requirements-prices.txt ;;
             *) pip install -r requirements.txt ;;
           esac
       - name: Run task
@@ -85,6 +86,8 @@ jobs:
             stock_real_estate) python -u stock_real_estate.py ;;
             # 賃貸等不動産（EdinetDB real-estate）を設定どおりに取る（無効の間は試行の10社。EdinetDB の日次枠を使う）
             rental_property_ingest) python -u rental_property_ingestor.py ;;
+            # 送信済みの日次メール（IMAP）から、全節と銘柄を analytics.alert_sections / alert_items へ
+            alert_backfill) python -u alert_store.py --backfill ;;
           esac
       - name: Commit state
         if: always()

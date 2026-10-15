@@ -1332,6 +1332,7 @@ FUDOSAN_MIN_INTERVAL_SEC: float = 0.5
 RE_BONUS_MIN: float = -2.0
 RE_BONUS_MAX: float = 3.0
 # 有報の注記「賃貸等不動産関係」（rental_property_ingestor.py・EdinetDB real-estate）。EdinetDB の日次枠を日次取り込みと分け合う
+ENABLE_ALERT_STORE: bool = True          # 日次メールの全節と銘柄を analytics.alert_sections / alert_items へ（alert_store.py）
 ENABLE_RENTAL_PROPERTY_FV: bool = False   # False の間は RENTAL_FV_TRIAL_LIMIT 社を1回だけ試す（結果を見て承認後に True）
 RENTAL_FV_DAILY_BUDGET: int = 15          # 1日に取る社数（＝EdinetDB の呼び出し回数）。残りは日次取り込みへ
 RENTAL_FV_TRIAL_LIMIT: int = 10

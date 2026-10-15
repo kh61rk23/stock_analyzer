@@ -2584,6 +2584,13 @@ def run_alert_notifier(cfg, results: dict) -> dict:
             )
             html_body = build_message(_gmail_alerts, mode="email")
             ok, err   = send_gmail(gmail_from, gmail_pwd, gmail_to, subject, html_body)
+            # 送った節（注意項目を含む全部）と、その中の銘柄を BQ に残す。メールを過ぎると追えなくなるため
+            if ok and getattr(cfg, "ENABLE_ALERT_STORE", True):
+                try:
+                    import alert_store
+                    alert_store.store_live(cfg, _gmail_alerts)
+                except Exception as _ase:
+                    print(f"    ⚠️ 注意項目のBQ保存エラー: {str(_ase)[:80]}")
             if ok:
                 channels.append("Gmail")
                 messages.append(subject)
