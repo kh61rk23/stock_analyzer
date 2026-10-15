@@ -17,6 +17,7 @@
 # 【対象と順番】
 #   保有不動産（corporate_holdings_p1）に土地簿価のある会社と不動産業（1032）を対象にし、
 #   未取得の会社 → 前回取得より後に有価証券報告書が出た会社、の順に RENTAL_FV_DAILY_BUDGET 社まで。
+#   未取得の中は、不動産業 → 土地簿価の大きい順（推定時価の補正で主に比べる会社を先に集めるため）。
 #   取得状況は stock_data/data/rental_property_state.json に残す。
 # 【予算】
 #   EdinetDB の日次枠（EDINETDB_DAILY_BUDGET）を日次取り込みと共有する。日次取り込みの直前に
@@ -72,12 +73,25 @@ LEFT JOIN `{project}.edinet.company` AS c ON c.edinet_code = f.edinet_code
 """
 
 TARGET_SQL = """
-SELECT edinet_code FROM (
-  SELECT DISTINCT h.edinet_code FROM `{project}.real_estate.corporate_holdings_p1` AS h
-  WHERE h.book_value_land_m_yen > 0
-  UNION DISTINCT
+WITH latest AS (
+  SELECT edinet_code, book_value_land_m_yen
+  FROM `{project}.real_estate.corporate_holdings_p1`
+  WHERE book_value_land_m_yen > 0
+  QUALIFY fiscal_year = MAX(fiscal_year) OVER (PARTITION BY edinet_code)
+),
+land AS (
+  SELECT edinet_code, SUM(book_value_land_m_yen) AS land_book FROM latest GROUP BY edinet_code
+),
+re_sector AS (
   SELECT edinet_code FROM `{project}.edinet.company_master` WHERE sector_code = '1032' AND NOT IFNULL(is_delisted, FALSE)
 )
+SELECT edinet_code, MAX(prio) AS prio, MAX(land_book) AS land_book FROM (
+  SELECT edinet_code, 1 AS prio, NULL AS land_book FROM re_sector
+  UNION ALL
+  SELECT edinet_code, 0 AS prio, land_book FROM land
+)
+GROUP BY edinet_code
+ORDER BY prio DESC, land_book DESC, edinet_code
 """
 
 LATEST_DOC_SQL = """
@@ -211,7 +225,7 @@ def run(cfg, limit: int | None = None) -> dict:
     from edinet_bq_client import EDINETBQClient
     bq = EDINETBQClient()
     ensure_table(bq)
-    cands = sorted({r.edinet_code for r in bq.client.query(TARGET_SQL.format(project=bq.project)).result()})
+    cands = list(dict.fromkeys(r.edinet_code for r in bq.client.query(TARGET_SQL.format(project=bq.project)).result()))
     latest = {r.edinet_code: str(r.latest) for r in bq.client.query(
         LATEST_DOC_SQL.format(project=bq.project),
         job_config=bigquery.QueryJobConfig(query_parameters=[
