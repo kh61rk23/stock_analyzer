@@ -692,7 +692,7 @@ def _section_deliberation_queue(results: dict, cfg) -> list:
     """
     lines = ["## 🗳️ 審議キュー候補（B部門 E3）", ""]
     try:
-        from deliberation_scheduler import get_queue_for_report
+        from deliberation_queue import get_queue_for_report
         dq = get_queue_for_report(
             cfg, results,
             top_n=int(getattr(cfg, "DELIBERATION_QUEUE_TOP_N", 5)))

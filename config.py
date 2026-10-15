@@ -1581,6 +1581,7 @@ DAILY_MODULES = [
     "pead_monitor",                # FE-5（screener直後・日次）
     "ml_meta",                     # S7 ML特徴量スナップショット（日次蓄積）
     "score_calculator",            # E10 JP/US共通スコア
+    "deliberation_queue",          # 投資審議の DB キュー（score_calculator の後）
         # size_decay_manager / cross_size_signal は stock_analyzer_main が _in_mode("size_tier") でゲートする。
         #   ここに "size_tier" が無いと日次・週次では永久に実行されない。
     "size_tier",                   # 規模別減衰管理 + 規模帯横断シグナル
@@ -5231,3 +5232,18 @@ SCREEN_STAGE2_TOP_N: int = 200            # 一次上位のうち二次評価に
 SCREEN_BLEND_UNIVERSE: float = 0.5        # final_score = これ×一次スコア + (1−これ)×二次の composite_score
 SCREEN_UNIVERSE_SEED_N: int = 20          # 一次上位から EDINET_SCREENER_CANDIDATES（個別キャッシュの育成）へ渡す社数
 SCREEN_UNIVERSE_TOP_REPORT_N: int = 50    # results["screener_universe"] に載せる上位件数
+
+
+# ==============================================================
+# BLOCK 63: 投資審議の DB キュー（deliberation_queue.py / tools/invest_queue.py）
+# ==============================================================
+# 日次でスクリーナーの最終候補から審議キューを作り BQ invest.deliberation_queue へ書く。
+# 隔週の審議は Claude Code のクラウド定時実行が invest-dept スキル（クラウド審議モード）でキューを読み、
+# 4エージェントの結果を invest.deliberations に書く。間隔は DELIBERATION_INTERVAL_DAYS（BLOCK 39）。
+ENABLE_DELIBERATION_QUEUE: bool = True
+DELIB_QUEUE_SIZE: int = 10          # 1日にキューへ入れる件数
+DELIB_RECHECK_DAYS: int = 90        # 前回審議からこの日数を超えたら再審議の対象（保有の見直しにも使う）
+DELIB_RESCORE_JUMP: float = 15.0    # 前回審議時より final_score がこの点以上上がったら再審議の対象
+DELIB_HOLDING_MAX: int = 3          # キューに入れる保有見直しの上限
+DELIB_PACKET_TOP_N: int = 5         # 審議パケットを作ってキューに保存する上位件数
+DELIB_BATCH_SIZE: int = 3           # クラウド定時実行1回で審議する件数

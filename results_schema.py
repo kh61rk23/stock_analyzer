@@ -136,6 +136,7 @@ SCHEMA: dict[str, list[str]] = {
     "screener": ["institutional_signal_scorer", "stock_analyzer_main"],
     "screener_candidates": ["stock_analyzer_main"],
     "screener_universe": ["stock_analyzer_main"],
+    "deliberation_queue": ["stock_analyzer_main"],
     "screener_trace": ["stock_analyzer_main"],
     "screener_feedback": ["stock_analyzer_main"],
     "screener_heatmap": ["stock_analyzer_main"],

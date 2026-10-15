@@ -81,7 +81,8 @@ CREATE TABLE IF NOT EXISTS `{project}.{ds}.deliberations` (
   approval_status STRING,
   approved_by STRING,
   approved_at TIMESTAMP,
-  review_on DATE
+  review_on DATE,
+  holding_intent STRING
 )
 PARTITION BY DATE(deliberated_at)
 CLUSTER BY ticker""",

@@ -436,11 +436,21 @@ def extract_alerts(cfg, results: dict) -> list:
         # ここに出る先頭銘柄が隔週ジョブで実際に選定される銘柄になる。
     if getattr(cfg, "ALERT_ON_DELIBERATION_QUEUE", True):
         try:
-            from deliberation_scheduler import get_queue_for_report
+            from deliberation_queue import get_queue_for_report
             _dq = get_queue_for_report(
                 cfg, results,
                 top_n=int(getattr(cfg, "DELIBERATION_QUEUE_TOP_N", 5)))
             _q = _dq.get("queue", [])
+            _lr = _dq.get("last_run") or {}
+            if str(_lr.get("status", "")).lower() == "failed":
+                alerts.append({
+                    "trigger":  "deliberation_run_failed",
+                    "title":    "⚠️ 投資審議の定時実行が失敗",
+                    "body":     (f"{str(_lr.get('started_at', ''))[:16]}: "
+                                 f"{str(_lr.get('error') or '理由不明')[:200]}"
+                                 "（取った銘柄はキューの pending に戻している）"),
+                    "severity": "high",
+                })
                         # 前回からの入れ替わり（連続日数・外れた銘柄と理由）
             _chg = {}
             try:

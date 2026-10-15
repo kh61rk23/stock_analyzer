@@ -5318,6 +5318,19 @@ def run_all_tasks(mode: str = "all") -> dict:
         except Exception as e:
             logger.add("score_calculator", "error", str(e)[:100])
             print(f"  ⚠️  共通スコア計算エラー: {str(e)[:80]}")
+    # 投資審議の DB キュー。クラウドの定時審議はこのキューだけを読むので、失敗は error で残す。
+    if getattr(cfg, "ENABLE_DELIBERATION_QUEUE", True) and _in_mode("deliberation_queue"):
+        try:
+            import deliberation_queue as _dlq
+            _dq_res = _dlq.run_daily(cfg, (results.get("screener") or {}).get("candidates") or [])
+            results["deliberation_queue"] = _dq_res
+            _pf = _dq_res.get("packet_failed") or {}
+            logger.add("deliberation_queue", "warn" if _pf else "success",
+                       f"キュー{_dq_res.get('queued', 0)}件 / パケット{_dq_res.get('packets', 0)}件"
+                       + (f" / パケット失敗{len(_pf)}: {', '.join(list(_pf)[:5])}" if _pf else ""))
+        except Exception as e:
+            logger.add("deliberation_queue", "error", str(e)[:150])
+            print(f"  ⚠️  審議キューの作成失敗: {str(e)[:100]}")
         # ── MLメタモデル: 特徴量スナップショット蓄積 ──
         # signal_aggregator の23カテゴリ components を日次で features.jsonl へ追記。
         # 学習は Colab（ml/train_meta.ipynb・週次手動）。ここは蓄積のみで軽量。

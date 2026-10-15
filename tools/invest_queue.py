@@ -252,11 +252,18 @@ def claim(client, limit: int, today: date | None = None, run_env: str = "cloud_r
        [_p("d", "STRING", today.isoformat()), _p("qd", "DATE", qd),
         _arr("t", tickers)]).result()
     claimed = []
+    # 保有意図は人間が書く列。直近の審議に入っているものを B1〜B4 に同文で渡す（部則: B2 の確認義務）
+    intents = {r["ticker"]: r["holding_intent"] for r in _q(client, f"""
+        SELECT ticker, ARRAY_AGG(holding_intent ORDER BY deliberated_at DESC LIMIT 1)[OFFSET(0)] AS holding_intent
+        FROM {_fq(client, DELIB_TABLE)}
+        WHERE ticker IN UNNEST(@t) AND holding_intent IS NOT NULL GROUP BY ticker""",
+        [_arr("t", tickers)]).result()}
     for r in rows:
         cid = case_id_for(r["ticker"], today)
         claimed.append({"case_id": cid, "ticker": r["ticker"], "company_name": r["company_name"],
                         "sector_code": r["sector_code"], "source": r["source"], "reason": r["reason"],
-                        "priority_rank": r["priority_rank"], "packet_md": r["packet_md"]})
+                        "priority_rank": r["priority_rank"], "packet_md": r["packet_md"],
+                        "holding_intent": intents.get(r["ticker"])})
     _q(client, f"""
         INSERT INTO {_fq(client, RUNS_TABLE)}
           (run_id, started_at, run_env, status, claimed_count, completed_count, case_ids)
@@ -275,6 +282,12 @@ def complete(client, case_id: str, work_dir: Path, run_id: str | None = None,
     qrow = dict(qrows[0].items()) if qrows else {"case_id": case_id}
     qrow["case_id"] = case_id
     row = parse_deliberation(files, qrow, run_env=run_env, overrides=ov)
+    # 保有意図は審議で変わらない人間の記述なので、直近の値を新しい行へ引き継ぐ
+    prev = list(_q(client, f"""
+        SELECT holding_intent FROM {_fq(client, DELIB_TABLE)}
+        WHERE ticker = @t AND holding_intent IS NOT NULL ORDER BY deliberated_at DESC LIMIT 1""",
+        [_p("t", "STRING", row.get("ticker"))]).result())
+    row["holding_intent"] = prev[0]["holding_intent"] if prev else None
 
     exists = list(_q(client, f"SELECT 1 FROM {_fq(client, DELIB_TABLE)} WHERE case_id = @c LIMIT 1",
                      [_p("c", "STRING", case_id)]).result())
@@ -297,7 +310,7 @@ def _insert_deliberation(client, r: dict) -> None:
     cols = ["case_id", "ticker", "company_name", "sector_code", "deliberated_at", "verdict", "conviction",
             "layer", "bull_conviction", "bear_conviction", "devil_unresolved", "devil_reversal", "kpi",
             "bull_memo", "bear_memo", "devil_memo", "report_md", "packet_md", "models", "run_env",
-            "approval_status", "approved_by", "approved_at", "review_on"]
+            "approval_status", "approved_by", "approved_at", "review_on", "holding_intent"]
     types = {"deliberated_at": "TIMESTAMP", "approved_at": "TIMESTAMP", "review_on": "DATE",
              "conviction": "INT64", "bull_conviction": "INT64", "bear_conviction": "INT64",
              "devil_unresolved": "INT64", "devil_reversal": "INT64"}

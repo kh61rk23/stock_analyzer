@@ -437,12 +437,29 @@ def cmd_feedback(cfg) -> None:
     print(f"✅ feedback 還流: {updated}件")
 
 
+def cmd_rules() -> bool:
+    """投資部の部則・審議スキル（vault が正本）に変更があれば GitHub へ同期・push する。
+
+    クラウドの定時審議はリポジトリ内のコピー（investment_dept/・.claude/skills/）しか読めないため、
+    vault で部則を直したら次の定期実行でここが反映する。差分が無ければ commit も push もしない。
+    """
+    import subprocess
+    r = subprocess.run([sys.executable, str(REPO_ROOT / "tools" / "sync_invest_rules.py"), "--apply"],
+                       cwd=REPO_ROOT, text=True, capture_output=True)
+    out = (r.stdout or "") + (r.stderr or "")
+    print(out.strip()[-1500:])
+    if r.returncode != 0:
+        print(f"⚠️ 部則の同期に失敗（exit {r.returncode}）")
+        return False
+    return True
+
+
 # ==============================================================
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Obsidian 同期ブリッジ（DEPT-2）")
     ap.add_argument("command", choices=["pull", "mirror", "holdings", "queue", "journal",
-                                        "feedback", "all"])
+                                        "feedback", "rules", "all"])
     ap.add_argument("--repo", default="", help="GitHub リポジトリURL")
     args = ap.parse_args()
     cfg = _load_config()
@@ -459,5 +476,7 @@ if __name__ == "__main__":
         cmd_journal(cfg)
     if args.command in ("feedback", "all"):
         cmd_feedback(cfg)
+    if args.command in ("rules", "all"):
+        ok = cmd_rules() and ok
     # pull / mirror の失敗は非0で返す（rc=0 だと run_apps.log 上は「成功」に見える）。
     sys.exit(0 if ok else 1)
