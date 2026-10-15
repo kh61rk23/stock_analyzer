@@ -235,7 +235,7 @@ def run(cfg, limit: int | None = None) -> dict:
     written = False
     if rows:
         written = bool(bq.merge_rows("rental_property_fv", rows, ["edinet_code", "fiscal_year"], dataset="real_estate"))
-    if not enabled:
+    if not enabled and getattr(client, "last_error", None) != "budget":
         meta["trial_done"] = today
     meta["last_run"] = today
     state_path.parent.mkdir(parents=True, exist_ok=True)
