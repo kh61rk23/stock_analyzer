@@ -86,3 +86,10 @@ class TestLaunchPrompts:
         assert "並列可" in md          # ①②並列
         assert "①②完了後" in md        # ③
         assert "③完了後" in md          # ④
+
+    def test_output_names_match_vault_rules(self):
+        # vault の部則（B1〜B3）と devil_calibration の glob は bull/bear/devil.md 前提
+        md = build_launch_prompts("c1", "AAPL")
+        for name in ("c1/bull.md", "c1/bear.md", "c1/devil.md"):
+            assert f"20_審議/{name}" in md
+        assert "01_ブル" not in md and "03_デビル" not in md

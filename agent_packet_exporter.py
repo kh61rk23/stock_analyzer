@@ -491,8 +491,9 @@ def build_packet(cfg, ticker: str) -> str:
                     / "screener_history.json")
     if sh:
         try:
+            from performance_tracker import normalize_history_entry
             for d in sorted(sh.keys(), reverse=True):
-                for c in (sh[d] or {}).get("candidates", []):
+                for c in normalize_history_entry(sh[d]):
                     if isinstance(c, dict) and str(c.get("ticker", "")) == ticker:
                         sector_code = str(c.get("sector_code", ""))
                         break

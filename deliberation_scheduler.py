@@ -116,14 +116,14 @@ PROMPTS = {
         "role": "①ブルアナリスト",
         "prompt": _COMMON + " あなたは強気仮説のみを構築する。リスクは書かない"
                   "（それはベア/デビルの職掌）。packetの数値を根拠に上昇シナリオを提示。"
-                  "出力: 20_審議/{case_id}/01_ブル.md",
+                  "出力: 20_審議/{case_id}/bull.md",
     },
     "bear": {
         "model": "Sonnet 5",
         "role": "②ベアアナリスト",
         "prompt": _COMMON + " あなたは弱気仮説のみを構築する。強気材料は書かない。"
                   "packetの数値を根拠に下落・停滞シナリオを提示。"
-                  "出力: 20_審議/{case_id}/02_ベア.md",
+                  "出力: 20_審議/{case_id}/bear.md",
     },
     "devil": {
         "model": "Opus 4.8",
@@ -131,7 +131,7 @@ PROMPTS = {
         "prompt": _COMMON + " あなたは検証者。bull.md と bear.md と packet を突き合わせ、"
                   "両仮説の論証の弱点・反証・データ鮮度/二重計上を指摘し、論点別に信頼度A/B/Cを付す。"
                   "独自の相場観や新規の買い/売り理由は持ち込まない。"
-                  "出力: 20_審議/{case_id}/03_デビル.md",
+                  "出力: 20_審議/{case_id}/devil.md",
     },
     "reporter": {
         "model": "Opus 4.8",

@@ -1,32 +1,34 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Wave R0-5 / E2: 審議→成績→デビル校正の週次自動実行（毎週日曜21:00） -->
-<!-- 登録手順（健太・1回だけ）:
-     1) このファイル内の WORKING_DIR を実際のリポジトリパスに合わせて確認
-     2) cp setup/com.kenta.invest-weekly.plist ~/Library/LaunchAgents/
-     3) launchctl load ~/Library/LaunchAgents/com.kenta.invest-weekly.plist
+<!-- 審議→成績→デビル校正の週次自動実行（毎週日曜21:00） -->
+<!-- 実行は司令塔シェル run_apps.sh の invest-weekly に委ねる。run_apps.sh が
+     リポジトリのパス解決・実在チェック・中央ログ記録を担うため、ここには
+     WorkingDirectory を書かない（リポジトリを移すと plist が黙って壊れるため）。
+     登録手順（1回だけ）:
+     1) cp setup/com.kenta.invest-weekly.plist ~/Library/LaunchAgents/
+     2) launchctl load ~/Library/LaunchAgents/com.kenta.invest-weekly.plist
      解除: launchctl unload ~/Library/LaunchAgents/com.kenta.invest-weekly.plist -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
   <string>com.kenta.invest-weekly</string>
+
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/bin/python3</string>
-    <string>weekly_feedback_runner.py</string>
+    <string>/bin/bash</string>
+    <string>/Users/kentaryobe/Documents/Obsidian_Local/司令塔シェル_動かさない/run_apps.sh</string>
+    <string>invest-weekly</string>
   </array>
-  <key>WorkingDirectory</key>
-  <string>/Users/kentaryobe/Documents/株・資産系統/株システム関連/stock_analyzer/stock_analyzer-main（更新用）</string>
+
   <key>StartCalendarInterval</key>
-  <dict>
-    <key>Weekday</key><integer>0</integer>
-    <key>Hour</key><integer>21</integer>
-    <key>Minute</key><integer>0</integer>
-  </dict>
+  <dict><key>Weekday</key><integer>0</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>0</integer></dict>
+  <key>RunAtLoad</key>
+  <false/>
+
   <key>StandardOutPath</key>
-  <string>/tmp/com.kenta.invest-weekly.out</string>
+  <string>/tmp/invest-weekly.log</string>
   <key>StandardErrorPath</key>
-  <string>/tmp/com.kenta.invest-weekly.err</string>
+  <string>/tmp/invest-weekly.err</string>
 </dict>
 </plist>
