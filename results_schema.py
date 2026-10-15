@@ -160,7 +160,8 @@ SCHEMA: dict[str, list[str]] = {
     "timeline": ["stock_analyzer_main"],
     "total_signal_score": ["stock_analyzer_main"],
     "unified_scores": ["stock_analyzer_main"],       # R5-2 Phase A: JP/US共通スコア
-    "stock_real_estate": ["stock_analyzer_main"],    # 全上場の銘柄単位不動産ボーナス（stock_real_estate.run）
+    "stock_real_estate": ["stock_analyzer_main"],
+    "rental_property_fv": ["stock_analyzer_main"],   # 賃貸等不動産の取得結果（rental_property_ingestor.run）    # 全上場の銘柄単位不動産ボーナス（stock_real_estate.run）
     "us_8k": ["stock_analyzer_main"],
     "us_fundamentals": ["stock_analyzer_main"],
     "us_macro": ["stock_analyzer_main"],

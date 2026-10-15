@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-13 21:39:33",
+  "generated_at": "2026-10-15 14:53:02",
   "source": "stock_analyzer_main.run_all_tasks（AST自動生成・手動編集禁止）",
   "stage_count": 107,
   "stages": [
@@ -30,7 +30,8 @@
         "edinetdb_ingest"
       ],
       "produces": [
-        "edinetdb_ingest"
+        "edinetdb_ingest",
+        "rental_property_fv"
       ]
     },
     {
