@@ -81,9 +81,12 @@ python3 maintenance_packet.py   # 全監査+台帳+直近変更を MAINTENANCE_P
   ※ 日曜は市場が動かないため停止（Actions 無料枠 2,000分/月の節約）。
     UTC 00:00 ちょうどはジョブが集中し実測で3〜4時間の遅延が出るため :17 へずらしてある。
     **前倒し（UTC 23:40 等）は不可** — JST月曜の回が UTC では日曜になり weekly 判定が壊れる。
-- 設定SSOT: config.py（BLOCK 0〜61・他moduleをimportしない）
-- パイプライン宣言: pipeline_registry.json（107ステージ・AST自動生成・手動編集禁止）
-- データ契約: results_schema.py（148キー）
+- 設定SSOT: config.py（BLOCK 0〜63・他moduleをimportしない）
+- パイプライン宣言: pipeline_registry.json（108ステージ・AST自動生成・手動編集禁止）
+- データ契約: results_schema.py（150キー）
+- 日本株スクリーナー: 全上場の一次採点（screener_universe.py・既存の評価部品を全上場に当てる・時価総額で足切りしない）→ 上位だけ二次評価（stock_screener.py）
+- 投資審議: 日次で審議キューを BQ invest.deliberation_queue へ（deliberation_queue.py）→ Claude Code クラウド定時実行（隔週）が `.claude/skills/invest-dept` のクラウド審議モードで4エージェント審議し invest.deliberations へ登録。
+  部則・審議スキルの正本は vault の B-investment。repo の `investment_dept/`・`.claude/skills/invest-*` は同期コピー（直接編集しない。obsidian_sync rules → tools/sync_invest_rules.py が push）
 - 観測性: module_ledger.py（実行台帳・連続失敗アラート・配線漏れ検出）
 - 投資部連携: agent_packet_exporter.py → Obsidian vault（B-investment）
 - ローカル同期: obsidian_sync.py（GitHub→Mac→iCloud vault / launchd は setup/ 参照）
