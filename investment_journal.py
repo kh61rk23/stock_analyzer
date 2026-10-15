@@ -561,8 +561,9 @@ def run_investment_journal(cfg, screener_result: dict = None,
                            performance_result: dict = None,
                            results: dict = None) -> dict:
     """
-    投資ジャーナルの自動更新を実行する。
-    stock_analyzer_main.py の screener 実行後・performance_tracker 後に呼ぶ。
+    投資ジャーナルの自動更新を一括で実行する（手動・検証用の入口）。
+    日次パイプラインからは呼ばない。①は stock_screener、②は performance_tracker が
+    それぞれ直接呼んでいるため、main に配線すると同じ更新が二重に走る。
 
     Returns:
         {
