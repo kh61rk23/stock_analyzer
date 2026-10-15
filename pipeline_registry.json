@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-15 21:17:25",
+  "generated_at": "2026-10-15 22:32:32",
   "source": "stock_analyzer_main.run_all_tasks（AST自動生成・手動編集禁止）",
   "stage_count": 108,
   "stages": [
@@ -1445,7 +1445,7 @@
       ]
     },
     {
-      "order": 5337,
+      "order": 5344,
       "modules": [
         "dataset_builder"
       ],
@@ -1460,7 +1460,7 @@
       ]
     },
     {
-      "order": 5366,
+      "order": 5373,
       "modules": [
         "corrector_applier"
       ],
@@ -1473,7 +1473,7 @@
       ]
     },
     {
-      "order": 5388,
+      "order": 5395,
       "modules": [
         "inference_engine"
       ],
@@ -1488,7 +1488,7 @@
       ]
     },
     {
-      "order": 5410,
+      "order": 5417,
       "modules": [
         "notion_obsidian_writer"
       ],
@@ -1503,7 +1503,7 @@
       ]
     },
     {
-      "order": 5433,
+      "order": 5440,
       "modules": [
         "job_posting_monitor"
       ],
@@ -1518,7 +1518,7 @@
       ]
     },
     {
-      "order": 5466,
+      "order": 5473,
       "modules": [
         "executive_transition_tracker"
       ],
@@ -1533,7 +1533,7 @@
       ]
     },
     {
-      "order": 5501,
+      "order": 5508,
       "modules": [
         "facility_expansion_monitor"
       ],
@@ -1548,7 +1548,7 @@
       ]
     },
     {
-      "order": 5535,
+      "order": 5542,
       "modules": [
         "event_horizon_scanner"
       ],
@@ -1563,7 +1563,7 @@
       ]
     },
     {
-      "order": 5560,
+      "order": 5567,
       "modules": [
         "options_strategy_advisor"
       ],
@@ -1578,7 +1578,7 @@
       ]
     },
     {
-      "order": 5585,
+      "order": 5592,
       "modules": [
         "ontology_exporter"
       ],
@@ -1593,7 +1593,7 @@
       ]
     },
     {
-      "order": 5614,
+      "order": 5621,
       "modules": [
         "weekly_report_generator"
       ],
@@ -1608,7 +1608,7 @@
       ]
     },
     {
-      "order": 5640,
+      "order": 5647,
       "modules": [
         "price_history_writer"
       ],
@@ -1623,7 +1623,7 @@
       ]
     },
     {
-      "order": 5680,
+      "order": 5687,
       "modules": [
         "module_ledger"
       ],

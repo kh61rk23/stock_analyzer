@@ -20,7 +20,7 @@ import json
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from invest_bq_schema import DATASET, LATEST_VIEW, LOCATION, QUEUE_TABLE, RUNS_TABLE
+from invest_bq_schema import DATASET, DELIB_TABLE, LATEST_VIEW, LOCATION, QUEUE_TABLE, RUNS_TABLE
 
 # 保有メモ・口座区分にこれらがあればコア層とみなす（部則7: NISA積立・恩株・放置大型株）
 CORE_ACCOUNT_MARKERS = ("NISA", "ニーサ")
@@ -319,6 +319,152 @@ def run_daily(cfg, candidates: list, today: date | None = None, client=None) -> 
     res = write_queue(client, rows, today,
                       Path(_cfg(cfg, "DATA_DIR", "stock_data/data")) / "tmp")
     res.update(queued=len(rows), packets=pk["ok"], packet_failed=pk["failed"])
+    return res
+
+
+# ── 審議結果の書き出しと承認の書き戻し ─────────────────────────
+# 流れ: Mac の obsidian_sync approvals が台帳の承認を invest_approvals.json に書いて push
+#   → ここの apply_approvals が差分だけ invest.deliberations へ反映
+#   → export_results が全件を invest_deliberations.json に書く（Actions が commit し、
+#     Mac の obsidian_sync deliberations が vault へミラーする）。
+# 承認はエージェントが作らない。人間が台帳に書いた内容の転記だけを行う（部則5）。
+
+EXPORT_FILE = "invest_deliberations.json"
+APPROVALS_FILE = "invest_approvals.json"
+APPROVED_BY = "健太（台帳）"
+EXPORT_COLUMNS = ("case_id", "ticker", "company_name", "deliberated_at", "verdict", "conviction",
+                  "layer", "devil_unresolved", "devil_reversal", "kpi", "bull_memo", "bear_memo",
+                  "devil_memo", "report_md", "packet_md", "run_env", "approval_status",
+                  "approved_at", "holding_intent")
+
+
+def _data_dir(cfg) -> Path:
+    return Path(_cfg(cfg, "DATA_DIR", "stock_data/data"))
+
+
+def rows_to_export(rows) -> list:
+    """BQ の行（dict 化済み）を JSON 化できる形にする。kpi は JSON 文字列なら dict に戻す。"""
+    out = []
+    for r in rows:
+        d = {k: _json_safe(r.get(k)) for k in EXPORT_COLUMNS}
+        if isinstance(d.get("kpi"), str):
+            try:
+                d["kpi"] = json.loads(d["kpi"])
+            except ValueError:
+                pass
+        out.append(d)
+    return out
+
+
+def export_results(cfg, client=None) -> dict:
+    """invest.deliberations の全件を1クエリで読み、DATA_DIR/invest_deliberations.json に書く。
+
+    0件のときは既存ファイルを空で潰さない。"""
+    client = client or _client()
+    cols = ", ".join("TO_JSON_STRING(kpi) AS kpi" if c == "kpi" else c for c in EXPORT_COLUMNS)
+    sql = f"SELECT {cols} FROM {_fq(client, DELIB_TABLE)} ORDER BY deliberated_at, case_id"
+    rows = rows_to_export(dict(r.items()) for r in client.query(sql, location=LOCATION).result())
+    if not rows:
+        return {"exported": 0, "skipped": "invest.deliberations が0件"}
+    path = _data_dir(cfg) / EXPORT_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "exported_at": datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S"),
+        "source": f"{DATASET}.{DELIB_TABLE}",
+        "count": len(rows),
+        "deliberations": rows,
+    }, ensure_ascii=False, indent=1), encoding="utf-8")
+    return {"exported": len(rows), "path": str(path)}
+
+
+def load_approvals_file(cfg) -> dict:
+    """invest_approvals.json の approvals（{case_id: {approval_status, approved_at}}）。無ければ空。"""
+    try:
+        raw = json.loads((_data_dir(cfg) / APPROVALS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    a = raw.get("approvals") if isinstance(raw, dict) else None
+    return a if isinstance(a, dict) else {}
+
+
+def diff_approvals(approvals: dict, current: dict) -> list:
+    """台帳側の承認と DB の現状の差分だけを返す（純粋関数）。
+
+    Args:
+        approvals: {case_id: {"approval_status", "approved_at"(YYYY-MM-DD|None)}}
+        current:   {case_id: {"approval_status", "approved_at"}}（DB に存在する case のみ）
+    DB に無い case（過去の台帳だけの case）は対象外。状態も日付も同じなら出さない。
+    """
+    out = []
+    for cid in sorted(approvals):
+        if cid not in current:
+            continue
+        want = approvals[cid] or {}
+        status = want.get("approval_status")
+        if not status:
+            continue
+        day = _to_date(want.get("approved_at"))
+        have = current[cid] or {}
+        if have.get("approval_status") == status and (
+                day is None or _to_date(have.get("approved_at")) == day):
+            continue
+        out.append({"case_id": cid, "approval_status": status, "approved_at": day})
+    return out
+
+
+def apply_approvals(cfg, client=None) -> dict:
+    """invest_approvals.json と invest.deliberations の差分だけを1本の MERGE で反映する。
+
+    読みは1本（対象 case の現状）、書きは差分があるときだけ1本。値はクエリパラメータで渡す。"""
+    approvals = load_approvals_file(cfg)
+    if not approvals:
+        return {"applied": 0, "skipped": "invest_approvals.json が無い／空"}
+    from google.cloud import bigquery
+    client = client or _client()
+    ids = sorted(approvals)
+    q = (f"SELECT case_id, approval_status, DATE(approved_at) AS approved_at "
+         f"FROM {_fq(client, DELIB_TABLE)} WHERE case_id IN UNNEST(@ids)")
+    job = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ArrayQueryParameter("ids", "STRING", ids)])
+    current = {r["case_id"]: {"approval_status": r["approval_status"], "approved_at": r["approved_at"]}
+               for r in client.query(q, job_config=job, location=LOCATION).result()}
+    diff = diff_approvals(approvals, current)
+    if not diff:
+        return {"applied": 0, "checked": len(current)}
+    structs = [bigquery.StructQueryParameter(
+        None,
+        bigquery.ScalarQueryParameter("case_id", "STRING", d["case_id"]),
+        bigquery.ScalarQueryParameter("approval_status", "STRING", d["approval_status"]),
+        bigquery.ScalarQueryParameter("approved_at", "DATE", d["approved_at"]))
+        for d in diff]
+    sql = f"""
+    MERGE {_fq(client, DELIB_TABLE)} T
+    USING (SELECT case_id, approval_status, approved_at FROM UNNEST(@rows)) S
+    ON T.case_id = S.case_id
+    WHEN MATCHED THEN UPDATE SET
+      approval_status = S.approval_status,
+      approved_by = @by,
+      approved_at = IF(S.approved_at IS NULL, T.approved_at, TIMESTAMP(S.approved_at))"""
+    cfgq = bigquery.QueryJobConfig(query_parameters=[
+        bigquery.ArrayQueryParameter("rows", "STRUCT", structs),
+        bigquery.ScalarQueryParameter("by", "STRING", APPROVED_BY)])
+    client.query(sql, job_config=cfgq, location=LOCATION).result()
+    return {"applied": len(diff), "cases": [d["case_id"] for d in diff]}
+
+
+def run_exports(cfg, client=None) -> dict:
+    """承認の反映 → 全件書き出しの順に実行する。片方の失敗がもう片方を止めない。
+    戻り値の errors が空でなければ呼び出し側は warn にする。"""
+    res: dict = {"errors": {}}
+    try:
+        client = client or _client()
+    except Exception as e:
+        return {"errors": {"client": str(e)[:120]}}
+    for name, fn in (("apply_approvals", apply_approvals), ("export_results", export_results)):
+        try:
+            res[name] = fn(cfg, client)
+        except Exception as e:  # 失敗は台帳に warn で残す。run_daily の結果は壊さない
+            res["errors"][name] = str(e)[:120]
     return res
 
 

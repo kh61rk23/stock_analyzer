@@ -21,7 +21,9 @@
 #             investment_journal.json に記帳 [DEPT-2②]
 #   feedback  investment_journal の成績を 40_判断台帳.md の
 #             成績列に還流 [DEPT-2③]
-#   all       pull → queue → journal → feedback を順に実行
+#   deliberations  クラウド審議の結果を vault（30_レポート/20_審議/40_判断台帳）へ新規分だけミラー
+#   approvals      台帳の承認を invest_approvals.json に書いて push（DB へは Actions が反映）
+#   all       pull → deliberations → mirror → approvals → holdings → queue → journal → feedback → rules
 #
 # 【定期実行（launchd 例・毎朝9時）】
 #   ~/Library/LaunchAgents/com.stockanalyzer.obsidian-sync.plist に
@@ -236,6 +238,172 @@ def cmd_mirror(cfg) -> bool:
         # Actions の auto コミットと競合したら取り込み直して再送
         _git_with_retry(g + ["pull", "--rebase", "-q", "origin", "main"], 300)
     print(f"❌ mirror: push 失敗: {(r.stderr or '')[:200]}")
+    return False
+
+
+# ==============================================================
+# deliberations: クラウド審議の結果 → vault（30_レポート / 20_審議 / 40_判断台帳）
+# approvals    : 台帳の承認 → invest_approvals.json → GitHub（Actions が DB へ反映）
+# ==============================================================
+DELIB_JSON = "invest_deliberations.json"
+APPROVALS_REL = Path("stock_data") / "data" / "invest_approvals.json"
+APPROVED_BY = "健太（台帳）"
+_APPROVAL_RE = re.compile(r"^(承認待ち|承認済み?|承認|否認|却下|保留|見送り)")
+_DATE_RE = re.compile(r"^\s*[（(]\s*(\d{4}-\d{2}-\d{2})")
+
+
+def parse_approval(status: str) -> tuple:
+    """台帳の状態列 → (approval_status, approved_at)。承認待ち・解釈不能は (None, None)。
+
+    「**承認（2026-09-29）**＝…」「否認」「保留」等。承認済・承認済みは「承認」、却下は「否認」に寄せる。"""
+    t = (status or "").replace("*", "").strip()
+    m = _APPROVAL_RE.match(t)
+    if not m or m.group(1) == "承認待ち":
+        return None, None
+    word = {"承認済": "承認", "承認済み": "承認", "却下": "否認"}.get(m.group(1), m.group(1))
+    d = _DATE_RE.match(t[m.end():m.end() + 40])
+    return word, (d.group(1) if d else None)
+
+
+def build_approvals(ledger_text: str) -> dict:
+    """台帳全体 → {case_id: {approval_status, approved_at}}（承認待ちの行は含めない）。"""
+    out = {}
+    for r in _parse_ledger_rows(ledger_text):
+        st, day = parse_approval(r["status"])
+        if st:
+            out[r["case_id"]] = {"approval_status": st, "approved_at": day}
+    return out
+
+
+def _cell(v) -> str:
+    """表のセルに入れられる1行の文字列にする（| と改行を除く）。"""
+    return re.sub(r"\s+", " ", str(v if v is not None else "").replace("|", "／")).strip()
+
+
+def ledger_row_for(rec: dict) -> str:
+    """DB の審議1件 → 台帳の1行（既存行と同じ8列）。状態は approval_status（日付つき）か「承認待ち」。"""
+    st = rec.get("approval_status") or "承認待ち"
+    day = str(rec.get("approved_at") or "")[:10]
+    if rec.get("approval_status") and day:
+        st = f"{st}（{day}）"
+    if rec.get("holding_intent"):
+        st += f"／保有意図: {rec['holding_intent']}"
+    cells = [rec.get("case_id"), rec.get("ticker"), rec.get("verdict"), rec.get("conviction"),
+             rec.get("layer"), rec.get("devil_unresolved") if rec.get("devil_unresolved") is not None else 0,
+             st]
+    return "| " + " | ".join(_cell(c) for c in cells) + " | |"
+
+
+def mirror_deliberations_to_vault(records: list, bdir: Path, today: str | None = None) -> dict:
+    """DB の審議結果のうち vault に無いものだけ書く。既存のファイル・台帳行は触らない。
+
+    書くもの: 30_レポート/<case>_判断レポート.md、20_審議/<case>/{bull,bear,devil,packet}.md、
+    40_判断台帳.md の末尾表に1行。台帳を書き換える前に .bak_YYYYMMDD を同フォルダに1度だけ作る。
+    人間が台帳や報告書に書いた承認を壊さないため、上書きはしない（冪等）。"""
+    today = today or datetime.now().strftime("%Y%m%d")
+    ledger = bdir / "40_判断台帳.md"
+    text = ledger.read_text(encoding="utf-8") if ledger.exists() else ""
+    known = {r["case_id"] for r in _parse_ledger_rows(text)}
+    stats = {"reports": 0, "memos": 0, "ledger_rows": 0, "skipped": 0}
+    new_lines = []
+    for rec in records:
+        cid = str(rec.get("case_id") or "").strip()
+        if not cid or "/" in cid or cid.startswith("."):
+            continue
+        wrote = False
+        rp = bdir / "30_レポート" / f"{cid}_判断レポート.md"
+        if rec.get("report_md") and not rp.exists():
+            rp.parent.mkdir(parents=True, exist_ok=True)
+            rp.write_text(rec["report_md"], encoding="utf-8")
+            stats["reports"] += 1
+            wrote = True
+        for key, name in (("bull_memo", "bull"), ("bear_memo", "bear"),
+                          ("devil_memo", "devil"), ("packet_md", "packet")):
+            mp = bdir / "20_審議" / cid / f"{name}.md"
+            if rec.get(key) and not mp.exists():
+                mp.parent.mkdir(parents=True, exist_ok=True)
+                mp.write_text(rec[key], encoding="utf-8")
+                stats["memos"] += 1
+                wrote = True
+        if cid not in known:
+            new_lines.append(ledger_row_for(rec))
+            known.add(cid)
+            stats["ledger_rows"] += 1
+            wrote = True
+        if not wrote:
+            stats["skipped"] += 1
+    if new_lines:
+        bak = ledger.with_name(f"{ledger.name}.bak_{today}")
+        if ledger.exists() and not bak.exists():
+            shutil.copy2(ledger, bak)
+        lines = text.splitlines()
+        last = max((i for i, l in enumerate(lines) if l.strip().startswith("|")), default=None)
+        if last is None:
+            lines = lines + [""] + new_lines
+        else:
+            lines[last + 1:last + 1] = new_lines
+        ledger.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return stats
+
+
+def _find_deliberations_json(cfg) -> Path | None:
+    for p in (SYNC_CACHE / "stock_data" / "data" / DELIB_JSON, Path(cfg.DATA_DIR) / DELIB_JSON):
+        if p.exists():
+            return p
+    return None
+
+
+def cmd_deliberations(cfg) -> bool:
+    """クラウド審議の結果（invest_deliberations.json）を vault へミラーする。pull の後に実行する。"""
+    src = _find_deliberations_json(cfg)
+    if src is None:
+        print("⏩ deliberations: invest_deliberations.json が無い（pull 後に再実行）")
+        return True
+    data = _load_json(src) or {}
+    recs = data.get("deliberations") or []
+    st = mirror_deliberations_to_vault(recs, _vault(cfg))
+    print(f"✅ deliberations: 全{len(recs)}件 → レポート{st['reports']}・メモ{st['memos']}"
+          f"・台帳行{st['ledger_rows']}を新規書き込み（既存{st['skipped']}件は触らない）")
+    return True
+
+
+def cmd_approvals(cfg) -> bool:
+    """台帳の承認状態を stock_data/data/invest_approvals.json に書き、変化があるときだけ
+    同期用clone（SYNC_CACHE）でその1ファイルを commit して push する（BQ 認証は Mac に置かない）。
+    Actions の deliberation_queue.apply_approvals が差分だけ invest.deliberations に反映する。"""
+    lp = _vault(cfg) / "40_判断台帳.md"
+    approvals = build_approvals(lp.read_text(encoding="utf-8")) if lp.exists() else {}
+    if not approvals:
+        print("⏩ approvals: 台帳に承認済みの行が無い／読めない（push しない）")
+        return True
+    if not (SYNC_CACHE / ".git").exists():
+        print("⏩ approvals: 同期用cloneが無い（先に pull が必要）")
+        return False
+    target = SYNC_CACHE / APPROVALS_REL
+    prev = (_load_json(target) or {}).get("approvals")
+    if prev == approvals:
+        print(f"✅ approvals: 変更なし（{len(approvals)}件）")
+        return True
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({
+        "approvals": approvals, "approved_by": APPROVED_BY,
+        "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "source": "40_判断台帳.md"}, ensure_ascii=False, indent=1), encoding="utf-8")
+    g = ["git", "-C", str(SYNC_CACHE)]
+    changed = sorted(c for c in approvals if (prev or {}).get(c) != approvals[c])
+    msg = f"auto: 承認ミラー更新（{len(approvals)}件・変更 {len(changed)}件）"
+    for step in (g + ["add", str(APPROVALS_REL)], g + ["commit", "-q", "-m", msg]):
+        r = subprocess.run(step, capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            print(f"❌ approvals: {' '.join(step[3:5])} 失敗: {(r.stderr or r.stdout)[:200]}")
+            return False
+    for _ in range(2):
+        r = _git_with_retry(g + ["push", "-q", "origin", "HEAD:main"], 120)
+        if r.returncode == 0:
+            print(f"✅ approvals: push 完了 — {msg}")
+            return True
+        _git_with_retry(g + ["pull", "--rebase", "-q", "origin", "main"], 300)
+    print(f"❌ approvals: push 失敗: {(r.stderr or '')[:200]}")
     return False
 
 
@@ -458,7 +626,7 @@ def cmd_rules() -> bool:
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Obsidian 同期ブリッジ（DEPT-2）")
-    ap.add_argument("command", choices=["pull", "mirror", "holdings", "queue", "journal",
+    ap.add_argument("command", choices=["pull", "mirror", "approvals", "deliberations", "holdings", "queue", "journal",
                                         "feedback", "rules", "all"])
     ap.add_argument("--repo", default="", help="GitHub リポジトリURL")
     args = ap.parse_args()
@@ -466,8 +634,12 @@ if __name__ == "__main__":
     ok = True
     if args.command in ("pull", "all"):
         ok = (cmd_pull(cfg, args.repo) is not False) and ok
+    if args.command in ("deliberations", "all"):
+        ok = cmd_deliberations(cfg) and ok
     if args.command in ("mirror", "all"):
         ok = cmd_mirror(cfg) and ok
+    if args.command in ("approvals", "all"):
+        ok = cmd_approvals(cfg) and ok
     if args.command in ("holdings", "all"):
         ok = cmd_holdings(cfg) and ok
     if args.command in ("queue", "all"):

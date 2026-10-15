@@ -233,18 +233,48 @@ def build_theme_entities(cfg) -> list[dict]:
     return themes
 
 
+def _decision_events_from_db(cfg) -> list[dict]:
+    """invest.deliberations の書き出し（invest_deliberations.json）から意思決定イベントを作る。
+    Actions 上でも vault 無しで読める。ファイルが無い・壊れていれば空。"""
+    raw = _load_json(Path(getattr(cfg, "DATA_DIR", REPO / "stock_data" / "data"))
+                     / "invest_deliberations.json")
+    recs = raw.get("deliberations") if isinstance(raw, dict) else None
+    events = []
+    for r in recs or []:
+        cid = str(r.get("case_id") or "")
+        decided = cid[:10] if len(cid) >= 10 else str(r.get("deliberated_at") or "")[:10]
+        if not cid or not r.get("ticker") or not decided:
+            continue
+        try:
+            conviction = int(r["conviction"]) if r.get("conviction") is not None else None
+        except (TypeError, ValueError):
+            conviction = None
+        events.append({
+            "case_id": cid, "ticker": r["ticker"],
+            "verdict": r.get("verdict"), "conviction": conviction,
+            "layer": r.get("layer"), "open_issues": int(r.get("devil_unresolved") or 0),
+            "status": r.get("approval_status") or "承認待ち", "result": "",
+            "decided_at": decided, "ingested_at": _NOW,
+        })
+    return events
+
+
 def build_decision_events(cfg) -> list[dict]:
-    """投資部 40_判断台帳.md を意思決定イベント化。"""
+    """意思決定イベント。DB（invest.deliberations の書き出し）を優先し、
+    DB に無い case だけ vault の 40_判断台帳.md から補う（Mac 実行時のみ）。"""
+    events = _decision_events_from_db(cfg)
+    seen = {e["case_id"] for e in events}
     vault = Path(getattr(cfg, "INVESTMENT_DEPT_VAULT_DIR", ""))
     lp = vault / "40_判断台帳.md"
     if not lp.exists():
-        return []
+        return events
     spec = importlib.util.spec_from_file_location(
         "obsidian_sync", str(REPO / "obsidian_sync.py"))
     osync = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(osync)
-    events = []
     for r in osync._parse_ledger_rows(lp.read_text(encoding="utf-8")):
+        if r["case_id"] in seen:
+            continue
         decided = r["case_id"][:10] if len(r["case_id"]) >= 10 else None
         if not decided:
             continue

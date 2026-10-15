@@ -5325,9 +5325,16 @@ def run_all_tasks(mode: str = "all") -> dict:
             _dq_res = _dlq.run_daily(cfg, (results.get("screener") or {}).get("candidates") or [])
             results["deliberation_queue"] = _dq_res
             _pf = _dq_res.get("packet_failed") or {}
-            logger.add("deliberation_queue", "warn" if _pf else "success",
+            # 承認の反映と審議結果の書き出し（vault・board 用ミラー）。失敗してもキュー作成の結果は変えず warn にする
+            _ex = _dlq.run_exports(cfg)
+            results["deliberation_queue"]["exports"] = _ex
+            _ex_err = _ex.get("errors") or {}
+            logger.add("deliberation_queue", "warn" if (_pf or _ex_err) else "success",
                        f"キュー{_dq_res.get('queued', 0)}件 / パケット{_dq_res.get('packets', 0)}件"
-                       + (f" / パケット失敗{len(_pf)}: {', '.join(list(_pf)[:5])}" if _pf else ""))
+                       + (f" / パケット失敗{len(_pf)}: {', '.join(list(_pf)[:5])}" if _pf else "")
+                       + (f" / 書き出し失敗: {_ex_err}" if _ex_err else
+                          f" / 承認反映{(_ex.get('apply_approvals') or {}).get('applied', 0)}件"
+                          f"・書き出し{(_ex.get('export_results') or {}).get('exported', 0)}件"))
         except Exception as e:
             logger.add("deliberation_queue", "error", str(e)[:150])
             print(f"  ⚠️  審議キューの作成失敗: {str(e)[:100]}")
