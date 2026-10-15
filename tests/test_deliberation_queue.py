@@ -274,3 +274,21 @@ def test_marker_head_matches_selected_target(tmp_path):
     already, _ = ds.resolve_deliberated(cfg)
     target = ds.select_deliberation_target(CANDS, already)
     assert target["ticker"] == head
+
+
+def test_fresh_mirror_is_treated_as_ledger(tmp_path):
+    """Mac が最近台帳と照合したミラーなら partial にしない。古ければ partial と経過日数を返す。"""
+    import json
+    from datetime import date, timedelta
+    import deliberation_scheduler as ds
+
+    class Cfg:
+        DATA_DIR = tmp_path
+        VAULT_INVEST_DIR = tmp_path / "nope"
+        DRIVE_BASE = tmp_path
+    for days, partial in ((0, False), (3, False), (5, True)):
+        stamp = (date.today() - timedelta(days=days)).isoformat() + " 12:00:00"
+        (tmp_path / "deliberated_tickers.json").write_text(json.dumps(
+            {"tickers": ["7203.T"], "exported_at": "2026-10-08 19:00:00", "verified_at": stamp}), encoding="utf-8")
+        out = ds.get_queue_for_report(Cfg, {"screener": {"candidates": []}})
+        assert out["partial"] is partial and out["mirror_age_days"] == days and out["already_count"] == 1

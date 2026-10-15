@@ -201,18 +201,28 @@ def cmd_mirror(cfg) -> bool:
         export_deliberated_mirror(cfg)
     except Exception:
         pass
-    if current == tickers:
-        print(f"✅ mirror: 変更なし（審議済み{len(tickers)}銘柄）")
+    today = datetime.now().strftime("%Y-%m-%d")
+    try:
+        prev = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        prev = {}
+    # 審議済みが変わらなくても1日1回は照合日（verified_at）を上げる。Actions のメールは
+    # これを見て、ミラーを正本と同じに扱えるか（台帳と最近照合されているか）を判断する。
+    if current == tickers and str(prev.get("verified_at", ""))[:10] == today:
+        print(f"✅ mirror: 変更なし（審議済み{len(tickers)}銘柄・本日照合済み）")
         return True
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps({
         "tickers": tickers,
-        "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "exported_at": (prev.get("exported_at") if current == tickers and prev.get("exported_at")
+                        else datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        "verified_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "source": "40_判断台帳.md",
     }, ensure_ascii=False, indent=2), encoding="utf-8")
     g = ["git", "-C", str(SYNC_CACHE)]
     added = sorted(set(tickers) - set(current or []))
-    msg = f"auto: 審議済みミラー更新（{len(tickers)}銘柄" + (f"・追加 {', '.join(added)}" if added else "") + "）"
+    msg = (f"auto: 審議済みミラー更新（{len(tickers)}銘柄" + (f"・追加 {', '.join(added)}" if added else "") + "）"
+           if current != tickers else f"auto: 審議済みミラー照合（{len(tickers)}銘柄・変更なし）")
     for step in (g + ["add", str(MIRROR_REL)], g + ["commit", "-q", "-m", msg]):
         r = subprocess.run(step, capture_output=True, text=True, timeout=60)
         if r.returncode != 0:

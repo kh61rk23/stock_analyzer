@@ -60,3 +60,21 @@ def test_bonus_on_adds_and_resorts():
     c = stock_screener.attach_public_funding(_cands(), FEATS, cfg)
     assert c[0]["ticker"] == "1111.T" and c[0]["composite_score"] > 51.0
     assert c[0]["public_funding_reasons"]
+
+
+def test_db_usage_lines_for_real_estate_and_seisakudb(tmp_path):
+    """不動産DB・政策DB の節に API の使用回数と使い道（呼び出し元・種類・結果）が出る。"""
+    import api_call_log
+    import alert_notifier
+    for st in (200, 200, 429):
+        api_call_log.note("seisakudb", "/v1/funding/E01234", st, caller="seisakudb_ingestor:run", data_dir=tmp_path)
+    from datetime import date
+    today = date.today().isoformat()
+    u = alert_notifier.load_db_usage("seisakudb", {"date": today, "calls": 2}, 1000, tmp_path, day=today)
+    body = "\n".join(alert_notifier.db_usage_lines(u))
+    assert "【API使用】2/1000回" in body and "seisakudb_ingestor:run 3回" in body and "HTTP 429×1" in body
+    a = alert_notifier.build_seisakudb_alert({"recent": 1, "companies_ok": 1, "calls": 2, "budget": 1000}, u)
+    assert "【API使用】2/1000回" in a["body"] and " / API 2/1000回" not in a["body"]
+    r = alert_notifier.build_real_estate_alert({"skipped": False, "success": 1, "holdings": 3}, {},
+                                               {"used": 49, "budget": 900, "calls": None, "stopped": None})
+    assert "【API使用】49/900回" in r["body"]

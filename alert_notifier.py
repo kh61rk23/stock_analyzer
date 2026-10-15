@@ -495,11 +495,16 @@ def extract_alerts(cfg, results: dict) -> list:
                 _ql.append(f"  審議済み除外: {_dq.get('already_count', 0)}銘柄"
                            f"（出所: {_dq.get('source', '不明')}）")
                 if _dq.get("partial"):
-                    # 除外集合が正本でないことは必ず明示する。
-                    # Actions からは vault の 40_判断台帳.md が読めないため、
-                    # 「審議済みなのに候補に出る」ことが起こり得る。
-                    _ql.append("  ⚠️ 判断台帳（正本）を参照できていないため、"
-                               "審議済み銘柄が混じる可能性があります")
+                    # 除外集合が台帳と最近照合されていないときだけ明示する。
+                    # Actions からは vault の 40_判断台帳.md が読めず、Mac の obsidian_sync が毎日
+                    # 照合して上げるミラーで代用している。照合が止まると審議済みが混じり得る。
+                    _age = _dq.get("mirror_age_days")
+                    if _age is not None:
+                        _ql.append(f"  ⚠️ 審議済みの一覧が{_age}日前から判断台帳と照合されていません"
+                                   "（Mac の同期が止まっている可能性）。審議済み銘柄が混じる可能性があります")
+                    else:
+                        _ql.append("  ⚠️ 判断台帳（正本）とそのミラーを参照できていないため、"
+                                   "審議済み銘柄が混じる可能性があります")
                                 # ── 機械可読マーカー ─────────────────
                                 # Claude の予定済みタスクが Gmail MCP でこのメールを読み、
                                 # 審議対象を取り出すための行。整形済みの日本語本文を
@@ -1927,7 +1932,15 @@ def extract_alerts(cfg, results: dict) -> list:
         # 不動産DB（取り込みと業種スコアへの反映）
     if getattr(cfg, "ALERT_ON_REAL_ESTATE", True):
         try:
-            _re = build_real_estate_alert(results.get("fudosan_ingest") or {}, sector_results)
+            _fd = Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
+            _fday = datetime.now().strftime("%Y-%m-%d")
+            try:
+                _fl = json.loads((_fd / "fudosandb_cache" / f"daily_{_fday}.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                _fl = None
+            _fu = load_db_usage("fudosandb", _fl, getattr(cfg, "FUDOSAN_DAILY_BUDGET", None), _fd, _fday)
+            _fu["stopped"] = "日次予算到達" if (results.get("fudosan_ingest") or {}).get("budget_stop") else None
+            _re = build_real_estate_alert(results.get("fudosan_ingest") or {}, sector_results, _fu)
             if _re:
                 alerts.append(_re)
         except Exception as _ree:
@@ -1936,7 +1949,16 @@ def extract_alerts(cfg, results: dict) -> list:
         # 政策DB（公的支出・経済安保）。出典表示は利用規約で必須
     if getattr(cfg, "ALERT_ON_SEISAKUDB", True):
         try:
-            _sk = build_seisakudb_alert(results.get("seisakudb") or {})
+            _sd = Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
+            _sday = datetime.now().strftime("%Y-%m-%d")
+            try:
+                _sl = json.loads((_sd / "seisakudb_usage.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                _sl = None
+            _skr = results.get("seisakudb") or {}
+            _su = load_db_usage("seisakudb", _sl, _skr.get("budget") or getattr(cfg, "SEISAKUDB_DAILY_BUDGET", None), _sd, _sday)
+            _su["stopped"] = _skr.get("stopped") if _skr.get("stopped") not in (None, "", "budget") else None
+            _sk = build_seisakudb_alert(_skr, _su)
             if _sk:
                 alerts.append(_sk)
         except Exception as _ske:
@@ -2019,7 +2041,36 @@ def build_high_dividend_alert(cfg, results: dict, sector_results: dict | None = 
     }
 
 
-def build_real_estate_alert(fudo: dict, sector_results: dict) -> dict | None:
+def db_usage_lines(usage: dict | None) -> list:
+    """不動産DB・政策DB の API 使用回数と使い道（呼び出し元・種類・結果）の行（純関数）。
+
+    usage = {"used": 本日の使用回数, "budget": 日次の上限, "calls": api_call_log.summarize の戻り値, "stopped": 停止理由}
+    """
+    if not isinstance(usage, dict) or usage.get("used") is None:
+        return []
+    lines = [f"  【API使用】{usage['used']}/{usage.get('budget', '—')}回"
+             + (f"（停止: {usage['stopped']}）" if usage.get("stopped") else "")]
+    u_lines, _ = api_usage_lines(usage.get("calls"), None, int(usage.get("used") or 0))
+    return lines + u_lines
+
+
+def load_db_usage(source: str, ledger: dict | None, budget, data_dir=None, day: str | None = None) -> dict:
+    """日次台帳（{"calls_used"} か {"calls"}）と api_call_log の記録から usage を作る。"""
+    used = None
+    if isinstance(ledger, dict) and (not day or str(ledger.get("date", day)) == day):
+        used = ledger.get("calls_used", ledger.get("calls"))
+    calls = None
+    try:
+        import api_call_log
+        calls = api_call_log.summarize(source, day, data_dir)
+    except Exception:
+        pass
+    if used is None and calls and calls.get("total"):
+        used = calls["total"]
+    return {"used": used, "budget": budget, "calls": calls}
+
+
+def build_real_estate_alert(fudo: dict, sector_results: dict, usage: dict | None = None) -> dict | None:
     """不動産DB（fudosandb.jp）の取り込み結果と、業種スコアへの反映をメール1件にまとめる（純関数）。
 
     不動産ボーナス（修正PBR・資産バリュー倍率・災害/人口リスクから −2〜+3点）が付いた銘柄も出す。
@@ -2031,6 +2082,7 @@ def build_real_estate_alert(fudo: dict, sector_results: dict) -> dict | None:
                      f" / 地域プロファイル {fudo.get('area_profiles', 0)}件"
                      + (f" / 失敗 {fudo['failure']}社" if fudo.get("failure") else "")
                      + ("（API上限で打ち切り）" if fudo.get("budget_stop") else ""))
+        lines.extend(db_usage_lines(usage))
         tg = [edinet_cols(c) for c in (fudo.get("targets") or [])][:12]
         if tg:
             lines.append("    対象: " + "、".join(f"{s} | {n}" for s, n in tg)
@@ -2065,7 +2117,7 @@ def build_real_estate_alert(fudo: dict, sector_results: dict) -> dict | None:
             "body": "\n".join(lines), "severity": "info", "channel": "gmail"}
 
 
-def build_seisakudb_alert(sk: dict) -> dict | None:
+def build_seisakudb_alert(sk: dict, usage: dict | None = None) -> dict | None:
     """政策DB の日次結果（seisakudb_ingestor.run の戻り値）をメール1件にまとめる（純関数）。"""
     if not isinstance(sk, dict) or not sk or sk.get("skipped"):
         return None
@@ -2079,8 +2131,9 @@ def build_seisakudb_alert(sk: dict) -> dict | None:
     lines = [f"  【取り込み】直近の公的支出 {sk.get('recent', 0)}件 / 個社 {sk.get('companies_ok', 0)}社"
              f"（受給記録なし {sk.get('companies_empty', 0)}社）"
              + (f" / 経済安保認定 {sk['certs']}件" if sk.get("certs") else "")
-             + f" / API {sk.get('calls', 0)}/{sk.get('budget', 0)}回"
-             + (f" / 停止: {sk['stopped']}" if sk.get("stopped") and sk["stopped"] != "budget" else "")]
+             + ("" if usage else f" / API {sk.get('calls', 0)}/{sk.get('budget', 0)}回"
+                + (f" / 停止: {sk['stopped']}" if sk.get("stopped") and sk["stopped"] != "budget" else ""))]
+    lines.extend(db_usage_lines(usage))
     hits = sk.get("company_hits") or []
     if hits:
         lines.append("  【個社の公的支出（今回取得・5年合計の多い順）】")
@@ -2139,10 +2192,13 @@ def api_usage_lines(calls: dict | None, caps: dict | None, used: int, ing: dict 
     caps = caps or {}
     if caps.get("caps"):
         c = caps["caps"]
-        lines.append("  【本日の枠の内訳】" + " / ".join(f"{_CAP_JA.get(k, k)} {v}" for k, v in c.items())
-                     + f" → 本日の枠 {caps.get('final')}回（決めたもの: {_CAP_JA.get(caps.get('limiter'), caps.get('limiter'))}）")
-        if caps.get("monthly_used") is not None:
-            lines.append(f"    今月の使用 {caps['monthly_used']}回 / 月の上限（設定）{caps.get('monthly_guard')}回")
+        # 平常（設定の日次予算どおりに枠が決まった日）は内訳を出さない。読むべき情報が無く、毎日のノイズになるため。
+        # 月の上限や EdinetDB 側の残りで枠が削られた日だけ、どれが効いたかを出す。
+        if caps.get("limiter") not in (None, "config"):
+            lines.append("  【本日の枠の内訳】" + " / ".join(f"{_CAP_JA.get(k, k)} {v}" for k, v in c.items())
+                         + f" → 本日の枠 {caps.get('final')}回（決めたもの: {_CAP_JA.get(caps.get('limiter'), caps.get('limiter'))}）")
+            if caps.get("monthly_used") is not None:
+                lines.append(f"    今月の使用 {caps['monthly_used']}回 / 月の上限（設定）{caps.get('monthly_guard')}回")
         if caps.get("limiter") in ("monthly_remaining", "monthly_guard"):
             warns.append(f"月の上限に近いため本日の枠を {caps.get('final')}回に抑えた")
         elif caps.get("limiter") == "daily_remaining" and c.get("daily_remaining", 0) < c.get("config", 0):

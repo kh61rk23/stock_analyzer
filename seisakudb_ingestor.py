@@ -73,6 +73,14 @@ class SeisakuClient:
         except OSError:
             pass
 
+    def _note(self, path: str, status) -> None:
+        """呼び出しを api_call_log に残す（メールの「API の使い道」用。失敗しても止めない）。"""
+        try:
+            import api_call_log
+            api_call_log.note("seisakudb", path, status, data_dir=self.ledger.parent)
+        except Exception:
+            pass
+
     def get(self, path: str, params: dict | None = None):
         if self.stopped or self.used >= self.daily_budget:
             self.stopped = self.stopped or "budget"
@@ -88,7 +96,9 @@ class SeisakuClient:
                                       "User-Agent": "stock_analyzer/1.0 (seisakudb_ingestor)"})
         except Exception as exc:
             print(f"    ⚠️ [seisakudb] {path}: 通信失敗 {type(exc).__name__}")
+            self._note(path, "error")
             return None
+        self._note(path, r.status_code)
         if r.status_code < 400:
             self.used += 1            # 成功だけが1 unit（4xx/5xx は課金されない）
             self._save()

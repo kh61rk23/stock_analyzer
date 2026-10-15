@@ -210,6 +210,9 @@ def _load_ledger_tickers(cfg) -> set:
 #      （※承認済みBuy行のみ＝審議したが見送った銘柄は含まれない部分集合）
 
 _DELIBERATED_MIRROR = "deliberated_tickers.json"
+# ミラーを正本と同じに扱える鮮度。Mac の obsidian_sync mirror が毎日、台帳と照合した日（verified_at）を
+# 書き込むので、この日数より新しければ「審議済みが漏れている」心配は無い。
+MIRROR_FRESH_DAYS = 3
 
 
 def _load_journal_tickers(cfg) -> set:
@@ -235,6 +238,17 @@ def _load_mirror_tickers(cfg) -> set:
         return set()
     tickers = raw.get("tickers", []) if isinstance(raw, dict) else raw
     return {str(t) for t in tickers if t} if isinstance(tickers, list) else set()
+
+
+def mirror_verified_age(cfg, today: date | None = None) -> int | None:
+    """ミラーが台帳と最後に照合された日からの経過日数（verified_at が無ければ exported_at）。"""
+    data_dir = Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
+    try:
+        raw = json.loads((data_dir / _DELIBERATED_MIRROR).read_text(encoding="utf-8"))
+        stamp = str(raw.get("verified_at") or raw.get("exported_at") or "")[:10]
+        return ((today or date.today()) - date.fromisoformat(stamp)).days
+    except Exception:
+        return None
 
 
 def resolve_deliberated(cfg) -> tuple[set, str]:
@@ -272,6 +286,7 @@ def export_deliberated_mirror(cfg) -> dict:
             json.dumps({
                 "tickers": sorted(tickers),
                 "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "verified_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "source": "40_判断台帳.md",
             }, ensure_ascii=False, indent=2),
             encoding="utf-8")
@@ -299,11 +314,16 @@ def get_queue_for_report(cfg, results: dict = None, top_n: int = 5) -> dict:
 
     already, source = resolve_deliberated(cfg)
     queue = build_deliberation_queue(cands, already, top_n=top_n)
+    age = mirror_verified_age(cfg) if source == "ミラー" else None
+    fresh = source == "台帳(正本)" or (age is not None and age <= MIRROR_FRESH_DAYS)
+    if source == "ミラー" and age is not None:
+        source = f"ミラー・台帳と照合 {age}日前" if age else "ミラー・本日台帳と照合"
     return {
         "queue":         queue,
         "source":        source,
         "already_count": len(already),
-        "partial":       source != "台帳(正本)",
+        "partial":       not fresh,
+        "mirror_age_days": age,
         "interval_days": int(getattr(cfg, "DELIBERATION_INTERVAL_DAYS", 14)),
     }
 
