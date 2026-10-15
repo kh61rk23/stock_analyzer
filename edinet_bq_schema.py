@@ -209,27 +209,7 @@ TABLE_DEFINITIONS = {
             updated_at TIMESTAMP               -- レコード最終更新日時
         )""",
 
-        "taxonomy_tag": """(
-            tag_id STRING NOT NULL,            -- タグ一意識別ID
-            node_id STRING NOT NULL,           -- 紐付け先ノードID
-            tag_type STRING,                   -- use_case / function / customer / geography / maturity
-            tag_value STRING,                  -- automotive / sensing 等
-            updated_at TIMESTAMP               -- レコード最終更新日時
-        )""",
 
-        "company": """(
-            company_id STRING NOT NULL,        -- 内部一意識別ID
-            company_code STRING,               -- 証券コード (JP: '7203' / US: 'AAPL')
-            ticker STRING,                     -- yfinance等で利用するティッカー
-            company_name_ja STRING,            -- 企業名 (日本語)
-            company_name_en STRING,            -- 企業名 (英語)
-            market STRING,                     -- 市場 (JP / US)
-            country STRING,                    -- 本社所在国
-            exchange STRING,                   -- 上場取引所
-            edinet_code STRING,                -- EDINET提出者コード (日本株のみ)
-            cik STRING,                        -- Central Index Key (米国株のみ)
-            updated_at TIMESTAMP               -- レコード最終更新日時
-        )""",
 
         "company_taxonomy_map": """(
             map_id STRING NOT NULL,            -- マッピング一意識別ID
@@ -250,17 +230,6 @@ TABLE_DEFINITIONS = {
             updated_at TIMESTAMP               -- レコード最終更新日時
         )""",
 
-        "segment_taxonomy_map": """(
-            map_id STRING NOT NULL,            -- マッピング一意識別ID
-            segment_id STRING NOT NULL,        -- edinet.segmentsへの外部キー
-            node_id STRING NOT NULL,           -- 技術ノードID
-            taxonomy_share FLOAT64,            -- セグメント売上のうち当該技術が占める割合
-            confidence_type STRING,            -- actual / estimated / inferred
-            confidence FLOAT64,                -- 判定の確信度
-            evidence_source STRING,            -- 根拠資料
-            verified_flag BOOL DEFAULT FALSE,  
-            updated_at TIMESTAMP               -- レコード最終更新日時
-        )""",
     },
 
     "geopolitics": {
@@ -294,7 +263,7 @@ TABLE_DEFINITIONS = {
 
         "company_country_exposure": """(
             exposure_id STRING NOT NULL,
-            company_id STRING NOT NULL,        -- taxonomy.company へのFK
+            company_id STRING NOT NULL,        -- 企業ID（証券コード等）
             ticker STRING,
             market STRING,                     -- JP / US
             country_code STRING NOT NULL,
@@ -317,19 +286,6 @@ TABLE_DEFINITIONS = {
     },
 
     "analytics": {
-        "company_scores": """(
-            company_code STRING NOT NULL,      
-            market STRING NOT NULL,            
-            score_date DATE NOT NULL,          
-            composite_score FLOAT64,           
-            sector_score FLOAT64,              
-            value_score FLOAT64,               
-            quality_score FLOAT64,             
-            technical_score FLOAT64,           
-            geo_impact_bonus FLOAT64,          
-            taxonomy_bonus FLOAT64,            
-            updated_at TIMESTAMP
-        ) PARTITION BY score_date"""
     },
 }
 

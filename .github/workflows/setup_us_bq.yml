@@ -4,8 +4,8 @@
 # ==============================================================
 # 【目的】
 #   us_bq_schema.py を実行し、BigQuery の `us` データセットと
-#   institutional_positions / job_signal_cache / executive_transitions /
-#   facility_signals / fundamentals の5テーブルを作成する。
+#   institutional_positions / job_signal_cache / fundamentals ほかを作成する
+#   （作成する表の一覧は us_bq_schema.py の DDL が正本）。
 #   これらが未作成のため institutional_13f_monitor.py 等の BQ 書込が
 #   宛先データセット不在で失敗していた問題への一回限りのセットアップ。
 #

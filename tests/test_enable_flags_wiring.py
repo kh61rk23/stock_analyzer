@@ -53,8 +53,6 @@ WIRED_FLAGS = [
 UNIMPLEMENTED_FLAGS = {
     # Treasury API から treasury_debt を作る処理が無い（読み手だけ存在）
     "ENABLE_TREASURY_DATA",
-    # analytics.company_scores への書き込み処理が無い
-    "ENABLE_GEO_SCORE_PERSIST",
 }
 
 

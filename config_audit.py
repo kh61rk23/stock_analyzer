@@ -158,7 +158,6 @@ UNREFERENCED_ALLOWLIST = {
     # ↓ 実装が存在せずフラグだけ先行しているもの。
     #   config.py 側に「未実装」と明記済み。実装したら本リストから外すこと。
     "ENABLE_TREASURY_DATA",      # treasury_debt の取得処理が無い（読み手だけ）
-    "ENABLE_GEO_SCORE_PERSIST",  # analytics.company_scores への書込処理が無い
     # 退役機能の墓標。legacy 業種別REST取得は廃止済みで実装も無い。False 固定であることを
     # tests/test_db_integration_refit.py が保証している（復活防止）。
     "ENABLE_EDINET",

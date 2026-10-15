@@ -579,8 +579,7 @@ def run_executive_transition_tracker(cfg, results: dict) -> dict:
 
     # 停止中: 政府EDINET APIキーが無いため、本モジュールの取得経路
     # （/documents.json を日付ごとに最大400回叩いてHTMLの役員略歴を
-    # 解析する実装）は動かない。ENABLE_EXECUTIVE_TRANSITION は False、
-    # BQ us.executive_transitions は0行。
+    # 解析する実装）は動かない。ENABLE_EXECUTIVE_TRANSITION は False。
     # 復活させる場合は EdinetDB の役員一覧（officerName / officialTitle /
     # sharesHeld 等の構造化データ）へ作り直すこと。HTML解析より確実で
     # API呼び出しも1社1回で済む。
@@ -756,33 +755,7 @@ def run_executive_transition_tracker(cfg, results: dict) -> dict:
     }
     _save_cache(cfg, new_cache)
 
-    # ── BQ格納（R0-2 / SPEC_db_schema.md §6-3）─────────────
-    if bool(getattr(cfg, "ENABLE_US_BQ_EXPORT", True)):
-        try:
-            from edinet_bq_client import insert_rows
-            _today = datetime.now().strftime("%Y-%m-%d")
-            _rows = []
-            for _tk, _r in (ticker_results or {}).items():
-                if not isinstance(_r, dict) or _r.get("reason", "").startswith("error"):
-                    continue
-                _skill = _r.get("new_skill_map") or _r.get("skill_categories") or {}
-                _rows.append({
-                    "detection_date":      _today,
-                    "ticker":              str(_tk),
-                    "edinet_code":         _r.get("edinet_code"),
-                    "company_name":        _r.get("company_name"),
-                    "new_hire_count":      int(_r.get("new_hire_count", 0) or 0),
-                    "skill_categories":    json.dumps(_skill, ensure_ascii=False),
-                    "transition_detected": bool(_r.get("transition_detected", False)),
-                    "fiscal_year_end":     _r.get("fiscal_year_end"),
-                    "sector_code":         str(_r.get("sector_code", "") or ""),
-                    "sector_boost_pt":     float(_r.get("sector_boost_pt", 0) or 0),
-                    "updated_at":          datetime.now().isoformat(),
-                })
-            if _rows and insert_rows(rows=_rows, table_ref="us.executive_transitions"):
-                print(f"    ☁️  [exec_transition] BQ格納 {len(_rows)}行 (us.executive_transitions)")
-        except Exception as _bqe:
-            print(f"    ⚠️  [exec_transition] BQ格納スキップ: {str(_bqe)[:60]}")
+    # 結果はローカルキャッシュだけに残す（BQ の格納先テーブルは持たない）
 
     elapsed = (datetime.now() - t0).seconds
     total_transitions = len(transition_alerts)

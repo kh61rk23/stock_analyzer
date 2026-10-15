@@ -57,8 +57,7 @@ class TestWeeklyGateKeys:
         assert sorted(keys - registered - retired) == []
 
     def test_bq_writing_monitors_run_in_weekly(self):
-        # BQ us.job_signal_cache / executive_transitions / facility_signals の
-        # 唯一の書き込み経路。weekly で通らなければ永久に0行になる。
+        # 役員異動は週次専用（現在は ENABLE_EXECUTIVE_TRANSITION=False で停止中）。
         # job_posting / facility_expansion は廃止済み（一覧から除外）
         for key in ("executive_transition",):
             assert _in_mode(key, "weekly") is True, f"{key} が週次で実行されない"

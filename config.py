@@ -3711,9 +3711,6 @@ GEO_SIGNAL_WEIGHT = 0.04   # 4%（pearl_signal の 5% から 1% 移譲相当）
 #   → 調整後合計 = 1.00
 # 上記の重みバランスは signal_aggregator.py の DEFAULT_WEIGHTS で実装する（Step 16）。
 
-# geo_signal の analytics.company_scores への書き込みフラグ。
-# 注意: 書き込み処理は未実装（True にしても何も起きない）。geo_impact_bonus 自体は results と週次レポートに載る。
-ENABLE_GEO_SCORE_PERSIST = False   # 初期は False（BQ 書き込みコスト削減）
 
 # ── G-N: ALL_DIRS への追加 ──────────────
 _WAVE6_DIRS = [

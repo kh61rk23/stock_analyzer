@@ -19,13 +19,11 @@
 # 【テーブル構成（SPEC_db_schema.md §6 の設計をそのままDDL化）】
 #   institutional_positions : SEC EDGAR Form 13F 機関投資家ポジション（institutional_13f_monitor.py が書込）
 #   job_signal_cache        : 求人票キーワード急増シグナル（現状ローカルJSONのみ・将来のBQ移行用）
-#   executive_transitions   : 役員略歴YoY差分・外部人材登用シグナル（同上）
-#   facility_signals        : 施設着工シグナル（同上）
 #   fundamentals            : SEC EDGAR四半期財務（us_fundamental_rotator.py が主キーMERGE）
 #
 # 【作成後にやること】
 #   1. institutional_13f_monitor.py の次回実行でBQ書込が成功するか実行ログを確認
-#   2. job_signal_cache / executive_transitions / facility_signals は現状ローカルJSON
+#   2. job_signal_cache は現状ローカルJSON
 #      キャッシュのみで運用中のため、BQ移行する場合は各モジュール側の insert 実装を追加
 #      すること（本ファイルはテーブルの箱を用意するのみ）
 #   3. SPEC_db_schema.md §6 の「実在未検証」表記を「作成済み」に更新すること
@@ -67,39 +65,6 @@ DDL = [
       surge_ratio       FLOAT64 OPTIONS(description='実際の倍率'),
       sector_boost_json JSON   OPTIONS(description='{sector_code: boost_pt}'),
       updated_at        TIMESTAMP
-    )
-    PARTITION BY signal_date
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS `{project}.us.executive_transitions` (
-      detection_date      DATE   NOT NULL,
-      ticker               STRING NOT NULL,
-      edinet_code          STRING,
-      company_name         STRING,
-      new_hire_count       INT64  OPTIONS(description='外部人材登用数'),
-      skill_categories     JSON   OPTIONS(description='{category: count}'),
-      transition_detected  BOOL   OPTIONS(description='転換シグナルフラグ'),
-      fiscal_year_end      STRING OPTIONS(description='対象決算期'),
-      sector_code          STRING,
-      sector_boost_pt      FLOAT64 OPTIONS(description='加算ポイント'),
-      updated_at           TIMESTAMP
-    )
-    PARTITION BY detection_date
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS `{project}.us.facility_signals` (
-      signal_date     DATE   NOT NULL,
-      project_name    STRING,
-      project_type    STRING OPTIONS(description='"工場" / "物流" / "データセンター" 等'),
-      company_name    STRING,
-      prefecture      STRING,
-      area_sqm        FLOAT64,
-      matched_sectors JSON   OPTIONS(description='[sector_code, ...]'),
-      sector_boost_pt FLOAT64,
-      source          STRING OPTIONS(description='"env_assessment" / "meti_factory"'),
-      announce_date   DATE,
-      expires_at      DATE   OPTIONS(description='signal_date + FACILITY_EXPANSION_TTL_DAYS'),
-      updated_at      TIMESTAMP
     )
     PARTITION BY signal_date
     """,
@@ -147,7 +112,7 @@ def create_all() -> None:
     cli = bqc.EDINETBQClient()
     project = cli.project
     for ddl in DDL:
-        # NOTE: format() は使わない。job_signal_cache / executive_transitions の
+        # NOTE: format() は使わない。job_signal_cache の
         # OPTIONS(description=...) に記述例として素の中括弧（例: '{sector_code: boost_pt}'）
         # が含まれ、str.format() だと KeyError('sector_code') で落ちる。
         # DDL中の置換対象は "{project}" のみなので replace() で置換する。
