@@ -214,7 +214,8 @@ def main() -> int:
     if args.no_push:
         print("--no-push のため push していない。")
         return 0
-    push = git("push", "origin", "main")
+    # 資料の一括移動など送信量が大きいと既定バッファでは HTTP 408 で切れるため広げる
+    push = git("-c", "http.postBuffer=524288000", "push", "origin", "main")
     if push.returncode != 0:
         print("push 失敗:\n" + push.stderr)
         return 6
