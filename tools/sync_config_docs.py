@@ -3,14 +3,18 @@
 
 既定は dry-run（コピー・commit・push をしない）。実行するには --apply を付ける。
 --no-push を付けると commit までで止まる。
+--prune を付けると、02 に無くなったファイル（フォルダ再編・改名の跡）を 01 側からも消す。
 
 安全策:
 - 認証情報らしいファイル名は同期しない（EXCLUDE_NAME_PATTERNS）
+- 認証情報置き場のフォルダは丸ごと同期しない（EXCLUDE_DIRS）
 - 同期候補と同期先の全テキストを秘密情報パターンでスキャンし、1件でも検出したら何もコピーせず中止する
 - テキスト以外の形式（zip・numbers など）は同期しない（一覧に出す）
 - git add は 構成管理資料/ だけに限る。index に他のステージ済み変更があれば中止する
 - main 以外のブランチでは push しない
-- 01 側にしか無いファイルは削除しない（一覧に出すだけ）
+- 01 側にしか無いファイルは --prune を付けたときだけ削除する（既定は一覧に出すだけ）
+- commit 前に 構成管理資料/ の index を作り直す。macOS の日本語ファイル名は NFD/NFC の
+  2通りで index に載ることがあり、片方が「未追跡」に見えて同期漏れになるため
 """
 from __future__ import annotations
 
@@ -22,6 +26,7 @@ import re
 import shutil
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent            # 01_System（gitリポジトリ）
@@ -36,6 +41,8 @@ EXCLUDE_NAME_PATTERNS = [          # 小文字で比較する
     "o-auth*", "client_secret*",
     "github_secrets_ledger.md",
 ]
+
+EXCLUDE_DIRS = {"09_認証情報_同期対象外"}   # 02 直下のフォルダ名（NFC）
 
 TEXT_SUFFIXES = {".md", ".txt", ".json", ".csv", ".py", ".rtf", ".sql", ".yml", ".yaml", ".toml", ".html"}
 
@@ -75,7 +82,7 @@ def collect() -> tuple[list[Path], list[str], list[str]]:
         rel = p.relative_to(SRC)
         if ".git" in rel.parts:
             continue
-        if is_excluded(p.name):
+        if unicodedata.normalize("NFC", rel.parts[0]) in EXCLUDE_DIRS or is_excluded(p.name):
             excluded.append(str(rel))
         elif p.suffix.lower() not in TEXT_SUFFIXES:
             skipped.append(str(rel))
@@ -96,6 +103,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--apply", action="store_true", help="コピー・commit・push を実行（既定は dry-run）")
     ap.add_argument("--no-push", action="store_true", help="commit までで止める")
+    ap.add_argument("--prune", action="store_true", help="02 に無い 01 側のファイルを削除する")
     args = ap.parse_args()
 
     if not SRC.is_dir():
@@ -111,13 +119,16 @@ def main() -> int:
         elif not filecmp.cmp(p, target, shallow=False):
             todo.append((p, "~"))
 
-    src_rel = {str(p.relative_to(SRC)) for p in copy}
+    nfc = lambda s: unicodedata.normalize("NFC", s)
+    src_rel = {nfc(str(p.relative_to(SRC))) for p in copy}
+    # 非テキストでスキップしたものは 02 に実在するので、--prune でも消さない
+    keep_rel = src_rel | {nfc(s) for s in skipped}
     orphans = []
     if DST.is_dir():
         for p in sorted(DST.rglob("*")):
             if p.is_file() and ".git" not in p.relative_to(DST).parts:
                 rel = str(p.relative_to(DST))
-                if rel not in src_rel:
+                if nfc(rel) not in keep_rel and p.name != ".DS_Store":
                     orphans.append(rel)
 
     hits: dict[str, list[str]] = {}
@@ -141,7 +152,7 @@ def main() -> int:
     print(f"同期先: {DST}")
     print(f"同期対象: {len(copy)}件 / 追加・更新: {len(todo)}件 / "
           f"除外（認証情報等）: {len(excluded)}件 / 非テキストでスキップ: {len(skipped)}件 / "
-          f"01のみ（削除しない）: {len(orphans)}件")
+          f"01のみ（{'削除する' if args.prune else '削除しない'}）: {len(orphans)}件")
     for p, mark in todo:
         print(f"  {mark} {p.relative_to(SRC)}")
     for rel in excluded:
@@ -149,7 +160,7 @@ def main() -> int:
     for rel in skipped:
         print(f"  skip(非テキスト): {rel}")
     for rel in orphans:
-        print(f"  only-in-01: {rel}")
+        print(f"  {'削除予定' if args.prune else 'only-in-01'}: {rel}")
 
     if not args.apply:
         print("\ndry-run です。実行するには --apply を付ける。")
@@ -172,7 +183,19 @@ def main() -> int:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(p, target)
     print(f"コピー: {len(todo)}件")
+    if args.prune:
+        for rel in orphans:
+            (DST / rel).unlink()
+        for d in sorted((p for p in DST.rglob("*") if p.is_dir()), key=lambda p: -len(p.parts)):
+            left = [c for c in d.iterdir() if c.name != ".DS_Store"]
+            if not left:
+                shutil.rmtree(d)
+        print(f"削除: {len(orphans)}件")
 
+    rm = git("rm", "-r", "--cached", "--quiet", "--ignore-unmatch", "--", DST_NAME)
+    if rm.returncode != 0:
+        print("index の作り直しに失敗:\n" + rm.stderr)
+        return 5
     add = git("add", "--", DST_NAME)
     if add.returncode != 0:
         print("git add 失敗:\n" + add.stderr)

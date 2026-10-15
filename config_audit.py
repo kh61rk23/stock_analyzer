@@ -175,8 +175,9 @@ UNREFERENCED_ALLOWLIST = {
 # tests/ を外すのは、テストからの参照で「本番で使われている」ように
 # 見えてしまうのを防ぐため。テストだけが読む定数は
 # 本番未使用であり、検査Eはそれを検出できなければ意味がない。
+# 構成管理資料/ は 02_Configuration_Management の同期コピー（コードではない）
 _SKIP_DIRS = {"__pycache__", ".git", ".pytest_cache", "pytest_cache",
-              "03_bk", "tests"}
+              "03_bk", "tests", "構成管理資料"}
 
 
 def _iter_py_files():

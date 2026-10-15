@@ -7,7 +7,7 @@
 #   読むべき「システムの現在地」を1ファイルに自動集約する:
 #     ① 全監査の実行結果（config_audit / pipeline / results_schema / pytest）
 #     ② 実行台帳の最新状態（連続失敗・配線漏れ）
-#     ③ CHANGELOG 直近エントリ（最近何が変わったか）
+#     ③ 開発ログ台帳（G-dev 40_開発ログ.jsonl）の直近エントリ（最近何が変わったか）
 #     ④ 標準保守手順への参照
 #
 # 【実行】
@@ -30,8 +30,11 @@ from datetime import datetime
 from pathlib import Path
 
 REPO = Path(__file__).parent
-# 設計正本フォルダは 02_Configuration_Management
-DOCS = REPO.parent / "02_Configuration_Management" / "01_最新版ロードマップ・必要書類"
+# 構成管理資料の正本は 02_Configuration_Management。保守パケットは進捗管理フォルダにも置く
+DOCS = REPO.parent / "02_Configuration_Management" / "04_進捗管理"
+# 変更履歴の正本（CHANGELOG.md は凍結済み）。board の devlog.py が追記する
+DEVLOG = (REPO.parent.parent / "Vault2_ClaudeCode_Local" / "CEO室" / "departments"
+          / "G-dev" / "40_開発ログ.jsonl")
 
 
 def _run(cmd: list[str], timeout: int = 300) -> tuple[int, str]:
@@ -99,18 +102,25 @@ def build_packet() -> str:
         lines.append("- 台帳なし（本番実行ログが未取得。obsidian_sync pull で取得可）")
     lines.append("")
 
-    # ③ CHANGELOG 直近
-    lines += ["## ③ 最近の変更（CHANGELOG 直近10行）", ""]
-    cl = DOCS / "CHANGELOG.md"
-    if cl.exists():
+    # ③ 開発ログ台帳 直近
+    lines += ["## ③ 最近の変更（開発ログ台帳 直近10件）", ""]
+    if DEVLOG.exists():
         try:
-            recent = [l for l in cl.read_text(encoding="utf-8").splitlines()
-                      if l.startswith("[20")][:10]
-            lines += [f"- {l}" for l in recent] or ["- エントリなし"]
+            rows = []
+            for l in DEVLOG.read_text(encoding="utf-8").splitlines():
+                if not l.strip():
+                    continue
+                e = json.loads(l)
+                if e.get("project") == "stock_analyzer":
+                    rows.append(e)
+            rows.sort(key=lambda e: (e.get("date", ""), e.get("added", "")), reverse=True)
+            lines += [f"- [{e.get('date', '')}] {e.get('kind', '')}: {e.get('title', '')}"
+                      + (f"（{e['commit']}）" if e.get("commit") else "")
+                      for e in rows[:10]] or ["- エントリなし"]
         except Exception:
             lines.append("- ⚠️ 読込エラー")
     else:
-        lines.append(f"- CHANGELOG なし（探索: {cl}）")
+        lines.append(f"- 開発ログ台帳なし（探索: {DEVLOG}）")
     lines += [
         "",
         "## ④ 改修時の鉄則（要約 — 詳細は CLAUDE.md）",
@@ -119,7 +129,7 @@ def build_packet() -> str:
         "2. config.py 変更後は `python3 config_audit.py`（重複定義は後勝ち上書きで黙って壊れる）",
         "3. main 変更後は `python3 pipeline_registry_gen.py` で registry 再生成",
         "4. results キー追加時は results_schema.py の SCHEMA に追記",
-        "5. 改修完了時は pytest 全通過を確認し、CHANGELOG に1行追記",
+        "5. 改修完了時は pytest 全通過を確認し、開発ログ台帳（devlog.py add）と構成管理資料を更新して tools/sync_config_docs.py で push",
         "",
     ]
     return "\n".join(lines)

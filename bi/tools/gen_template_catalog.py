@@ -1,6 +1,6 @@
 """BIテンプレートの一覧表（TEMPLATE_CATALOG.md）を bi/templates/*.json から生成する。
 
-資料側（02_Configuration_Management/10_BI基盤/TEMPLATE_CATALOG.md）は手で書かず、このスクリプトの出力を置く。
+資料側（02_Configuration_Management/06_BI基盤/TEMPLATE_CATALOG.md）は手で書かず、このスクリプトの出力を置く。
 テンプレを足した・直したら再実行する（読むだけ。テンプレ JSON や stock_data は変更しない）。
 使い方: python3 bi/tools/gen_template_catalog.py            … 既定の置き場へ書く
         python3 bi/tools/gen_template_catalog.py --out -    … 標準出力へ
@@ -15,7 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE_DIR = ROOT / "bi" / "templates"
-DEFAULT_OUT = ROOT.parent / "02_Configuration_Management" / "10_BI基盤" / "TEMPLATE_CATALOG.md"
+DEFAULT_OUT = ROOT.parent / "02_Configuration_Management" / "06_BI基盤" / "TEMPLATE_CATALOG.md"
 
 # 領域の表示順・日本語名。テンプレが無い領域は「枠だけ」の行を出す（状態は STATUS に書く）
 DOMAINS = [

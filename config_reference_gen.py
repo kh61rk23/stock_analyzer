@@ -3,7 +3,7 @@
 # 【用途】CONFIG_REFERENCE.md の唯一の生成手段。手で直すと設定追加が反映されなくなるため、
 #   改修のたびに本スクリプトで作り直す（stock-analyzer-refit スキル §6 の完了手順に組み込む）。
 # 【実行】python3 config_reference_gen.py [--out <path>]
-#   既定の出力先: ../02_Configuration_Management/02_ファイル構成/CONFIG_REFERENCE.md
+#   既定の出力先: ../02_Configuration_Management/02_台帳・リファレンス/CONFIG_REFERENCE.md
 # ==============================================================
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from datetime import date
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
-DEFAULT_OUT = REPO.parent / "02_Configuration_Management" / "02_ファイル構成" / "CONFIG_REFERENCE.md"
+DEFAULT_OUT = REPO.parent / "02_Configuration_Management" / "02_台帳・リファレンス" / "CONFIG_REFERENCE.md"
 NAME_RE = re.compile(r"^_?[A-Z][A-Z0-9_]*$")
 SECRET_RE = re.compile(r"(KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL)", re.I)
 BLOCK_RE = re.compile(r"^#\s*(?:★\s*)?(BLOCK\s*[^:：]+)[:：]\s*(.*)$")
@@ -49,7 +49,8 @@ def _references(names: set[str]) -> dict[str, dict[str, list[str]]]:
     word = re.compile(r"\b[_A-Z][A-Z0-9_]{2,}\b")
     for f in sorted(REPO.rglob("*.py")):
         rel = f.relative_to(REPO).as_posix()
-        if rel == "config.py" or rel.startswith(("stock_data/", ".")) or "/." in rel:
+        # 構成管理資料/ は 02_Configuration_Management の同期コピー（コードではない）
+        if rel == "config.py" or rel.startswith(("stock_data/", ".", "構成管理資料/")) or "/." in rel:
             continue
         try:
             found = set(word.findall(f.read_text(encoding="utf-8", errors="ignore")))

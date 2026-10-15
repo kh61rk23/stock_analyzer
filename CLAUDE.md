@@ -1,17 +1,21 @@
 # stock_analyzer — AIエージェント保守手順書（AGENT-1）
 
 このリポジトリで Claude Code 等のAIエージェントが作業する際の標準手順。
-設計の正本は `../02_Configuration_Management/02_ファイル構成/`
-（SPEC_core.md / SPEC_db_schema.md / SPEC_investment_dept.md / MODULE_INDEX.md）。
-進捗管理・引き継ぎ資料は `../02_Configuration_Management/01_最新版ロードマップ・必要書類/`
-（TODO_LIST.md / SESSION_PACKET.md 等。CHANGELOG.md は2026-09-26に凍結し、変更履歴は board の開発ログ台帳へ移設）。
+構成管理資料の正本は `../02_Configuration_Management/`（フォルダの案内は `00_README.md`）。
+- 設計書: `01_設計書/`（SPEC_core.md / SPEC_db_schema.md / SPEC_investment_dept.md / 詳細設計書.md / 俯瞰図.md / UML_シーケンス図集.md）
+- 台帳: `02_台帳・リファレンス/`（MODULE_INDEX.md / CONFIG_REFERENCE.md / MODULE_DISCOVERY_GUIDE.md）
+- 運用手順: `03_運用手順/` ／ 進捗: `04_進捗管理/`（TODO_LIST.md / MAINTENANCE_PACKET.md）
+- 提案・検証記録: `05_提案・検証記録/` ／ BI: `06_BI基盤/` ／ BQスナップショット: `07_DBスキーマ/`
+- 認証情報: `09_認証情報_同期対象外/`（git に入れない） ／ 旧資料・退避: `99_old/`（退避は `99_old/bk/`）
+- CHANGELOG は 2026-09-26 に凍結（`04_進捗管理/CHANGELOG_凍結_20260926.md`）。変更履歴は board の開発ログ台帳へ移設。
+- repo 内の `構成管理資料/` は 02 の同期コピー（直接編集しない。手順5で同期する）。
 
 ## 絶対禁止
 
 - **`../stock_analyzer-main_bk` を変更しない**（バックアップ。読むのは可）
 - APIキー・トークンのコード内ハードコード（`os.getenv()` + GitHub Secrets 経由のみ）
 ※資料に記載は可とする。
-- 認証情報ファイル（`*_key.json`・`*pass.json`・`O-auth*`・`client_secret*`・`GITHUB_SECRETS_LEDGER.md`）を git 管理下（01_System 配下を含む）に置かない。同期は `tools/sync_config_docs.py` の除外リストを必ず通すこと
+- 認証情報ファイル（`*_key.json`・`*pass.json`・`O-auth*`・`client_secret*`・`GITHUB_SECRETS_LEDGER.md`）を git 管理下（01_System 配下を含む）に置かない。置き場は `../02_Configuration_Management/09_認証情報_同期対象外/` に限る。同期は `tools/sync_config_docs.py` の除外リストを必ず通すこと
 - config.py のモジュールレベル重複定義（Pythonは後勝ち上書きで黙って壊れる。
   2026-06 に LEADING_INDICATOR_RULES 三重定義で先行指標7本が無効化されていた実害事例）
 
@@ -54,17 +58,20 @@ python3 maintenance_packet.py   # 全監査+台帳+直近変更を MAINTENANCE_P
    `python3 ~/Documents/Obsidian_Local/Vault2_ClaudeCode_Local/board/devlog.py add --project stock_analyzer --kind 修正 --title "…" --detail "…" --files a.py --commit abc1234`
    （board「システム › 開発」/dev で全プロジェクト横断に見られる）
 3. **構成管理資料を必ず更新する**（2026-10-03 健太指示：改修のたびに更新。正本は `../02_Configuration_Management/`。repo 内の `構成管理資料/` は手順5で同期する）
-   - `../02_Configuration_Management/02_ファイル構成/MODULE_INDEX.md`：追加・変更したモジュールとワークフローの行
-   - `../02_Configuration_Management/02_ファイル構成/SPEC_db_schema.md`：テーブル・列・書き手・実測行数（§0-1）を変えたら必ず
-   - `../02_Configuration_Management/02_ファイル構成/CONFIG_REFERENCE.md`：`python3 config_reference_gen.py` で再生成（手編集しない）
-   - `../02_Configuration_Management/08_jsonファイル,テーブル定義/bq_all_schemas_<日付>.json`：BQの表・列を変えたら取り直す
-   - SPEC_core.md：処理の流れ・構造を変えたら
+   - `../02_Configuration_Management/02_台帳・リファレンス/MODULE_INDEX.md`：追加・変更したモジュールとワークフローの行
+   - `../02_Configuration_Management/01_設計書/SPEC_db_schema.md`：テーブル・列・書き手・実測行数（§0-1）を変えたら必ず（更新前は `99_old/bk/設計書/` に退避）
+   - `../02_Configuration_Management/02_台帳・リファレンス/CONFIG_REFERENCE.md`：`python3 config_reference_gen.py` で再生成（手編集しない）
+   - `../02_Configuration_Management/07_DBスキーマ/bq_all_schemas_<日付>.json`：BQの表・列を変えたら取り直す
+   - `../02_Configuration_Management/01_設計書/SPEC_core.md`：処理の流れ・構造を変えたら
+   - `../02_Configuration_Management/06_BI基盤/`：BI のマート・テンプレを変えたら（TEMPLATE_CATALOG.md は `python3 bi/tools/gen_template_catalog.py` で再生成）
+   - 進捗が動いたら `../02_Configuration_Management/04_進捗管理/TODO_LIST.md`、調査・提案のレポートは `05_提案・検証記録/` に置く
 4. **開発ダッシュボードを更新する**：board の G-dev `10_案件台帳.md` の stock_analyzer 行
    （概要・現在地／次アクション）を最新にする（開発ログ＝/dev の明細と、台帳＝現在地の両方）
 5. **構成管理資料を push する**（2026-10-15 健太指示：改修のたびに最新版を push）
    - `python3 tools/sync_config_docs.py` で dry-run の内容を確認してから `python3 tools/sync_config_docs.py --apply` を実行する
+   - 02 側でファイルを移動・改名・削除したときは `--prune` を付ける（02 に無い 01 側のファイルを消す。dry-run で「削除予定」を確認してから）
    - 02 → `構成管理資料/` へ同期し、commit して origin/main へ push する。対象は `構成管理資料/` のみ
-   - 認証情報らしいファイルは同期しない（除外リストは tools/sync_config_docs.py の EXCLUDE_NAME_PATTERNS）。秘密情報を検出したら何もコピーせず中止する
+   - 認証情報らしいファイルは同期しない（除外は tools/sync_config_docs.py の EXCLUDE_NAME_PATTERNS と EXCLUDE_DIRS）。秘密情報を検出したら何もコピーせず中止する
    - 中止（exit 2〜6）したら表示された理由を健太に報告する。強制 push や除外リストの書き換えで通さない
 
 ## このシステムの構造（30秒）
@@ -74,9 +81,9 @@ python3 maintenance_packet.py   # 全監査+台帳+直近変更を MAINTENANCE_P
   ※ 日曜は市場が動かないため停止（Actions 無料枠 2,000分/月の節約）。
     UTC 00:00 ちょうどはジョブが集中し実測で3〜4時間の遅延が出るため :17 へずらしてある。
     **前倒し（UTC 23:40 等）は不可** — JST月曜の回が UTC では日曜になり weekly 判定が壊れる。
-- 設定SSOT: config.py（BLOCK 0〜39・他moduleをimportしない）
-- パイプライン宣言: pipeline_registry.json（108ステージ・AST自動生成・手動編集禁止）
-- データ契約: results_schema.py（145キー）
+- 設定SSOT: config.py（BLOCK 0〜61・他moduleをimportしない）
+- パイプライン宣言: pipeline_registry.json（107ステージ・AST自動生成・手動編集禁止）
+- データ契約: results_schema.py（148キー）
 - 観測性: module_ledger.py（実行台帳・連続失敗アラート・配線漏れ検出）
 - 投資部連携: agent_packet_exporter.py → Obsidian vault（B-investment）
 - ローカル同期: obsidian_sync.py（GitHub→Mac→iCloud vault / launchd は setup/ 参照）

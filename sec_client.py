@@ -12,7 +12,7 @@
 #   us_8k_monitor / us_fundamental_rotator / us_insider_form4_scraper /
 #   us_sector_bridge_enhanced（insider_monitor は us_insider_form4_scraper 経由）。
 #   User-Agent・CIK解決・レート制限・リトライを各モジュールで独自実装しないこと（D-6/D-7）。
-#   詳細: 02_Configuration_Management/old/05_提案_2026-07-26/
+#   詳細: 02_Configuration_Management/99_old/提案/2026-07-26_JP-US統合/
 #         要件定義書_JP-US統合_20260726.md §6 U-1
 #
 # 【公開 API】
