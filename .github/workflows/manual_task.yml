@@ -26,6 +26,7 @@ on:
           - stock_real_estate
           - rental_property_ingest
           - alert_backfill
+          - ontology_export
 
 permissions:
   contents: write
@@ -48,7 +49,7 @@ jobs:
       - name: Install dependencies
         run: |
           case "${{ inputs.task }}" in
-            price_universe_*|us_company_facts_*|stock_real_estate|alert_backfill) pip install -r requirements-prices.txt ;;
+            price_universe_*|us_company_facts_*|stock_real_estate|alert_backfill|ontology_export) pip install -r requirements-prices.txt ;;
             *) pip install -r requirements.txt ;;
           esac
       - name: Run task
@@ -88,6 +89,8 @@ jobs:
             rental_property_ingest) python -u rental_property_ingestor.py ;;
             # 送信済みの日次メール（IMAP）から、全節と銘柄を analytics.alert_sections / alert_items へ
             alert_backfill) python -u alert_store.py --backfill ;;
+            # オントロジー（企業・シグナル・テーマ・判断）を週次を待たずに作り直す
+            ontology_export) python -u ontology_exporter.py ;;
           esac
       - name: Commit state
         if: always()
