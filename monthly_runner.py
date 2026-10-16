@@ -141,6 +141,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--force", action="store_true",
                     help="月初判定を無視して実行する")
     ap.add_argument("--no-mail", action="store_true", help="月次メールを送らない（過去月の作り直し用）")
+    ap.add_argument("--no-status", action="store_true",
+                    help="monthly_loop_status.json を書き換えない（過去月の作り直しで、当月の追いつき判定を狂わせないため）")
     ap.add_argument("--catch-up", action="store_true",
                     help="直近3か月で月次レビューが無い月を作り直す（メールは送らない）")
     args = ap.parse_args(argv)
@@ -234,10 +236,11 @@ def main(argv: list[str] | None = None) -> int:
             status["steps"][name] = f"error: {str(e)[:120]}"
             print(f"  ❌ {name}: {e}")
 
-    if args.dry_run:
-        # dry-run は観測点（monthly_loop_status.json）を書き換えない
-        print("✅ dry-run 完了")
-        return 0
+    if args.dry_run or args.no_status:
+        # dry-run と過去月の作り直しは観測点（monthly_loop_status.json）を書き換えない
+        print("✅ dry-run 完了" if args.dry_run else ("✅ 月次ループ完了（状態ファイルは更新しない）" if status["ok"]
+                                                     else "⚠️ 月次ループ一部失敗（状態ファイルは更新しない）"))
+        return 0 if (args.dry_run or status["ok"]) else 1
     STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
     STATUS_PATH.write_text(
         json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -270,7 +273,7 @@ def catch_up(today: date) -> int:
     rc = 0
     for m in months:
         print(f"📅 月次の作り直し: {m}")
-        rc |= main(["--month", m, "--force", "--no-mail"])
+        rc |= main(["--month", m, "--force", "--no-mail", "--no-status"])
     return rc
 
 

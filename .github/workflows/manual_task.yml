@@ -108,6 +108,8 @@ jobs:
           git add stock_data/data/ 2>/dev/null || true
           git add stock_data/bi/ 2>/dev/null || true
           git add stock_data/logs/ 2>/dev/null || true
+          # 月次の作り直し等が書くレポートとペーパー口座（ここに無いと作っても保存されない）
+          git add stock_data/insights/ stock_data/paper/ 2>/dev/null || true
           git diff --cached --quiet && exit 0
           git commit -m "auto: manual task ${{ inputs.task }}"
           for i in 1 2 3; do git pull --rebase origin main && git push && exit 0; sleep 10; done
