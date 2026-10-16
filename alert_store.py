@@ -34,6 +34,8 @@ SUBJECT_MARK = "【投資AIエージェント】"
 _SEVERITY_FROM_LABEL = {"🔴": "high", "🟡": "medium", "ℹ": "info"}
 _JP_TICKER = re.compile(r"(?<![0-9A-Z])(\d[0-9A-Z]\d[0-9A-Z])\.T\b")
 _US_TICKER = re.compile(r"[（(]([A-Z]{1,5}(?:\.[A-Z]{1,3})?)[）)]")
+# 13F の節など、括弧なしで「新規取得: MSFT Microsoft …」と書く行
+_US_LABELED = re.compile(r"(?:新規取得|買い増し|売却|保有)\s*[:：]\s*([A-Z]{1,5}(?:\.[A-Z]{1,3})?)\b")
 _NOT_TICKERS = {"FRB", "ECB", "BOJ", "IMF", "ETF", "PER", "PBR", "ROE", "ROA", "FCF", "EPS", "USD", "JPY", "EUR", "CPI",
                 "GDP", "NHK", "CNBC", "TOPIX", "NASDAQ", "FF", "AI", "DX", "IR", "TOB", "MBO", "IPO", "ESG", "API", "HTTP",
                 "IFRS", "JGAAP", "OECD", "FOMC", "PMI", "ISM", "CEO", "CFO", "LLM", "EV", "REIT", "TSE", "SEC", "ADR"}
@@ -49,6 +51,9 @@ SECTION_KEYS = [
     ("EDINET DB", "edinetdb"), ("不動産DB", "fudosandb"), ("政策DB", "seisakudb"), ("金利", "rates"),
     ("注目ニュース", "news"), ("テーマETF", "theme_etf"), ("注目業種", "top_sectors"), ("米国株サマリー", "us_summary"),
     ("スコア急変", "score_jump"), ("インサイダー", "insider"), ("大量保有", "large_holding"),
+    ("議員取引", "congress_trade"), ("アクティビスト", "institutional_13f"), ("高スコアアイデア", "ideas"),
+    ("マクロ急変", "macro_shock"), ("センチメント極端", "sentiment_extreme"), ("データ鮮度", "freshness_sla"),
+    ("アノマリー", "month_anomaly"),
 ]
 
 
@@ -72,6 +77,7 @@ def extract_items(body: str) -> list[dict]:
         if not s:
             continue
         found = [(t + ".T", "JP") for t in _JP_TICKER.findall(s)]
+        found += [(t, "US") for t in _US_LABELED.findall(s) if t not in _NOT_TICKERS]
         found += [(t, "US") for t in _US_TICKER.findall(s)
                   if t not in _NOT_TICKERS and (not re.fullmatch(r"[A-Z]{1,2}", t) or t in ("MU", "GE", "BA", "F", "T", "V"))]
         for tk, mkt in found:

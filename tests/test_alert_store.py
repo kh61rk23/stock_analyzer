@@ -40,3 +40,10 @@ def test_latest_per_day_keeps_last_sent():
          {"report_date": "2026-10-15", "sent_at": "2026-10-15T05:00:00+00:00", "n": 2},
          {"report_date": "2026-10-14", "sent_at": "2026-10-14T05:00:00+00:00", "n": 3}]
     assert [x["n"] for x in ast.latest_per_day(m)] == [3, 2]
+
+
+def test_labeled_us_ticker_and_new_section_keys():
+    body = "🏦 [アクティビスト] Pershing Square\n     新規取得: MSFT Microsoft Corporation (MICROSOFT CORP)\n     取得額: $2.1B"
+    assert [i["ticker"] for i in ast.extract_items(body)] == ["MSFT"]
+    assert ast.section_key("🏛️ 重要議員取引 5件") == "congress_trade"
+    assert ast.section_key("🏦 大手機関・アクティビスト新規取得") == "institutional_13f"
