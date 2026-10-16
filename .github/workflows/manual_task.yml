@@ -27,6 +27,7 @@ on:
           - rental_property_ingest
           - alert_backfill
           - ontology_export
+          - monthly_catchup
 
 permissions:
   contents: write
@@ -91,6 +92,8 @@ jobs:
             alert_backfill) python -u alert_store.py --backfill ;;
             # オントロジー（企業・シグナル・テーマ・判断）を週次を待たずに作り直す
             ontology_export) python -u ontology_exporter.py ;;
+            # 直近3か月で月次レビューが抜けている月を作り直す（メールは送らない）
+            monthly_catchup) python -u monthly_runner.py --catch-up ;;
           esac
       - name: Commit state
         if: always()

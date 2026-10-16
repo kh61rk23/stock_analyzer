@@ -37,6 +37,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import importlib.util
 import json
 import subprocess
@@ -139,7 +140,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--force", action="store_true",
                     help="月初判定を無視して実行する")
+    ap.add_argument("--no-mail", action="store_true", help="月次メールを送らない（過去月の作り直し用）")
+    ap.add_argument("--catch-up", action="store_true",
+                    help="直近3か月で月次レビューが無い月を作り直す（メールは送らない）")
     args = ap.parse_args(argv)
+    if args.catch_up:
+        return catch_up(date.today())
 
     cfg = _load_config()
     today = date.today()
@@ -148,15 +154,25 @@ def main(argv: list[str] | None = None) -> int:
         print("⏩ 月次ランナー: スキップ（ENABLE_MONTHLY_RUNNER=False）")
         return 0
 
-    # 月初判定。Actions が1日に落ちても翌日以降に追いつけるよう幅を持たせる。
-    max_day = int(getattr(cfg, "MONTHLY_RUN_MAX_DAY", 3))
-    if not args.force and today.day > max_day:
-        print(f"⏩ 月次ランナー: スキップ（{today.day}日 > 月初{max_day}日まで）"
-              f" — 手動実行は --force")
-        return 0
-
     yyyymm = args.month or prev_month(today)
     steps = build_steps(cfg, yyyymm, today)
+    if args.no_mail:
+        steps = [x for x in steps if x[0] != "monthly_mail"]
+
+    # 月初判定。月初 MONTHLY_RUN_MAX_DAY 日を過ぎても、前月分が終わっていなければその月のうちに追いつく
+    # （Actions が月初に何日も止まると、その月の月次がまるごと抜けるため）。
+    max_day = int(getattr(cfg, "MONTHLY_RUN_MAX_DAY", 3))
+    if not args.force and today.day > max_day:
+        try:
+            _st = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            _st = {}
+        _done = {n for n, v in (_st.get("steps") or {}).items() if str(v).startswith(("success", "skipped"))}
+        if _st.get("target_month") == yyyymm and all(name in _done for name, *_ in steps):
+            print(f"⏩ 月次ランナー: スキップ（{today.day}日 > 月初{max_day}日まで・{yyyymm} は完了済み）"
+                  f" — 手動実行は --force")
+            return 0
+        print(f"📅 月初{max_day}日を過ぎたが {yyyymm} の月次が未完了のため追いつく")
 
     # 月初は複数日走るため、同じ対象月で成功済みのステップは飛ばし、失敗・未実行のものだけやり直す。
     prev = {}
@@ -218,12 +234,44 @@ def main(argv: list[str] | None = None) -> int:
             status["steps"][name] = f"error: {str(e)[:120]}"
             print(f"  ❌ {name}: {e}")
 
+    if args.dry_run:
+        # dry-run は観測点（monthly_loop_status.json）を書き換えない
+        print("✅ dry-run 完了")
+        return 0
     STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
     STATUS_PATH.write_text(
         json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(("✅ 月次ループ完了" if status["ok"] else "⚠️ 月次ループ一部失敗")
-          + f" → {STATUS_PATH.relative_to(REPO)}")
+    print(("✅ 月次ループ完了" if status["ok"] else "⚠️ 月次ループ一部失敗") + f" → {STATUS_PATH.name}")
     return 0 if status["ok"] else 1
+
+
+def _shift(yyyymm: str, k: int) -> str:
+    y, m = int(yyyymm[:4]), int(yyyymm[4:])
+    m -= k
+    while m <= 0:
+        m += 12
+        y -= 1
+    return f"{y}{m:02d}"
+
+
+def missing_months(today: date, insight_dir: Path, back: int = 3) -> list[str]:
+    """直近 back か月（前月から）のうち、月次戦略レビュー（月次の最後のステップ）が無い月（純関数に近い）。"""
+    last = prev_month(today)
+    months = [_shift(last, k) for k in range(back)]
+    return sorted(m for m in months if not (insight_dir / f"strategy_review_{m}.md").exists())
+
+
+def catch_up(today: date) -> int:
+    base = Path(os.environ.get("STOCK_ANALYZER_BASE") or REPO / "stock_data")
+    months = missing_months(today, base / "insights")
+    if not months:
+        print("✅ 月次の作り直し: 抜けている月なし")
+        return 0
+    rc = 0
+    for m in months:
+        print(f"📅 月次の作り直し: {m}")
+        rc |= main(["--month", m, "--force", "--no-mail"])
+    return rc
 
 
 if __name__ == "__main__":
