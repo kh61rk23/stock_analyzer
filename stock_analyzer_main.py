@@ -4561,12 +4561,19 @@ def run_all_tasks(mode: str = "all") -> dict:
                 cfg.DRIVE_BASE / "insider_monitor.py",
             )
             if _im:
-                # screener通過銘柄を優先対象に
+                # 日本株スクリーナーの通過銘柄に、米国株スクリーナーの上位を足す。
+                # 日本株だけを渡すと米国のインサイダー取得が0銘柄になる。米国株は us_screener が同じ上位の
+                # Form 4 を取得済みで、キャッシュを共有するため取得回数は増えない。
                 screener_tickers = [
                     c["ticker"]
                     for c in results.get("screener", {}).get("candidates", [])
                     if c.get("pass_filters")
                 ]
+                _us = results.get("us_screener") or {}
+                screener_tickers += [
+                    c["ticker"] for c in ((_us.get("top_picks") or []) + (_us.get("candidates") or []))
+                    if isinstance(c, dict) and c.get("ticker") and c["ticker"] not in screener_tickers
+                ][:int(getattr(cfg, "US_INSIDER_MAX_TICKERS", 40))]
                 im_result = _im.run_insider_monitor(cfg, screener_tickers or None)
                 results["insider_monitor"] = im_result
                 logger.add("insider_monitor", "success",

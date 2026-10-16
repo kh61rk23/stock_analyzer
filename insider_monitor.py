@@ -271,6 +271,9 @@ def run_insider_monitor(cfg, tickers: Optional[list] = None) -> dict:
     print("\n  🔍 インサイダー取引モニター開始...")
 
     cached = _load_cache(cfg)
+    # 前回が米国0件で、今回は米国株を渡されているなら使い回さない（対象漏れのまま7日固定されるのを防ぐ）
+    if cached and not cached.get("total_us") and any(not str(t).endswith(".T") for t in (tickers or [])):
+        cached = None
     if cached:
         print(f"    ✅ キャッシュ使用 (US:{cached.get('total_us',0)}件 "
               f"JP:{cached.get('total_jp',0)}件)")
