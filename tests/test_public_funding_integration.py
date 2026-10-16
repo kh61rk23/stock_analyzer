@@ -78,3 +78,14 @@ def test_db_usage_lines_for_real_estate_and_seisakudb(tmp_path):
     r = alert_notifier.build_real_estate_alert({"skipped": False, "success": 1, "holdings": 3}, {},
                                                {"used": 49, "budget": 900, "calls": None, "stopped": None})
     assert "【API使用】49/900回" in r["body"]
+
+
+def test_policy_change_line_shows_from_to():
+    import alert_notifier
+    rate = {"bank": "FRB", "label": "米FFレート(3M T-bill proxy)", "prev_value": 3.943, "curr_value": 4.0,
+            "change_pt": 0.057, "direction": "引き締め方向（利上げ）", "prev_date": "2026-10-14", "curr_date": "2026-10-15"}
+    fx = {"bank": "為替", "label": "USD/JPY（円安↑ 円高↓）", "ticker": "JPY=X", "prev_value": 151.40,
+          "curr_value": 151.20, "change_pt": -0.198, "direction": "円高進行"}
+    assert "3.943% → 4.000%（+0.057%pt）（2026-10-14→2026-10-15） → 引き締め方向" in alert_notifier.policy_change_line(rate)
+    assert "151.40円 → 151.20円（-0.20円） → 円高進行" in alert_notifier.policy_change_line(fx)
+    assert "+0.057%pt →" in alert_notifier.policy_change_line({**rate, "prev_value": None})

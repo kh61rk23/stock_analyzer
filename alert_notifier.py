@@ -113,13 +113,7 @@ def extract_alerts(cfg, results: dict) -> list:
         policy = results.get("policy", {})
         new_events = policy.get("new_events", [])
         if new_events:
-            lines = []
-            for ev in new_events:
-                chg = ev.get("change_pt", 0)
-                lines.append(
-                    f"  [{ev.get('bank','')}] {ev.get('label','')} "
-                    f"{chg:+.3f}%pt → {ev.get('direction','')}"
-                )
+            lines = [policy_change_line(ev) for ev in new_events]
             alerts.append({
                 "trigger":  "policy_change",
                 "title":    f"⚡ 政策金利変化 {len(new_events)}件検出",
@@ -2049,6 +2043,24 @@ def build_high_dividend_alert(cfg, results: dict, sector_results: dict | None = 
         "body":     "\n".join(lines),
         "severity": "info",
     }
+
+
+def policy_change_line(ev: dict) -> str:
+    """政策金利・為替の変化1件を「前回 → 今回（変化）→ 方向」で書く（純関数）。
+
+    金利は %・%pt、為替（USD/JPY など）は 円 で出す。前回・今回の値が無い古い記録は変化だけを出す。
+    """
+    label = str(ev.get("label") or "")
+    fx = "JPY" in label.upper() or "円" in label or str(ev.get("ticker", "")).upper().endswith("=X")
+    unit, dunit, nd = ("円", "円", 2) if fx else ("%", "%pt", 3)
+    chg = ev.get("change_pt") or 0
+    prev, curr = ev.get("prev_value"), ev.get("curr_value")
+    when = f"（{ev.get('prev_date')}→{ev.get('curr_date')}）" if ev.get("prev_date") and ev.get("curr_date") else ""
+    if prev is not None and curr is not None:
+        move = f"{prev:,.{nd}f}{unit} → {curr:,.{nd}f}{unit}（{chg:+.{nd}f}{dunit}）{when}"
+    else:
+        move = f"{chg:+.{nd}f}{dunit}"
+    return f"  [{ev.get('bank', '')}] {label} {move} → {ev.get('direction', '')}"
 
 
 def db_usage_lines(usage: dict | None) -> list:
