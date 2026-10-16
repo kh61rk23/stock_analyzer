@@ -1771,7 +1771,7 @@ def _screen_sector(sector_code: str, sector_name: str,
             "longterm_confidence":    lt_confidence,
             "longterm_flags":         lt_flags,
             "net_cash_ratio":         (
-                round((data.get("total_cash", 0) - (data.get("total_debt") or 0))
+                round(((data.get("total_cash") or 0) - (data.get("total_debt") or 0))
                       / (data.get("market_cap", 1) or 1), 3)
                 if data.get("market_cap") else None
             ),
@@ -1833,7 +1833,7 @@ def _screen_sector(sector_code: str, sector_name: str,
             if _c["is_latent_pearl"] and _c.get("pass_filters"):
                 _lp_bonus = round(min(5.0, _lp_score / 20.0), 1)
                 _c["composite_score"] = round(
-                    min(100.0, _c.get("composite_score", 0.0) + _lp_bonus), 1
+                    min(100.0, (_c.get("composite_score") or 0.0) + _lp_bonus), 1
                 )
                 _c["latent_pearl_bonus"] = _lp_bonus
             else:
@@ -1875,7 +1875,7 @@ def _screen_sector(sector_code: str, sector_name: str,
                     "independence_score": _lpe.get("independence_score", 0.0),
                     "catalyst_flags":     _lpe.get("catalyst_flags", []),
                     "composite_score":    round(
-                        min(100.0, 50.0 + _lpe.get("latent_pearl_score", 0.0) * 0.3), 1
+                        min(100.0, 50.0 + (_lpe.get("latent_pearl_score") or 0.0) * 0.3), 1
                     ),
                     "sector_code":        sector_code,
                     "size_tier":          "Micro",  # 潜伏銘柄はデフォルトMicro
