@@ -35,3 +35,12 @@ def test_alert_items_become_signal_events_with_stable_ids():
     assert [e["signal_category"] for e in ev] == ["alert_buyback", "alert_earnings_surprise_down"]
     assert ev[0]["fired_at"] == "2026-10-15" and ev[1]["direction"] == "bearish"
     assert ev[0]["event_id"] == oe.alert_signal_events(_Client([r]))[0]["event_id"]
+
+
+def test_theme_entities_read_subthemes_inside_sectors():
+    import config
+    themes = oe.build_theme_entities(config, {("JP", "値上げ転嫁力"): ["2802.T"]})
+    names = {t["theme_name"] for t in themes if t["theme_type"] == "subtheme"}
+    assert "値上げ転嫁力" in names and "version" not in names and "attributes" not in names
+    assert len(names) > 50
+    assert next(t for t in themes if t["theme_name"] == "値上げ転嫁力")["member_tickers"] == ["2802.T"]

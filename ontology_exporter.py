@@ -247,23 +247,50 @@ def alert_signal_events(client) -> list[dict]:
     return events
 
 
-def build_theme_entities(cfg) -> list[dict]:
-    """サブテーマJSON＋クラスターキャッシュをテーマエンティティ化。"""
+SUBTHEME_MEMBERS_SQL = """
+SELECT market, subtheme, ARRAY_AGG(DISTINCT ticker ORDER BY ticker LIMIT 50) AS tickers
+FROM `{project}.edinet.ticker_subtheme_mapping`
+WHERE ticker IS NOT NULL AND NOT STARTS_WITH(ticker, 'SECTOR_')
+GROUP BY market, subtheme
+"""
+
+
+def subtheme_members(client) -> dict:
+    """{(市場, サブテーマ): [ticker…]}（edinet.ticker_subtheme_mapping・1クエリ）。"""
+    out = {}
+    try:
+        for r in client.query(SUBTHEME_MEMBERS_SQL.format(project=client.project)).result():
+            out[(r.market, r.subtheme)] = [t if (t.endswith(".T") or r.market != "JP") else f"{t}.T" for t in r.tickers]
+    except Exception as e:
+        print(f"  ⚠️ [ontology] サブテーマの構成銘柄の読み込み失敗: {str(e)[:100]}")
+    return out
+
+
+def build_theme_entities(cfg, members: dict | None = None) -> list[dict]:
+    """サブテーマ定義（業種ごとの subthemes）とクラスターキャッシュをテーマエンティティ化する。
+
+    サブテーマ JSON は {"sectors": {業種コード: {"subthemes": [...]}}}。同じテーマ名が複数業種に出れば1件にまとめ、
+    member_tickers は ticker_subtheme_mapping の銘柄（無ければ業種コード）。
+    """
     themes = []
+    members = members or {}
     for fname, market in (("jp_sector_subtheme.json", "JP"),
                           ("us_sector_subtheme.json", "US")):
         data = _load_json(REPO / "data" / fname)
-        if not isinstance(data, dict):
+        sectors = (data or {}).get("sectors") if isinstance(data, dict) else None
+        if not isinstance(sectors, dict):
             continue
-        for key, body in data.items():
-            if not isinstance(body, dict):
-                continue
+        by_name: dict = {}
+        for code, body in sectors.items():
+            for name in (body or {}).get("subthemes") or []:
+                by_name.setdefault(str(name), []).append(str(code))
+        for name, codes in by_name.items():
             themes.append({
-                "theme_id": _eid("subtheme", market, key),
-                "theme_name": str(key),
+                "theme_id": _eid("subtheme", market, name),
+                "theme_name": name,
                 "theme_type": "subtheme",
                 "market": market,
-                "member_tickers": [],
+                "member_tickers": members.get((market, name)) or codes[:50],
                 "heat_score": None,
                 "updated_at": _NOW,
             })
@@ -425,7 +452,7 @@ def build_tables(cfg, client=None) -> dict:
     return {
         "company_entity": build_company_entities(cfg, listed),
         "signal_event":   signals,
-        "theme_entity":   build_theme_entities(cfg),
+        "theme_entity":   build_theme_entities(cfg, subtheme_members(client) if client is not None else None),
         "decision_event": build_decision_events(cfg),
     }
 
