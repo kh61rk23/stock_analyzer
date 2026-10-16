@@ -121,3 +121,36 @@ def test_failed_area_profile_keeps_company_due_for_retry(tmp_path, monkeypatch):
     assert result["failure"] == 1
     assert "E1" not in meta
     assert "13101" not in meta["_area_profiles"]
+
+
+def test_ingest_uses_budget_until_spent_and_merges_once(tmp_path, monkeypatch):
+    """1社1回で済む会社が続けば、2回見積もりの社数を超えて枠いっぱいまで進む。書き込みは表ごとに1回。"""
+    codes = [f"E{i}" for i in range(1, 31)]
+    (tmp_path / "edinetdb_company_cache.json").write_text(json.dumps({
+        "companies": [{"edinet_code": c, "sec_code": f"{1000 + i}0"} for i, c in enumerate(codes)],
+    }), encoding="utf-8")
+    merges = []
+
+    class FakeRest:
+        def __init__(self, *_a, **_k):
+            self.calls = 0
+
+        def get(self, path, params=None):
+            self.calls += 1
+            return [{"edinet_code": params["edinet_code"], "fiscal_year": 2025, "facility_name": "本社"}]
+
+    class FakeBQ:
+        def merge_rows(self, table, rows, *_a, **_k):
+            merges.append((table, len(rows)))
+            return True
+
+    monkeypatch.setattr(module, "DBRestClient", FakeRest)
+    monkeypatch.setattr("edinet_bq_client.EDINETBQClient", FakeBQ)
+    monkeypatch.setattr(module, "plan_fudosan_targets", lambda companies, cfg, meta, budget: codes[:budget // 2])
+    cfg = SimpleNamespace(ENABLE_FUDOSAN_INGEST=True, FUDOSAN_API_KEY="key", FUDOSAN_DAILY_BUDGET=10,
+                          FUDOSAN_BACKFILL_CUTOFF="2099-12-31", FUDOSAN_REFRESH_DAYS=365,
+                          FUDOSAN_ROTATION_META="fudosan_rotation.json", DATA_DIR=tmp_path)
+    result = module.run_fudosan_ingest(cfg)
+    assert result["success"] == 10 and result["calls_used"] == 10 and result["budget_stop"] is True
+    assert [t for t, _ in merges] == ["corporate_holdings_p1", "area_profile_p1"]
+    assert merges[0][1] == 10

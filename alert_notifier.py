@@ -1948,7 +1948,7 @@ def extract_alerts(cfg, results: dict) -> list:
                 _fl = json.loads((_fd / "fudosandb_cache" / f"daily_{_fday}.json").read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 _fl = None
-            _fu = load_db_usage("fudosandb", _fl, getattr(cfg, "FUDOSAN_DAILY_BUDGET", None), _fd, _fday)
+            _fu = load_db_usage("fudosandb", _fl, getattr(cfg, "FUDOSAN_PLAN_DAILY_LIMIT", 100), _fd, _fday)
             _fu["stopped"] = "日次予算到達" if (results.get("fudosan_ingest") or {}).get("budget_stop") else None
             _re = build_real_estate_alert(results.get("fudosan_ingest") or {}, sector_results, _fu)
             if _re:

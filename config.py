@@ -1323,6 +1323,7 @@ FUDOSAN_BASE_URL: str = os.getenv(
 FUDOSAN_DAILY_BUDGET: int = 900
 FUDOSAN_BACKFILL_CUTOFF: str = "2026-07-30"
 FUDOSAN_POST_CUTOFF_BUDGET: int = 90
+FUDOSAN_PLAN_DAILY_LIMIT: int = 100       # 不動産DB の契約上の1日の上限（8/1以降）。メールの【API使用】の分母。自動取り込みは POST_CUTOFF_BUDGET まで
 FUDOSAN_REFRESH_DAYS: int = 365
 FUDOSAN_ROTATION_META: str = "fudosan_rotation_meta.json"
 FUDOSAN_HOLDINGS_TABLE: str = "corporate_holdings_p1"

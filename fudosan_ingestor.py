@@ -217,7 +217,9 @@ def run_fudosan_ingest(
                 "targets": [], "budget": daily_budget,
             }
     else:
-        targets = plan_fudosan_targets(companies, cfg, meta, daily_budget)
+        # 1社に必要な呼び出しは「保有不動産1回＋未取得の市区町村ぶん」で、実際は1回で済む会社が多い。
+        # 2回と見積もって社数を先に決めると枠が余るため、候補は多めに並べ、使った回数で打ち切る。
+        targets = plan_fudosan_targets(companies, cfg, meta, daily_budget * 3)
     if target_limit is not None:
         targets = targets[:max(0, int(target_limit))]
     if dry_run:
@@ -247,10 +249,18 @@ def run_fudosan_ingest(
         area_meta = {}
     seen_municipalities: set[str] = set()
     budget_stop = False
+    attempted: list[str] = []
+    all_holdings: list[dict] = []
+    all_areas: list[dict] = []
+    pending_done: list[str] = []
     for code in targets:
         if budget_stop:
             # 予算を使い切った後は全企業が失敗するだけなので周回を止める。
             break
+        if int(getattr(client, "calls", 0) or 0) >= daily_budget:
+            budget_stop = True
+            break
+        attempted.append(code)
         raw = client.get(
             "/corporate/real-estate-holdings", {"edinet_code": code, "limit": 2000}
         )
@@ -316,34 +326,43 @@ def run_fudosan_ingest(
                     # 無駄な周回を止める。
                     budget_stop = True
                     break
-        try:
-            bq.merge_rows(
-                getattr(cfg, "FUDOSAN_HOLDINGS_TABLE", "corporate_holdings_p1"), holding_rows,
-                ["edinet_code", "fiscal_year", "facility_name"], dataset="real_estate",
-            )
-            bq.merge_rows(
-                getattr(cfg, "FUDOSAN_AREA_TABLE", "area_profile_p1"),
-                area_rows, ["municipality_code"], dataset="real_estate"
-            )
-            holdings_count += len(holding_rows)
-            area_count += len(area_rows)
-            area_meta.update(area_updates)
-            if profile_failed:
-                # holdingsは保存済みでも、未取得profileがある限り企業ローテーションを
-                # 完了させず、次回に欠損分を再試行する。
-                failure += 1
-            else:
-                meta[code] = {"last_fetched": date.today().isoformat()}
-                success += 1
-        except Exception:
+        all_holdings.extend(holding_rows)
+        all_areas.extend(area_rows)
+        area_meta.update(area_updates)
+        holdings_count += len(holding_rows)
+        area_count += len(area_rows)
+        if profile_failed:
+            # holdingsは保存するが、未取得profileがある限り企業ローテーションを
+            # 完了させず、次回に欠損分を再試行する。
             failure += 1
+        else:
+            pending_done.append(code)
+    # 書き込みはその回に取った全社ぶんを表ごとに1本の MERGE にする（会社ごとに撃つと本数がそのまま費用になる）。
+    # 書けなかったときは取得済みにせず、次回に取り直す。
+    try:
+        bq.merge_rows(
+            getattr(cfg, "FUDOSAN_HOLDINGS_TABLE", "corporate_holdings_p1"), all_holdings,
+            ["edinet_code", "fiscal_year", "facility_name"], dataset="real_estate",
+        )
+        bq.merge_rows(
+            getattr(cfg, "FUDOSAN_AREA_TABLE", "area_profile_p1"),
+            all_areas, ["municipality_code"], dataset="real_estate"
+        )
+        for code in pending_done:
+            meta[code] = {"last_fetched": date.today().isoformat()}
+        success += len(pending_done)
+    except Exception as exc:
+        print(f"    ❌ [fudosan] BQ への書き込み失敗（{len(pending_done)}社は次回取り直す）: {str(exc)[:150]}")
+        failure += len(pending_done)
+        holdings_count = area_count = 0
+        area_meta = meta.get("_area_profiles", {}) if isinstance(meta.get("_area_profiles"), dict) else {}
     meta["_area_profiles"] = area_meta
     _save_json(meta_path, meta)
     log_counts = client.log_summary() if hasattr(client, "log_summary") else {}
     return {
         "skipped": False, "success": success, "failure": failure,
         "holdings": holdings_count, "area_profiles": area_count,
-        "targets": targets, "budget": daily_budget,
+        "targets": attempted, "budget": daily_budget, "calls_used": int(getattr(client, "calls", 0) or 0),
         "budget_stop": budget_stop,
         "log_counts": log_counts,
     }
