@@ -1337,6 +1337,9 @@ ENABLE_ALERT_STORE: bool = True          # 日次メールの全節と銘柄を 
 ENABLE_RENTAL_PROPERTY_FV: bool = True    # True＝毎日 RENTAL_FV_DAILY_BUDGET 社を取る。False＝RENTAL_FV_TRIAL_LIMIT 社を1回だけ試行
 RENTAL_FV_DAILY_BUDGET: int = 15          # 1日に取る社数（＝EdinetDB の呼び出し回数）。残りは日次取り込みへ
 RENTAL_FV_TRIAL_LIMIT: int = 10
+# 未取得なら優先して取る会社（EDINET コード）。IFRS の投資不動産の公正価値が EdinetDB real-estate で取れるかを
+# 投資不動産の大きい IFRS 会社で確かめるため（NTT・住友商事・三井物産・J.フロント・IHI）
+RENTAL_FV_PRIORITY_CODES: tuple = ("E04430", "E02528", "E02513", "E03516", "E02128")
 FUDOSANDB_BASE_URL: str = FUDOSAN_BASE_URL  # 後方互換
 FUDOSANDB_DAILY_BUDGET: int = FUDOSAN_DAILY_BUDGET  # 後方互換
 

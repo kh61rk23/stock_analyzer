@@ -17,7 +17,7 @@
 # 【対象と順番】
 #   保有不動産（corporate_holdings_p1）に土地簿価のある会社と不動産業（1032）を対象にし、
 #   未取得の会社 → 前回取得より後に有価証券報告書が出た会社、の順に RENTAL_FV_DAILY_BUDGET 社まで。
-#   未取得の中は、不動産業 → 土地簿価の大きい順（推定時価の補正で主に比べる会社を先に集めるため）。
+#   未取得の中は、RENTAL_FV_PRIORITY_CODES → 不動産業 → 土地簿価の大きい順（推定時価の補正で主に比べる会社を先に集めるため）。
 #   取得状況は stock_data/data/rental_property_state.json に残す。
 # 【予算】
 #   EdinetDB の日次枠（EDINETDB_DAILY_BUDGET）を日次取り込みと共有する。日次取り込みの直前に
@@ -225,7 +225,9 @@ def run(cfg, limit: int | None = None) -> dict:
     from edinet_bq_client import EDINETBQClient
     bq = EDINETBQClient()
     ensure_table(bq)
-    cands = list(dict.fromkeys(r.edinet_code for r in bq.client.query(TARGET_SQL.format(project=bq.project)).result()))
+    cands = list(dict.fromkeys(
+        [str(c) for c in (getattr(cfg, "RENTAL_FV_PRIORITY_CODES", ()) or ())]
+        + [r.edinet_code for r in bq.client.query(TARGET_SQL.format(project=bq.project)).result()]))
     latest = {r.edinet_code: str(r.latest) for r in bq.client.query(
         LATEST_DOC_SQL.format(project=bq.project),
         job_config=bigquery.QueryJobConfig(query_parameters=[
