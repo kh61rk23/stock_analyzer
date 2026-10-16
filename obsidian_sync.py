@@ -123,7 +123,19 @@ def cmd_pull(cfg, repo_url: str) -> bool:
         return
     SYNC_CACHE.parent.mkdir(parents=True, exist_ok=True)
     if (SYNC_CACHE / ".git").exists():
-        r = _git_with_retry(["git", "-C", str(SYNC_CACHE), "pull", "--ff-only"], 300)
+        # 同期用 clone には mirror / approvals / holdings の自動コミットが積まれる。ネットワーク断で push できなかった
+        # コミットが残ると早送りできず、以後の pull が毎回失敗する（審議結果が vault に届かなくなる）。
+        # rebase で GitHub の後ろに並べ直し、取り残したコミットはここで送り出す。
+        g = ["git", "-C", str(SYNC_CACHE)]
+        r = _git_with_retry(g + ["pull", "--rebase", "--autostash", "-q", "origin", "main"], 300)
+        if r.returncode != 0:
+            subprocess.run(g + ["rebase", "--abort"], capture_output=True, text=True, timeout=60)
+        else:
+            ahead = subprocess.run(g + ["rev-list", "--count", "origin/main..HEAD"], capture_output=True, text=True, timeout=60)
+            if (ahead.stdout or "0").strip() not in ("", "0"):
+                pr = _git_with_retry(g + ["push", "-q", "origin", "HEAD:main"], 120)
+                print(f"{'✅' if pr.returncode == 0 else '⚠️'} 取り残した自動コミット {ahead.stdout.strip()}件の push"
+                      + ("" if pr.returncode == 0 else f" 失敗（次回再試行）: {(pr.stderr or '')[:120]}"))
     else:
         r = _git_with_retry(["git", "clone", "--depth", "1", repo_url,
                              str(SYNC_CACHE)], 600)
