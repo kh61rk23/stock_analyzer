@@ -209,12 +209,15 @@ def cmd_mirror(cfg) -> bool:
         current = sorted(json.loads(target.read_text(encoding="utf-8")).get("tickers") or [])
     except (OSError, ValueError):
         current = None
-    # 作業コピー側にも書く（Mac上の queue / board が同じ集合を使う）
-    try:
-        from deliberation_scheduler import export_deliberated_mirror
-        export_deliberated_mirror(cfg)
-    except Exception:
-        pass
+    def _copy_to_worktree() -> None:
+        """作業コピー側にも同じ中身を置く（Mac上の queue / board が同じ集合を使う）。
+        別の時刻で書き直すと GitHub 側と食い違い、作業コピーの pull が毎回衝突するため、clone の版をそのまま写す。"""
+        try:
+            dst = Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / MIRROR_REL.name
+            if target.exists() and dst.parent.exists():
+                dst.write_bytes(target.read_bytes())
+        except OSError:
+            pass
     today = datetime.now().strftime("%Y-%m-%d")
     try:
         prev = json.loads(target.read_text(encoding="utf-8"))
@@ -223,6 +226,7 @@ def cmd_mirror(cfg) -> bool:
     # 審議済みが変わらなくても1日1回は照合日（verified_at）を上げる。Actions のメールは
     # これを見て、ミラーを正本と同じに扱えるか（台帳と最近照合されているか）を判断する。
     if current == tickers and str(prev.get("verified_at", ""))[:10] == today:
+        _copy_to_worktree()
         print(f"✅ mirror: 変更なし（審議済み{len(tickers)}銘柄・本日照合済み）")
         return True
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -245,6 +249,7 @@ def cmd_mirror(cfg) -> bool:
     for attempt in range(2):
         r = _git_with_retry(g + ["push", "-q", "origin", "HEAD:main"], 120)
         if r.returncode == 0:
+            _copy_to_worktree()
             print(f"✅ mirror: push 完了 — {msg}")
             return True
         # Actions の auto コミットと競合したら取り込み直して再送
