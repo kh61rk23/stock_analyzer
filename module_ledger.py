@@ -41,6 +41,8 @@ from pathlib import Path
 from typing import Optional
 
 _LATEST_FILENAME = "module_ledger_latest.json"
+# 連続失敗として数える状態。alert は別ワークフロー（price_universe 等）が「取得率が下限割れ」で付ける失敗。
+_FAIL_STATUSES = ("error", "alert")
 
 # ── mode-key → 実際に logger.add() で使われる記録キー ──
 # DAILY_MODULES の mode-key と記録キーが一致せず、かつ接頭辞派生でもない
@@ -224,7 +226,7 @@ def _calc_consecutive_failures(cfg, today_ledger: dict) -> dict:
 
     failing = {
         name: 1 for name, m in today_ledger["modules"].items()
-        if m["status"] == "error"
+        if m["status"] in _FAIL_STATUSES
     }
     if not failing:
         return {}
@@ -239,7 +241,7 @@ def _calc_consecutive_failures(cfg, today_ledger: dict) -> dict:
             continue  # 実行が無かった日は判定対象外
         for name in list(active):
             st = past.get("modules", {}).get(name, {}).get("status")
-            if st == "error":
+            if st in _FAIL_STATUSES:
                 failing[name] += 1
             else:
                 active.discard(name)  # 成功/スキップ/記録なしで連続打ち切り
@@ -281,6 +283,55 @@ def _calc_last_success(cfg, today_ledger: dict) -> dict:
 # BLOCK 2: 確定・永続化・アラート
 # ==============================================================
 
+def _calc_unrecorded_streak(cfg, today_ledger: dict) -> dict:
+    """当日「記録なし」のモジュールが、何日続けて記録なしか（実行の無かった日は数えない）。"""
+    history_days = int(getattr(cfg, "LEDGER_HISTORY_DAYS", 14))
+    today = datetime.strptime(today_ledger["date"], "%Y-%m-%d")
+    streak = {name: 1 for name in today_ledger.get("unrecorded") or []}
+    active = set(streak)
+    for i in range(1, history_days + 1):
+        if not active:
+            break
+        past = _load_daily(cfg, (today - timedelta(days=i)).strftime("%Y-%m-%d"))
+        if past is None:
+            continue
+        missing = set(past.get("unrecorded") or [])
+        for name in list(active):
+            if name in missing:
+                streak[name] += 1
+            else:
+                active.discard(name)
+    return streak
+
+
+def _calc_external_stale(cfg, today_ledger: dict) -> dict:
+    """別ワークフロー（record_external）で毎日入るはずの記録が、何日来ていないか。
+    LEDGER_EXTERNAL_EXPECT={名前: 許容日数} を超えたものだけ返す（ワークフローの停止・無効化に気づくため）。"""
+    expect = dict(getattr(cfg, "LEDGER_EXTERNAL_EXPECT", {}) or {})
+    if not expect:
+        return {}
+    history_days = max(int(getattr(cfg, "LEDGER_HISTORY_DAYS", 14)), max(expect.values()) + 1)
+    today = datetime.strptime(today_ledger["date"], "%Y-%m-%d")
+    out = {}
+    for name, limit in expect.items():
+        last = None
+        for i in range(0, history_days + 1):
+            d = (today - timedelta(days=i)).strftime("%Y-%m-%d")
+            day = today_ledger if i == 0 else (_load_daily(cfg, d) or {})
+            ext = {}
+            try:
+                p = _external_path(cfg, d)
+                ext = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+            except Exception:
+                ext = {}
+            if name in (day.get("modules") or {}) or name in ext:
+                last = i
+                break
+        if last is None or last > int(limit):
+            out[name] = last if last is not None else history_days
+    return out
+
+
 def finalize_daily_ledger(cfg, logs: list, send_alert: bool = True) -> dict:
     """
     日次台帳を確定して保存し、サマリーを返す。
@@ -291,9 +342,14 @@ def finalize_daily_ledger(cfg, logs: list, send_alert: bool = True) -> dict:
     ledger["consecutive_failures"] = _calc_consecutive_failures(cfg, ledger)
     ledger["last_success"]         = _calc_last_success(cfg, ledger)
 
+    ledger["unrecorded_streak"]    = _calc_unrecorded_streak(cfg, ledger)
+    ledger["external_stale"]       = _calc_external_stale(cfg, ledger)
+
     threshold = int(getattr(cfg, "LEDGER_CONSEC_FAIL_DAYS", 3))
+    unrec_days = int(getattr(cfg, "LEDGER_UNRECORDED_DAYS", 2))
     ledger["alerts"] = [
         {
+            "kind":   "consecutive_failure",
             "module": name,
             "days":   days,
             "note":   ledger["modules"].get(name, {}).get("note", ""),
@@ -303,6 +359,16 @@ def finalize_daily_ledger(cfg, logs: list, send_alert: bool = True) -> dict:
             key=lambda x: -x[1],
         )
         if days >= threshold
+    ] + [
+        # 1日だけの記録なしはモードの切り替わり等でも起きるため、続いたときだけ通知する
+        {"kind": "unrecorded", "module": name, "days": days,
+         "note": "DAILY_MODULES に登録済みなのに実行記録が無い（配線漏れ・ログ未配線の疑い）"}
+        for name, days in sorted(ledger["unrecorded_streak"].items(), key=lambda x: -x[1])
+        if days >= unrec_days
+    ] + [
+        {"kind": "external_stale", "module": name, "days": days,
+         "note": "別ワークフローの記録が来ていない（ワークフローの停止・無効化・失敗の疑い）"}
+        for name, days in sorted(ledger["external_stale"].items(), key=lambda x: -x[1])
     ]
 
     # 保存（日次 + latest）
@@ -324,8 +390,9 @@ def finalize_daily_ledger(cfg, logs: list, send_alert: bool = True) -> dict:
                if m.get("status") in ("warn", "alert")]
     if _warned:
         print(f"    ⚠️  要確認: {', '.join(sorted(_warned)[:8])}")
+    _KIND = {"consecutive_failure": "連続失敗", "unrecorded": "記録なし", "external_stale": "記録が来ない"}
     for a in ledger["alerts"]:
-        print(f"    🚨 連続失敗 {a['days']}日: {a['module']} ({a['note'][:50]})")
+        print(f"    🚨 {_KIND.get(a.get('kind'), '')} {a['days']}日: {a['module']} ({a['note'][:50]})")
     if ledger["unrecorded"]:
         print(f"    👻 記録なし（配線漏れ疑い）: {', '.join(ledger['unrecorded'][:8])}")
 
@@ -346,22 +413,24 @@ def _send_failure_alert(cfg, ledger: dict) -> None:
         if not (frm and pwd and to):
             return
         from alert_notifier import send_gmail
+        kind_ja = {"consecutive_failure": "連続失敗", "unrecorded": "記録なし（配線漏れ疑い）",
+                   "external_stale": "別ワークフローの記録が来ない"}
         rows = "".join(
-            f"<tr><td>{a['module']}</td><td>{a['days']}日</td>"
+            f"<tr><td>{kind_ja.get(a.get('kind'), '連続失敗')}</td><td>{a['module']}</td><td>{a['days']}日</td>"
             f"<td>{a['note'][:80]}</td></tr>"
             for a in ledger["alerts"]
         )
         html = (
-            f"<p>以下のモジュールが連続失敗しています（{ledger['date']}時点）。</p>"
+            f"<p>実行台帳で次の異常を見つけました（{ledger['date']}時点）。</p>"
             f"<table border='1' cellpadding='4'>"
-            f"<tr><th>モジュール</th><th>連続失敗</th><th>直近エラー</th></tr>"
+            f"<tr><th>種類</th><th>モジュール</th><th>日数</th><th>内容</th></tr>"
             f"{rows}</table>"
             f"<p>詳細: stock_data/logs/module_ledger_latest.json</p>"
         )
         send_gmail(frm, pwd, to,
-                   f"🚨【実行台帳】モジュール連続失敗 {len(ledger['alerts'])}件",
+                   f"🚨【実行台帳】異常 {len(ledger['alerts'])}件（連続失敗・記録なし・別ワークフロー）",
                    html)
-        print(f"    📧 連続失敗アラート送信: {len(ledger['alerts'])}件")
+        print(f"    📧 実行台帳の異常アラート送信: {len(ledger['alerts'])}件")
     except Exception as e:
         print(f"    ⚠️  [ledger] アラート送信失敗: {str(e)[:60]}")
 

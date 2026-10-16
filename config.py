@@ -4183,6 +4183,14 @@ ENABLE_LATENT_PEARL_BONUS: bool = True
 ENABLE_MODULE_LEDGER: bool = True
 LEDGER_CONSEC_FAIL_DAYS: int = 3    # この日数以上の連続失敗で Gmail アラート
 LEDGER_HISTORY_DAYS: int = 14       # 連続失敗・最終成功日の遡及日数
+LEDGER_UNRECORDED_DAYS: int = 2     # DAILY_MODULES の「記録なし」がこの日数続いたら Gmail アラート（配線漏れの疑い）
+# 別ワークフロー（record_external）の記録が来なくなったら気づくための許容日数（土日・祝日の休みを含めて数える）
+LEDGER_EXTERNAL_EXPECT: dict = {
+    "price_universe_jp": 4,
+    "price_universe_us": 4,
+    "us_company_facts_update": 4,
+    "report_store": 3,
+}
 
 # ==============================================================
 # BLOCK 39: 投資部（マルチエージェント審議）連携設定（DEPT-1）
