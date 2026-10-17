@@ -104,3 +104,22 @@ class TestQueue:
         assert "6504.T" in q
         # スコア降順で並ぶこと
         assert q.index("6674.T") < q.index("6504.T")
+
+
+def test_git_retry_gives_up_quickly_after_offline(monkeypatch):
+    """一度つながらないと分かったら、同じ回の残りの git は再試行しない。"""
+    import types
+    import obsidian_sync as osync
+    calls = []
+
+    def fake_run(args, **kw):
+        calls.append(args)
+        return types.SimpleNamespace(returncode=128, stderr="fatal: Could not resolve host: github.com", stdout="")
+    monkeypatch.setattr(osync.subprocess, "run", fake_run)
+    monkeypatch.setattr(osync, "_OFFLINE", False)
+    import time
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    osync._git_with_retry(["git", "pull"], 10, tries=6, wait=0)
+    assert len(calls) == 6 and osync._OFFLINE is True
+    osync._git_with_retry(["git", "push"], 10, tries=6, wait=0)
+    assert len(calls) == 7

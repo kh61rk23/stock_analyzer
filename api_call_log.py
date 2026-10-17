@@ -21,7 +21,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 _SKIP_FILES = {"api_call_log.py", "db_rest_client.py"}
-_CODE_RE = re.compile(r"/E\d{5}(?=/|$)")
+_CODE_RE = re.compile(r"/(?:E\d{5}|\d[0-9A-Z]\d[0-9A-Z]0?)(?=/|$)")
 _NUM_RE = re.compile(r"/\d{4,}(?=/|$)")
 
 

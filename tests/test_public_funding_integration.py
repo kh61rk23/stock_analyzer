@@ -89,3 +89,34 @@ def test_policy_change_line_shows_from_to():
     assert "3.943% → 4.000%（+0.057%pt）（2026-10-14→2026-10-15） → 引き締め方向" in alert_notifier.policy_change_line(rate)
     assert "151.40円 → 151.20円（-0.20円） → 円高進行" in alert_notifier.policy_change_line(fx)
     assert "+0.057%pt →" in alert_notifier.policy_change_line({**rate, "prev_value": None})
+
+
+def test_own_prior_use_is_not_warned():
+    """賃貸等不動産の取得で先に使った分だけ残りが減った日は、警告も内訳も出さない。"""
+    import alert_notifier
+    caps = {"caps": {"config": 97, "daily_remaining": 91}, "limiter": "daily_remaining", "final": 91}
+    calls = {"total": 20, "by_caller": [("edinetdb_ingestor:run_edinetdb_ingest", 10),
+                                        ("rental_property_ingestor:run", 15), ("api_key_health:_probe_edinetdb", 1)],
+             "by_path": [], "by_status": [("200", 26)]}
+    lines, warns = alert_notifier.api_usage_lines(calls, caps, 89)
+    body = "\n".join(lines)
+    assert not any("他で使われ" in w for w in warns) and "本日の枠の内訳" not in body
+    assert "先に 16回使用" in body
+    other = {**calls, "by_caller": [("edinetdb_ingestor:run_edinetdb_ingest", 10)]}
+    _, warns2 = alert_notifier.api_usage_lines(other, caps, 89)
+    assert any("他で使われ" in w for w in warns2)
+
+
+def test_seisakudb_note_records_real_caller(tmp_path, monkeypatch):
+    import api_call_log
+    import seisakudb_ingestor as sk
+    c = sk.SeisakuClient("k", tmp_path / "seisakudb_usage.json")
+
+    def get():                      # 本番では SeisakuClient.get の中から _note を呼ぶ
+        c._note("/companies/542A0/public-funding", 200)
+
+    def run_x():
+        get()
+    run_x()
+    s = api_call_log.summarize("seisakudb", None, tmp_path)
+    assert s["by_caller"][0][0].endswith(":run_x") and s["by_path"][0][0] == "/companies/{code}/public-funding"

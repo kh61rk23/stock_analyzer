@@ -91,6 +91,9 @@ def _load_json(p: Path):
 # pull: GitHub → ローカル stock_data + vault 05_最新データ/
 # ==============================================================
 
+_OFFLINE = False
+
+
 def _git_with_retry(args: list, timeout: int, tries: int = 6, wait: int = 30):
     """ネットワーク未接続（スリープ復帰直後）を待って git を再試行する。
 
@@ -99,7 +102,10 @@ def _git_with_retry(args: list, timeout: int, tries: int = 6, wait: int = 30):
     やすい。再試行しないと pull がほぼ毎回失敗し、同期用cloneが古いまま残る。
     """
     import time as _t
+    global _OFFLINE
     r = None
+    if _OFFLINE:
+        tries = 1
     for i in range(tries):
         r = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
         if r.returncode == 0:
@@ -107,6 +113,11 @@ def _git_with_retry(args: list, timeout: int, tries: int = 6, wait: int = 30):
         transient = any(k in (r.stderr or "") for k in (
             "Could not resolve host", "unable to access", "Connection", "timed out"))
         if not transient or i == tries - 1:
+            if transient and tries > 1:
+                # 待ってもつながらなかった。この回の残りの git は再試行せずに次回へ回す
+                # （工程ごとに 30秒×6回 待つと、オフラインの日は同期が何時間も終わらない）
+                _OFFLINE = True
+                print("  📴 ネットワークにつながらないため、この回の残りの git は待たずに次回へ回す")
             break
         print(f"  ⏳ ネットワーク待ち（{i + 1}/{tries}）: {(r.stderr or '').strip()[:80]}")
         _t.sleep(wait)

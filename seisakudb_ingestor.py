@@ -76,8 +76,11 @@ class SeisakuClient:
     def _note(self, path: str, status) -> None:
         """呼び出しを api_call_log に残す（メールの「API の使い道」用。失敗しても止めない）。"""
         try:
+            import inspect
             import api_call_log
-            api_call_log.note("seisakudb", path, status, data_dir=self.ledger.parent)
+            # 呼び出し元は get() を呼んだ側（この _note と get 自身は飛ばす）
+            api_call_log.note("seisakudb", path, status, caller=api_call_log.caller_of(inspect.stack()[2:]),
+                              data_dir=self.ledger.parent)
         except Exception:
             pass
 

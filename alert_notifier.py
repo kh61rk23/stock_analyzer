@@ -2212,18 +2212,28 @@ def api_usage_lines(calls: dict | None, caps: dict | None, used: int, ing: dict 
         if n429:
             warns.append(f"HTTP 429（回数制限）{n429}回")
     caps = caps or {}
+    # 日次取り込みの前に、同じ枠を自分たちで先に使う工程（賃貸等不動産の取得・キーの生存確認）の回数。
+    # これで説明がつく「残りの減り」は予定どおりなので、警告にも内訳にも出さない。
+    own_prior = sum(v for k, v in (calls.get("by_caller") or [])
+                    if str(k).startswith(("rental_property_ingestor", "api_key_health")))
+    planned = False
+    if caps.get("caps") and caps.get("limiter") == "daily_remaining":
+        _c = caps["caps"]
+        planned = (_c.get("config", 0) - _c.get("daily_remaining", 0)) <= own_prior
+        if planned and own_prior:
+            lines.append(f"  （賃貸等不動産の取得・キー確認で先に {own_prior}回使用。日次取り込みは残りの枠で動く）")
     if caps.get("caps"):
         c = caps["caps"]
         # 平常（設定の日次予算どおりに枠が決まった日）は内訳を出さない。読むべき情報が無く、毎日のノイズになるため。
         # 月の上限や EdinetDB 側の残りで枠が削られた日だけ、どれが効いたかを出す。
-        if caps.get("limiter") not in (None, "config"):
+        if caps.get("limiter") not in (None, "config") and not planned:
             lines.append("  【本日の枠の内訳】" + " / ".join(f"{_CAP_JA.get(k, k)} {v}" for k, v in c.items())
                          + f" → 本日の枠 {caps.get('final')}回（決めたもの: {_CAP_JA.get(caps.get('limiter'), caps.get('limiter'))}）")
             if caps.get("monthly_used") is not None:
                 lines.append(f"    今月の使用 {caps['monthly_used']}回 / 月の上限（設定）{caps.get('monthly_guard')}回")
         if caps.get("limiter") in ("monthly_remaining", "monthly_guard"):
             warns.append(f"月の上限に近いため本日の枠を {caps.get('final')}回に抑えた")
-        elif caps.get("limiter") == "daily_remaining" and c.get("daily_remaining", 0) < c.get("config", 0):
+        elif caps.get("limiter") == "daily_remaining" and c.get("daily_remaining", 0) < c.get("config", 0) and not planned:
             warns.append(f"本日すでに他で使われ、残り {c.get('daily_remaining')}回から開始")
         final = int(caps.get("final") or 0)
         if final and used < final * 0.5:
