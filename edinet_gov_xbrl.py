@@ -49,7 +49,8 @@ def facts_from_xbrl(xml: str) -> list[dict]:
         text = re.sub(r"<[^>]+>", " ", _html.unescape(val))
         text = re.sub(r"\s+", " ", text).strip()
         out.append({"element": f"{prefix}:{name}", "contextRef": a.get("contextRef"), "unitRef": a.get("unitRef"),
-                    "decimals": a.get("decimals"), "value": text[:600], "is_text_block": name.endswith("TextBlock")})
+                    "decimals": a.get("decimals"), "value": text[:600], "is_text_block": name.endswith("TextBlock"),
+                    "text": text if name.endswith("TextBlock") else None})
     return out
 
 
