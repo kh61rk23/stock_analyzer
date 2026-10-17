@@ -128,7 +128,7 @@ def fair_value_from_text(text: str, book_values_million: list) -> list | None:
     戻り値は book_values_million と同じ長さのリスト（取れなかった期末は None）。1つも取れなければ None。
     表の金額が千円・円単位の会社もあるので、帳簿価額×1・1,000・1,000,000 の順に文中の数値と突き合わせ、当たった単位で読む。
     読み方は2通り:
-      1) 帳簿価額の数値（カンマ区切り）が「公正価値」という語より後ろにあり、その直後（数字と数字の間に
+      1) 帳簿価額の数値（カンマ区切り）が「公正価値」という語の近く（手前150字以内・間に「残高」なし）にあり、その直後（数字と数字の間に
          6字以内の注記しか挟まない）に次の数値が並ぶなら、それをその期末の公正価値とする（横並びの表）。
          増減表にも同じ帳簿価額が出るため、いちばん後ろの出現を採る（公正価値の表は増減表の後にある）。
       2) 1) で1つも取れなければ、「公正価値」または「投資不動産」という見出しの直後に並ぶ数値
@@ -154,12 +154,17 @@ def fair_value_from_text(text: str, book_values_million: list) -> list | None:
         gap = t[nums[i][1]:nums[i + 1][0]]
         return nums[i + 1][2] if len(gap) <= 6 and "公正価値" not in gap else None
 
+    def header_near(pos):
+        """pos の手前 150 字以内に「公正価値」があり、その間に「残高」（増減表の行）が無い。"""
+        j = t.rfind("公正価値", 0, pos)
+        return j >= 0 and pos - j <= 150 and "残高" not in t[j:pos]
+
     out: list = [None] * len(bvs)
     for k, bv in enumerate(bvs):
         if bv is None:
             continue
         for mult in mults:
-            hits = [i for i, (a, _b, v) in enumerate(nums) if a > first and round(v) == round(bv * mult)]
+            hits = [i for i, (a, _b, v) in enumerate(nums) if a > first and round(v) == round(bv * mult) and header_near(a)]
             for i in reversed(hits):
                 fv = adjacent(i)
                 if fv is not None and ok(bv, fv / mult):
