@@ -1350,11 +1350,11 @@ FUDOSANDB_DAILY_BUDGET: int = FUDOSAN_DAILY_BUDGET  # 後方互換
 # 政策DB（seisakudb.jp）。1日1000回まで（成功したリクエストだけ数える）。データは月次更新。
 SEISAKUDB_API_KEY: str = os.getenv("SEISAKUDB_API_KEY", "")   # GitHub Secrets
 ENABLE_SEISAKUDB: bool = True
-SEISAKUDB_DAILY_BUDGET: int = 1000       # 1日の上限。固定取得のあと個社ローテーションで使い切る
+SEISAKUDB_DAILY_BUDGET: int = 300        # 1日に使う回数（API の上限は1000）。データは月次更新なので、個社ローテーションは約4日で1周すれば足りる。1000回だと日次が10分延び Actions の無料枠（月2,000分）を圧迫する
 SEISAKUDB_RESERVE: int = 0               # 手動確認用に残す回数
 SEISAKUDB_RECENT_LIMIT: int = 500        # 直近イベントの取得件数
 SEISAKUDB_TOP_LIMIT: int = 2000          # 公的支出ランキングの取得件数
-SEISAKUDB_MIN_INTERVAL_SEC: float = 0.5  # 送信間隔の下限（1000回で約10分。連打すると429を誘発する）
+SEISAKUDB_MIN_INTERVAL_SEC: float = 0.5  # 送信間隔の下限（300回で約3分。連打すると429を誘発する）
 # 公的支出の特徴量（銘柄ごとの受給額・経済安保認定）。スコア加点は承認後に True にする。
 ENABLE_PUBLIC_FUNDING_FEATURES: bool = True
 ENABLE_PUBLIC_FUNDING_BONUS: bool = False
@@ -1503,6 +1503,7 @@ SUMMARY_MAX_TICKERS: int = 10         # 要約する最大銘柄数（コスト�
 
 # Step C': テーマETFトラッキング設定
 ENABLE_ETF_TRACKER: bool = True     # テーマETFトラッキングの有効化
+ARXIV_THEME_TIME_BUDGET_SEC: int = 150  # テーマ別 arXiv 論文数の問い合わせに使う上限秒数。超えたら打ち切り、7日以内の前回分を使う
 # Step D: Excel ダッシュボード CSV エクスポート（使わない方針のため停止中）
 ENABLE_EXCEL_EXPORT: bool = False  # Excel/CSVダッシュボード出力（使わない）
 ETF_TOP_N: int = 3                  # アラートに表示するトップテーマ数
