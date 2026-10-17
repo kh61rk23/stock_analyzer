@@ -53,19 +53,43 @@ def facts_from_xbrl(xml: str) -> list[dict]:
     return out
 
 
-def _instance_from_zip(blob: bytes) -> str:
-    with zipfile.ZipFile(io.BytesIO(blob)) as z:
-        names = [n for n in z.namelist() if n.endswith(".xbrl") and "PublicDoc" in n] or \
-                [n for n in z.namelist() if n.endswith(".xbrl")]
-        if not names:
-            return ""
-        raw = z.read(sorted(names, key=len)[0])
+def _decode(raw: bytes) -> str:
     for enc in ("utf-8", "cp932"):
         try:
             return raw.decode(enc)
         except UnicodeDecodeError:
             continue
     return raw.decode("utf-8", errors="replace")
+
+
+def facts_from_ixbrl(htm: str) -> list[dict]:
+    """インライン XBRL（ix:nonFraction / ix:nonNumeric）から、name が MATCH に当たる要素を取り出す（純関数）。"""
+    out = []
+    pat = re.compile(r"<ix:(nonFraction|nonNumeric)\b([^>]*)>(.*?)</ix:\1>", re.S | re.I)
+    for m in pat.finditer(htm or ""):
+        kind, attrs, inner = m.groups()
+        a = dict(re.findall(r'([\w:]+)="([^"]*)"', attrs))
+        name = a.get("name", "")
+        if not MATCH.search(name):
+            continue
+        text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", _html.unescape(inner))).strip()
+        out.append({"element": name, "contextRef": a.get("contextRef"), "unitRef": a.get("unitRef"),
+                    "decimals": a.get("decimals"), "scale": a.get("scale"), "sign": a.get("sign"),
+                    "value": text[:600], "is_text_block": name.endswith("TextBlock")})
+    return out
+
+
+def facts_from_zip(blob: bytes) -> tuple[list[dict], str]:
+    """ZIP の中の XBRL インスタンス（.xbrl）を読む。無ければ PublicDoc のインライン XBRL（.htm）を全部読む。"""
+    with zipfile.ZipFile(io.BytesIO(blob)) as z:
+        names = z.namelist()
+        inst = [n for n in names if n.endswith(".xbrl") and "PublicDoc" in n]
+        if inst:
+            return facts_from_xbrl(_decode(z.read(sorted(inst, key=len)[0]))), "xbrl"
+        facts = []
+        for n in sorted(n for n in names if "PublicDoc" in n and n.endswith(".htm")):
+            facts.extend(facts_from_ixbrl(_decode(z.read(n))))
+        return facts, "ixbrl"
 
 
 def probe(cfg, codes: list[str]) -> int:
@@ -88,17 +112,18 @@ def probe(cfg, codes: list[str]) -> int:
             continue
         doc = rows[0]
         r = requests.get(f"{API}/documents/{doc.doc_id}", params={"type": 1, "Subscription-Key": key}, timeout=120)
-        if r.status_code != 200 or "zip" not in r.headers.get("Content-Type", ""):
+        # 本体は ZIP だが Content-Type は application/octet-stream で返るので、先頭の PK で見分ける
+        if r.status_code != 200 or not r.content.startswith(b"PK"):
             print(f"❌ {code} {doc.doc_id}: HTTP {r.status_code} {r.headers.get('Content-Type')} {r.text[:200]}")
             rc = 1
             continue
-        facts = facts_from_xbrl(_instance_from_zip(r.content))
+        facts, fmt = facts_from_zip(r.content)
         p = out_dir / f"edinet_gov_probe_{code}.json"
         p.write_text(json.dumps({"fetched": date.today().isoformat(), "edinet_code": code, "doc_id": doc.doc_id,
-                                 "fiscal_year_end": str(doc.fiscal_year_end), "facts": facts},
+                                 "fiscal_year_end": str(doc.fiscal_year_end), "format": fmt, "facts": facts},
                                 ensure_ascii=False, indent=1), encoding="utf-8")
         names = sorted({f["element"] for f in facts})
-        print(f"✅ {code} {doc.doc_id}: 投資不動産の要素 {len(facts)}件（{len(names)}種類）→ {p.name}")
+        print(f"✅ {code} {doc.doc_id}: 投資不動産の要素 {len(facts)}件（{len(names)}種類・{fmt}）→ {p.name}")
         for n in names[:30]:
             print(f"    {n}")
     return rc
