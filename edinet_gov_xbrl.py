@@ -215,7 +215,7 @@ def book_values_from_facts(facts: list[dict]) -> tuple[float | None, float | Non
 
 
 def build_row(code: str, doc_id: str, fiscal_year_end, facts: list[dict], now: str | None = None) -> tuple[str, dict | None]:
-    """1社の有報の要素 → (状態, rental_property_fv の行)。状態は ok / no_property（投資不動産なし）/ no_fv。"""
+    """1社の有報の要素 → (状態, rental_property_fv の行)。状態は ok / no_property（投資不動産なし）/ no_fv / no_period（決算期末が不明）。"""
     prior, cur = book_values_from_facts(facts)
     if cur is None:
         return "no_property", None
@@ -224,6 +224,8 @@ def build_row(code: str, doc_id: str, fiscal_year_end, facts: list[dict], now: s
     fv = got[-1] if got else None
     if fv is None:
         return "no_fv", None
+    if not fiscal_year_end:
+        return "no_period", None  # doc_index に決算期末が無い有報は、年度を推測で決めず書かない
     now = now or datetime.now(timezone.utc).isoformat()
     return "ok", {
         "edinet_code": code, "fiscal_year": int(str(fiscal_year_end)[:4]), "doc_id": doc_id,
@@ -304,7 +306,7 @@ def ingest(cfg, limit: int | None = None) -> dict:
     retry_before = (date.today() - timedelta(days=30)).isoformat()
     targets = pick_targets({c: r.doc_id for c, r in latest_rows.items()}, state, limit, retry_before)
     today = date.today().isoformat()
-    rows, stat = [], {"ok": 0, "no_property": 0, "no_fv": 0, "error": 0}
+    rows, stat = [], {"ok": 0, "no_property": 0, "no_fv": 0, "no_period": 0, "error": 0}
     last = 0.0
     for code in targets:
         r = latest_rows[code]

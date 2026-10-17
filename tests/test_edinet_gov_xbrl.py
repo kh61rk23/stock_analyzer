@@ -162,6 +162,7 @@ def test_build_row_uses_current_year_and_million_yen():
 
 def test_build_row_statuses():
     assert eg.build_row("E1", "S", "2026-03-31", [])[0] == "no_property"
+    assert eg.build_row("E1", "S", None, _facts("212344000000", "185351000000", TEXT_MITSUI)) == ("no_period", None)
     assert eg.build_row("E1", "S", "2026-03-31", _facts(None, "0", "公正価値"))[0] == "no_property"
     assert eg.build_row("E1", "S", "2026-03-31", _facts("1000000", "2000000000000", "説明のみ"))[0] == "no_fv"
 
