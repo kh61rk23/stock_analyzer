@@ -244,6 +244,39 @@ def _probe_edinetdb(key: str) -> dict:
         return _entry(STATE_LIMITED, "判定不能（通信エラー・タイムアウト）")
 
 
+def _probe_edinet_gov(key: str) -> dict:
+    """
+    政府 EDINET API v2 の書類一覧（前営業日・type=1＝メタデータのみ）を1コールして判定する。
+    HTTP 200 かつ本文の metadata.status が "200" なら✅。401/403（本文の status も同様）は❌（失効の疑い）。
+    429 などは⚠️。キーは要求 URL に入るので、例外の本文・URL はメッセージに含めない。
+    """
+    req = _requests()
+    if req is None:
+        return _entry(STATE_LIMITED, "判定不能（requests 未導入）")
+    try:
+        resp = req.get(
+            "https://api.edinet-fsa.go.jp/api/v2/documents.json",
+            params={"date": prev_business_day().isoformat(), "type": 1, "Subscription-Key": key},
+            timeout=PROBE_TIMEOUT_SLOW,
+        )
+        if resp.status_code == 429:
+            return _entry(STATE_LIMITED, "HTTP 429（レート制限・失効ではない）")
+        if resp.status_code != 200:
+            state = classify_http_generic(resp.status_code)
+            return _entry(state, _http_msg(state, resp.status_code))
+        try:
+            body_status = str(((resp.json() or {}).get("metadata") or {}).get("status", ""))
+        except Exception:
+            body_status = ""
+        if body_status == "200":
+            return _entry(STATE_ALIVE, "HTTP 200（正常）")
+        if body_status in ("401", "403"):
+            return _entry(STATE_DEAD, f"本文の status {body_status}（失効の疑い・再発行が必要）")
+        return _entry(STATE_LIMITED, "判定不能（応答の metadata.status が 200 でない）")
+    except Exception:
+        return _entry(STATE_LIMITED, "判定不能（通信エラー・タイムアウト）")
+
+
 def _probe_fudosan(key: str) -> dict:
     """公式RESTの最小ページを1コールして認証状態を判定する。"""
     req = _requests()
@@ -479,6 +512,7 @@ def run_key_health(cfg) -> dict:
             "ingest無効（ENABLE_EDINETDB_INGEST=0）。BQ既存データのみ参照"
         )
     _run("FUDOSAN_API_KEY",      _probe_fudosan,  g("FUDOSAN_API_KEY"))
+    _run("EDINET_GOV_API_KEY",   _probe_edinet_gov, g("EDINET_GOV_API_KEY"))
     _run("ESTAT_API_KEY",        _probe_estat,    g("ESTAT_API_KEY"))
     _run("POLICY_FRED_API_KEY",  _probe_fred,     g("POLICY_FRED_API_KEY"))
     _run("DEEPL_API_KEY",        _probe_deepl,    g("DEEPL_API_KEY"))

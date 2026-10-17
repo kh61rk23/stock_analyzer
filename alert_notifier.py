@@ -1920,7 +1920,8 @@ def extract_alerts(cfg, results: dict) -> list:
             except Exception:
                 _calls = None
             alerts.append(build_edinetdb_ingest_alert(
-                ing, _web, _jl(_dd / "edinetdb_cache" / f"daily_{_today}.json"), 100, _calls))
+                ing, _web, _jl(_dd / "edinetdb_cache" / f"daily_{_today}.json"), 100, _calls,
+                gov=results.get("edinet_gov_fv")))
 
         # 国債利回り（日米 10/5/3年・前日比/前週比）と政策金利（米・欧・日）
     if getattr(cfg, "ALERT_ON_RATES", True):
@@ -2250,7 +2251,7 @@ def api_usage_lines(calls: dict | None, caps: dict | None, used: int, ing: dict 
 
 
 def build_edinetdb_ingest_alert(ing: dict, web: dict | None = None, ledger: dict | None = None,
-                                daily_limit: int = 100, calls: dict | None = None) -> dict:
+                                daily_limit: int = 100, calls: dict | None = None, gov: dict | None = None) -> dict:
     """EdinetDB の日次結果をメール用アラート1件にまとめる（純関数）。
 
     年次財務は会社ページ（Web）、API は有報本文・セグメント・四半期財務と役割が分かれているので、
@@ -2292,6 +2293,11 @@ def build_edinetdb_ingest_alert(ing: dict, web: dict | None = None, ledger: dict
                  + f" / 書類一覧 {ing.get('doc_index_rows', 0)}件")
     u_lines, warns = api_usage_lines(calls, ing.get("budget_caps"), int(used or 0), ing)
     lines += u_lines
+    if isinstance(gov, dict) and not gov.get("skipped"):
+        lines.append("  【IFRS 公正価値（政府 EDINET）】" + (
+            f"失敗: {gov['error']}" if gov.get("error") and "targets" not in gov else
+            f"対象 {gov.get('targets', 0)}社 / 取得 {gov.get('with_fair_value', 0)}件 / 対象外 {gov.get('not_applicable', 0)}社"
+            f" / 公正価値なし {gov.get('no_fair_value', 0)}社 / 失敗 {gov.get('failed', 0)}社"))
     n = len(done) + int(web.get("ok", 0) or 0)
     return {
         "trigger":  "edinetdb_ingest",

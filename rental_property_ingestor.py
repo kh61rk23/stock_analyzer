@@ -18,6 +18,7 @@
 #   保有不動産（corporate_holdings_p1）に土地簿価のある会社と不動産業（1032）を対象にし、
 #   未取得の会社 → 前回取得より後に有価証券報告書が出た会社、の順に RENTAL_FV_DAILY_BUDGET 社まで。
 #   未取得の中は、RENTAL_FV_PRIORITY_CODES → 不動産業 → 土地簿価の大きい順（推定時価の補正で主に比べる会社を先に集めるため）。
+#   政府 EDINET（edinet_gov_xbrl.py）で公正価値が取れた IFRS 会社は対象から外す。
 #   取得状況は stock_data/data/rental_property_state.json に残す。
 # 【予算】
 #   EdinetDB の日次枠（EDINETDB_DAILY_BUDGET）を日次取り込みと共有する。日次取り込みの直前に
@@ -228,6 +229,13 @@ def run(cfg, limit: int | None = None) -> dict:
     cands = list(dict.fromkeys(
         [str(c) for c in (getattr(cfg, "RENTAL_FV_PRIORITY_CODES", ()) or ())]
         + [r.edinet_code for r in bq.client.query(TARGET_SQL.format(project=bq.project)).result()]))
+    # 政府 EDINET で公正価値が取れた IFRS 会社は EdinetDB 側で取らない（公正価値の空の行が同じキーを上書きするため）
+    try:
+        import edinet_gov_xbrl
+        gov_ok = edinet_gov_xbrl.ok_codes(cfg)
+    except Exception:
+        gov_ok = set()
+    cands = [c for c in cands if c not in gov_ok]
     latest = {r.edinet_code: str(r.latest) for r in bq.client.query(
         LATEST_DOC_SQL.format(project=bq.project),
         job_config=bigquery.QueryJobConfig(query_parameters=[

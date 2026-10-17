@@ -1425,6 +1425,15 @@ def run_all_tasks(mode: str = "all") -> dict:
         except Exception as _rpe:
             results["rental_property_fv"] = {"error": str(_rpe)[:150]}
             print(f"  ⚠️  賃貸等不動産の取得エラー（スキップ）: {str(_rpe)[:80]}")
+        # IFRS 会社の投資不動産の公正価値（政府 EDINET API）。キーが無ければ何もしない。失敗しても本処理は続ける
+        import os as _os
+        if _os.environ.get("EDINET_GOV_API_KEY") or getattr(cfg, "EDINET_GOV_API_KEY", ""):
+            try:
+                import edinet_gov_xbrl as _egx
+                results["edinet_gov_fv"] = _egx.ingest(cfg)
+            except Exception as _ege:
+                results["edinet_gov_fv"] = {"error": type(_ege).__name__}
+                print(f"  ⚠️  政府 EDINET の公正価値取得エラー（スキップ）: {type(_ege).__name__}")
         try:
             _edi = _load_local_module("edinetdb_ingestor", "/content/edinetdb_ingestor.py", cfg.DRIVE_BASE / "edinetdb_ingestor.py")
             if _edi:

@@ -154,3 +154,47 @@ def test_edinetdb_probe_is_dormant_when_daily_ingest_is_disabled(monkeypatch):
     entry = result["entries"]["EDINETDB_API_KEY"]
     assert entry["state"] == kh.STATE_SKIPPED
     assert "BQ既存データ" in entry["message"]
+
+
+# ── 政府 EDINET API v2 の死活確認 ──
+def _gov_resp(status_code, body):
+    class _R:
+        def json(self):
+            if body is None:
+                raise ValueError("no json")
+            return body
+    r = _R()
+    r.status_code = status_code
+    return r
+
+
+def test_edinet_gov_probe_classifies_http_and_body_status(monkeypatch):
+    class _Req:
+        resp = None
+        params = None
+
+        @classmethod
+        def get(cls, url, params=None, timeout=None):
+            cls.params = params
+            return cls.resp
+
+    monkeypatch.setattr(kh, "_requests", lambda: _Req)
+    cases = [
+        (200, {"metadata": {"status": "200"}}, kh.STATE_ALIVE),
+        (200, {"metadata": {"status": "401"}}, kh.STATE_DEAD),
+        (200, {"statusCode": 200}, kh.STATE_LIMITED),
+        (401, None, kh.STATE_DEAD),
+        (403, None, kh.STATE_DEAD),
+        (429, None, kh.STATE_LIMITED),
+        (500, None, kh.STATE_LIMITED),
+    ]
+    for code, body, want in cases:
+        _Req.resp = _gov_resp(code, body)
+        e = kh._probe_edinet_gov("SECRET-KEY")
+        assert e["state"] == want, (code, body)
+        assert "SECRET-KEY" not in e["message"]
+    assert _Req.params["type"] == 1 and _Req.params["date"] == kh.prev_business_day().isoformat()
+
+    class _Cfg:
+        EDINET_GOV_API_KEY = ""
+    assert kh.run_key_health(_Cfg())["entries"]["EDINET_GOV_API_KEY"]["state"] == kh.STATE_UNSET

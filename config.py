@@ -1219,9 +1219,10 @@ GOV_VEGPRICE_API = "https://api.cultivationdata.net/yasai_kakaku?div=all&type=cs
 # ==============================================================
 
 # APIキーはコードに書かず環境変数から読む（GitHub Actions は Secrets→run_headless.py の ENV_MAP 経由）。
-# 金融庁 EDINET API のキーは使っていない。有報の構造化データは EdinetDB（下の EDINETDB_API_KEY）、
-# 有報PDFは EDINET の公開ダウンロード（キー不要・officer_extractor.py）。
+# 有報の構造化データは EdinetDB（下の EDINETDB_API_KEY）、有報PDFは EDINET の公開ダウンロード（キー不要・officer_extractor.py）。
+# 金融庁の政府 EDINET API v2（EDINET_GOV_API_KEY）は IFRS 会社の投資不動産の公正価値の取り込み（edinet_gov_xbrl.py）だけが使う。
 EDINETDB_API_KEY: str = os.getenv("EDINETDB_API_KEY", "")  # 民間 EdinetDB
+EDINET_GOV_API_KEY: str = os.getenv("EDINET_GOV_API_KEY", "")  # 金融庁 EDINET API v2
 FUDOSAN_API_KEY: str = os.getenv("FUDOSAN_API_KEY", "")
 ESTAT_API_KEY: str = os.getenv("ESTAT_API_KEY", "")
 
@@ -1288,6 +1289,9 @@ EDINETDB_WEB_MAX_CHECKS: int = 300  # 1日のWeb確認の上限（1秒に1回＝
 EDINETDB_LOOKBACK_DAYS: int = 7
 # EdinetDB の上限は「1日100回・月は100×在籍日数」（edinetdb.jp/pricing）。
 # 日次予算は手動確認用に少し残して使い切る。月の実残量は /usage の monthly_remaining で抑える。
+# 政府 EDINET API による IFRS 会社の投資不動産の公正価値の取り込み（edinet_gov_xbrl.py --ingest）。キーが無ければ動かない
+EDINET_GOV_FV_DAILY_LIMIT: int = 30       # 1日に有報 ZIP を取る社数の上限
+EDINET_GOV_MIN_INTERVAL_SEC: float = 1.0  # 政府 API への連続アクセスの間隔の下限
 EDINETDB_DAILY_BUDGET: int = 97  # 100回の手前で止める（手動確認用に3回残す）
 EDINETDB_MONTHLY_GUARD: int = 3100
 EDINETDB_COMPANY_CACHE_DAYS: int = 7   # 会社マスタ（社名・上場区分）の取り直し間隔

@@ -332,6 +332,7 @@ jobs:
           GOOGLE_DRIVE_FOLDER_ID:     ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
           ESTAT_API_KEY:              ${{ secrets.ESTAT_API_KEY }}
           EDINETDB_API_KEY:           ${{ secrets.EDINETDB_API_KEY }}
+          EDINET_GOV_API_KEY:         ${{ secrets.EDINET_GOV_API_KEY }}
           FUDOSAN_API_KEY:            ${{ secrets.FUDOSAN_API_KEY }}
           SEISAKUDB_API_KEY:          ${{ secrets.SEISAKUDB_API_KEY }}
           DEEPL_API_KEY:              ${{ secrets.DEEPL_API_KEY }}

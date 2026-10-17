@@ -163,6 +163,7 @@ SCHEMA: dict[str, list[str]] = {
     "total_signal_score": ["stock_analyzer_main"],
     "unified_scores": ["stock_analyzer_main"],       # R5-2 Phase A: JP/US共通スコア
     "stock_real_estate": ["stock_analyzer_main"],
+    "edinet_gov_fv": ["stock_analyzer_main"],   # IFRS 会社の投資不動産の公正価値（edinet_gov_xbrl.ingest）
     "rental_property_fv": ["stock_analyzer_main"],   # 賃貸等不動産の取得結果（rental_property_ingestor.run）    # 全上場の銘柄単位不動産ボーナス（stock_real_estate.run）
     "us_8k": ["stock_analyzer_main"],
     "us_fundamentals": ["stock_analyzer_main"],
