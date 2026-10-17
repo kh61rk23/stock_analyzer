@@ -105,8 +105,8 @@ def _translate_deepl(text: str, api_key: str) -> Optional[str]:
         short_text += "."
 
     try:
+        # キーは Authorization ヘッダーで渡す（本文の auth_key は DeepL が受け付けず 403 になる）
         payload = urllib.parse.urlencode({
-            "auth_key": api_key,
             "text":     short_text,
             "source_lang": "EN",
             "target_lang": "JA",
@@ -116,6 +116,8 @@ def _translate_deepl(text: str, api_key: str) -> Optional[str]:
             base_url,
             data=payload,
             method="POST",
+            headers={"Authorization": f"DeepL-Auth-Key {api_key}",
+                     "Content-Type": "application/x-www-form-urlencoded"},
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
             result = json.loads(resp.read().decode("utf-8"))
@@ -123,10 +125,10 @@ def _translate_deepl(text: str, api_key: str) -> Optional[str]:
 
     except urllib.error.HTTPError as e:
         if e.code in (403, 456):
-            # キー無効/quota超過: 実行内リトライは無意味なので以降スキップ
+            # 403＝キー無効・権限、456＝月の文字数上限。実行内リトライは無意味なので以降スキップ
             _deepl_disabled_this_run = True
-            print("      ⚠️  DeepL無効（403/quota）: 以降は英語原文のまま保存"
-                  "（DEEPL_API_KEY要点検）")
+            why = "月の文字数上限（456）" if e.code == 456 else "認証エラー（403・DEEPL_API_KEY要点検）"
+            print(f"      ⚠️  DeepL無効（{why}）: 以降は英語原文のまま保存")
         else:
             print(f"      ⚠️  DeepL 翻訳エラー: {str(e)[:60]}")
         return None
