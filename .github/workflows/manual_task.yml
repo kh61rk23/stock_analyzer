@@ -28,6 +28,7 @@ on:
           - alert_backfill
           - ontology_export
           - monthly_catchup
+          - edinet_gov_probe
 
 permissions:
   contents: write
@@ -50,7 +51,7 @@ jobs:
       - name: Install dependencies
         run: |
           case "${{ inputs.task }}" in
-            price_universe_*|us_company_facts_*|stock_real_estate|alert_backfill|ontology_export) pip install -r requirements-prices.txt ;;
+            price_universe_*|us_company_facts_*|stock_real_estate|alert_backfill|ontology_export|edinet_gov_probe) pip install -r requirements-prices.txt ;;
             *) pip install -r requirements.txt ;;
           esac
       - name: Run task
@@ -65,6 +66,7 @@ jobs:
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
           DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
           EDINETDB_API_KEY: ${{ secrets.EDINETDB_API_KEY }}
+          EDINET_GOV_API_KEY: ${{ secrets.EDINET_GOV_API_KEY }}
           STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
         run: |
           case "${{ inputs.task }}" in
@@ -94,6 +96,8 @@ jobs:
             ontology_export) python -u ontology_exporter.py ;;
             # 直近3か月で月次レビューが抜けている月を作り直す（メールは送らない）
             monthly_catchup) python -u monthly_runner.py --catch-up ;;
+            # 政府 EDINET API で IFRS 会社（J.フロント・三井物産・NTT）の有報 XBRL から投資不動産の要素を書き出す（EDINET_GOV_API_KEY が要る）
+            edinet_gov_probe) python -u edinet_gov_xbrl.py --probe E03516 E02513 E04430 ;;
           esac
       - name: Commit state
         if: always()
