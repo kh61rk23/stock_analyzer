@@ -221,3 +221,15 @@ def test_merge_sql_for_rental_property_fv_row(monkeypatch):
     assert "T.`edinet_code` = S.`edinet_code` AND T.`fiscal_year` = S.`fiscal_year`" in sql
     assert "SAFE_CAST(JSON_VALUE(row, '$.fair_value_m_yen') AS FLOAT64) AS `fair_value_m_yen`" in sql
     assert "SAFE_CAST(JSON_VALUE(row, '$.updated_at') AS TIMESTAMP)" in sql
+
+
+def test_fair_value_label_row_without_book_value_in_table():
+    # 帳簿価額の表（増減表）と公正価値の表が別で、公正価値の表は「投資不動産」の行に前期・当期の2値だけ
+    t = ("投資不動産の帳簿価額及び公正価値 期末残高 167,493 172,840 (2）公正価値 （単位：百万円） "
+         "前連結会計年度 （2024年12月31日） 当連結会計年度 （2025年12月31日） 投資不動産 402,982 146,472 公正価値は、主として")
+    assert eg.fair_value_from_text(t, [167493, 172840]) == [402982.0, 146472.0]
+
+
+def test_fair_value_in_thousand_yen_is_returned_in_million_yen():
+    t = "帳簿価額 公正価値 帳簿価額 公正価値 千円 千円 千円 千円 投資不動産 186,322 800,000 190,500 810,000"
+    assert eg.fair_value_from_text(t, [186.322, 190.5]) == [800.0, 810.0]

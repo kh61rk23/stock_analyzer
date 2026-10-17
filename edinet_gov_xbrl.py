@@ -35,7 +35,7 @@ import sys
 import time
 import unicodedata
 import zipfile
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 API = "https://api.edinet-fsa.go.jp/api/v2"
@@ -123,14 +123,17 @@ def _numbers(text: str) -> list[tuple[int, int, float]]:
 
 
 def fair_value_from_text(text: str, book_values_million: list) -> list | None:
-    """注記テキスト（HTML を外した文字列）から、帳簿価額（百万円・古い期末→新しい期末の順）に対応する公正価値を拾う。
+    """注記テキスト（HTML を外した文字列）から、帳簿価額（百万円・古い期末→新しい期末の順）に対応する公正価値を百万円で拾う。
 
     戻り値は book_values_million と同じ長さのリスト（取れなかった期末は None）。1つも取れなければ None。
+    表の金額が千円・円単位の会社もあるので、帳簿価額×1・1,000・1,000,000 の順に文中の数値と突き合わせ、当たった単位で読む。
     読み方は2通り:
       1) 帳簿価額の数値（カンマ区切り）が「公正価値」という語より後ろにあり、その直後（数字と数字の間に
          6字以内の注記しか挟まない）に次の数値が並ぶなら、それをその期末の公正価値とする（横並びの表）。
          増減表にも同じ帳簿価額が出るため、いちばん後ろの出現を採る（公正価値の表は増減表の後にある）。
-      2) 帳簿価額が文中に無ければ、「公正価値」の直後に並ぶ数値（前期・当期の2値、1値なら当期）を期末の順に当てる。
+      2) 1) で1つも取れなければ、「公正価値」または「投資不動産」という見出しの直後に並ぶ数値
+         （前期・当期の2値、帳簿価額が1つなら当期の1値）を期末の順に当てる。帳簿価額の表そのもの
+         （値が帳簿価額と同じ）は除く。
     帳簿価額の 0.3〜20 倍の外は捨てる。
     """
     t = unicodedata.normalize("NFKC", text or "")
@@ -139,6 +142,7 @@ def fair_value_from_text(text: str, book_values_million: list) -> list | None:
     if first < 0 or not bvs:
         return None
     nums = _numbers(t)
+    mults = (1, 1000, 1000000)
 
     def ok(bv, fv):
         return bv is not None and bv > 0 and fv is not None and FV_RATIO_MIN * bv <= fv <= FV_RATIO_MAX * bv
@@ -154,33 +158,40 @@ def fair_value_from_text(text: str, book_values_million: list) -> list | None:
     for k, bv in enumerate(bvs):
         if bv is None:
             continue
-        hits = [i for i, (a, _b, v) in enumerate(nums) if a > first and round(v) == round(bv)]
-        for i in reversed(hits):
-            fv = adjacent(i)
-            if ok(bv, fv):
-                out[k] = fv
+        for mult in mults:
+            hits = [i for i, (a, _b, v) in enumerate(nums) if a > first and round(v) == round(bv * mult)]
+            for i in reversed(hits):
+                fv = adjacent(i)
+                if fv is not None and ok(bv, fv / mult):
+                    out[k] = fv / mult
+                    break
+            if out[k] is not None:
                 break
-    if all(v is None for v in out):
-        # 2) 「公正価値」の行（帳簿価額は表に無い）
-        for m in re.finditer("公正価値", t):
-            pair = []
-            for i, (a, _b, v) in enumerate(nums):
-                if a < m.end():
-                    continue
-                if pair and a - nums[i - 1][1] > 6:
-                    break
-                if not pair and a - m.end() > 6:
-                    break
-                pair.append(v)
-                if len(pair) == 2:
-                    break
-            if not pair:
+    if any(v is not None for v in out):
+        return out
+    # 2) 見出しの直後の数値
+    anchors = [m.end() for m in re.finditer("公正価値", t)] + \
+              [m.end() for m in re.finditer("投資不動産", t) if m.start() > first]
+    for end in sorted(anchors):
+        vals = []
+        for i, (a, _b, v) in enumerate(nums):
+            if a < end:
                 continue
-            vals = pair[-len(bvs):] if len(bvs) < 2 else pair[:2]
-            if len(vals) == len(bvs) and all(ok(b, v) for b, v in zip(bvs, vals)):
-                return list(vals)
-        return None
-    return out
+            if a - (nums[i - 1][1] if vals else end) > 6:
+                break
+            vals.append(v)
+            if len(vals) == 2:
+                break
+        if not vals:
+            continue
+        pick = vals[:2] if len(bvs) >= 2 else vals[-1:]
+        if len(pick) != len(bvs) or any(b is None for b in bvs):
+            continue
+        for mult in mults:
+            fvs = [v / mult for v in pick]
+            if all(ok(b, v) for b, v in zip(bvs, fvs)) and not all(round(v * mult) == round(b * mult) for b, v in zip(bvs, fvs)):
+                return fvs
+    return None
 
 
 def book_values_from_facts(facts: list[dict]) -> tuple[float | None, float | None]:
@@ -217,11 +228,14 @@ def build_row(code: str, doc_id: str, fiscal_year_end, facts: list[dict], now: s
     }
 
 
-def pick_targets(latest: dict, state: dict, limit: int) -> list[str]:
+def pick_targets(latest: dict, state: dict, limit: int, retry_before: str = "") -> list[str]:
     """処理する会社（純関数）。latest は {code: doc_id}。台帳に同じ doc_id が無い会社だけを、
-    未処理 → 新しい有報が出た会社、の順に limit 社。error は次回また取る。"""
+    未処理 → 新しい有報が出た会社、の順に limit 社。retry_before（日付文字列）以前に no_fv だった会社も取り直す。"""
     never = [c for c in sorted(latest) if c not in state]
-    stale = [c for c in sorted(latest) if c in state and (state[c].get("doc_id") != latest[c] or state[c].get("status") == "error")]
+    # error は次回また取る。no_fv（注記の書き方を読めなかった）は読み方の改善を拾うため 30 日後に取り直す
+    stale = [c for c in sorted(latest) if c in state and (
+        state[c].get("doc_id") != latest[c] or state[c].get("status") == "error"
+        or (state[c].get("status") == "no_fv" and str(state[c].get("fetched", "")) <= retry_before))]
     return (never + stale)[:max(0, int(limit))]
 
 
@@ -282,7 +296,8 @@ def ingest(cfg, limit: int | None = None) -> dict:
         state = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         state = {}
-    targets = pick_targets({c: r.doc_id for c, r in latest_rows.items()}, state, limit)
+    retry_before = (date.today() - timedelta(days=30)).isoformat()
+    targets = pick_targets({c: r.doc_id for c, r in latest_rows.items()}, state, limit, retry_before)
     today = date.today().isoformat()
     rows, stat = [], {"ok": 0, "no_property": 0, "no_fv": 0, "error": 0}
     last = 0.0
@@ -306,7 +321,7 @@ def ingest(cfg, limit: int | None = None) -> dict:
         except Exception as e:
             stat["error"] += 1
             state[code] = {"status": "error", "doc_id": r.doc_id, "fetched": today, "error": type(e).__name__}
-            print(f"    ❌ {code} {r.doc_id}: 解析 {type(e).__name__}")
+            print(f"    ❌ {code} {r.doc_id}: 解析 {type(e).__name__} {str(e)[:100]}")
             continue
         stat[status] += 1
         state[code] = {"status": status, "doc_id": r.doc_id, "fetched": today}
@@ -317,7 +332,8 @@ def ingest(cfg, limit: int | None = None) -> dict:
         elif status == "no_fv":
             text = " ".join(f["text"] for f in facts if f.get("text"))
             i = text.find("公正価値")
-            print(f"    ⚠️ {code} {r.doc_id}: 帳簿価額はあるが公正価値を拾えない: {text[max(0, i - 40):i + 260]!r}")
+            row_bv = book_values_from_facts(facts)
+            print(f"    ⚠️ {code} {r.doc_id}: 帳簿価額 {row_bv} はあるが公正価値を拾えない: {text[max(0, i - 40):i + 700]!r}")
     written = False
     if rows:
         written = bool(bq.merge_rows("rental_property_fv", rows, ["edinet_code", "fiscal_year"], dataset="real_estate"))
