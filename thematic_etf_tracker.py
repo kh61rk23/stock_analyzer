@@ -593,10 +593,10 @@ def _arxiv_query(keywords: list, start: str, end: str, n: int = 1, cats: list = 
         "search_query": q, "max_results": max(1, n),
         # 件数は並び順に依存しない。代表論文は関連度順の方がテーマに沿う
         "sortBy": "relevance", "sortOrder": "descending"})
-    for attempt in range(3):
+    for attempt in range(2):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "stock_analyzer/1.0"})
-            xml = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "ignore")
+            xml = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "ignore")
             m = re.search(r"<opensearch:totalResults[^>]*>(\d+)<", xml)
             papers = []
             for e in re.findall(r"<entry>(.*?)</entry>", xml, re.S)[:n]:
@@ -623,22 +623,33 @@ def fetch_arxiv_theme_counts(cfg=None, today: Optional[datetime] = None) -> dict
     key = today.strftime("%Y-%m-%d")
     cache_p = (Path(getattr(cfg, "CACHE_DIR", "stock_data/cache")) if cfg
                else Path("stock_data/cache")) / _ARXIV_THEME_CACHE
+    cached: dict = {}
     try:
-        c = json.loads(cache_p.read_text(encoding="utf-8"))
-        if c.get("date") == key and c.get("themes"):
-            return c["themes"]
+        cached = json.loads(cache_p.read_text(encoding="utf-8"))
+        if cached.get("date") == key and cached.get("themes"):
+            return cached["themes"]
     except (OSError, ValueError):
-        pass
+        cached = {}
     end = today - timedelta(days=_ARXIV_LAG_DAYS)
     r0, r1 = end - timedelta(days=27), end
     p0, p1 = end - timedelta(days=55), end - timedelta(days=28)
     f = lambda d: d.strftime("%Y%m%d")
     out: dict = {}
-    for th in THEME_DEFINITIONS:
+    # arXiv が応答しない日は1件ごとに再試行が積み重なり20分かかっていた（Actions の無料枠を食う）。
+    # 時間の上限を設け、最初のテーマから応答が無ければ残りは問い合わせない。
+    budget = float(getattr(cfg, "ARXIV_THEME_TIME_BUDGET_SEC", 150) if cfg else 150)
+    started = time.monotonic()
+    for i, th in enumerate(THEME_DEFINITIONS):
+        if time.monotonic() - started > budget:
+            print(f"    ⏱️ arXiv 検索API: {budget:.0f}秒を超えたので残り{len(THEME_DEFINITIONS) - i}テーマは問い合わせない")
+            break
         kws = th.get("arxiv_keywords", [])
         cats = th.get("arxiv_api_cats", [])
         recent, papers = _arxiv_query(kws, f(r0), f(r1), n=3, cats=cats)
         time.sleep(3.1)                      # arXiv API の利用規約（3秒に1回）
+        if recent is None and not out:
+            print("    ⚠️ arXiv 検索API が応答しないので、今日は問い合わせを打ち切る")
+            break
         prev, _ = _arxiv_query(kws, f(p0), f(p1), n=1, cats=cats)
         time.sleep(3.1)
         if recent is None or prev is None:
@@ -653,6 +664,15 @@ def fetch_arxiv_theme_counts(cfg=None, today: Optional[datetime] = None) -> dict
                                encoding="utf-8")
         except OSError:
             pass
+        return out
+    # 取れなかった日は、7日以内の前回分を使う（固定50点に落とさない）
+    try:
+        age = (today.date() - datetime.strptime(cached.get("date", ""), "%Y-%m-%d").date()).days
+    except ValueError:
+        age = None
+    if cached.get("themes") and age is not None and age <= 7:
+        print(f"    📚 arXiv 検索API: 前回（{cached['date']}）の論文数を使う")
+        return cached["themes"]
     return out
 
 

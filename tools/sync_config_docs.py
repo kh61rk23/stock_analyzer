@@ -44,7 +44,7 @@ EXCLUDE_NAME_PATTERNS = [          # 小文字で比較する
 
 EXCLUDE_DIRS = {"09_認証情報_同期対象外"}   # 02 直下のフォルダ名（NFC）
 
-TEXT_SUFFIXES = {".md", ".txt", ".json", ".csv", ".py", ".rtf", ".sql", ".yml", ".yaml", ".toml", ".html"}
+TEXT_SUFFIXES = {".md", ".txt", ".json", ".csv", ".py", ".rtf", ".sql", ".yml", ".yaml", ".toml", ".html", ".svg"}
 
 SECRET_PATTERNS = [
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
