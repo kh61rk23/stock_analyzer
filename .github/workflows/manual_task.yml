@@ -119,4 +119,5 @@ jobs:
           git add stock_data/insights/ stock_data/paper/ 2>/dev/null || true
           git diff --cached --quiet && exit 0
           git commit -m "auto: manual task ${{ inputs.task }}"
-          for i in 1 2 3; do git pull --rebase origin main && git push && exit 0; sleep 10; done
+          for i in 1 2 3; do git pull --rebase --autostash -X theirs origin main && git push && exit 0; git rebase --abort 2>/dev/null || true; sleep 15; done
+          echo "::error::状態ファイルを push できなかった（この回の結果は保存されていない）"; exit 1
