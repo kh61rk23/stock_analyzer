@@ -78,9 +78,51 @@ def test_load_rows_job_id_ignores_time_columns_and_order():
     assert bqc.load_job_id("p.d.t", a) != bqc.load_job_id("p.d.t", [{"k": 3}])
 
 
-def test_load_rows_conflict_success_is_noop_and_failure_is_false():
-    assert bqc.load_rows(FakeClient("ok"), "p.d.t", [{"k": 1}]) is True
-    assert bqc.load_rows(FakeClient("bad"), "p.d.t", [{"k": 1}]) is False
+def test_load_rows_conflict_success_is_noop():
+    c = FakeClient("ok")
+    assert bqc.load_rows(c, "p.d.t", [{"k": 1}]) is True
+    assert len(c.loads) == 1
+
+
+class RetryClient(FakeClient):
+    """state_by_id: job_id 末尾の接尾辞 -> ok / bad / None(新規で成功)。"""
+
+    def __init__(self, existing):
+        super().__init__()
+        self.existing = existing
+
+    def load_table_from_json(self, rows, ref, job_id=None, job_config=None, location=None, **kw):
+        self.loads.append({"job_id": job_id})
+        if job_id in self.existing:
+            raise Conflict("exists")
+        return FakeJob()
+
+    def get_job(self, jid, location=None):
+        return types.SimpleNamespace(state="DONE", error_result=None if self.existing[jid] == "ok" else {"reason": "x"})
+
+
+def test_load_rows_retries_with_suffix_after_failed_job():
+    rows = [{"k": 1}]
+    base = bqc.load_job_id("p.d.t", rows)
+    c = RetryClient({base: "bad"})
+    assert bqc.load_rows(c, "p.d.t", rows) is True
+    assert [x["job_id"] for x in c.loads] == [base, base + "_r1"]
+
+
+def test_load_rows_uses_succeeded_branch_without_writing_again():
+    rows = [{"k": 1}]
+    base = bqc.load_job_id("p.d.t", rows)
+    c = RetryClient({base: "bad", base + "_r1": "ok"})
+    assert bqc.load_rows(c, "p.d.t", rows) is True
+    assert [x["job_id"] for x in c.loads] == [base, base + "_r1"]
+
+
+def test_load_rows_gives_up_after_three_retries():
+    rows = [{"k": 1}]
+    base = bqc.load_job_id("p.d.t", rows)
+    c = RetryClient({base: "bad", base + "_r1": "bad", base + "_r2": "bad", base + "_r3": "bad"})
+    assert bqc.load_rows(c, "p.d.t", rows) is False
+    assert len(c.loads) == 4
 
 
 def test_module_insert_rows_uses_load(fake):

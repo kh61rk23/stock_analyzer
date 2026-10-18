@@ -44,6 +44,10 @@ except ImportError:
 _VOLATILE_COLS = frozenset({"ingested_at", "updated_at", "detected_at", "scraped_at", "fetched_at"})
 
 
+# 失敗済み job_id を避けて取り直す最大回数
+LOAD_RETRIES = 3
+
+
 def load_job_id(table_ref: str, rows: list, ignore_keys=_VOLATILE_COLS) -> str:
     """表と内容から job_id を決める。行の並びや実行時刻の列が違っても、同じ内容なら同じ ID になる。"""
     import hashlib
@@ -59,28 +63,32 @@ def load_rows(client, table_ref: str, rows: list, ignore_keys=_VOLATILE_COLS) ->
     """行を WRITE_APPEND の load job（無料。ストリーミング挿入は使わない）で追記する。
     表のスキーマ・パーティションは既存の表のものをそのまま使う。
     同じ job_id が成功済みなら何も書かず True を返す（再実行で二重に入らない）。
+    BQ は失敗したジョブの job_id も再利用させないので、失敗済みなら末尾に _r1.._r3 を付けて取り直す。
     """
     from google.api_core.exceptions import Conflict
     if not rows:
         return True
-    jid = load_job_id(table_ref, rows, ignore_keys)
+    base = load_job_id(table_ref, rows, ignore_keys)
     cfg = bigquery.LoadJobConfig(
         source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
         write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
     )
-    try:
-        client.load_table_from_json(rows, table_ref, job_id=jid, job_config=cfg, location="US").result()
-        return True
-    except Conflict:
-        old = client.get_job(jid, location="US")
-        if old.state == "DONE" and not old.error_result:
-            print(f"[BQClient] load {jid} は成功済み（再実行のため書込なし）")
+    for attempt in range(LOAD_RETRIES + 1):
+        jid = base if attempt == 0 else f"{base}_r{attempt}"
+        try:
+            client.load_table_from_json(rows, table_ref, job_id=jid, job_config=cfg, location="US").result()
             return True
-        print(f"[BQClient] load {jid} は既にあるが失敗している: {old.error_result}")
-        return False
-    except Exception as e:
-        print(f"[BQClient] load 失敗 ({table_ref}): {str(e)[:120]}")
-        return False
+        except Conflict:
+            old = client.get_job(jid, location="US")
+            if old.state == "DONE" and not old.error_result:
+                print(f"[BQClient] load {jid} は成功済み（再実行のため書込なし）")
+                return True
+            print(f"[BQClient] load {jid} は失敗済み。別の job_id で取り直す: {old.error_result}")
+        except Exception as e:
+            print(f"[BQClient] load 失敗 ({table_ref}): {str(e)[:120]}")
+            return False
+    print(f"[BQClient] load が{LOAD_RETRIES + 1}回とも失敗済み: {base}")
+    return False
 
 
 # ============================================================
