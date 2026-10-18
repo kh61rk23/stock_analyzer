@@ -10,6 +10,9 @@
 #   ④ 保有銘柄の鮮度（DATA_DIR/portfolio_summary.json の as_of＝家計簿締めの日）
 #   ⑤ クラウド審議 routine（deliberation_queue.get_routine_health の BQ 集計）
 #      「失敗」だけでなく、起動しない・途中で止まる（claimed のまま）も拾う
+#   ⑥ BI マート bi.m_screener の鮮度（stock_data/bi/manifest.json の generated_at）
+#      不動産ボーナス・一次採点・業種構成は日次処理の中で前日の m_screener を読むので、
+#      bi_export が止まると古い値のまま点数に入る（Actions は緑のまま）
 #
 # 判定は純関数（*_issues）。読み込みは collect_file_issues にまとめる。
 # 戻り値の issue は {"severity": "high"|"medium", "text": str}。
@@ -19,7 +22,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 MAC_STATUS_FILE = "mac_sync_status.json"
@@ -141,6 +144,30 @@ def routine_issues(health: dict | None, now: datetime, interval_days: int, grace
     return out
 
 
+# ── ⑥ BI マート ──────────────────────────────────────────────
+
+def bi_mart_issues(manifest: dict | None, now: datetime, stale_days: float,
+                   marts: tuple = ("m_screener",)) -> list:
+    """manifest.json の generated_at（内容が変わった日時・UTC）が stale_days 日より古いマートを警告する。
+
+    m_screener は株価が入るので平日は毎日中身が変わる。日曜は動かないので土→月の2日は正常。
+    manifest は bi_export が全マート成功した回だけ書くため、失敗が続くと日時が止まる。"""
+    if not manifest:
+        return []
+    by = {m.get("mart"): m for m in (manifest.get("marts") or []) if isinstance(m, dict)}
+    out = []
+    for name in marts:
+        gen = _parse_dt(str((by.get(name) or {}).get("generated_at") or "").replace("T", " ").rstrip("Z"))
+        if gen is None:
+            continue
+        age = (now - gen).total_seconds() / 86400
+        if age > stale_days:
+            out.append(_issue("high", f"BI マート {name} が {gen:%Y-%m-%d} から {age:.0f}日 更新されていない"
+                                      f"（許容 {stale_days:.0f}日）。不動産ボーナス・一次採点・業種構成が古い値で"
+                                      "計算されている。BI export の失敗を確認"))
+    return out
+
+
 # ── 読み込み ──────────────────────────────────────────────────
 
 def _read_json(p: Path):
@@ -166,6 +193,10 @@ def collect_file_issues(cfg, now: datetime | None = None) -> list:
                                   float(_cfg(cfg, "OPS_WEEKLY_LOOP_STALE_DAYS", 9)))
     issues += holdings_issues(_read_json(data_dir / "portfolio_summary.json"), now.date(),
                               int(_cfg(cfg, "OPS_HOLDINGS_STALE_DAYS", 14)))
+    # manifest の時刻は UTC。now（ローカル時刻・TZ=Asia/Tokyo）を UTC に直して比べる
+    issues += bi_mart_issues(_read_json(log_dir.parent / "bi" / "manifest.json"),
+                             now.astimezone(timezone.utc).replace(tzinfo=None),
+                             float(_cfg(cfg, "OPS_BI_MART_STALE_DAYS", 3)))
     return issues
 
 

@@ -218,3 +218,40 @@ def test_no_streaming_insert_calls_remain():
             if pat.search(line) and not line.lstrip().startswith("#"):
                 bad.append(f"{p.name}:{i}")
     assert not bad, bad
+
+
+class LocClient(FakeClient):
+    """get_dataset でデータセットの location を返し、load / get_job に渡った location を記録する。"""
+
+    def __init__(self, loc, conflict_state=None):
+        super().__init__(conflict_state)
+        self.loc = loc
+        self.locs = []
+
+    def get_dataset(self, key):
+        return types.SimpleNamespace(location=self.loc)
+
+    def load_table_from_json(self, rows, ref, job_id=None, job_config=None, location=None, **kw):
+        self.locs.append(("load", location))
+        return super().load_table_from_json(rows, ref, job_id=job_id, job_config=job_config, **kw)
+
+    def get_job(self, jid, location=None):
+        self.locs.append(("get", location))
+        return super().get_job(jid)
+
+
+def test_load_rows_uses_dataset_location():
+    # 東京のデータセットへ US の job で投げると「Dataset が見つからない」で必ず失敗する
+    bqc._DATASET_LOCATION.clear()
+    c = LocClient("asia-northeast1")
+    assert bqc.load_rows(c, "p.analytics_loc_t.t", [{"k": 1}]) is True
+    assert c.locs == [("load", "asia-northeast1")]
+    c2 = LocClient("asia-northeast1", conflict_state="ok")
+    assert bqc.load_rows(c2, "p.analytics_loc_t.t", [{"k": 2}]) is True
+    assert ("get", "asia-northeast1") in c2.locs
+
+
+def test_dataset_location_falls_back_to_none():
+    bqc._DATASET_LOCATION.clear()
+    assert bqc.dataset_location(FakeClient(), "p.nodata.t") is None   # get_dataset が無い偽物
+    assert bqc.dataset_location(FakeClient(), "t") is None

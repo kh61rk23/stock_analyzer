@@ -256,3 +256,45 @@ def test_monthly_runner_has_subtheme_refresh():
     assert "subtheme_refresh" in names and names[-1] == "monthly_mail"
     cmd = next(s[2] for s in steps if s[0] == "subtheme_refresh")
     assert cmd[-2:] == ["--refresh", "--if-changed"]
+
+
+# ── BI マートの鮮度（高-3）─────────────────────────────────────
+
+def test_bi_mart_issues():
+    oh = load_module("ops_health")
+    man = {"marts": [{"mart": "m_screener", "generated_at": "2026-10-17T05:26:17Z"},
+                     {"mart": "m_arxiv_keywords", "generated_at": "2026-10-01T00:00:00Z"}]}
+    # 前日分（日次の中で読む通常の古さ）と 土→月 の2日は正常
+    assert oh.bi_mart_issues(man, datetime(2026, 10, 18, 5, 0), 3) == []
+    assert oh.bi_mart_issues(man, datetime(2026, 10, 19, 6, 0), 3) == []
+    got = oh.bi_mart_issues(man, datetime(2026, 10, 21, 6, 0), 3)
+    assert len(got) == 1 and "m_screener" in got[0]["text"] and got[0]["severity"] == "high"
+    assert oh.bi_mart_issues(None, datetime(2026, 10, 21), 3) == []
+
+
+def test_collect_reads_bi_manifest(tmp_path, monkeypatch):
+    oh = load_module("ops_health")
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    (tmp_path / "bi").mkdir()
+    (tmp_path / "bi" / "manifest.json").write_text(json.dumps(
+        {"marts": [{"mart": "m_screener", "generated_at": "2026-10-10T05:00:00Z"}]}), encoding="utf-8")
+    cfg = SimpleNamespace(LOG_DIR=tmp_path / "logs", DATA_DIR=tmp_path / "data")
+    got = oh.collect_file_issues(cfg, datetime(2026, 10, 18, 14, 0))
+    assert len(got) == 1 and "m_screener" in got[0]["text"]
+
+
+# ── 日本株の台帳日付（高-4）────────────────────────────────────
+
+def test_price_universe_ledger_date():
+    pu = load_module("price_universe")
+    assert pu.ledger_date(datetime(2026, 10, 14, 1, 30)) == "2026-10-13"   # 遅れて0時をまたいだ JP の回
+    assert pu.ledger_date(datetime(2026, 10, 13, 21, 45)) == "2026-10-13"
+    assert pu.ledger_date(datetime(2026, 10, 14, 9, 45)) == "2026-10-14"   # US の朝の回
+
+
+# ── テストは本物の BQ を読まない ──────────────────────────────
+
+def test_no_real_bq_credentials_in_tests():
+    import os
+    assert not os.environ.get("BQ_CREDENTIALS")
+    assert not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")

@@ -221,6 +221,21 @@ def market_cutoff_date(market: str, now_utc: datetime) -> date:
     return local.date() + timedelta(days=1 if closed else 0)
 
 
+LEDGER_DAY_ROLLOVER_HOUR = 6   # JST のこの時刻より前に終わった回は前日の回として台帳に記録する
+
+
+def ledger_date(now_jst: datetime) -> str:
+    """台帳（record_external）に記録する日付（純関数）。
+
+    日本株の回は 16:47 JST 予定だが、GitHub 側の遅れで開始が翌 02:00 になる日がある。
+    終わった時刻の日付で記録すると、その日の台帳に JP の記録が無く、翌日に2回分が重なる。
+    0〜6時に終わった回は前日の回とみなす（米国株の 07:47 予定の回は遅れても昼までに終わる）。"""
+    d = now_jst.date()
+    if now_jst.hour < LEDGER_DAY_ROLLOVER_HOUR:
+        d -= timedelta(days=1)
+    return d.isoformat()
+
+
 def _num(v):
     try:
         f = float(v)
@@ -629,7 +644,8 @@ def main(argv=None) -> int:
         if not args.dry_run and not args.limit:
             try:
                 from module_ledger import record_external
-                record_external(cfg, name, status, note)
+                record_external(cfg, name, status, note,
+                                date_str=ledger_date(datetime.now(ZoneInfo("Asia/Tokyo"))))
             except Exception as e:
                 print(f"⚠️ 台帳への記録に失敗: {str(e)[:80]}")
         if status != "success":
