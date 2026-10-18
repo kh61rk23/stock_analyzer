@@ -85,7 +85,7 @@ DDL = [
       conviction  INT64,
       layer       STRING,
       open_issues INT64  OPTIONS(description='デビル未解消指摘数'),
-      status      STRING OPTIONS(description='承認待ち/承認/見送り'),
+      status      STRING OPTIONS(description='承認待ち/承認/否認/保留'),
       result      STRING OPTIONS(description='後日成績'),
       decided_at  DATE   NOT NULL,
       ingested_at TIMESTAMP NOT NULL

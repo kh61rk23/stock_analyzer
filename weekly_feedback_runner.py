@@ -7,7 +7,8 @@
 #     1) obsidian_sync.py journal   … 承認済みBuyの台帳記帳（冪等）
 #     2) obsidian_sync.py feedback  … 成績還流（performance_tracker連携）
 #     3) devil_calibration.py       … 25_デビル校正ノート.md 更新
-#   を連続実行する。結果は stock_data/weekly_loop_status.json（作業コピー）に残す。
+#   を連続実行する。結果は <STOCK_ANALYZER_BASE>/weekly_loop_status.json に残す（Mac では作業コピーの外の
+#   ~/.stock_analyzer_sync/stock_data_mirror。未設定ならリポジトリの stock_data）。
 #   このファイルは Mac にしか無いので、obsidian_sync.py all が mac_sync_status.json の
 #   weekly_loop に載せて push し、日次メール（ops_health）が最終成功の古さを見る。
 #
@@ -29,6 +30,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime
@@ -42,6 +44,13 @@ STEPS = [
 
 STATUS_PATH = Path("stock_data/weekly_loop_status.json")
 
+
+def status_file(base: Path = None) -> Path:
+    """週次ループの記録ファイル。base を渡したら base/stock_data、無ければ STOCK_ANALYZER_BASE、それも無ければリポジトリの stock_data。"""
+    if base is None and os.environ.get("STOCK_ANALYZER_BASE"):
+        return Path(os.environ["STOCK_ANALYZER_BASE"]).expanduser() / STATUS_PATH.name
+    return (base or Path(__file__).resolve().parent) / STATUS_PATH
+
 # --if-stale で「前回成功からこの日数以上」経っていたら実行する
 from config_sync import sync_module_constants
 
@@ -54,9 +63,8 @@ STALE_DAYS = 7
 
 def last_success_at(base: Path = None) -> datetime | None:
     """前回「成功した」実行の日時。記録が無ければ None。"""
-    base = base or Path(__file__).resolve().parent
     try:
-        st = json.loads((base / STATUS_PATH).read_text(encoding="utf-8"))
+        st = json.loads(status_file(base).read_text(encoding="utf-8"))
         s = st.get("last_success") or (st.get("run_at") if st.get("ok") else None)
         return datetime.strptime(str(s), "%Y-%m-%d %H:%M") if s else None
     except Exception:
@@ -89,7 +97,7 @@ def main(dry_run: bool = False, if_stale: bool = False) -> int:
     # バックアップ経路（Claude予定タスク等）から頻繁に呼ばれても
     # 二重実行しないためのガード。本線の launchd は無条件で走る。
     if if_stale and not dry_run:
-        run, why = is_stale(base=base)
+        run, why = is_stale()
         if not run:
             print(f"⏩ 週次ループ: スキップ（{why}）")
             return 0
@@ -125,15 +133,14 @@ def main(dry_run: bool = False, if_stale: bool = False) -> int:
     if status["ok"] and not dry_run:
         status["last_success"] = status["run_at"]
     else:
-        prev = last_success_at(base)
+        prev = last_success_at()
         if prev:
             status["last_success"] = prev.strftime("%Y-%m-%d %H:%M")
 
-    (base / STATUS_PATH).parent.mkdir(parents=True, exist_ok=True)
-    (base / STATUS_PATH).write_text(
-        json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(("✅ 週次ループ完了" if status["ok"] else "⚠️ 週次ループ一部失敗")
-          + f" → {STATUS_PATH}")
+    out = status_file()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(("✅ 週次ループ完了" if status["ok"] else "⚠️ 週次ループ一部失敗") + f" → {out}")
     return 0 if status["ok"] else 1
 
 

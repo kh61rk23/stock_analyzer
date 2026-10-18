@@ -87,6 +87,7 @@ def test_parse_approval_variants():
     assert p("否認（2026-10-01）＝理由") == ("否認", "2026-10-01")
     assert p("却下") == ("否認", None)
     assert p("保留（2026-10-02）") == ("保留", "2026-10-02")
+    assert p("見送り（2026-10-03）") == (None, None)   # 結論は承認／否認／保留の3つだけ
     assert p("") == (None, None)
 
 

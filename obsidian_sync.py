@@ -13,7 +13,7 @@
 #
 # 【サブコマンド】
 #   pull      GitHub リポジトリから stock_data 出力を取得し、
-#             ① ローカル作業コピーの stock_data へミラー
+#             ① Mac 用の stock_data（~/.stock_analyzer_sync/stock_data_mirror）へミラー
 #             ② vault の 05_最新データ/ へ主要成果物を転記
 #   queue     15_審議キュー.md の自動セクションを再生成
 #             （screener上位 + ドリフト + Ignition収束）[DEPT-2①]
@@ -51,6 +51,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).parent
 SYNC_CACHE = Path.home() / ".stock_analyzer_sync" / "repo"
+# Mac が読む stock_data の置き場。作業コピー（01_System/stock_data）に写すと、改修中の
+# git add で古い状態を commit して Actions の新しい状態を巻き戻す危険があるため、作業コピーの外に置く。
+# run_apps.sh が STOCK_ANALYZER_BASE で同じ場所を全ジョブ（週次・月次・board）へ渡す。
+MIRROR_BASE = Path.home() / ".stock_analyzer_sync" / "stock_data_mirror"
+MIRROR_SUBDIRS = ("data", "insights", "logs", "cache", "bi", "paper", "ontology")
 
 AUTO_BEGIN = "<!-- AUTO-QUEUE:BEGIN（obsidian_sync.py が再生成。手動編集禁止） -->"
 AUTO_END   = "<!-- AUTO-QUEUE:END -->"
@@ -62,9 +67,8 @@ def _load_config():
     cfg = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(cfg)
     base_env = os.environ.get("STOCK_ANALYZER_BASE", "")
-    base = Path(base_env) if base_env else (
-        Path(cfg.DRIVE_BASE) if Path(cfg.DRIVE_BASE).exists()
-        else REPO_ROOT / "stock_data")
+    base = Path(base_env).expanduser() if base_env else MIRROR_BASE
+    base.mkdir(parents=True, exist_ok=True)
     cfg.DRIVE_BASE, cfg.DATA_DIR = base, base / "data"
     cfg.INSIGHT_DIR, cfg.LOG_DIR = base / "insights", base / "logs"
     cfg.CACHE_DIR = base / "cache"
@@ -155,10 +159,10 @@ def cmd_pull(cfg, repo_url: str) -> bool:
         return False
     print(f"✅ リポジトリ同期: {SYNC_CACHE}")
 
-    # ① ローカル作業コピーの stock_data へミラー（パケットが濃くなる）
+    # ① Mac 用の stock_data（作業コピーの外）へミラー（パケット・board /bi /screening /risk が読む）
     src = SYNC_CACHE / "stock_data"
     if src.exists():
-        for sub in ("data", "insights", "logs", "cache"):
+        for sub in MIRROR_SUBDIRS:
             s = src / sub
             if s.exists():
                 shutil.copytree(s, Path(cfg.DRIVE_BASE) / sub,
@@ -220,8 +224,8 @@ def cmd_mirror(cfg) -> bool:
         current = sorted(json.loads(target.read_text(encoding="utf-8")).get("tickers") or [])
     except (OSError, ValueError):
         current = None
-    def _copy_to_worktree() -> None:
-        """作業コピー側にも同じ中身を置く（Mac上の queue / board が同じ集合を使う）。
+    def _copy_to_mac_base() -> None:
+        """Mac 用の stock_data 側にも同じ中身を置く（Mac上の queue / board が同じ集合を使う）。
         別の時刻で書き直すと GitHub 側と食い違い、作業コピーの pull が毎回衝突するため、clone の版をそのまま写す。"""
         try:
             dst = Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / MIRROR_REL.name
@@ -237,7 +241,7 @@ def cmd_mirror(cfg) -> bool:
     # 審議済みが変わらなくても1日1回は照合日（verified_at）を上げる。Actions のメールは
     # これを見て、ミラーを正本と同じに扱えるか（台帳と最近照合されているか）を判断する。
     if current == tickers and str(prev.get("verified_at", ""))[:10] == today:
-        _copy_to_worktree()
+        _copy_to_mac_base()
         print(f"✅ mirror: 変更なし（審議済み{len(tickers)}銘柄・本日照合済み）")
         return True
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -260,7 +264,7 @@ def cmd_mirror(cfg) -> bool:
     for attempt in range(2):
         r = _git_with_retry(g + ["push", "-q", "origin", "HEAD:main"], 120)
         if r.returncode == 0:
-            _copy_to_worktree()
+            _copy_to_mac_base()
             print(f"✅ mirror: push 完了 — {msg}")
             return True
         # Actions の auto コミットと競合したら取り込み直して再送
@@ -276,14 +280,16 @@ def cmd_mirror(cfg) -> bool:
 DELIB_JSON = "invest_deliberations.json"
 APPROVALS_REL = Path("stock_data") / "data" / "invest_approvals.json"
 APPROVED_BY = "健太（台帳）"
-_APPROVAL_RE = re.compile(r"^(承認待ち|承認済み?|承認|否認|却下|保留|見送り)")
+# 状態列の結論は 承認／否認／保留 の3つ（健太決定・C-07）。承認済・却下は書き癖として受け、3つへ寄せる
+_APPROVAL_RE = re.compile(r"^(承認待ち|承認済み?|承認|否認|却下|保留)")
 _DATE_RE = re.compile(r"^\s*[（(]\s*(\d{4}-\d{2}-\d{2})")
 
 
 def parse_approval(status: str) -> tuple:
     """台帳の状態列 → (approval_status, approved_at)。承認待ち・解釈不能は (None, None)。
 
-    「**承認（2026-09-29）**＝…」「否認」「保留」等。承認済・承認済みは「承認」、却下は「否認」に寄せる。"""
+    「**承認（2026-09-29）**＝…」「否認」「保留」。承認済・承認済みは「承認」、却下は「否認」に寄せる。
+    それ以外の語（見送り等）は結論として読まない（承認待ちのまま）。"""
     t = (status or "").replace("*", "").strip()
     m = _APPROVAL_RE.match(t)
     if not m or m.group(1) == "承認待ち":
@@ -697,13 +703,14 @@ def cmd_status(steps: dict) -> bool:
 
     Mac がスリープ・オフライン・電源オフだと承認の BQ 反映・部則のクラウド同期が止まるが、
     Actions 側からは見えない。日次メール（ops_health）はこのファイルの last_success_at の古さで気づく。
-    週次ループ（weekly_feedback_runner）の結果も、作業コピーにしか残らないのでここに載せて送る。"""
+    週次ループ（weekly_feedback_runner）の結果も、Mac にしか残らないのでここに載せて送る。"""
     if not (SYNC_CACHE / ".git").exists():
         print("⏩ status: 同期用cloneが無い")
         return False
     target = SYNC_CACHE / STATUS_REL
     prev = _load_json(target)
-    weekly = _load_json(REPO_ROOT / WEEKLY_LOOP_REL)
+    base_env = os.environ.get("STOCK_ANALYZER_BASE", "")
+    weekly = _load_json((Path(base_env).expanduser() if base_env else MIRROR_BASE) / WEEKLY_LOOP_REL.name)
     now = datetime.now()
     new = build_mac_status(prev, steps, now, weekly)
     if not should_push_status(prev, new, now):

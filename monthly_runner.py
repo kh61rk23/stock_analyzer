@@ -46,7 +46,9 @@ from datetime import date, datetime
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
-STATUS_PATH = REPO / "stock_data" / "monthly_loop_status.json"
+# Mac（launchd）では作業コピーの外の ~/.stock_analyzer_sync/stock_data_mirror、Actions では workspace の stock_data
+STATUS_PATH = (Path(os.environ["STOCK_ANALYZER_BASE"]).expanduser() if os.environ.get("STOCK_ANALYZER_BASE")
+               else REPO / "stock_data") / "monthly_loop_status.json"
 
 
 def _load_config():
