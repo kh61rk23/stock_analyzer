@@ -20,6 +20,16 @@ if not os.environ.get("STOCK_ANALYZER_BASE"):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_bq_credentials(monkeypatch):
+    """実行環境の BigQuery 鍵をテストから見えなくする。
+
+    クラウドのセッションや Actions では BQ_CREDENTIALS が入っていて、BQ を偽物に差し替えていない
+    テストが本物の表を読み、実データ次第で落ちる（課金も発生する）。鍵が要るテストは自分で setenv する。"""
+    for k in ("BQ_CREDENTIALS", "GOOGLE_APPLICATION_CREDENTIALS"):
+        monkeypatch.delenv(k, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _reset_process_caches():
     """プロセス内キャッシュをテストごとに捨てる。
 

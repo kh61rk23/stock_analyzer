@@ -4210,6 +4210,7 @@ OPS_ACTIONS_WARN_RATIO: float = 0.8        # 使用量がこの割合を超え�
 OPS_MAC_SYNC_STALE_HOURS: int = 48         # Mac の同期（obsidian_sync all）の最終成功からの許容時間
 OPS_WEEKLY_LOOP_STALE_DAYS: int = 9        # 週次ループ（日曜21時）の最終成功からの許容日数
 OPS_HOLDINGS_STALE_DAYS: int = 14          # 保有銘柄（家計簿締め）の as_of からの許容日数
+OPS_BI_MART_STALE_DAYS: int = 3            # bi.m_screener（bi/manifest.json の generated_at）の許容日数。日曜休みで土→月は2日
 OPS_DELIB_GRACE_DAYS: int = 2              # 審議の間隔 DELIBERATION_INTERVAL_DAYS に足す猶予
 OPS_DELIB_CLAIM_STALE_HOURS: int = 24      # claimed / running のまま放置とみなす時間
 OPS_DELIB_ROUTINE_START: str = "2026-10-18"  # クラウド審議 routine の初回予定日（これより前の空白は数えない）

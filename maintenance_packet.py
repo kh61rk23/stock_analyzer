@@ -30,6 +30,19 @@ from datetime import datetime
 from pathlib import Path
 
 REPO = Path(__file__).parent
+# Mac では Actions の状態は作業コピーの外（obsidian_sync のミラー先）にある。作業コピーの stock_data は
+# git の版のままで古いため、STOCK_ANALYZER_BASE → ミラー → 作業コピーの順に探す。
+MAC_MIRROR = Path.home() / ".stock_analyzer_sync" / "stock_data_mirror"
+
+
+def _stock_base() -> Path:
+    import os
+    env = os.environ.get("STOCK_ANALYZER_BASE", "").strip()
+    if env:
+        return Path(env).expanduser()
+    if (MAC_MIRROR / "logs").is_dir():
+        return MAC_MIRROR
+    return REPO / "stock_data"
 # 構成管理資料の正本は 02_Configuration_Management。保守パケットは進捗管理フォルダにも置く
 DOCS = REPO.parent / "02_Configuration_Management" / "04_進捗管理"
 # 変更履歴の正本（CHANGELOG.md は凍結済み）。board の devlog.py が追記する
@@ -85,21 +98,25 @@ def build_packet() -> str:
 
     # ② 実行台帳
     lines += ["## ② 実行台帳（直近の本番実行状態）", ""]
-    ledger_p = REPO / "stock_data" / "logs" / "module_ledger_latest.json"
+    ledger_p = _stock_base() / "logs" / "module_ledger_latest.json"
     if ledger_p.exists():
         try:
             led = json.loads(ledger_p.read_text(encoding="utf-8"))
             s = led.get("stats", {})
             lines.append(f"- {led.get('date','')}: 成功{s.get('success',0)} "
-                         f"/ 失敗{s.get('error',0)} / スキップ{s.get('skipped',0)}")
+                         f"/ 失敗{s.get('error',0)} / スキップ{s.get('skipped',0)}（{ledger_p.parent.parent}）")
+            kind_ja = {"consecutive_failure": "連続失敗", "unrecorded": "記録なし",
+                       "external_stale": "記録が来ない"}
             for a in led.get("alerts", []):
-                lines.append(f"- 🚨 連続失敗{a['days']}日: {a['module']}")
+                lines.append(f"- 🚨 {kind_ja.get(a.get('kind'), '連続失敗')}{a['days']}日: {a['module']}")
             if led.get("unrecorded"):
                 lines.append(f"- 👻 記録なし: {', '.join(led['unrecorded'][:8])}")
         except Exception:
             lines.append("- ⚠️ 台帳解析エラー")
     else:
         lines.append("- 台帳なし（本番実行ログが未取得。obsidian_sync pull で取得可）")
+    lines.append("- ※ 成功・失敗の数は run_all_tasks の中のモジュールと record_external の記録だけ。"
+                 "Actions の枠切れ・cron の遅れ・Mac 同期・審議 routine の停止は、日次メールの「🩺 運用の監視」で見る")
     lines.append("")
 
     # ③ 開発ログ台帳 直近

@@ -47,6 +47,25 @@ _VOLATILE_COLS = frozenset({"ingested_at", "updated_at", "detected_at", "scraped
 # 失敗済み job_id を避けて取り直す最大回数
 LOAD_RETRIES = 3
 
+# データセット → location（asia-northeast1 / US）。load job と get_job はデータセットと同じ location で
+# 投げないと「Dataset が見つからない」で失敗する（edinet・analytics・taxonomy 等は東京、us・ontology は US）。
+_DATASET_LOCATION: dict = {}
+
+
+def dataset_location(client, table_ref: str) -> str | None:
+    """table_ref（project.dataset.table）のデータセットの location。get_dataset はメタデータ API で課金なし。
+    引けないとき（偽クライアント等）は None を返し、BQ に宛先から決めさせる。"""
+    parts = table_ref.split(".")
+    if len(parts) < 2:
+        return None
+    key = ".".join(parts[:-1])
+    if key not in _DATASET_LOCATION:
+        try:
+            _DATASET_LOCATION[key] = client.get_dataset(key).location
+        except Exception:
+            return None
+    return _DATASET_LOCATION[key]
+
 
 def load_job_id(table_ref: str, rows: list, ignore_keys=_VOLATILE_COLS) -> str:
     """表と内容から job_id を決める。行の並びや実行時刻の列が違っても、同じ内容なら同じ ID になる。"""
@@ -69,6 +88,7 @@ def load_rows(client, table_ref: str, rows: list, ignore_keys=_VOLATILE_COLS) ->
     if not rows:
         return True
     base = load_job_id(table_ref, rows, ignore_keys)
+    loc = dataset_location(client, table_ref)
     cfg = bigquery.LoadJobConfig(
         source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
         write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
@@ -76,10 +96,10 @@ def load_rows(client, table_ref: str, rows: list, ignore_keys=_VOLATILE_COLS) ->
     for attempt in range(LOAD_RETRIES + 1):
         jid = base if attempt == 0 else f"{base}_r{attempt}"
         try:
-            client.load_table_from_json(rows, table_ref, job_id=jid, job_config=cfg, location="US").result()
+            client.load_table_from_json(rows, table_ref, job_id=jid, job_config=cfg, location=loc).result()
             return True
         except Conflict:
-            old = client.get_job(jid, location="US")
+            old = client.get_job(jid, location=loc)
             if old.state == "DONE" and not old.error_result:
                 print(f"[BQClient] load {jid} は成功済み（再実行のため書込なし）")
                 return True

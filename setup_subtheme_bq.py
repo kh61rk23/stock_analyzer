@@ -15,8 +15,8 @@ setup_subtheme_bq.py
     BQ_PROJECT_ID='stock-analyzer-edinet' \
     python3 setup_subtheme_bq.py
 
-【冪等性】 既定の実行（初回整備）は ticker_subtheme_mapping を streaming insert で足すため、
-         再実行すると同じ行が重なる（sub_theme_master は MERGE なので重ならない）。
+【冪等性】 既定の実行（初回整備）は ticker_subtheme_mapping に load job で追記する。job_id は内容から
+         決まるので同じ内容の再実行は重ならないが、内容が変わると古い行が残る（sub_theme_master は MERGE）。
          定期の更新は --refresh を使う: 投入したい全行を重複なしで作り、
          ticker_subtheme_mapping を load job（WRITE_TRUNCATE・無料）で丸ごと置き換える。
          --if-changed を付けると、config の代表銘柄とサブテーマJSONが前回の置き換えから
