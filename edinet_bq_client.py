@@ -425,9 +425,11 @@ class EDINETBQClient:
         try:
             code = str(company_code).replace("'", "")
             mkt = str(market).replace("'", "")
-            date_cond = ""
+            date_cond = "AND (valid_to IS NULL OR valid_to >= CURRENT_DATE())"
             if as_of_date:
-                date_cond = f"AND valid_from <= '{str(as_of_date)[:10]}'"
+                d = str(as_of_date)[:10]
+                date_cond = (f"AND valid_from <= '{d}' "
+                             f"AND (valid_to IS NULL OR valid_to >= '{d}')")
             sql = f"""
             SELECT node_id,
                    relevance_score       AS score,
@@ -1081,6 +1083,7 @@ class EDINETBQClient:
         FROM `{self.project}.taxonomy.company_taxonomy_map`
         WHERE company_id IN UNNEST(@codes)
           AND relevance_score IS NOT NULL
+          AND (valid_to IS NULL OR valid_to >= CURRENT_DATE())
         QUALIFY ROW_NUMBER() OVER (
             PARTITION BY company_id, node_id
             ORDER BY

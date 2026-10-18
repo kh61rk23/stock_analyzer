@@ -1,0 +1,49 @@
+{
+  "_meta": {
+    "purpose": "taxonomy_company_mapper の語の照合（confidence_type=text_match）の除外語としきい値",
+    "used_by": "taxonomy_company_mapper.py build_node_terms / match_company_nodes",
+    "how_to_edit": "誤爆した語を exclude_terms（全ノード共通）か exclude_terms_by_node（そのノードだけ）に足す。次の週次実行で、出なくなった行は valid_to が入って読み手から外れる",
+    "exclude_basis": "一般語（素材・通信・システム等）、別の語の一部として頻出するもの（有価証券の『証券』、通信販売の『通信』、バイオマスの『バイオ』、ライブラリの『ライブ』）、他ノードの説明から来て意味がずれるもの（ev_battery の『リサイクル』等）を外す"
+  },
+  "min_ja_term_len": 2,
+  "min_ascii_term_len": 3,
+  "min_desc_term_len": 3,
+  "use_description_terms": true,
+  "min_text_hits": 3,
+  "min_single_term_hits": 2,
+  "text_hit_cap": 10,
+  "sections": ["事業の内容"],
+  "ignore_phrases": ["海外食", "住宅ローン", "有価証券", "通信販売", "バイオマス", "ライブラリ", "SDN. BHD.", "SDN.BHD.", "SDN BHD"],
+  "exclude_terms": [
+    "Open", "エネルギー", "オフィス", "ケーブル", "コンテナ", "システム",
+    "シリコン系", "スイッチ", "ソフトウェア", "ターミナル", "ハード", "バイオ", "パイプライン",
+    "パッケージング", "フレームワーク", "プラットフォーム", "モジュール", "モバイル", "ライブ",
+    "加工装置", "受託", "基盤", "学習", "家庭用", "市況", "機能性素材", "機械", "検査", "消費",
+    "省エネ", "社会インフラ", "総合", "系統", "素材", "脱炭素", "自動化", "計測装置", "証券",
+    "診断", "請負", "資源", "資産管理", "輸送", "通信", "運営", "金融", "電力", "電化", "電気",
+    "変換器", "中継器", "高効率", "高周波", "高耐熱", "デジタル化"
+  ],
+  "exclude_terms_by_node": {
+    "infrastructure_construction": ["建設", "インフラ", "不動産"],
+    "ev_battery": ["リサイクル"],
+    "rare_metal_refining": ["リサイクル"],
+    "semiconductor_material": ["ウエハ"],
+    "technology_trading": ["半導体"],
+    "gas_utility": ["ガス"],
+    "resources_energy_upstream": ["ガス", "石油"],
+    "financials": ["保険", "銀行"],
+    "insurance": ["保険"],
+    "ev_powertrain": ["インバータ"],
+    "space_launch": ["エンジン"],
+    "5g_base_station": ["アンテナ"],
+    "satellite_ground_station": ["アンテナ"],
+    "warehouse_automation": ["倉庫"],
+    "nonbank_finance": ["リース"],
+    "port_terminal": ["港湾"],
+    "plant_engineering": ["LNG"],
+    "carbon_fiber": ["航空機"],
+    "titanium_alloy": ["航空機"],
+    "adc": ["ADC"],
+    "mrna_therapeutics": ["治療薬"]
+  }
+}
