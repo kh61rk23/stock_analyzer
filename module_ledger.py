@@ -500,3 +500,53 @@ def get_module_freshness(cfg) -> dict:
     if not ledger:
         return {}
     return dict(ledger.get("last_success", {}))
+
+
+# ==============================================================
+# BLOCK 4: ワークフローのステップ結果を台帳へ（CLI）
+# ==============================================================
+# daily_run.yml の continue-on-error ステップ（BI export・EdinetDB web refresh 等）は
+# run_all_tasks の外で走るため RunLogger に載らず、失敗しても Actions は緑・メールは平常のままになる。
+# yml の最後で steps.<id>.outcome を渡して record_external で残し、翌日以降の連続失敗・
+# LEDGER_EXTERNAL_EXPECT（記録が来ない）の検知に乗せる。
+#   python module_ledger.py steps bi_export=failure edinetdb_web_refresh=success ...
+
+# GitHub の outcome → 台帳の status。空（前の段で止まって走らなかった）は記録しない。
+_STEP_OUTCOME_STATUS = {"success": "success", "failure": "error",
+                        "cancelled": "error", "skipped": "skipped"}
+
+
+def parse_step_outcomes(args: list) -> dict:
+    """["name=outcome", ...] → {name: status}。outcome が空・未知のものは落とす（純関数）。"""
+    out = {}
+    for a in args or []:
+        name, _, outcome = str(a).partition("=")
+        status = _STEP_OUTCOME_STATUS.get(outcome.strip().lower())
+        if name.strip() and status:
+            out[name.strip()] = status
+    return out
+
+
+def _cli_cfg():
+    import os
+    from types import SimpleNamespace
+    base = Path(os.environ.get("STOCK_ANALYZER_BASE", "").strip() or Path(__file__).resolve().parent / "stock_data")
+    return SimpleNamespace(LOG_DIR=base / "logs")
+
+
+def main(argv: list = None) -> int:
+    import sys
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv or argv[0] != "steps":
+        print("usage: python module_ledger.py steps <name>=<outcome> ...")
+        return 2
+    cfg = _cli_cfg()
+    rows = parse_step_outcomes(argv[1:])
+    for name, status in rows.items():
+        record_external(cfg, name, status, "daily_run.yml のステップ結果")
+        print(f"📒 {name}: {status}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

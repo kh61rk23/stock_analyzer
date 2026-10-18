@@ -478,6 +478,37 @@ def get_last_run(client) -> dict | None:
     return None
 
 
+def _safe_routine_health(cfg, client) -> dict | None:
+    try:
+        return get_routine_health(client, int(_cfg(cfg, "OPS_DELIB_CLAIM_STALE_HOURS", 24)))
+    except Exception as e:  # 監視の失敗でキューの表示を止めない
+        print(f"  ⚠️ 審議 routine の健全性を読めない: {str(e)[:100]}")
+        return None
+
+
+def get_routine_health(client, claim_stale_hours: int = 24) -> dict:
+    """routine が「失敗」以外の形で止まっていないかを1クエリで集計する（ops_health.routine_issues が判定）。
+
+    last_activity: 最後に成功した run の開始か、審議の登録（ローカル実行・backfill を含む）の遅い方。
+    stale_claimed: claimed のまま claim_stale_hours 時間を超えたキュー行（release されずに落ちた）。
+    stale_running: running のまま claim_stale_hours 時間を超えた実行記録。"""
+    h = int(claim_stale_hours)
+    sql = f"""
+    SELECT
+      (SELECT MAX(started_at) FROM {_fq(client, RUNS_TABLE)}
+         WHERE status = 'ok' AND completed_count > 0) AS last_ok_run,
+      (SELECT MAX(deliberated_at) FROM {_fq(client, DELIB_TABLE)}) AS last_deliberation,
+      (SELECT COUNT(*) FROM {_fq(client, QUEUE_TABLE)}
+         WHERE status = 'claimed' AND claimed_at < TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {h} HOUR)) AS stale_claimed,
+      (SELECT COUNT(*) FROM {_fq(client, RUNS_TABLE)}
+         WHERE status = 'running' AND started_at < TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {h} HOUR)) AS stale_running"""
+    r = dict(list(client.query(sql, location=LOCATION).result())[0].items())
+    times = [t for t in (r.get("last_ok_run"), r.get("last_deliberation")) if t is not None]
+    last = max(times) if times else None
+    r["last_activity"] = last.astimezone(timezone.utc).replace(tzinfo=None).isoformat(sep=" ") if last else None
+    return r
+
+
 def get_queue_for_report(cfg, results: dict = None, top_n: int = 5, client=None) -> dict:
     """deliberation_scheduler.get_queue_for_report と同じ戻り値で、読み元を BQ に切り替えた版。
 
@@ -505,7 +536,8 @@ def get_queue_for_report(cfg, results: dict = None, top_n: int = 5, client=None)
         return {"queue": queue, "source": "BQ invest.deliberation_queue", "already_count": int(cnt),
                 "partial": False, "mirror_age_days": None,
                 "interval_days": int(_cfg(cfg, "DELIBERATION_INTERVAL_DAYS", 14)),
-                "last_run": get_last_run(client)}
+                "last_run": get_last_run(client),
+                "routine_health": _safe_routine_health(cfg, client)}
     except Exception as e:
         print(f"  ⚠️ 審議キューをBQから読めない（台帳・ミラーに切替）: {str(e)[:100]}")
         from deliberation_scheduler import get_queue_for_report as legacy

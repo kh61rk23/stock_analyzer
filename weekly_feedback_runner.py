@@ -7,8 +7,9 @@
 #     1) obsidian_sync.py journal   … 承認済みBuyの台帳記帳（冪等）
 #     2) obsidian_sync.py feedback  … 成績還流（performance_tracker連携）
 #     3) devil_calibration.py       … 25_デビル校正ノート.md 更新
-#   を連続実行する。失敗時は結果ファイルに記録し、翌朝の統合ブリーフ
-#   （alert_notifier / E11）が拾えるよう stock_data/weekly_loop_status.json に残す。
+#   を連続実行する。結果は stock_data/weekly_loop_status.json（作業コピー）に残す。
+#   このファイルは Mac にしか無いので、obsidian_sync.py all が mac_sync_status.json の
+#   weekly_loop に載せて push し、日次メール（ops_health）が最終成功の古さを見る。
 #
 # 【実行】python3 weekly_feedback_runner.py [--dry-run] [--if-stale]
 #   --if-stale: 前回「成功」から7日未満なら何もしない（追いつき用ガード）

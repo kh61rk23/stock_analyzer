@@ -89,6 +89,7 @@ concurrency:
   
 permissions:
   contents: write   # git push を許可
+  actions: read     # actions_usage.py が当月の実行履歴（使用分数）を読む
 
 jobs:
   run-analyzer:
@@ -135,12 +136,24 @@ jobs:
             MODE="weekly"
           else
             MODE="daily"
+            # 月曜の回が落ちた・GitHub に落とされた週は、週次（ontology・backtest・rule_optimizer・
+            # 週次レポート等）がまるごと抜ける。最後に週次が成功してから8日以上なら、この回を weekly に上げる。
+            # 印（stock_data/data/last_weekly_run.json）は週次の分析が成功した回だけ下の Commit で書く。
+            LAST=$(python3 -c "import json;print(json.load(open('stock_data/data/last_weekly_run.json')).get('date',''))" 2>/dev/null || true)
+            if [ -n "$LAST" ]; then
+              AGE=$(( ( $(date -u +%s) - $(date -u -d "$LAST" +%s) ) / 86400 ))
+              if [ "$AGE" -ge 8 ]; then
+                MODE="weekly"
+                echo "↗️ 最後の週次成功が ${LAST}（${AGE}日前）のため weekly で追いつく"
+              fi
+            fi
           fi
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
           echo "▶ 実行モード: $MODE"
 
       # ── 3-B1. EdinetDB同期（公式更新08:00 JST後・日次分析より先）────
       - name: 🗄️ Ensure EdinetDB BigQuery schema
+        id: db-schema
         continue-on-error: true
         env:
           STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
@@ -284,6 +297,7 @@ jobs:
       # バッチしか投入しないため、自動実行でも未承認データは入らない。
       # continue-on-error: taxonomy が落ちても日次分析は続ける（信号1本ぶん）。
       - name: 🗂️ Load taxonomy nodes & company map (weekly)
+        id: taxonomy
         if: steps.set-mode.outputs.mode == 'weekly'
         continue-on-error: true
         env:
@@ -302,6 +316,7 @@ jobs:
       # 2026-10-05: 分析の前に移動（API取込が held_fy を使い、メールが結果を載せるため）。新しい年度の有報が出た会社と
       # 未取得の会社を最大100社（1秒1社・15分で打ち切り）。API は本文・セグメント・四半期に使う。
       - name: 🌐 EdinetDB web refresh (annual financials)
+        id: web-refresh
         if: steps.set-mode.outputs.mode != 'single'
         continue-on-error: true
         env:
@@ -310,7 +325,18 @@ jobs:
           BQ_CREDENTIALS:       ${{ secrets.BQ_CREDENTIALS }}
         run: python -u edinetdb_web_backfill.py --scope due --years 3 --time-budget-min 15 2>&1
 
+      # 当月の Actions 使用分数を数えて logs/actions_usage.json へ（日次メールの「運用の監視」が読む）。
+      # 無料枠を超えると月末まで全 workflow が止まり、メールも来なくなるので、超える前に知らせる。
+      - name: ⏱️ Count Actions usage
+        if: steps.set-mode.outputs.mode != 'single'
+        continue-on-error: true
+        env:
+          GH_TOKEN:            ${{ secrets.GITHUB_TOKEN }}
+          STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
+        run: python -u actions_usage.py 2>&1
+
       - name: 🚀 Run analyzer
+        id: analyzer
         env:
           STOCK_ANALYZER_MODE:  ${{ steps.set-mode.outputs.mode }}
           STOCK_ANALYZER_BASE:  ${{ github.workspace }}/stock_data
@@ -363,6 +389,7 @@ jobs:
       # 2026-10-03: 自然言語→SQL 用の DB構造台帳（stock_data/data/db_catalog.md）を毎日作り直す。
       # INFORMATION_SCHEMA と __TABLES__ だけを読むので課金はほぼ0。失敗しても日次は止めない。
       - name: 🗂️ Refresh DB catalog
+        id: db-catalog
         if: steps.set-mode.outputs.mode != 'single'
         continue-on-error: true
         env:
@@ -372,6 +399,7 @@ jobs:
         run: python -u db_catalog_gen.py 2>&1
 
       - name: 🗓️ Run monthly runner (month start only)
+        id: monthly
         if: steps.set-mode.outputs.mode != 'single'
         continue-on-error: true
         env:
@@ -390,6 +418,7 @@ jobs:
       # insights 以下の md レポート（マクロ・業種・ニュース・ETF・IMF・政府統計・週次ほか全部）を読んで BigQuery analytics に追記する
       # （load job・無料）。取り込み記録 data/report_store_state.json と違うファイルだけ。BI export より前に置き、当日分をマートに載せる。
       - name: 📚 Reports to BigQuery
+        id: report-store
         if: steps.set-mode.outputs.mode != 'single'
         continue-on-error: true
         env:
@@ -412,6 +441,26 @@ jobs:
           BQ_CREDENTIALS:       ${{ secrets.BQ_CREDENTIALS }}
         run: |
           python -u bi_export.py 2>&1 || { echo "❌ bi_export が失敗しました（日次本体は継続・stock_data/bi は前回のまま）"; exit 1; }
+
+      # ── 5-A3. 外側ステップの結果を実行台帳へ ─────────────────────
+      # ここまでの continue-on-error ステップは run_all_tasks の外なので RunLogger に載らず、
+      # 失敗しても Actions は緑・メールは平常のままになる。outcome を台帳（record_external）に残し、
+      # 翌日以降の連続失敗アラートと LEDGER_EXTERNAL_EXPECT（記録が来ない）の検知に乗せる。
+      # 走らなかったステップ（outcome が空）は記録しない。report_store は自分で記録する。
+      - name: 📒 Record outer step outcomes
+        if: always()
+        continue-on-error: true
+        env:
+          STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
+        run: |
+          python module_ledger.py steps \
+            setup_db_integration_bq=${{ steps.db-schema.outcome }} \
+            taxonomy_load=${{ steps.taxonomy.outcome }} \
+            edinetdb_web_refresh=${{ steps.web-refresh.outcome }} \
+            db_catalog=${{ steps.db-catalog.outcome }} \
+            monthly_runner=${{ steps.monthly.outcome }} \
+            report_store_step=${{ steps.report-store.outcome }} \
+            bi_export=${{ steps.bi-export.outcome }}
 
       # ── 5-B. 状態ファイル・キャッシュをリポジトリにコミット ───────
       # 2026-07-12 BUG-03対応: .iqy生成（Excel Webクエリ）は廃止（ENABLE_EXCEL_EXPORT=False）。
@@ -449,6 +498,12 @@ jobs:
             # （models/ と data/us_fundamentals_db/）は .gitignore 済みなので、
             # ディレクトリごと add しても増える分は実行の成果物だけになる。
             # 新しい状態ファイルを足しても、ここを触らずに永続化される。
+            # 週次の分析が成功した回だけ印を書く（上の Set execution mode が、抜けた週を翌日以降に weekly で追いつかせる）
+            if [ "${{ steps.analyzer.outcome }}" = "success" ] && { [ "${{ steps.set-mode.outputs.mode }}" = "weekly" ] || [ "${{ steps.set-mode.outputs.mode }}" = "all" ]; }; then
+              echo "{\"date\": \"$(date -u '+%Y-%m-%d')\", \"run_id\": \"${{ github.run_id }}\"}" > stock_data/data/last_weekly_run.json
+            fi
+            # 保存できた日の印。push に失敗すると記録ごと origin に届かないので、翌日以降「記録が来ない」で気づける
+            STOCK_ANALYZER_BASE="${{ github.workspace }}/stock_data" python module_ledger.py steps daily_state_push=success || true
             git add stock_data/data/ 2>/dev/null || true
             git add stock_data/cache/ 2>/dev/null || true
             git add stock_data/insights/ 2>/dev/null || true
@@ -470,6 +525,16 @@ jobs:
             done
             echo "::error::状態ファイルを push できなかった（この回の結果は保存されていない）"
             exit 1
+
+      # ── 5-C. 通知が届かなかった日はジョブを赤にする ─────────────
+      # Gmail のアプリパスワード失効・送信失敗のときは、日次メール自体が来ないので気づく経路が無い。
+      # alert_notifier / api_key_health が GITHUB_ENV に NOTIFY_FAILED を書いたら、状態の保存の後でここで落とし、
+      # GitHub の失敗通知（別経路のメール）を出す。
+      - name: 🚨 Fail if notification could not be sent
+        if: always() && env.NOTIFY_FAILED != ''
+        run: |
+          echo "::error::通知が届いていない: ${NOTIFY_FAILED}"
+          exit 1
 
       # ── 6. 結果を Artifacts として保存（7日間保持）──────
       - name: 📁 Upload results

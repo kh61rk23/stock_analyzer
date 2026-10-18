@@ -4190,12 +4190,28 @@ LEDGER_CONSEC_FAIL_DAYS: int = 3    # この日数以上の連続失敗で Gmail
 LEDGER_HISTORY_DAYS: int = 14       # 連続失敗・最終成功日の遡及日数
 LEDGER_UNRECORDED_DAYS: int = 2     # DAILY_MODULES の「記録なし」がこの日数続いたら Gmail アラート（配線漏れの疑い）
 # 別ワークフロー（record_external）の記録が来なくなったら気づくための許容日数（土日・祝日の休みを含めて数える）
+# daily_run.yml の外側ステップ（module_ledger.py steps で記録）は日曜に止まるので土→月の2日を許す。
+# daily_state_push は commit 直前に記録して一緒に push する。push に失敗した日は記録ごと消えるので「来ない」で気づく。
 LEDGER_EXTERNAL_EXPECT: dict = {
     "price_universe_jp": 4,
-    "price_universe_us": 4,
+    "price_universe_us": 4,          # 米国株は火・木・土（土→火で3日空く）
     "us_company_facts_update": 4,
     "report_store": 3,
+    "bi_export": 3,
+    "edinetdb_web_refresh": 3,
+    "daily_state_push": 3,
 }
+
+# 運用の監視（ops_health.py → 日次メール「🩺 運用の監視」）。run_all_tasks の外で止まるものを見る。
+ALERT_ON_OPS_HEALTH: bool = True
+OPS_ACTIONS_MONTHLY_MINUTES: int = 2000    # Actions の月の無料枠（Free プラン。Pro なら 3000）
+OPS_ACTIONS_WARN_RATIO: float = 0.8        # 使用量がこの割合を超える（または月末見込みが枠を超える）と警告
+OPS_MAC_SYNC_STALE_HOURS: int = 48         # Mac の同期（obsidian_sync all）の最終成功からの許容時間
+OPS_WEEKLY_LOOP_STALE_DAYS: int = 9        # 週次ループ（日曜21時）の最終成功からの許容日数
+OPS_HOLDINGS_STALE_DAYS: int = 14          # 保有銘柄（家計簿締め）の as_of からの許容日数
+OPS_DELIB_GRACE_DAYS: int = 2              # 審議の間隔 DELIBERATION_INTERVAL_DAYS に足す猶予
+OPS_DELIB_CLAIM_STALE_HOURS: int = 24      # claimed / running のまま放置とみなす時間
+OPS_DELIB_ROUTINE_START: str = "2026-10-18"  # クラウド審議 routine の初回予定日（これより前の空白は数えない）
 
 # ==============================================================
 # BLOCK 39: 投資部（マルチエージェント審議）連携設定（DEPT-1）
@@ -4543,6 +4559,7 @@ KEY_HEALTH_CSE_ENABLED: bool = False
 ENABLE_MONTHLY_RUNNER: bool = True
 # 各ステップの個別スイッチ。False にするとそのステップだけスキップされる。
 ENABLE_SIGNAL_CULLING: bool = True          # E4 シグナル淘汰レポート（月次）
+ENABLE_SUBTHEME_REFRESH: bool = True        # 業種×サブテーマ表の作り直し（setup_subtheme_bq.py --refresh）
 ENABLE_MONTHLY_STRATEGY_REVIEW: bool = True  # E12 月次戦略レビュー（集約・最後に実行）
 # tax_optimizer を走らせる月（四半期＋11月末の枠取り前）。
 TAX_OPTIMIZER_MONTHS: tuple = (1, 4, 7, 10, 11)

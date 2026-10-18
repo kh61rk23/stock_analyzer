@@ -92,6 +92,13 @@ def build_steps(cfg, yyyymm: str, today: date) -> list:
          [py, "geo_exposure_runner.py"],
          "geo系3フラグが全てFalse"),
 
+        # 業種×サブテーマ表（edinet.ticker_subtheme_mapping / sub_theme_master）を config の代表銘柄と
+        # サブテーマJSONから作り直す。日次で読むのに書き手が初回整備だけだったため。変化の無い月は何もしない。
+        ("subtheme_refresh",
+         flag("ENABLE_SUBTHEME_REFRESH"),
+         [py, "setup_subtheme_bq.py", "--refresh", "--if-changed"],
+         "ENABLE_SUBTHEME_REFRESH=False"),
+
         ("signal_culling",
          flag("ENABLE_SIGNAL_CULLING"),
          [py, "signal_culling_report.py", yyyymm],

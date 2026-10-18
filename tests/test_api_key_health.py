@@ -124,7 +124,10 @@ def test_prev_business_day_skips_weekend():
 
 
 # ── 未設定キーの分類（run_key_health を requests無し想定でも壊さない）──
-def test_run_key_health_unset_keys_do_not_crash():
+def test_run_key_health_unset_keys_do_not_crash(monkeypatch):
+    for k in ("GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_OAUTH_REFRESH_TOKEN"):
+        monkeypatch.delenv(k, raising=False)
+
     class _Cfg:
         pass  # 全キー未設定
 
@@ -135,7 +138,9 @@ def test_run_key_health_unset_keys_do_not_crash():
     assert entries["EDINETDB_API_KEY"]["state"] == kh.STATE_UNSET
     assert entries["FUDOSAN_API_KEY"]["state"] == kh.STATE_UNSET
     assert entries["ANTHROPIC_API_KEY"]["state"] == kh.STATE_SKIPPED
-    assert entries["GOOGLE_OAUTH"]["state"] == kh.STATE_SKIPPED
+    assert entries["GOOGLE_OAUTH"]["state"] == kh.STATE_UNSET
+    assert entries["SEISAKUDB_API_KEY"]["state"] == kh.STATE_UNSET
+    assert entries["NOTION_API_KEY"]["state"] == kh.STATE_UNSET
     assert result["ledger_status"] == "success"  # 未設定は❌ではない
     assert result["summary"].startswith("🔑 [key_health]")
 

@@ -30,7 +30,7 @@ import sys
 import unicodedata
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent            # 01_System（git リポジトリ）
+REPO = Path(__file__).resolve().parent.parent            # 同期先の git リポジトリ（--repo で差し替える）
 SRC = (Path.home() / "Documents" / "Obsidian_Local" / "Vault2_ClaudeCode_Local" / "CEO室"
        / "departments" / "B-investment")
 DST_RULES = "investment_dept"
@@ -144,7 +144,12 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true", help="コピー・commit・push を実行（既定は dry-run）")
     ap.add_argument("--no-push", action="store_true", help="commit までで止める")
     ap.add_argument("--prune", action="store_true", help="vault に無い repo 側のファイルを削除する")
+    ap.add_argument("--repo", default="", help="同期先の git リポジトリ（既定はこのファイルのある repo）。"
+                                              "obsidian_sync は同期用 clone を渡し、作業コピーで rebase・push しない")
     args = ap.parse_args()
+    if args.repo:
+        global REPO
+        REPO = Path(args.repo).expanduser().resolve()
 
     if not SRC.is_dir():
         print(f"中止: 同期元がない: {SRC}")

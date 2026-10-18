@@ -181,6 +181,19 @@ def convert(rows: list[dict], old: dict | None = None, trades: dict | None = Non
     return out, summary
 
 
+def keep_generated(old: dict | None, new: dict) -> dict:
+    """中身（generated 以外）が前回と同じなら generated を前回の値に戻す（純関数）。
+
+    generated は作った日なので毎日変わり、保有が同じでも毎日 auto コミットが入って
+    「同期できている」ように見えてしまう。中身が変わった日だけ差分が出るようにする。"""
+    if not old:
+        return new
+    strip = lambda d: {k: v for k, v in d.items() if k != "generated"}
+    if strip(old) == strip(new) and old.get("generated"):
+        return {**new, "generated": old["generated"]}
+    return new
+
+
 def _read(path: Path) -> list[dict]:
     with open(path, encoding="utf-8-sig") as fh:
         return list(csv.DictReader(fh))
@@ -210,6 +223,10 @@ def main(argv=None) -> int:
         w = csv.DictWriter(fh, fieldnames=FIELDS)
         w.writeheader()
         w.writerows(rows)
+    try:
+        summary = keep_generated(json.loads(OUT_SUMMARY.read_text(encoding="utf-8")), summary)
+    except (OSError, ValueError):
+        pass
     OUT_SUMMARY.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"✅ 保有銘柄 {len(rows)}銘柄 / 株式 {summary['equity_jpy']:,}円 / 総資産 {summary['total_assets_jpy']:,}円"
           f"（{summary['as_of']}時点）")

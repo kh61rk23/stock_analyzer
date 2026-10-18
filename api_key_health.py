@@ -137,6 +137,20 @@ def classify_deepl(status_code: Optional[int]) -> str:
     return STATE_LIMITED
 
 
+def classify_google_oauth(status_code: Optional[int], body_text: str = "") -> str:
+    """
+    Google OAuth の refresh token 判定: 200=✅ / 400 の invalid_grant・401 の invalid_client=❌ / それ以外=⚠️。
+    同意画面が「テスト」のままだと refresh token は7日で、使わなければ6か月で invalid_grant になる。
+    """
+    if status_code == 200:
+        return STATE_ALIVE
+    body = (body_text or "").lower()
+    if status_code in (400, 401) and ("invalid_grant" in body or "invalid_client" in body
+                                      or "unauthorized_client" in body):
+        return STATE_DEAD
+    return STATE_LIMITED
+
+
 def prev_business_day(today: Optional[_dt.date] = None) -> _dt.date:
     """
     前営業日（土日をスキップ）を返す。EDINET documents.json のプローブ日付に使う。
@@ -423,6 +437,65 @@ def _probe_gmail_smtp(from_addr: str, password: str) -> dict:
         return _entry(STATE_LIMITED, "判定不能（通信エラー・タイムアウト）")
 
 
+def _probe_seisakudb(key: str) -> dict:
+    """政策DB の認証必須 API（取り込みと同じ /v1/funding/recent）を limit=1 で1コール判定する。
+    日次の使用は SEISAKUDB_DAILY_BUDGET（契約1,000回/日のうち300回）なので1回は無視できる。"""
+    req = _requests()
+    if req is None:
+        return _entry(STATE_LIMITED, "判定不能（requests 未導入）")
+    try:
+        resp = req.get(
+            "https://seisakudb.jp/v1/funding/recent", params={"limit": 1},
+            headers={"Authorization": f"Bearer {key}", "Accept": "application/json",
+                     "User-Agent": "StockAnalyzer/3.0"},
+            timeout=PROBE_TIMEOUT_SLOW,
+        )
+        if resp.status_code == 429:
+            return _entry(STATE_LIMITED, "HTTP 429（レート制限・失効ではない）")
+        state = classify_http_generic(resp.status_code)
+        return _entry(state, _http_msg(state, resp.status_code))
+    except Exception:
+        return _entry(STATE_LIMITED, "判定不能（通信エラー・タイムアウト）")
+
+
+def _probe_notion(key: str) -> dict:
+    """Notion の /v1/users/me（自分の integration）を1コール。200=✅ / 401=❌。"""
+    req = _requests()
+    if req is None:
+        return _entry(STATE_LIMITED, "判定不能（requests 未導入）")
+    try:
+        resp = req.get(
+            "https://api.notion.com/v1/users/me",
+            headers={"Authorization": f"Bearer {key}", "Notion-Version": "2022-06-28"},
+            timeout=PROBE_TIMEOUT,
+        )
+        state = classify_http_generic(resp.status_code)
+        return _entry(state, _http_msg(state, resp.status_code))
+    except Exception:
+        return _entry(STATE_LIMITED, "判定不能（通信エラー・タイムアウト）")
+
+
+def _probe_google_oauth(client_id: str, client_secret: str, refresh_token: str) -> dict:
+    """refresh token でアクセストークンを1回取り直して判定する（Drive へのバックアップが使う経路）。
+    失効すると run_headless の WARNING だけでバックアップが黙って止まるため、ここで❌にする。"""
+    req = _requests()
+    if req is None:
+        return _entry(STATE_LIMITED, "判定不能（requests 未導入）")
+    try:
+        resp = req.post(
+            "https://oauth2.googleapis.com/token",
+            data={"client_id": client_id, "client_secret": client_secret,
+                  "refresh_token": refresh_token, "grant_type": "refresh_token"},
+            timeout=PROBE_TIMEOUT,
+        )
+        state = classify_google_oauth(resp.status_code, resp.text[:500] if resp.text else "")
+        if state == STATE_DEAD:
+            return _entry(state, f"HTTP {resp.status_code}（refresh token 失効の疑い・再発行が必要）")
+        return _entry(state, _http_msg(state, resp.status_code))
+    except Exception:
+        return _entry(STATE_LIMITED, "判定不能（通信エラー・タイムアウト）")
+
+
 def _probe_bq(cfg) -> dict:
     """既存 edinet_bq_client を生成し SELECT 1 を実行。成功=✅ / 失敗=❌。"""
     try:
@@ -516,6 +589,8 @@ def run_key_health(cfg) -> dict:
     _run("ESTAT_API_KEY",        _probe_estat,    g("ESTAT_API_KEY"))
     _run("POLICY_FRED_API_KEY",  _probe_fred,     g("POLICY_FRED_API_KEY"))
     _run("DEEPL_API_KEY",        _probe_deepl,    g("DEEPL_API_KEY"))
+    _run("SEISAKUDB_API_KEY",    _probe_seisakudb, g("SEISAKUDB_API_KEY"))
+    _run("NOTION_API_KEY",       _probe_notion,   g("NOTION_API_KEY"))
 
     # ── GOOGLE_CSE: quota保護。既定 disabled → ⏭️。明示有効時のみ実クエリ ──
     cse_key = g("GOOGLE_CSE_API_KEY")
@@ -547,6 +622,13 @@ def run_key_health(cfg) -> dict:
         except Exception:
             entries["ALERT_GMAIL_PASSWORD"] = _entry(
                 STATE_LIMITED, "判定不能（プローブ内例外）")
+        # Gmail が死ぬと、このキー判定を含む日次メール自体が届かない。GitHub の失敗通知へ回す
+        if entries["ALERT_GMAIL_PASSWORD"]["state"] == STATE_DEAD:
+            try:
+                import ops_health
+                ops_health.flag_ci_failure("Gmail のアプリパスワードが失効している（SMTP認証失敗）。日次メールは届かない")
+            except Exception:
+                pass
 
     # ── BQ_CREDENTIALS: クライアント生成 + SELECT 1 ──
     bq_path = g("BQ_CREDENTIALS_PATH")
@@ -563,9 +645,19 @@ def run_key_health(cfg) -> dict:
 
     # ── 対象外（将来枠）: 今回はプローブしない ──
     # ANTHROPIC_API_KEY: SEC要約（ENABLE_SEC_SUMMARIZER）有効化時に probe を追加する枠。
-    # GOOGLE_OAUTH_*   : OAuth トークンのリフレッシュ判定枠（要 token 永続化設計）。
     entries["ANTHROPIC_API_KEY"] = _entry(STATE_SKIPPED, "チェック対象外（将来枠）")
-    entries["GOOGLE_OAUTH"]      = _entry(STATE_SKIPPED, "チェック対象外（将来枠）")
+
+    # ── GOOGLE_OAUTH_*: refresh token でアクセストークンを取り直せるか ──
+    import os as _os
+    _oa = {k: (g(k) or _os.environ.get(k, "")) for k in
+           ("GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_OAUTH_REFRESH_TOKEN")}
+    if any(is_unset(v) for v in _oa.values()):
+        entries["GOOGLE_OAUTH"] = _entry(STATE_UNSET, "未設定（CLIENT_ID/SECRET/REFRESH_TOKEN のいずれかが空）")
+    else:
+        try:
+            entries["GOOGLE_OAUTH"] = _probe_google_oauth(*_oa.values())
+        except Exception:
+            entries["GOOGLE_OAUTH"] = _entry(STATE_LIMITED, "判定不能（プローブ内例外）")
 
     # ── 出力 ──
     summary = build_summary(entries)
