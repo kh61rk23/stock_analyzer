@@ -1324,6 +1324,7 @@ FUDOSAN_BASE_URL: str = os.getenv(
     "FUDOSAN_BASE_URL",
     os.getenv("FUDOSANDB_BASE_URL", "https://fudosandb.jp/v1"),
 )
+# FUDOSAN_BACKFILL_CUTOFF 以前だけ効く取り込み枠。cutoff 後は下の POST_CUTOFF_BUDGET（契約上の上限は PLAN_DAILY_LIMIT=100回/日）が効くので、いまは使われない
 FUDOSAN_DAILY_BUDGET: int = 900
 FUDOSAN_BACKFILL_CUTOFF: str = "2026-07-30"
 FUDOSAN_POST_CUTOFF_BUDGET: int = 90

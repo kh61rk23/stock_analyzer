@@ -102,11 +102,6 @@ SOURCES = [
         "columns": ["event_id", "fired_at", "ticker", "sector_code", "signal_category", "signal_value", "direction", "source_module"],
     },
     {
-        "source": "stock-analyzer-edinet.us.fundamentals",
-        "dest": "src_us_fundamentals",
-        "columns": ["ticker", "cik", "period_end", "revenue", "operating_income", "net_income", "eps_diluted", "fcf", "buyback"],
-    },
-    {
         "source": "stock-analyzer-edinet.us.company_profile",
         "dest": "src_us_company_profile",
         "columns": ["ticker", "cik", "name", "exchange", "sic", "sic_description", "shares_outstanding", "shares_as_of", "shares_source",

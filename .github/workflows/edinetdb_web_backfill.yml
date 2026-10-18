@@ -30,6 +30,8 @@ jobs:
   backfill:
     runs-on: ubuntu-latest
     timeout-minutes: 350
+    env:
+      TZ: Asia/Tokyo
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -50,14 +52,14 @@ jobs:
           ARGS="--scope ${{ inputs.scope }} --years ${{ inputs.years }} --time-budget-min 320"
           if [ -n "${{ inputs.limit }}" ]; then ARGS="$ARGS --limit ${{ inputs.limit }}"; fi
           python -u edinetdb_web_backfill.py $ARGS
-      - name: Commit rotation meta
+      - name: Commit state
         if: always()
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add stock_data/data/edinetdb_rotation_meta.json
+          git add stock_data/data/edinetdb_rotation_meta.json stock_data/data/edinetdb_web_last.json
           git diff --cached --quiet && exit 0
-          git commit -m "auto: edinetdb web backfill meta"
+          git commit -m "auto: edinetdb web backfill state"
           for i in 1 2 3; do git pull --rebase --autostash -X theirs origin main && git push && exit 0; git rebase --abort 2>/dev/null || true; sleep 15; done
           echo "::error::状態ファイルを push できなかった（この回の結果は保存されていない）"; exit 1
       # 2026-10-03: 時間切れで中断した場合は、同じ条件で自分をもう一度起動する（全社は約7〜8時間かかる）。

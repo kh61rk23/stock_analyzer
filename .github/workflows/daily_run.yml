@@ -122,7 +122,7 @@ jobs:
       # ── 3-A. 実行モード決定 ───────────────────────────────
       #   手動実行       → inputs.mode を使用（daily / weekly / all / single）
       #   スケジュール実行 → UTC 月曜（= 月曜 JST）なら weekly、それ以外は daily
-      #   ※ 後続の週次専用ステップ（13F・text_extractor）がこの出力を参照するため、
+      #   ※ 後続の週次専用ステップ（text_extractor）がこの出力を参照するため、
       #     それらより前に実行する必要がある。
       - name: 🎯 Set execution mode
         id: set-mode
@@ -172,53 +172,8 @@ jobs:
       #   本体側の実行だけを残す。results / 実行台帳 / pipeline_registry に
       #   統合されており、DAILY_MODULES で制御できるのはそちらのため。
 
-      # ── 3-B3. Wave 6 - U-4: 機関投資家 13F 監視（四半期提出期間のみ）──
-      - name: 🏦 Run institutional 13F monitor (quarterly filing period only)
-        if: steps.set-mode.outputs.mode == 'weekly'
-        env:
-          BQ_CREDENTIALS:  ${{ secrets.BQ_CREDENTIALS }}
-          BQ_PROJECT_ID:   ${{ secrets.BQ_PROJECT_ID }}
-          SEC_USER_AGENT:  ${{ secrets.SEC_USER_AGENT }}
-          # config.py を単独ロードするため、この指定がないとColab既定の
-          # /content/drive/MyDrive/stock_analyzer を参照してrunner上でPermissionErrorになる。
-          STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
-        run: |
-          python - <<'EOF'
-          import importlib.util, sys, pathlib, os
-
-          cfg_path = pathlib.Path("config.py")
-          spec = importlib.util.spec_from_file_location("config", cfg_path)
-          cfg  = importlib.util.module_from_spec(spec)
-          spec.loader.exec_module(cfg)
-
-          # SEC User-Agent を環境変数から上書き（設定済みの場合）
-          _ua = os.environ.get("SEC_USER_AGENT", "")
-          if _ua:
-              cfg.SEC_USER_AGENT = _ua
-
-          # 四半期提出期間外はスキップ（institutional_13f_monitor 内部でも判定するが
-          # CI コスト削減のため yml 側でも事前に判定する）
-          from datetime import datetime
-          _now = datetime.now()
-          _qm  = getattr(cfg, "INSTITUTIONAL_QUARTER_MONTHS",   (1, 4, 7, 10))
-          _qd  = getattr(cfg, "INSTITUTIONAL_QUARTER_DAY_FROM",  15)
-          if _now.month not in _qm or _now.day < _qd:
-              print(f"⏩ 13F: 提出期間外（{_now.month}月{_now.day}日）→ スキップ")
-              sys.exit(0)
-
-          sys.path.insert(0, str(pathlib.Path(".")))
-          from institutional_13f_monitor import run_institutional_13f_monitor
-          result = run_institutional_13f_monitor(cfg, {})
-          if result.get("skipped"):
-              print("⏩ 13F モニター: スキップ")
-          else:
-              print(
-                  f"✅ 13F 完了: 変化{len(result.get('all_changes', []))}件 / "
-                  f"BQ格納{result.get('bq_rows', 0)}件"
-              )
-          EOF
+      # 13F（機関投資家）は本体 stock_analyzer_main.py が四半期の提出期間の判定つきで呼ぶ（専用の事前ステップは持たない）。
       # ── 3-B2. Wave 5 - E4: テキストシグナル抽出（週次のみ・50社上限）──
-      # 追加不要（3-B3との共存は if 条件が同一のため問題なし。並列ではなく直列実行のため順序に依存性なし）
       # 2026-09-26: 停止。config.SECTORS に銘柄リストが無く（銘柄はBQから取る方式へ移行済み）
       # 毎週「対象銘柄リストが空のためスキップ」で空振りしていた。リスク減点自体も
       # ENABLE_TEXT_RISK_BONUS=False で当面無効（健太の判断）。

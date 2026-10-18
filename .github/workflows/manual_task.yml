@@ -58,6 +58,7 @@ jobs:
       - name: Run task
         id: run
         env:
+          TZ: Asia/Tokyo
           BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
           BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
           ALERT_GMAIL_FROM: ${{ secrets.ALERT_GMAIL_FROM }}
@@ -68,6 +69,8 @@ jobs:
           DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
           EDINETDB_API_KEY: ${{ secrets.EDINETDB_API_KEY }}
           EDINET_GOV_API_KEY: ${{ secrets.EDINET_GOV_API_KEY }}
+          FUDOSAN_API_KEY: ${{ secrets.FUDOSAN_API_KEY }}
+          POLICY_FRED_API_KEY: ${{ secrets.POLICY_FRED_API_KEY }}
           STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
         run: |
           case "${{ inputs.task }}" in
@@ -86,7 +89,7 @@ jobs:
             arxiv_enrich) python -u arxiv_store.py --enrich ;;
             report_backfill) python -u report_store.py ;;
             # 日次処理の EdinetDB 関連だけ（会社ページの年次財務 → API の本文・セグメント・四半期 → 書類一覧）。その日の残り枠を使う
-            edinetdb_ingest) python -u edinetdb_web_backfill.py --scope due --years 3 --time-budget-min 15; python -u edinetdb_ingestor.py; python -u -c "import config as c, edinet_doc_indexer as d; print(d.run_doc_indexer(cfg=c))" ;;
+            edinetdb_ingest) python -u edinetdb_web_backfill.py --scope due --years 3 --time-budget-min 15 && python -u edinetdb_ingestor.py && python -u -c "import config as c, edinet_doc_indexer as d; print(d.run_doc_indexer(cfg=c))" ;;
             # 銘柄単位の不動産ボーナス（bi.m_screener から全上場分）と業種マスタ・company_master ビューだけを作り直す
             stock_real_estate) python -u stock_real_estate.py ;;
             # 賃貸等不動産（EdinetDB real-estate）を設定どおりに取る（無効の間は試行の10社。EdinetDB の日次枠を使う）

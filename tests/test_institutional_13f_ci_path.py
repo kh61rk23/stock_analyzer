@@ -20,14 +20,13 @@ def _daily_steps() -> list[dict]:
     return workflow["jobs"]["run-analyzer"]["steps"]
 
 
-def test_weekly_13f_step_sets_writable_stock_analyzer_base():
-    step = next(
-        item
-        for item in _daily_steps()
-        if "institutional 13F monitor" in item.get("name", "")
-    )
-
-    assert step["env"]["STOCK_ANALYZER_BASE"] == "${{ github.workspace }}/stock_data"
+def test_13f_runs_only_from_main_not_from_a_workflow_step():
+    # 13F は本体が四半期の提出期間の判定つきで呼ぶ。専用の事前ステップを置くと二重に走る
+    steps = _daily_steps()
+    assert not any("13F" in item.get("name", "") for item in steps)
+    assert not any("run_institutional_13f_monitor" in item.get("run", "") for item in steps)
+    main_src = (REPO_ROOT / "stock_analyzer_main.py").read_text(encoding="utf-8")
+    assert "run_institutional_13f_monitor" in main_src
 
 
 def test_13f_cache_uses_configured_cache_dir(tmp_path):

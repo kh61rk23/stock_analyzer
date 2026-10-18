@@ -23,6 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
+      TZ: Asia/Tokyo
       STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
     steps:
       - uses: actions/checkout@v6
