@@ -36,7 +36,7 @@ def _setup(tmp_path, monkeypatch, tickers):
 
 def test_mirror_pushes_only_when_changed(tmp_path, monkeypatch):
     origin, cache = _setup(tmp_path, monkeypatch, {"7203.T", "543A.T"})
-    cfg = types.SimpleNamespace()
+    cfg = types.SimpleNamespace(DATA_DIR=str(tmp_path / "macdata"))
     assert osync.cmd_mirror(cfg) is True
     log = subprocess.run(["git", "--git-dir", str(origin), "log", "--oneline", "-1"],
                          capture_output=True, text=True).stdout
@@ -54,7 +54,7 @@ def test_mirror_pushes_only_when_changed(tmp_path, monkeypatch):
 
 def test_empty_ledger_does_not_push(tmp_path, monkeypatch):
     origin, _ = _setup(tmp_path, monkeypatch, set())
-    assert osync.cmd_mirror(types.SimpleNamespace()) is True
+    assert osync.cmd_mirror(types.SimpleNamespace(DATA_DIR=str(tmp_path / "macdata"))) is True
     n = subprocess.run(["git", "--git-dir", str(origin), "rev-list", "--count", "main"],
                        capture_output=True, text=True).stdout.strip()
     assert n == "2", "台帳が読めないときに空のミラーで上書きしてはいけない"

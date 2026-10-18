@@ -228,7 +228,7 @@ def cmd_mirror(cfg) -> bool:
         """Mac 用の stock_data 側にも同じ中身を置く（Mac上の queue / board が同じ集合を使う）。
         別の時刻で書き直すと GitHub 側と食い違い、作業コピーの pull が毎回衝突するため、clone の版をそのまま写す。"""
         try:
-            dst = Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / MIRROR_REL.name
+            dst = Path(getattr(cfg, "DATA_DIR", MIRROR_BASE / "data")) / MIRROR_REL.name
             if target.exists() and dst.parent.exists():
                 dst.write_bytes(target.read_bytes())
         except OSError:
