@@ -233,8 +233,10 @@ def main():
     fwd = fetch_forward_returns(panel, cfg)
     note = ""
     if not fwd:
-        note = ("⚠️ 先リターンが取得できなかったため全カテゴリ判定不能"
-                "（ネットワーク/パネル蓄積不足）。")
+        note = ("⚠️ カテゴリパネルが0日分（stock_data/data/category_panel.jsonl が無い）のため全カテゴリ判定不能。"
+                "パネルは日次の signal_aggregator の後に1日1行たまる" if not panel else
+                f"⚠️ 先リターンが取れないため全カテゴリ判定不能（パネル {len(panel)}日分・"
+                f"先リターンには各日から{FWD_DAYS}営業日後の終値が要る。蓄積不足か株価の取得失敗）。")
         print(f"    {note}")
     judgments = build_judgments(panel, fwd, weights)
     md = render_report(judgments, weights, yyyymm, note)

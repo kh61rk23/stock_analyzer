@@ -143,6 +143,17 @@ def build_steps(cfg, yyyymm: str, today: date) -> list:
     ]
 
 
+# 状態ファイルで「済み」とみなす接頭辞。gave_up は MONTHLY_STEP_MAX_ATTEMPTS 回失敗して今月は諦めたもの
+_DONE_PREFIXES = ("success", "skipped", "gave_up")
+
+
+def mail_blockers(steps_status: dict) -> list:
+    """月次メールの前のステップで、まだ終わっていない（この月のうちにやり直す）もの（純関数）。
+    メールを先に送ると、後からやり直しで成功したレポートが送られないため、これが空になるまで待つ。"""
+    return [n for n, v in steps_status.items()
+            if n != "monthly_mail" and not str(v).startswith(_DONE_PREFIXES)]
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="月次・四半期モジュールの一括実行")
     ap.add_argument("--month", default="", help="対象月 YYYYMM（既定: 前月）")
@@ -178,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
             _st = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             _st = {}
-        _done = {n for n, v in (_st.get("steps") or {}).items() if str(v).startswith(("success", "skipped"))}
+        _done = {n for n, v in (_st.get("steps") or {}).items() if str(v).startswith(_DONE_PREFIXES)}
         if _st.get("target_month") == yyyymm and all(name in _done for name, *_ in steps):
             print(f"⏩ 月次ランナー: スキップ（{today.day}日 > 月初{max_day}日まで・{yyyymm} は完了済み）"
                   f" — 手動実行は --force")
@@ -186,15 +197,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"📅 月初{max_day}日を過ぎたが {yyyymm} の月次が未完了のため追いつく")
 
     # 月初は複数日走るため、同じ対象月で成功済みのステップは飛ばし、失敗・未実行のものだけやり直す。
-    prev = {}
+    prev, attempts = {}, {}
     if not args.force and not args.dry_run:
         try:
             _p = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
             if _p.get("target_month") == yyyymm:
                 prev = _p.get("steps") or {}
+                attempts = dict(_p.get("attempts") or {})
         except (OSError, ValueError):
             prev = {}
-    done = {n for n, v in prev.items() if str(v).startswith(("success", "skipped"))}
+    done = {n for n, v in prev.items() if str(v).startswith(_DONE_PREFIXES)}
+    # 失敗したステップは月初を過ぎても毎日やり直すので、直らない失敗が月末まで Actions の枠を使い続けないよう回数で止める
+    max_attempts = int(getattr(cfg, "MONTHLY_STEP_MAX_ATTEMPTS", 3))
     if steps and all(name in done for name, *_ in steps):
         print(f"⏩ 月次ランナー: 対象月={yyyymm} は全ステップ完了済み — 再実行は --force")
         return 0
@@ -205,6 +219,7 @@ def main(argv: list[str] | None = None) -> int:
         "run_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "target_month": yyyymm,
         "steps": {},
+        "attempts": attempts,
         "ok": True,
     }
 
@@ -212,6 +227,20 @@ def main(argv: list[str] | None = None) -> int:
         if name in done:
             status["steps"][name] = prev[name]
             continue
+        if enabled and not args.dry_run and attempts.get(name, 0) >= max_attempts:
+            status["steps"][name] = f"gave_up / {max_attempts}回失敗 / 最後: {str(prev.get(name, ''))[:200]}"
+            print(f"  🛑 {name}: {max_attempts}回失敗したため今月は諦める（手動は --force）")
+            continue
+        if name == "monthly_mail" and enabled and not args.dry_run:
+            waiting = mail_blockers(status["steps"])
+            if waiting:
+                status["ok"] = False
+                status["steps"][name] = f"waiting / 未完了: {', '.join(waiting)}"
+                print(f"  ⏳ monthly_mail: {', '.join(waiting)} が終わるまで送らない（翌日以降に再試行）")
+                continue
+            gave_up = [n for n, v in status["steps"].items() if str(v).startswith("gave_up")]
+            if gave_up:
+                cmd = cmd + ["--gave-up", ",".join(gave_up)]
         if not enabled:
             print(f"  ⏩ {name}: スキップ（{skip_reason}）")
             status["steps"][name] = f"skipped / {skip_reason}"
@@ -220,6 +249,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  [dry-run] {name}: {' '.join(cmd)}")
             status["steps"][name] = "dry-run"
             continue
+        if not args.dry_run:
+            attempts[name] = attempts.get(name, 0) + 1
         try:
             r = subprocess.run(cmd, cwd=REPO, capture_output=True,
                                text=True, timeout=900)

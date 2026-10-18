@@ -660,10 +660,9 @@ def run_alpha_attributer(cfg, results: dict | None = None) -> dict:
     # ── Step 2: 月末のみ IC 計算 ─────────────────────────────
     calculated = False
     today = date.today()
-    is_month_end = (
-        today == (today.replace(day=1) + timedelta(days=32)).replace(day=1)
-                 - timedelta(days=1)
-    )
+    # 週次（月曜）の回からしか呼ばれないので、月末日ちょうどではなく「月の最後の7日間」で判定する
+    # （月末日ちょうどだと月末が月曜の月しか動かない）。IC は上書きなので同じ月に2回走っても同じ結果。
+    is_month_end = (today + timedelta(days=int(getattr(cfg, "RULE_OPTIMIZER_MONTH_END_WINDOW_DAYS", 7)))).month != today.month
 
     if is_month_end or getattr(cfg, "FORCE_ATTRIBUTION_CALC", False):
         try:

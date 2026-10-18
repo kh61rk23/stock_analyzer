@@ -17,10 +17,27 @@ _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
-from paper.paper_broker import load_accounts   # noqa: E402
+from paper.paper_broker import load_accounts, load_events, rebuild_accounts_from_events   # noqa: E402
 
 
-def judge_promotion(acc: dict, cfg=None) -> dict:
+def month_start_equity(history: list, ym: str):
+    """月初の評価額＝前月最後の記録（無ければ当月最初の記録）（純関数）。
+    当月最初の記録を使うと、初日の損益が月次から抜ける。"""
+    before = [h for h in history if str(h.get("date", ""))[:7] < ym]
+    if before:
+        return before[-1]["equity"]
+    inside = [h for h in history if str(h.get("date", ""))[:7] == ym]
+    return inside[0]["equity"] if inside else None
+
+
+def positions_at_month_end(events: list, ym: str) -> dict:
+    """events.jsonl から月末時点の保有を作り直す（純関数）。{strategy: {ticker: {qty, avg_cost}}}
+    月次は月初を過ぎてから（追いつきでは半月後に）作るので、accounts.json の今の保有は月末の保有ではない。"""
+    upto = [e for e in events or [] if e.get("type") == "init" or str(e.get("date", ""))[:7] <= ym]
+    return {k: v.get("positions", {}) for k, v in rebuild_accounts_from_events(upto).items()}
+
+
+def judge_promotion(acc: dict, cfg=None, fills: int | None = None) -> dict:
     """実弾昇格M2基準の判定。
 
     基準（config.py BLOCK 45）:
@@ -44,9 +61,9 @@ def judge_promotion(acc: dict, cfg=None) -> dict:
     min_pf     = float(getattr(cfg, "PROMOTION_MIN_PF", 1.3))
     max_p      = float(getattr(cfg, "PROMOTION_MAX_P", 0.10))
 
-    # 取引数は約定イベント数（fills）。無ければ equity_history から推定しない
-    # （水増しになるため）。
-    trades = int(acc.get("total_fills", 0) or 0)
+    # 取引数は約定イベント数（events.jsonl の fill）。口座（accounts.json）には件数を持たないので
+    # 呼び出し側が数えて渡す。equity_history から推定しない（水増しになるため）。
+    trades = int(fills if fills is not None else (acc.get("total_fills", 0) or 0))
 
     # 月次リターン系列 → PF / bootstrap p
     by_month = {}
@@ -76,7 +93,7 @@ def judge_promotion(acc: dict, cfg=None) -> dict:
             "pf": pf, "p": p, "reasons": reasons}
 
 
-def build_report(accounts: dict, yyyymm: str, cfg=None) -> str:
+def build_report(accounts: dict, yyyymm: str, cfg=None, events: list | None = None) -> str:
     """accounts.json から月次レポートMDを生成（純粋関数・pytest対象）。"""
     ym = f"{yyyymm[:4]}-{yyyymm[4:]}"
     lines = [f"# ペーパートレード月次成績 {ym}",
@@ -94,7 +111,7 @@ def build_report(accounts: dict, yyyymm: str, cfg=None) -> str:
         if not hist:
             lines.append(f"| {sid} | - | - | - | - | 0 |")
             continue
-        start, end = hist[0]["equity"], hist[-1]["equity"]
+        start, end = month_start_equity(acc.get("equity_history", []), ym), hist[-1]["equity"]
         pnl = end - start
         ret = pnl / start if start > 0 else 0.0
         lines.append(f"| {sid} | {start:,.0f} | {end:,.0f} | {pnl:+,.0f} | "
@@ -107,19 +124,25 @@ def build_report(accounts: dict, yyyymm: str, cfg=None) -> str:
     for sid, acc in sorted(accounts.items()):
         if sid.startswith("_") or not isinstance(acc, dict):
             continue
-        j = judge_promotion(acc, cfg)
+        j = judge_promotion(acc, cfg, fills=(sum(1 for e in events if e.get("type") == "fill"
+                                                 and e.get("strategy") == sid
+                                                 and str(e.get("date", ""))[:7] <= ym)
+                                             if events else None))
         pf_s = "—" if j["pf"] is None else f"{j['pf']:.2f}"
         p_s  = "—" if j["p"] is None else f"{j['p']:.3f}"
         mark = "🎯 昇格候補" if j["eligible"] else "—"
         lines.append(f"| {sid} | {j['trades']} | {pf_s} | {p_s} | {mark} | "
                      f"{'／'.join(j['reasons']) or '-'} |")
 
-    lines += ["", "## 保有ポジション（月末時点）",
+    month_end = positions_at_month_end(events, ym) if events else None
+    lines += ["", "## 保有ポジション（" + ("月末時点・約定記録から再構築" if month_end is not None
+                                          else "作成時点") + "）",
               "| 戦略 | ticker | qty | avg_cost |", "|---|---|---|---|"]
     for sid, acc in sorted(accounts.items()):
         if sid.startswith("_") or not isinstance(acc, dict):
             continue
-        for t, p in sorted(acc.get("positions", {}).items()):
+        held = month_end.get(sid, {}) if month_end is not None else acc.get("positions", {})
+        for t, p in sorted(held.items()):
             lines.append(f"| {sid} | {t} | {p['qty']:.0f} | {p['avg_cost']:,.1f} |")
     return "\n".join(lines) + "\n"
 
@@ -131,7 +154,7 @@ def main():
     except Exception:
         cfg = None
     accounts = load_accounts(cfg)
-    md = build_report(accounts, yyyymm, cfg)
+    md = build_report(accounts, yyyymm, cfg, events=load_events(cfg))
 
     vault = Path(getattr(cfg, "INVESTMENT_DEPT_VAULT_DIR", "")) if cfg else Path("")
     if vault and vault.exists():
