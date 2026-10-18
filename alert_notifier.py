@@ -34,7 +34,7 @@
 import smtplib
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import date, datetime, timezone
 
 
 
@@ -107,6 +107,7 @@ def extract_alerts(cfg, results: dict) -> list:
         ]
     """
     alerts = []
+    _routine_issues: list = []   # ⑥-3 で BQ から読んだ審議 routine の異常（末尾の運用の監視に載せる）
 
     # ── ① 政策金利変化 ────────────────────────────────────────
     if getattr(cfg, "ALERT_ON_POLICY_CHANGE", True):
@@ -436,6 +437,16 @@ def extract_alerts(cfg, results: dict) -> list:
                 top_n=int(getattr(cfg, "DELIBERATION_QUEUE_TOP_N", 5)))
             _q = _dq.get("queue", [])
             _lr = _dq.get("last_run") or {}
+            try:
+                import ops_health
+                _st = getattr(cfg, "OPS_DELIB_ROUTINE_START", "")
+                _routine_issues = ops_health.routine_issues(
+                    _dq.get("routine_health"), datetime.now(timezone.utc).replace(tzinfo=None),
+                    int(_dq.get("interval_days") or 14),
+                    int(getattr(cfg, "OPS_DELIB_GRACE_DAYS", 2)),
+                    date.fromisoformat(_st) if _st else None)
+            except Exception as _rhe:
+                print(f"    ⚠️ 審議 routine の判定失敗: {str(_rhe)[:80]}")
             if str(_lr.get("status", "")).lower() == "failed":
                 alerts.append({
                     "trigger":  "deliberation_run_failed",
@@ -1969,6 +1980,18 @@ def extract_alerts(cfg, results: dict) -> list:
         except Exception as _ske:
             print(f"    ⚠️ 政策DB節の生成失敗: {str(_ske)[:80]}")
 
+    # ── 運用の監視（Actions 枠・Mac 同期・週次ループ・保有銘柄・審議 routine）──
+    # どれも run_all_tasks の外で止まり、Actions は緑・台帳は成功のままになるため、ここで見る。
+    if getattr(cfg, "ALERT_ON_OPS_HEALTH", True):
+        try:
+            import ops_health
+            _ops = ops_health.collect_file_issues(cfg) + list(_routine_issues)
+            _oa = ops_health.build_alert(_ops)
+            if _oa:
+                alerts.append(_oa)
+        except Exception as _ope:
+            print(f"    ⚠️ 運用の監視の生成失敗: {str(_ope)[:80]}")
+
         # コードだけで出ている所に名前を補う（日本株ティッカー・業種コード）
     try:
         from name_resolver import enrich_text
@@ -2638,6 +2661,11 @@ def run_alert_notifier(cfg, results: dict) -> dict:
             else:
                 errors.append(f"Gmail: {err}")
                 print(f"    ⚠️  Gmail: {err}")
+                try:
+                    import ops_health
+                    ops_health.flag_ci_failure(f"日次メールの送信に失敗: {str(err)[:200]}")
+                except Exception:
+                    pass
 
     # 少なくとも1チャネルに届いた後でのみ通知済み状態を更新する。
     if sent > 0:

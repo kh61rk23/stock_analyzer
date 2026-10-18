@@ -640,7 +640,13 @@ def cmd_rules() -> bool:
     vault で部則を直したら次の定期実行でここが反映する。差分が無ければ commit も push もしない。
     """
     import subprocess
-    r = subprocess.run([sys.executable, str(REPO_ROOT / "tools" / "sync_invest_rules.py"), "--apply"],
+    # 同期用 clone（SYNC_CACHE）で commit・push する。作業コピー（01_System）で autostash・rebase すると
+    # 改修途中のファイルと交錯するため、mirror / approvals / holdings と同じく clone 側だけを動かす。
+    if not (SYNC_CACHE / ".git").exists():
+        print("⏩ rules: 同期用cloneが無い（先に pull が必要）")
+        return False
+    r = subprocess.run([sys.executable, str(REPO_ROOT / "tools" / "sync_invest_rules.py"), "--apply",
+                        "--repo", str(SYNC_CACHE)],
                        cwd=REPO_ROOT, text=True, capture_output=True)
     out = (r.stdout or "") + (r.stderr or "")
     print(out.strip()[-1500:])
@@ -648,6 +654,78 @@ def cmd_rules() -> bool:
         print(f"⚠️ 部則の同期に失敗（exit {r.returncode}）")
         return False
     return True
+
+
+# ==============================================================
+# status: Mac の同期状況を GitHub へ（Actions の日次メールが鮮度を見る）
+# ==============================================================
+STATUS_REL = Path("stock_data") / "logs" / "mac_sync_status.json"
+WEEKLY_LOOP_REL = Path("stock_data") / "weekly_loop_status.json"
+STATUS_PUSH_HOURS = 6   # 状態が変わらない日は、この時間ごとにだけ push する（30分ごとの起動で commit を積まない）
+
+
+def build_mac_status(prev: dict | None, steps: dict, now: datetime, weekly_loop: dict | None) -> dict:
+    """この回の工程の成否 → mac_sync_status.json の中身（純関数）。成功した回だけ last_success_at を進める。"""
+    prev = prev or {}
+    ok = bool(steps) and all(steps.values())
+    stamp = now.strftime("%Y-%m-%d %H:%M:%S")
+    return {
+        "updated_at": stamp,
+        "last_ok": ok,
+        "last_success_at": stamp if ok else prev.get("last_success_at"),
+        "steps": dict(steps),
+        "weekly_loop": weekly_loop if weekly_loop is not None else prev.get("weekly_loop"),
+        "source": "obsidian_sync.py all（Mac launchd）",
+    }
+
+
+def should_push_status(prev: dict | None, new: dict, now: datetime, push_hours: float = STATUS_PUSH_HOURS) -> bool:
+    """成否・週次ループが変わったとき、または前回 push から push_hours 以上たったときだけ push する（純関数）。"""
+    if not prev:
+        return True
+    if prev.get("last_ok") != new.get("last_ok") or prev.get("weekly_loop") != new.get("weekly_loop"):
+        return True
+    try:
+        last = datetime.strptime(str(prev.get("updated_at"))[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return True
+    return (now - last).total_seconds() >= push_hours * 3600
+
+
+def cmd_status(steps: dict) -> bool:
+    """同期用 clone に mac_sync_status.json を書いて、その1ファイルだけ commit & push する。
+
+    Mac がスリープ・オフライン・電源オフだと承認の BQ 反映・部則のクラウド同期が止まるが、
+    Actions 側からは見えない。日次メール（ops_health）はこのファイルの last_success_at の古さで気づく。
+    週次ループ（weekly_feedback_runner）の結果も、作業コピーにしか残らないのでここに載せて送る。"""
+    if not (SYNC_CACHE / ".git").exists():
+        print("⏩ status: 同期用cloneが無い")
+        return False
+    target = SYNC_CACHE / STATUS_REL
+    prev = _load_json(target)
+    weekly = _load_json(REPO_ROOT / WEEKLY_LOOP_REL)
+    now = datetime.now()
+    new = build_mac_status(prev, steps, now, weekly)
+    if not should_push_status(prev, new, now):
+        print(f"⏩ status: 変化なし（前回 {str((prev or {}).get('updated_at'))[:16]}・{STATUS_PUSH_HOURS}時間ごとに送る）")
+        return True
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(new, ensure_ascii=False, indent=2), encoding="utf-8")
+    g = ["git", "-C", str(SYNC_CACHE)]
+    msg = f"auto: Mac同期の状況（{'成功' if new['last_ok'] else '一部失敗'}）"
+    for step in (g + ["add", str(STATUS_REL)], g + ["commit", "-q", "-m", msg]):
+        r = subprocess.run(step, capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            print(f"❌ status: {' '.join(step[3:5])} 失敗: {(r.stderr or r.stdout)[:200]}")
+            return False
+    for _ in range(2):
+        r = _git_with_retry(g + ["push", "-q", "origin", "HEAD:main"], 120)
+        if r.returncode == 0:
+            print(f"✅ status: push 完了 — {msg}")
+            return True
+        _git_with_retry(g + ["pull", "--rebase", "-q", "origin", "main"], 300)
+    print(f"⚠️ status: push 失敗（次回の pull で取り残しを送る）: {(r.stderr or '')[:200]}")
+    return False
 
 
 # ==============================================================
@@ -659,17 +737,17 @@ if __name__ == "__main__":
     ap.add_argument("--repo", default="", help="GitHub リポジトリURL")
     args = ap.parse_args()
     cfg = _load_config()
-    ok = True
+    steps: dict = {}
     if args.command in ("pull", "all"):
-        ok = (cmd_pull(cfg, args.repo) is not False) and ok
+        steps["pull"] = cmd_pull(cfg, args.repo) is not False
     if args.command in ("deliberations", "all"):
-        ok = cmd_deliberations(cfg) and ok
+        steps["deliberations"] = bool(cmd_deliberations(cfg))
     if args.command in ("mirror", "all"):
-        ok = cmd_mirror(cfg) and ok
+        steps["mirror"] = bool(cmd_mirror(cfg))
     if args.command in ("approvals", "all"):
-        ok = cmd_approvals(cfg) and ok
+        steps["approvals"] = bool(cmd_approvals(cfg))
     if args.command in ("holdings", "all"):
-        ok = cmd_holdings(cfg) and ok
+        steps["holdings"] = bool(cmd_holdings(cfg))
     if args.command in ("queue", "all"):
         cmd_queue(cfg)
     if args.command in ("journal", "all"):
@@ -677,6 +755,9 @@ if __name__ == "__main__":
     if args.command in ("feedback", "all"):
         cmd_feedback(cfg)
     if args.command in ("rules", "all"):
-        ok = cmd_rules() and ok
+        steps["rules"] = bool(cmd_rules())
+    ok = all(steps.values())
+    if args.command == "all":
+        cmd_status(steps)
     # pull / mirror の失敗は非0で返す（rc=0 だと run_apps.log 上は「成功」に見える）。
     sys.exit(0 if ok else 1)

@@ -15,7 +15,12 @@ setup_subtheme_bq.py
     BQ_PROJECT_ID='stock-analyzer-edinet' \
     python3 setup_subtheme_bq.py
 
-【冪等性】 CREATE TABLE IF NOT EXISTS + MERGE/streaming upsert のため再実行安全。
+【冪等性】 既定の実行（初回整備）は ticker_subtheme_mapping を streaming insert で足すため、
+         再実行すると同じ行が重なる（sub_theme_master は MERGE なので重ならない）。
+         定期の更新は --refresh を使う: 投入したい全行を重複なしで作り、
+         ticker_subtheme_mapping を load job（WRITE_TRUNCATE・無料）で丸ごと置き換える。
+         --if-changed を付けると、config の代表銘柄とサブテーマJSONが前回の置き換えから
+         変わっていない月は何もしない（monthly_runner の subtheme_refresh が月初に呼ぶ）。
 
 【投入内容】
   - sub_theme_master      : jp/us_sector_subtheme.json（subtheme_loader 同期）
@@ -25,9 +30,12 @@ setup_subtheme_bq.py
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
@@ -124,7 +132,119 @@ def _build_real_ticker_rows(cfg, market: str = "JP") -> list[dict]:
     return rows
 
 
+_MAP_KEY = ("ticker", "sector_code", "market", "subtheme")
+STATE_FILE = "subtheme_refresh_state.json"
+
+
+def build_placeholder_rows(sectors: dict, market: str) -> list[dict]:
+    """サブテーマJSONの業種×サブテーマ → 業種レベルの行（ticker='SECTOR_<業種>'）。
+    sync_subtheme_json_to_bq と同じ形。読み手は SECTOR_ を実銘柄から除いて使う。"""
+    rows = []
+    for code, info in (sectors or {}).items():
+        if not isinstance(info, dict):
+            continue
+        for st in info.get("subthemes", []) or []:
+            if st:
+                rows.append({"ticker": f"SECTOR_{code}", "sector_code": str(code), "market": market,
+                             "subtheme": str(st), "relevance": 1.0, "source": "json_sync"})
+    return rows
+
+
+def build_master_rows(sectors: dict, market: str, version: str) -> list[dict]:
+    """サブテーマJSON → sub_theme_master の行（upsert_sub_theme_master に渡す形）。"""
+    out = []
+    for code, info in (sectors or {}).items():
+        if not isinstance(info, dict):
+            continue
+        out.append({
+            "sector_code": str(code), "market": market,
+            "name_ja": str(info.get("name_ja") or info.get("name_en") or ""),
+            "supply_chain_position": str(info.get("supply_chain_position", "") or ""),
+            "business_cycle_sensitivity": str(info.get("business_cycle_sensitivity", "") or ""),
+            "export_dependency": str(info.get("export_dependency", "") or ""),
+            "digital_transformation_stage": str(info.get("digital_transformation_stage", "") or ""),
+            "esg_priority": str(info.get("esg_priority", "") or ""),
+            "bm_type": info.get("bm_type"),
+            "subthemes": list(info.get("subthemes", []) or []),
+            "version": version,
+        })
+    return out
+
+
+def dedupe_mapping(rows: list[dict]) -> list[dict]:
+    """(ticker, sector_code, market, subtheme) が同じ行は最初の1行だけ残す（純関数）。"""
+    seen, out = set(), []
+    for r in rows:
+        k = tuple(str(r.get(c, "")) for c in _MAP_KEY)
+        if not all(k) or k in seen:
+            continue
+        seen.add(k)
+        out.append(r)
+    return out
+
+
+def fingerprint(mapping_rows: list[dict], master_rows: list[dict]) -> str:
+    """投入内容の指紋（行の並びに依らない）。前回の置き換えと同じなら --if-changed で飛ばす。"""
+    norm = lambda rows: sorted(json.dumps(r, ensure_ascii=False, sort_keys=True, default=str) for r in rows)
+    payload = json.dumps([norm(mapping_rows), norm(master_rows)], ensure_ascii=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def refresh(if_changed: bool = False) -> int:
+    """sub_theme_master を MERGE し、ticker_subtheme_mapping を重複なしの全行で置き換える。"""
+    cfg = _load("config")
+    sl = _load("subtheme_loader")
+    mapping, master = list(_build_real_ticker_rows(cfg, market="JP")), []
+    for market in ("JP", "US"):
+        sectors = sl.load_all_subthemes(market=market, cfg=cfg) or {}
+        version = str((getattr(sl, "_cache", {}).get(market) or {}).get("version", "1.0"))
+        mapping += build_placeholder_rows(sectors, market)
+        master += build_master_rows(sectors, market, version)
+    mapping = dedupe_mapping(mapping)
+    fp = fingerprint(mapping, master)
+    state_path = Path(getattr(cfg, "DATA_DIR", REPO / "stock_data" / "data")) / STATE_FILE
+    try:
+        prev = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        prev = {}
+    if if_changed and prev.get("fingerprint") == fp:
+        print(f"⏩ subtheme refresh: 代表銘柄・サブテーマJSONとも前回（{prev.get('refreshed_at', '')[:10]}）から変化なし")
+        return 0
+    if not mapping:
+        print("❌ subtheme refresh: 投入する行が0件（config・JSON を読めていない）。表は置き換えない")
+        return 1
+
+    bqc = _load("edinet_bq_client")
+    bq = bqc.EDINETBQClient()
+    if not _create_tables(bq):
+        return 1
+    ok_master = bq.upsert_sub_theme_master(master) if master else True
+    from google.cloud import bigquery
+    table_ref = f"{bq.dataset}.ticker_subtheme_mapping"
+    now = datetime.now(timezone.utc).isoformat()
+    payload = [{**{c: r.get(c) for c in ("ticker", "sector_code", "market", "subtheme", "relevance", "source")},
+                "updated_at": now} for r in mapping]
+    job = bq.client.load_table_from_json(payload, table_ref, job_config=bigquery.LoadJobConfig(
+        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+        schema=bq.client.get_table(table_ref).schema))
+    job.result()
+    print(f"✅ ticker_subtheme_mapping 置き換え: {len(payload)}行"
+          f"（実銘柄 {sum(1 for r in payload if not r['ticker'].startswith('SECTOR_'))}・業種行 "
+          f"{sum(1 for r in payload if r['ticker'].startswith('SECTOR_'))}）／ sub_theme_master MERGE {len(master)}行"
+          f"{'' if ok_master else '（失敗あり）'}")
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps({"fingerprint": fp, "refreshed_at": now, "mapping_rows": len(payload),
+                                      "master_rows": len(master)}, ensure_ascii=False, indent=2), encoding="utf-8")
+    return 0 if ok_master else 1
+
+
 def main() -> int:
+    if "--refresh" in sys.argv:
+        if not os.environ.get("BQ_CREDENTIALS") and not os.environ.get("BQ_CREDENTIALS_PATH"):
+            # monthly_runner は Mac（司令塔シェル）からも起動される。BQ の鍵が無い側では飛ばし、Actions 側で更新する
+            print("⏩ subtheme refresh: BQ_CREDENTIALS が無いのでスキップ（Actions の月次で更新する）")
+            return 0
+        return refresh(if_changed="--if-changed" in sys.argv)
     if not os.environ.get("BQ_CREDENTIALS") and not os.environ.get("BQ_CREDENTIALS_PATH"):
         print("❌ BQ_CREDENTIALS（またはBQ_CREDENTIALS_PATH）が未設定です。")
         print("   サービスアカウントJSONを環境変数で渡してください。")

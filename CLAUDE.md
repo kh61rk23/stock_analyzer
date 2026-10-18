@@ -16,6 +16,8 @@
 - APIキー・トークンのコード内ハードコード（`os.getenv()` + GitHub Secrets 経由のみ）
 ※資料に記載は可とする。
 - 認証情報ファイル（`*_key.json`・`*pass.json`・`O-auth*`・`client_secret*`・`GITHUB_SECRETS_LEDGER.md`）を git 管理下（01_System 配下を含む）に置かない。置き場は `../02_Configuration_Management/09_認証情報_同期対象外/` に限る。同期は `tools/sync_config_docs.py` の除外リストを必ず通すこと
+- `git add -A`・`git commit -a` で commit しない（対象ファイルを明示して add する）。Mac の作業コピーの `stock_data/` は
+  obsidian_sync が同期用 clone から写したミラーで、Actions の最新より古いことがある。まとめて commit すると状態ファイルを巻き戻す
 - config.py のモジュールレベル重複定義（Pythonは後勝ち上書きで黙って壊れる。
   2026-06 に LEADING_INDICATOR_RULES 三重定義で先行指標7本が無効化されていた実害事例）
 
