@@ -3,13 +3,20 @@
 # 共通フィクスチャ — 外部API・ネットワーク接続ゼロで完結する
 # ==============================================================
 import importlib.util
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
 
 REPO = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO))
+
+# テストが作業コピーの stock_data（キャッシュ・台帳）へ書かないよう、config を読む前に一時フォルダへ向ける。
+# 明示的に STOCK_ANALYZER_BASE を渡した実行（CI の一部など）はそれを使う。
+if not os.environ.get("STOCK_ANALYZER_BASE"):
+    os.environ["STOCK_ANALYZER_BASE"] = tempfile.mkdtemp(prefix="stock_analyzer_test_base_")
 
 
 @pytest.fixture(autouse=True)

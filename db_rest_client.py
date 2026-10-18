@@ -8,6 +8,7 @@ API の呼出数はローカル台帳と、提供される場合は ``/usage`` �
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import date
 from pathlib import Path
@@ -26,6 +27,12 @@ _CFG_CONST_MAP = {
 }
 
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+def _default_data_dir() -> Path:
+    """cfg が無い時の data フォルダ。STOCK_ANALYZER_BASE（Actions・Mac・テスト）に従い、無ければ相対の stock_data/data。"""
+    base = os.environ.get("STOCK_ANALYZER_BASE", "").strip()
+    return (Path(base).expanduser() if base else Path("stock_data")) / "data"
 
 
 def budget_remaining(
@@ -47,7 +54,7 @@ class DBRestClient:
         self,
         base_url: str,
         api_key: str = "",
-        cache_dir: str | Path = "stock_data/data/db_rest_cache",
+        cache_dir: str | Path | None = None,
         daily_budget: int = 80,
         source_name: str = "database",
         *,
@@ -58,7 +65,7 @@ class DBRestClient:
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key.strip()
-        self.cache_dir = Path(cache_dir)
+        self.cache_dir = Path(cache_dir) if cache_dir is not None else _default_data_dir() / "db_rest_cache"
         self.daily_budget = max(0, int(daily_budget))
         self.source_name = source_name
         self.timeout = max(1, int(timeout))
@@ -79,7 +86,7 @@ class DBRestClient:
     @classmethod
     def edinetdb(cls, cfg):
         sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
-        data_dir = Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
+        data_dir = Path(getattr(cfg, "DATA_DIR", None) or _default_data_dir())
         return cls(
             getattr(cfg, "EDINETDB_BASE_URL", "https://edinetdb.jp/v1"),
             getattr(cfg, "EDINETDB_API_KEY", ""),
@@ -91,7 +98,7 @@ class DBRestClient:
 
     @classmethod
     def fudosandb(cls, cfg):
-        data_dir = Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
+        data_dir = Path(getattr(cfg, "DATA_DIR", None) or _default_data_dir())
         return cls(
             getattr(cfg, "FUDOSAN_BASE_URL", getattr(cfg, "FUDOSANDB_BASE_URL", "https://fudosandb.jp/v1")),
             getattr(cfg, "FUDOSAN_API_KEY", ""),

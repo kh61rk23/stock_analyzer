@@ -205,7 +205,9 @@ def fetch(today: date | None = None) -> dict:
 def get_rates(cfg=None, today: date | None = None) -> dict:
     """1日1回キャッシュして返す。"""
     today = today or date.today()
-    base = Path(getattr(cfg, "CACHE_DIR", "stock_data/cache")) if cfg else Path("stock_data/cache")
+    env = os.environ.get("STOCK_ANALYZER_BASE", "").strip()
+    fallback = (Path(env).expanduser() if env else Path("stock_data")) / "cache"
+    base = Path(getattr(cfg, "CACHE_DIR", None) or fallback) if cfg else fallback
     p = base / f"rates_{today.isoformat()}.json"
     try:
         cached = json.loads(p.read_text(encoding="utf-8"))
