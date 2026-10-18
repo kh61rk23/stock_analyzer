@@ -1,0 +1,430 @@
+{
+ "generated": "2026-10-18T12:49:37",
+ "assumptions": {
+  "funding_lag_days": 30,
+  "asof_step": 5,
+  "split_guard": [
+   0.2,
+   5.0
+  ],
+  "alert_ret_guard": [
+   0.5,
+   2.0
+  ],
+  "alert_horizon": 20
+ },
+ "bq_bytes_billed": 436207616,
+ "caveats": [
+  "価格表は2025-10以降の約1年分。評価期間が短く、1つの相場局面に偏る（頑健性は未検証）",
+  "判定は効果基準（IC>0 かつ t>=2）だけ。固有性（規模・業種の効果を除いても残るか）と頑健性は未確認",
+  "母集団 all の IC には「受給の有無」が効く。受給のある銘柄だけ（funded）の IC は0近辺なら、額の大小ではなく有無の効果",
+  "public_funding_rank は最新分しか無く使っていない。受給は event_date + 30日以降に知り得たと仮定",
+  "注意項目は日本株のみ。通知が最近の項目は20営業日先の株価がまだ無く対象外"
+ ],
+ "public_funding_ic": [
+  {
+   "feature": "cum_amount",
+   "universe": "all",
+   "horizon": 20,
+   "dates": 45,
+   "mean": 0.047330000000000004,
+   "t_nw": 4.328425711357864,
+   "pos_share": 0.7111111111111111,
+   "avg_n": 3770.0,
+   "judge": "採用候補"
+  },
+  {
+   "feature": "cum_amount",
+   "universe": "all",
+   "horizon": 60,
+   "dates": 37,
+   "mean": 0.07024675675675676,
+   "t_nw": 4.392243311343319,
+   "pos_share": 1.0,
+   "avg_n": 3770.0,
+   "judge": "採用候補"
+  },
+  {
+   "feature": "cum_amount",
+   "universe": "funded",
+   "horizon": 20,
+   "dates": 45,
+   "mean": 0.004117333333333333,
+   "t_nw": 0.31480284782082996,
+   "pos_share": 0.5555555555555556,
+   "avg_n": 1125.0,
+   "judge": "見送り"
+  },
+  {
+   "feature": "cum_amount",
+   "universe": "funded",
+   "horizon": 60,
+   "dates": 37,
+   "mean": -0.00045594594594594573,
+   "t_nw": -0.016922275624627416,
+   "pos_share": 0.4864864864864865,
+   "avg_n": 1125.0,
+   "judge": "見送り"
+  },
+  {
+   "feature": "econ_sec_flag",
+   "universe": "all",
+   "horizon": 20,
+   "dates": 45,
+   "mean": 0.020614444444444442,
+   "t_nw": 1.6298011436271667,
+   "pos_share": 0.6888888888888889,
+   "avg_n": 3770.0,
+   "judge": "見送り"
+  },
+  {
+   "feature": "econ_sec_flag",
+   "universe": "all",
+   "horizon": 60,
+   "dates": 37,
+   "mean": 0.03844,
+   "t_nw": 1.983080875278809,
+   "pos_share": 0.7567567567567568,
+   "avg_n": 3770.0,
+   "judge": "見送り"
+  },
+  {
+   "feature": "procurement_cum",
+   "universe": "all",
+   "horizon": 20,
+   "dates": 45,
+   "mean": 0.024432,
+   "t_nw": 2.5059978080844707,
+   "pos_share": 0.6888888888888889,
+   "avg_n": 3770.0,
+   "judge": "採用候補"
+  },
+  {
+   "feature": "procurement_cum",
+   "universe": "all",
+   "horizon": 60,
+   "dates": 37,
+   "mean": 0.03391027027027027,
+   "t_nw": 2.188463637093056,
+   "pos_share": 0.7837837837837838,
+   "avg_n": 3770.0,
+   "judge": "採用候補"
+  },
+  {
+   "feature": "procurement_cum",
+   "universe": "funded",
+   "horizon": 20,
+   "dates": 45,
+   "mean": 0.025756666666666664,
+   "t_nw": 1.8122271817049722,
+   "pos_share": 0.6444444444444445,
+   "avg_n": 810.0,
+   "judge": "見送り"
+  },
+  {
+   "feature": "procurement_cum",
+   "universe": "funded",
+   "horizon": 60,
+   "dates": 37,
+   "mean": 0.02947756756756757,
+   "t_nw": 1.2297327002202134,
+   "pos_share": 0.7297297297297297,
+   "avg_n": 810.0,
+   "judge": "見送り"
+  },
+  {
+   "feature": "recent_1y",
+   "universe": "all",
+   "horizon": 20,
+   "dates": 45,
+   "mean": 0.013096000000000002,
+   "t_nw": 1.9372981118083574,
+   "pos_share": 0.6666666666666666,
+   "avg_n": 3770.0,
+   "judge": "見送り"
+  },
+  {
+   "feature": "recent_1y",
+   "universe": "all",
+   "horizon": 60,
+   "dates": 37,
+   "mean": 0.012371891891891891,
+   "t_nw": 1.3531659932423443,
+   "pos_share": 0.5675675675675675,
+   "avg_n": 3770.0,
+   "judge": "見送り"
+  },
+  {
+   "feature": "recent_1y",
+   "universe": "funded",
+   "horizon": 20,
+   "dates": 45,
+   "mean": 0.014671555555555556,
+   "t_nw": 1.1120208018605644,
+   "pos_share": 0.6,
+   "avg_n": 350.0,
+   "judge": "見送り"
+  },
+  {
+   "feature": "recent_1y",
+   "universe": "funded",
+   "horizon": 60,
+   "dates": 37,
+   "mean": 0.017110540540540543,
+   "t_nw": 1.006838116330427,
+   "pos_share": 0.5945945945945946,
+   "avg_n": 350.0,
+   "judge": "見送り"
+  },
+  {
+   "feature": "subsidy_cum",
+   "universe": "all",
+   "horizon": 20,
+   "dates": 45,
+   "mean": 0.04522266666666666,
+   "t_nw": 4.068859440329582,
+   "pos_share": 0.7555555555555555,
+   "avg_n": 3770.0,
+   "judge": "採用候補"
+  },
+  {
+   "feature": "subsidy_cum",
+   "universe": "all",
+   "horizon": 60,
+   "dates": 37,
+   "mean": 0.06924324324324324,
+   "t_nw": 6.374266417403515,
+   "pos_share": 1.0,
+   "avg_n": 3770.0,
+   "judge": "採用候補"
+  },
+  {
+   "feature": "subsidy_cum",
+   "universe": "funded",
+   "horizon": 20,
+   "dates": 45,
+   "mean": -0.0010366666666666662,
+   "t_nw": -0.07652398707693764,
+   "pos_share": 0.5111111111111111,
+   "avg_n": 503.0,
+   "judge": "見送り"
+  },
+  {
+   "feature": "subsidy_cum",
+   "universe": "funded",
+   "horizon": 60,
+   "dates": 37,
+   "mean": 0.005890270270270271,
+   "t_nw": 0.2279722590180506,
+   "pos_share": 0.5945945945945946,
+   "avg_n": 503.0,
+   "judge": "見送り"
+  }
+ ],
+ "alerts": {
+  "section_severity": {
+   "anomaly|high": {
+    "mkt": {
+     "events": 4,
+     "days": 1,
+     "mean_excess": -0.07035901085512247,
+     "median_excess": -0.07984494828534805,
+     "hit_rate": 0.25,
+     "t_day": null,
+     "judge": "判定不能（事象数不足）"
+    },
+    "sec": {
+     "events": 4,
+     "days": 1,
+     "mean_excess": -0.018319004408340722,
+     "median_excess": -0.026735843792627507,
+     "hit_rate": 0.5,
+     "t_day": null,
+     "judge": "判定不能（事象数不足）"
+    }
+   },
+   "anomaly|medium": {
+    "mkt": {
+     "events": 11,
+     "days": 3,
+     "mean_excess": -0.013674845201337814,
+     "median_excess": -0.020110858384209222,
+     "hit_rate": 0.36363636363636365,
+     "t_day": -1.2084214367202684,
+     "judge": "判定不能（事象数不足）"
+    },
+    "sec": {
+     "events": 11,
+     "days": 3,
+     "mean_excess": 0.0005283023240369444,
+     "median_excess": -0.026735843792627507,
+     "hit_rate": 0.36363636363636365,
+     "t_day": -0.5921876881780138,
+     "judge": "判定不能（事象数不足）"
+    }
+   },
+   "breakout|medium": {
+    "mkt": {
+     "events": 10,
+     "days": 10,
+     "mean_excess": -0.0013882947729390597,
+     "median_excess": -0.003461333045498925,
+     "hit_rate": 0.5,
+     "t_day": -0.3890427581638641,
+     "judge": "判定不能（事象数不足）"
+    },
+    "sec": {
+     "events": 10,
+     "days": 10,
+     "mean_excess": -0.009041089621411067,
+     "median_excess": -0.012439914508113702,
+     "hit_rate": 0.4,
+     "t_day": -1.8191793554321296,
+     "judge": "判定不能（事象数不足）"
+    }
+   },
+   "deliberation_queue|info": {
+    "mkt": {
+     "events": 134,
+     "days": 35,
+     "mean_excess": -0.020047107454393656,
+     "median_excess": -0.02473321813800247,
+     "hit_rate": 0.31343283582089554,
+     "t_day": -2.404580558029673,
+     "judge": "逆向き（見送り）"
+    },
+    "sec": {
+     "events": 134,
+     "days": 35,
+     "mean_excess": -0.022889098759210882,
+     "median_excess": -0.03734263397618609,
+     "hit_rate": 0.27611940298507465,
+     "t_day": -3.5927249355703728,
+     "judge": "逆向き（見送り）"
+    }
+   },
+   "earnings_surprise_down|medium": {
+    "mkt": {
+     "events": 19,
+     "days": 15,
+     "mean_excess": 0.009246598638434064,
+     "median_excess": 0.008632198613500744,
+     "hit_rate": 0.631578947368421,
+     "t_day": 0.6927711036991945,
+     "judge": "判定不能（事象数不足）"
+    },
+    "sec": {
+     "events": 19,
+     "days": 15,
+     "mean_excess": 0.016742281710210555,
+     "median_excess": 0.023062046779317634,
+     "hit_rate": 0.6842105263157895,
+     "t_day": 1.4954613369005925,
+     "judge": "判定不能（事象数不足）"
+    }
+   },
+   "earnings_surprise_up|high": {
+    "mkt": {
+     "events": 73,
+     "days": 23,
+     "mean_excess": 0.012084492544470396,
+     "median_excess": 0.014400451485699097,
+     "hit_rate": 0.5753424657534246,
+     "t_day": 0.6557166547743072,
+     "judge": "見送り"
+    },
+    "sec": {
+     "events": 73,
+     "days": 23,
+     "mean_excess": 0.017109977079415493,
+     "median_excess": 0.014698539975347574,
+     "hit_rate": 0.5616438356164384,
+     "t_day": 1.2729420979907493,
+     "judge": "見送り"
+    }
+   },
+   "exit_strategy|high": {
+    "mkt": {
+     "events": 116,
+     "days": 51,
+     "mean_excess": -0.013397318038360835,
+     "median_excess": -0.012898794504295189,
+     "hit_rate": 0.4396551724137931,
+     "t_day": -2.4942224451189685,
+     "judge": "逆向き（見送り）"
+    },
+    "sec": {
+     "events": 116,
+     "days": 51,
+     "mean_excess": -0.03324690173245568,
+     "median_excess": -0.03996053029445169,
+     "hit_rate": 0.1810344827586207,
+     "t_day": -7.975921126970514,
+     "judge": "逆向き（見送り）"
+    }
+   }
+  },
+  "source_severity": {
+   "mail_backfill|high": {
+    "mkt": {
+     "events": 193,
+     "days": 56,
+     "mean_excess": -0.004939673472145123,
+     "median_excess": -0.004826683930002962,
+     "hit_rate": 0.48704663212435234,
+     "t_day": -0.867333477584813,
+     "judge": "見送り"
+    },
+    "sec": {
+     "events": 193,
+     "days": 56,
+     "mean_excess": -0.013890612910885447,
+     "median_excess": -0.022977681768456024,
+     "hit_rate": 0.3316062176165803,
+     "t_day": -2.6003037580631227,
+     "judge": "逆向き（見送り）"
+    }
+   },
+   "mail_backfill|info": {
+    "mkt": {
+     "events": 134,
+     "days": 35,
+     "mean_excess": -0.020047107454393656,
+     "median_excess": -0.02456413365969027,
+     "hit_rate": 0.31343283582089554,
+     "t_day": -2.404580558029673,
+     "judge": "逆向き（見送り）"
+    },
+    "sec": {
+     "events": 134,
+     "days": 35,
+     "mean_excess": -0.022889098759210882,
+     "median_excess": -0.03675600459587486,
+     "hit_rate": 0.27611940298507465,
+     "t_day": -3.592724935570374,
+     "judge": "逆向き（見送り）"
+    }
+   },
+   "mail_backfill|medium": {
+    "mkt": {
+     "events": 40,
+     "days": 22,
+     "mean_excess": 0.0002844782296535181,
+     "median_excess": 0.0006740872496675612,
+     "hit_rate": 0.525,
+     "t_day": 0.8184838889576558,
+     "judge": "見送り"
+    },
+    "sec": {
+     "events": 40,
+     "days": 22,
+     "mean_excess": 0.005837594546107405,
+     "median_excess": 0.0022746811485154315,
+     "hit_rate": 0.525,
+     "t_day": 1.5820175165554369,
+     "judge": "見送り"
+    }
+   }
+  }
+ }
+}
