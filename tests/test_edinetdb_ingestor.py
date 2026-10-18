@@ -451,3 +451,57 @@ class TestMissingIsNotAFailure:
         status = ("skipped" if r.get("skipped")
                   else ("success" if not r.get("failure") else "alert"))
         assert status == "success"
+
+
+def test_text_block_rows_omit_analysis_columns():
+    rows = module.map_edinetdb_text_blocks(
+        "E02144", [{"section": "事業等のリスク", "text": "本文"}], 2025,
+        company_code="7203", now="2026-07-21T00:00:00+00:00",
+    )
+    for column in ("finbert_positive", "finbert_negative", "finbert_neutral",
+                   "yoy_delta", "risk_deterioration_flag", "risk_category_scores"):
+        assert column not in rows[0]
+
+
+def test_text_analysis_merge_leaves_omitted_columns_untouched():
+    import edinet_bq_client as bqmod
+
+    class _F:
+        def __init__(self, name, field_type):
+            self.name, self.field_type = name, field_type
+
+    class _Fake:
+        sqls = []
+
+        def get_table(self, _ref):
+            class _T:
+                schema = [_F("text_id", "STRING"), _F("doc_id", "STRING"),
+                          _F("section_type", "STRING"), _F("raw_text", "STRING"),
+                          _F("finbert_positive", "FLOAT"),
+                          _F("yoy_delta", "FLOAT"),
+                          _F("risk_deterioration_flag", "BOOLEAN"),
+                          _F("risk_category_scores", "JSON")]
+            return _T()
+
+        def query(self, sql, job_config=None):
+            self.sqls.append(sql)
+
+            class _J:
+                def result(self_inner):
+                    return []
+            return _J()
+
+    rows = module.map_edinetdb_text_blocks(
+        "E02144", [{"section": "事業等のリスク", "text": "本文"}], 2025,
+        company_code="7203", now="2026-07-21T00:00:00+00:00",
+    )
+    fake = _Fake()
+    client = object.__new__(bqmod.EDINETBQClient)
+    client.project, client.dataset, client.client = "p", "p.edinet", fake
+    assert client.merge_rows("text_analysis", rows, ["text_id"]) is True
+    sql = fake.sqls[0]
+    for column in ("finbert_positive", "yoy_delta",
+                   "risk_deterioration_flag", "risk_category_scores"):
+        assert column not in sql
+    assert "T.`raw_text` = S.`raw_text`" in sql
+    assert "INSERT (`text_id`" in sql

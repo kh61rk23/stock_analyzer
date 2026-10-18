@@ -326,6 +326,8 @@ def map_edinetdb_text_blocks(
     now = now or datetime.now(timezone.utc).isoformat()
     rows = []
     doc_id = f"edinetdb_{code}_{fiscal_year or 'latest'}"
+    # finbert_* / yoy_delta / risk_* は行に含めない。merge_rows は行にある列だけを
+    # UPDATE するため、None で入れると再取込のたびに別経路が書いた値を NULL で潰す。
     for block in blocks or []:
         section = str(block.get("section") or "").strip()
         raw_text = str(block.get("text") or "").strip()
@@ -338,12 +340,6 @@ def map_edinetdb_text_blocks(
             "company_code": company_code or None,
             "fiscal_year_end": fiscal_year_end,
             "section_type": section,
-            "finbert_positive": None,
-            "finbert_negative": None,
-            "finbert_neutral": None,
-            "yoy_delta": None,
-            "risk_deterioration_flag": None,
-            "risk_category_scores": None,
             "raw_text": raw_text,
             "source": "edinetdb",
             "updated_at": now,
