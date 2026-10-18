@@ -62,6 +62,27 @@ def _reset_process_caches():
     _clear()
 
 
+@pytest.fixture(autouse=True)
+def _no_live_rates(request, monkeypatch):
+    """メール組み立てのテストが国債利回りを実際に取りに行かないようにする。
+
+    alert_notifier のメール組み立ては rates_monitor.get_rates を呼び、キャッシュが無いと
+    財務省・FRED へ HTTP で取りに行く（テストが外部に出て、結果も日によって変わる）。
+    rates_monitor 自体のテストは差し替えない。
+    """
+    if request.module.__name__.endswith("test_rates_monitor"):
+        yield
+        return
+    try:
+        import rates_monitor
+        monkeypatch.setattr(rates_monitor, "get_rates",
+                            lambda cfg=None, today=None: {"jp": {}, "us": {}, "policy": {},
+                                                          "errors": []})
+    except Exception:
+        pass
+    yield
+
+
 def load_module(name: str):
     """リポジトリ直下のモジュールを importlib でロードする。"""
     spec = importlib.util.spec_from_file_location(name, str(REPO / f"{name}.py"))
