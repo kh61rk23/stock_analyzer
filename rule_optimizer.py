@@ -492,6 +492,28 @@ def update_signal_weights(cfg, factor_correlations: dict) -> dict:
 # BLOCK 5: weights.json 保存・読み込み
 # ==============================================================
 
+def in_month_end_window(today: date, window_days: int = 7) -> bool:
+    """月の最後の window_days 日に入っているか（純関数）。
+
+    この処理は週次（月曜）の回でしか呼ばれない。「月末日ちょうど」を条件にすると、月末が月曜の月
+    （年に2〜3回）しか動かず、日曜は実行自体が無いので月末が日曜の月は必ず抜ける。
+    最後の7日間には月曜がちょうど1回あるので、毎月1回だけ動く。"""
+    return (today + timedelta(days=window_days)).month != today.month
+
+
+def _meta_path(cfg) -> Path:
+    return Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / "rule_optimizer_meta.json"
+
+
+def updated_this_month(cfg, today: date) -> bool:
+    """今月すでに重みを更新したか（手動の weekly 実行や追いつきで同じ月に2回学習しないため）。"""
+    try:
+        meta = json.loads(_meta_path(cfg).read_text(encoding="utf-8"))
+        return meta.get("last_update_month") == today.strftime("%Y-%m")
+    except (OSError, ValueError):
+        return False
+
+
 def _weights_path(cfg) -> Path:
     return Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / WEIGHT_FILE
 
@@ -1506,12 +1528,12 @@ def run_rule_optimizer(cfg, force: bool = False) -> dict:
     """
     sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     today = date.today()
-    is_month_end = (today == (today.replace(day=1) + timedelta(days=32)).replace(day=1)
-                    - timedelta(days=1))
+    is_month_end = in_month_end_window(today, int(getattr(cfg, "RULE_OPTIMIZER_MONTH_END_WINDOW_DAYS", 7)))
+    already = is_month_end and updated_this_month(cfg, today)
 
-    if not force and not is_month_end:
+    if not force and (not is_month_end or already):
         old_weights = load_weights(cfg)
-        print("  ⏩ ルールオプティマイザー: 月末以外はスキップ")
+        print("  ⏩ ルールオプティマイザー: " + ("今月は更新済みのためスキップ" if already else "月末の週以外はスキップ"))
         return {
             "updated":          False,
             "weights":          old_weights,
@@ -1595,6 +1617,12 @@ def run_rule_optimizer(cfg, force: bool = False) -> dict:
         print("    重み更新: 有意な変化なし（安定稼働中）")
 
     save_weights(cfg, new_weights)
+    try:
+        _meta_path(cfg).write_text(json.dumps({"last_update_month": today.strftime("%Y-%m"),
+                                               "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
+                                              ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as e:
+        print(f"    ⚠️  rule_optimizer_meta.json 保存失敗: {e}")
 
     # ── [RESEARCH-2] クラウディングスコアによる自動重み削減 ──────────
     try:

@@ -4645,27 +4645,24 @@ def run_all_tasks(mode: str = "all") -> dict:
             except Exception as e:
                 logger.add("rule_optimizer", "error", str(e)[:100])
                 print(f"  ⚠️  ルールオプティマイザーエラー: {str(e)[:80]}")
-                # ── [⑤] 月末のみ: 監査ログ生成 ─────────────────────
-                from datetime import date as _date
-                _is_month_end = (_date.today() == (
-                    _date.today().replace(day=1)
-                    + __import__("datetime").timedelta(days=32)
-                ).replace(day=1) - __import__("datetime").timedelta(days=1))
-                if _is_month_end:
-                    try:
-                        _al = _load_local_module(
-                            "learning_audit_log",
-                            "/content/learning_audit_log.py",
-                            cfg.DRIVE_BASE / "learning_audit_log.py",
-                        )
-                        if _al:
-                            audit = _al.generate_audit_log(cfg, ro_result, results)
-                            results["learning_audit"] = audit
-                            if audit.get("manual_review_needed"):
-                                logger.add("learning_audit", "alert",
-                                            audit.get("review_reason", "")[:80])
-                    except Exception as _ae:
-                        print(f"  ⚠️  監査ログ生成エラー: {_ae}")
+            # ── [⑤] 重みを更新した回（月末の週）だけ: 監査ログ生成 ─────────────
+            # 月次戦略レビューの④がこのファイル（learning_audit_YYYY-MM.json）を読む。
+            _ro_res = results.get("rule_optimizer") or {}
+            if _ro_res.get("updated"):
+                try:
+                    _al = _load_local_module(
+                        "learning_audit_log",
+                        "/content/learning_audit_log.py",
+                        cfg.DRIVE_BASE / "learning_audit_log.py",
+                    )
+                    if _al:
+                        audit = _al.generate_audit_log(cfg, _ro_res, results)
+                        results["learning_audit"] = audit
+                        logger.add("learning_audit", "alert" if audit.get("manual_review_needed") else "success",
+                                   (audit.get("review_reason", "") or "監査ログ生成")[:80])
+                except Exception as _ae:
+                    logger.add("learning_audit", "error", str(_ae)[:100])
+                    print(f"  ⚠️  監査ログ生成エラー: {_ae}")
 
         # 2. [GAP-8] 月末に IC 計算を実行 (最適化の成否に関わらず試行)
         try:
@@ -5276,6 +5273,21 @@ def run_all_tasks(mode: str = "all") -> dict:
                     logger.add("signal_aggregator", "success",
                                f"レジーム:{regime} / 買い推奨:{len(top)}業種 "
                                f"/ 縮退:{_contraction_mode} / 防御:{_def_count}業種")
+                    # カテゴリ別スコアのパネル（月次のシグナル淘汰が20日先リターンと突き合わせる入力）。
+                    # sector_signals はこのステージで初めてできるため、ここで毎日書く。
+                    # alpha_attributer の呼び出し位置（週次の rule_optimizer・このステージより前）では書けない。
+                    try:
+                        _aa_panel = _load_local_module(
+                            "alpha_attributer",
+                            "/content/alpha_attributer.py",
+                            cfg.DRIVE_BASE / "alpha_attributer.py",
+                        )
+                        if _aa_panel and getattr(cfg, "ENABLE_ALPHA_ATTRIBUTION", True):
+                            _n_panel = _aa_panel.record_category_panel(cfg, results)
+                            logger.add("category_panel", "success" if _n_panel else "skipped",
+                                       f"カテゴリパネル: {_n_panel}業種" if _n_panel else "同日記録済み・内訳なし")
+                    except Exception as _cpe:
+                        logger.add("category_panel", "error", str(_cpe)[:100])
             else:
                 print("  ⚠️  signal_aggregator.py が見つかりません")
         except Exception as e:

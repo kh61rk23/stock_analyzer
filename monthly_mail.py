@@ -6,7 +6,9 @@
 #   月次戦略レビュー（E12）/ シグナル淘汰（E4）/ ペーパー取引の月次成績（S2）/
 #   資産配分の提案（S11）/ コモディティ配分（S6・当月分）/ 税・NISA（S10・実施月のみ）
 # 送信先・認証は日次メールと同じ（ALERT_GMAIL_FROM / ALERT_GMAIL_PASSWORD / ALERT_GMAIL_TO）。
-# 実行: python3 monthly_mail.py <YYYYMM> [--dry-run]
+# 送るのは GitHub Actions だけ。monthly_runner は Mac（司令塔シェル invest-monthly）からも起動されるが、
+# Mac の月次の状態ファイルは Actions とは別なので、Mac でも送ると同じ月の月次メールが2通になる。
+# 実行: python3 monthly_mail.py <YYYYMM> [--dry-run] [--send-anyway]
 # ==============================================================
 from __future__ import annotations
 
@@ -26,8 +28,12 @@ def _next_month(ym: str) -> str:
     return f"{y + (m == 12)}{(m % 12) + 1:02d}"
 
 
-def report_files(insights: Path, ym: str) -> list[tuple[str, Path]]:
-    """対象月のレポート（題名, パス）。存在するものだけ。"""
+def report_files(insights: Path, ym: str, tax_months: tuple = (1, 4, 7, 10, 11)) -> list[tuple[str, Path]]:
+    """対象月のレポート（題名, パス）。存在するものだけ。
+
+    税・NISA（tax_report_<年>.md）は年に1本を上書きするファイルで、tax_optimizer が動くのは
+    TAX_OPTIMIZER_MONTHS の月だけ。それ以外の月に同封すると前回の古い版を新しいレポートとして送るので、
+    送る月（対象月の翌月）が実施月のときだけ入れる。"""
     nm = _next_month(ym)
     cands = [
         ("📋 月次戦略レビュー（E12）", insights / f"strategy_review_{ym}.md"),
@@ -35,8 +41,9 @@ def report_files(insights: Path, ym: str) -> list[tuple[str, Path]]:
         ("📒 ペーパー取引の月次成績（S2）", insights / f"paper_{ym}.md"),
         ("⚖️ 資産配分の提案（S11）", insights / f"allocation_proposal_{ym}.md"),
         ("🛢️ コモディティ配分（S6・当月）", insights / f"commodity_alloc_{nm}.md"),
-        ("🧾 税・NISA（S10）", insights / f"tax_report_{ym[:4]}.md"),
     ]
+    if int(nm[4:]) in tuple(tax_months):
+        cands.append(("🧾 税・NISA（S10）", insights / f"tax_report_{nm[:4]}.md"))
     return [(t, p) for t, p in cands if p.exists()]
 
 
@@ -76,14 +83,20 @@ def md_to_html(md: str) -> str:
 
 def _inline(s: str) -> str:
     s = html.escape(s)
-    return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s)
+    s = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s)
+    # レポートは強調に *…* も使う（signal_culling・tax 等）。** を先に処理してから単独の * を斜体に
+    return re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"<i>\1</i>", s)
 
 
-def build(ym: str, insights: Path) -> tuple[str, str, int]:
-    files = report_files(insights, ym)
-    subject = f"📅 月次レポート {ym[:4]}-{ym[4:]}（{len(files)}本）"
+def build(ym: str, insights: Path, tax_months: tuple = (1, 4, 7, 10, 11), late_note: str = "",
+          gave_up: list | None = None) -> tuple[str, str, int]:
+    files = report_files(insights, ym, tax_months)
+    subject = f"📅 月次レポート {ym[:4]}-{ym[4:]}（{len(files)}本）" + ("（遅れて送信）" if late_note else "")
     parts = [f"<h2>📅 月次レポート {ym[:4]}年{int(ym[4:])}月</h2>",
              "<div>月次処理（monthly_runner）が作成した各レポートです。数値の一次情報は各元ファイルを正本とします。</div>",
+             *([f'<div style="color:#b45309">⚠️ {html.escape(late_note)}</div>'] if late_note else []),
+             *([f'<div style="color:#b91c1c">❌ 次のステップは失敗が続いたため今月は作れていません（レポートに含まれない）: '
+                f'{html.escape(", ".join(gave_up))}</div>'] if gave_up else []),
              "<ul>" + "".join(f"<li>{html.escape(t)}</li>" for t, _ in files) + "</ul>"]
     for title, p in files:
         try:
@@ -108,16 +121,31 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("month", help="対象月 YYYYMM")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--send-anyway", action="store_true", help="GitHub Actions の外でも送る（手元での試し送信用）")
+    ap.add_argument("--gave-up", default="", help="monthly_runner が諦めたステップ（カンマ区切り）。本文の冒頭に出す")
     a = ap.parse_args(argv)
     try:
         sys.path.insert(0, str(REPO))
         import config as cfg
-        insights = Path(getattr(cfg, "INSIGHTS_DIR", REPO / "stock_data" / "insights"))
+        insights = Path(getattr(cfg, "INSIGHT_DIR", REPO / "stock_data" / "insights"))
     except Exception:
         cfg, insights = None, REPO / "stock_data" / "insights"
-    subject, body, n = build(a.month, insights)
+    tax_months = tuple(getattr(cfg, "TAX_OPTIMIZER_MONTHS", (1, 4, 7, 10, 11)))
+    today = date.today()
+    max_day = int(getattr(cfg, "MONTHLY_RUN_MAX_DAY", 3))
+    late = (f"月初{max_day}日までに送れず、{today.month}月{today.day}日に追いつきで送っています"
+            if today.strftime("%Y%m") == _next_month(a.month) and today.day > max_day else "")
+    subject, body, n = build(a.month, insights, tax_months, late,
+                             [x for x in a.gave_up.split(",") if x.strip()])
     print(f"📅 月次メール: {subject}")
     if a.dry_run:
+        return 0
+    if n == 0:
+        # 空のメールを送って「成功」にすると、月次が全部失敗した月に気づけない
+        print("  ❌ 対象月のレポートが1本も無いので送らない（月次の各ステップを確認）")
+        return 1
+    if os.environ.get("GITHUB_ACTIONS") != "true" and not a.send_anyway:
+        print("  ⏩ GitHub Actions の外なので送らない（月次メールは Actions が送る・試すときは --send-anyway）")
         return 0
     from alert_notifier import send_gmail
     frm = os.environ.get("ALERT_GMAIL_FROM") or getattr(cfg, "ALERT_GMAIL_FROM", "")

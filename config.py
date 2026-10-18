@@ -1471,6 +1471,8 @@ EVAL_FORCE_WEEKLY: bool = False
 
 ENABLE_SCREENER: bool = True         # スクリーニング有効化フラグ
 ENABLE_RULE_OPTIMIZER:      bool = True   # ルール重み最適化 [4-8]
+# ルール重み・IC・学習監査ログの月次判定。週次（月曜）の回が「月の最後の N 日」に入ったら月1回動く
+RULE_OPTIMIZER_MONTH_END_WINDOW_DAYS: int = 7
 ENABLE_JP_US_BRIDGE:        bool = True   # JP×US横断分析
 ENABLE_SCREENER_FEEDBACK:   bool = True   # screenerフィードバックループ
 ENABLE_ANOMALY_SEASON:  bool = True   # 季節アノマリー [4-4]
@@ -4567,6 +4569,8 @@ ENABLE_MONTHLY_STRATEGY_REVIEW: bool = True  # E12 月次戦略レビュー（�
 TAX_OPTIMIZER_MONTHS: tuple = (1, 4, 7, 10, 11)
 # 月初判定の許容日（1〜この日までを「月初」とみなす。Actions障害の翌日復旧を許容）
 MONTHLY_RUN_MAX_DAY: int = 3
+# 月次の各ステップを同じ対象月で試す上限回数（直らない失敗を月末まで毎日やり直して Actions の枠を使わないため）
+MONTHLY_STEP_MAX_ATTEMPTS: int = 3
 
 # ==============================================================
 # BLOCK 59: 実装モジュール定数の集約
