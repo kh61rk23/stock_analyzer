@@ -37,6 +37,53 @@ except ImportError:
 
 
 # ============================================================
+# load job による追記（無料・再実行で重複しない）
+# ============================================================
+
+# 実行のたびに値が変わる列。job_id の材料から外して、同じ内容の再実行を同じ job_id にする。
+_VOLATILE_COLS = frozenset({"ingested_at", "updated_at", "detected_at", "scraped_at", "fetched_at"})
+
+
+def load_job_id(table_ref: str, rows: list, ignore_keys=_VOLATILE_COLS) -> str:
+    """表と内容から job_id を決める。行の並びや実行時刻の列が違っても、同じ内容なら同じ ID になる。"""
+    import hashlib
+    body = json.dumps(
+        sorted(json.dumps({k: v for k, v in r.items() if k not in ignore_keys},
+                          ensure_ascii=False, sort_keys=True, default=str) for r in rows),
+        ensure_ascii=False)
+    key = hashlib.sha1(f"{table_ref}\n{body}".encode()).hexdigest()[:24]
+    return "ld_" + re.sub(r"[^A-Za-z0-9_]", "_", table_ref.split(".")[-1])[:60] + "_" + key
+
+
+def load_rows(client, table_ref: str, rows: list, ignore_keys=_VOLATILE_COLS) -> bool:
+    """行を WRITE_APPEND の load job（無料。ストリーミング挿入は使わない）で追記する。
+    表のスキーマ・パーティションは既存の表のものをそのまま使う。
+    同じ job_id が成功済みなら何も書かず True を返す（再実行で二重に入らない）。
+    """
+    from google.api_core.exceptions import Conflict
+    if not rows:
+        return True
+    jid = load_job_id(table_ref, rows, ignore_keys)
+    cfg = bigquery.LoadJobConfig(
+        source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
+        write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+    )
+    try:
+        client.load_table_from_json(rows, table_ref, job_id=jid, job_config=cfg, location="US").result()
+        return True
+    except Conflict:
+        old = client.get_job(jid, location="US")
+        if old.state == "DONE" and not old.error_result:
+            print(f"[BQClient] load {jid} は成功済み（再実行のため書込なし）")
+            return True
+        print(f"[BQClient] load {jid} は既にあるが失敗している: {old.error_result}")
+        return False
+    except Exception as e:
+        print(f"[BQClient] load 失敗 ({table_ref}): {str(e)[:120]}")
+        return False
+
+
+# ============================================================
 # クライアント本体
 # ============================================================
 
@@ -222,16 +269,12 @@ class EDINETBQClient:
         """
         行を挿入する。
         BigQuery はネイティブ upsert 非対応のため追記式。
-        重複排除はクエリ側で ROW_NUMBER() / QUALIFY を使う。
+        書込みは load job（無料）。job_id を内容から決めるので、同じ内容の再実行は二重に入らない。
         """
         if not rows:
             return True
         table_ref = f"{self.project}.{dataset or BQ_DATASET}.{table_name}"
-        errors = self.client.insert_rows_json(table_ref, rows)
-        if errors:
-            print(f"[BQClient] insert_rows error ({table_name}): {errors}")
-            return False
-        return True
+        return load_rows(self.client, table_ref, rows)
 
     def run_dml(self, sql: str) -> int:
         """
@@ -1905,7 +1948,7 @@ class EDINETBQClient:
 
         try:
             now_ts = self.now_iso()
-            # streaming insert（insert_rows_json）でバルク書込
+            # load job でバルク書込
             # self.dataset は既に "project.dataset" 形式なので、さらに
             #   self.project を前置すると "proj.proj.dataset.table" の4階層になり
             #   404（テーブル不在）になる。dataset.table の3階層にする。
@@ -1932,22 +1975,11 @@ class EDINETBQClient:
                 print("  [BQClient] upsert_ticker_subtheme_mapping: 有効行なし")
                 return True
 
-            # バッチサイズ 500 件に分割して書込（BQ streaming 制限対策）
-            batch_size = 500
-            total_errors = 0
-            for i in range(0, len(enriched), batch_size):
-                batch  = enriched[i: i + batch_size]
-                errors = self.client.insert_rows_json(table_ref, batch)
-                if errors:
-                    total_errors += len(errors)
-                    print(
-                        f"  [BQClient] ticker_subtheme_mapping insert エラー "
-                        f"({len(errors)}件): {str(errors[0])[:80]}"
-                    )
-
-            written = len(enriched) - total_errors
+            # load job は件数制限がないので分割せず1回で書く
+            ok = load_rows(self.client, table_ref, enriched)
+            written = len(enriched) if ok else 0
             print(
-                f"  [BQClient] ✅ upsert_ticker_subtheme_mapping: "
+                f"  [BQClient] {'✅' if ok else '⚠️'} upsert_ticker_subtheme_mapping: "
                 f"{written}/{len(enriched)}行 書込完了"
             )
             return written > 0
@@ -2067,7 +2099,7 @@ class EDINETBQClient:
 def insert_rows(rows: list = None, table_ref: str = "",
                 project_id: str = "", table_name: str = "", **_ignored) -> bool:
     """
-    BQ INSERT のモジュールレベルAPI（dataset 横断対応）。
+    BQ 追記（load job）のモジュールレベルAPI（dataset 横断対応）。
 
     institutional_13f_monitor.py が insert_rows(project_id=..., table_ref=
       "us.institutional_positions", rows=...) とモジュール関数として呼ぶ。
@@ -2082,11 +2114,7 @@ def insert_rows(rows: list = None, table_ref: str = "",
         # "dataset.table" 形式なら project を前置（cli.dataset は project 込み）
         if ref.count(".") == 1:
             ref = f"{project_id or cli.project}.{ref}"
-        errors = cli.client.insert_rows_json(ref, rows)
-        if errors:
-            print(f"[BQClient] insert_rows error ({ref}): {errors}")
-            return False
-        return True
+        return load_rows(cli.client, ref, rows)
     except Exception as e:
         print(f"[BQClient] insert_rows 失敗: {str(e)[:80]}")
         return False

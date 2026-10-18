@@ -57,7 +57,7 @@ def _build_taxonomy_rows(
     実スキーマ（ground truth: bq_all_schemas_20260704.json）の列:
       map_id/company_id/node_id/relevance_score/confidence/revenue_share_est/
       confidence_type/evidence_source/rationale/valid_from/auto_derived/verified_flag/updated_at。
-      列名が1つでも違うと insert_rows_json が常に失敗し、テーブルが空のままになる。
+      列名が1つでも違うと load job が常に失敗し、テーブルが空のままになる。
 
     行の規約（叩き台=draft層）:
       company_id      "sector:{market}:{sector_code}"（業種レベルの擬似企業ID。
@@ -256,13 +256,10 @@ def _write_to_bq(rows: list[dict], cfg) -> tuple[bool, int]:
         # ※ GCP上に taxonomy.company_taxonomy_map が作成済みであること前提
         table_ref = f"{project}.{dataset}.company_taxonomy_map"
 
-        # BQ streaming insert（insert_rows_json）で一括書込
-        errors = bq.client.insert_rows_json(table_ref, rows)
-        if errors:
-            print(
-                f"  [cluster_exporter] BQ insert_rows エラー "
-                f"({len(errors)}件): {str(errors[0])[:80]}"
-            )
+        # load job（無料・job_id は内容から決まる）で一括書込
+        from edinet_bq_client import load_rows
+        if not load_rows(bq.client, table_ref, rows):
+            print("  [cluster_exporter] BQ load job が失敗")
             return False, 0
 
         print(
