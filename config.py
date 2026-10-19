@@ -1351,7 +1351,7 @@ FUDOSANDB_DAILY_BUDGET: int = FUDOSAN_DAILY_BUDGET  # 後方互換
 # 政策DB（seisakudb.jp）。1日1000回まで（成功したリクエストだけ数える）。データは月次更新。
 SEISAKUDB_API_KEY: str = os.getenv("SEISAKUDB_API_KEY", "")   # GitHub Secrets
 ENABLE_SEISAKUDB: bool = True
-SEISAKUDB_DAILY_BUDGET: int = 300        # 1日に使う回数（API の上限は1000）。データは月次更新なので、個社ローテーションは約4日で1周すれば足りる。1000回だと日次が10分延び Actions の無料枠（月2,000分）を圧迫する
+SEISAKUDB_DAILY_BUDGET: int = 100        # 1日に使う回数（API の上限は1000）。データは月次更新なので、個社ローテーション（約3,800社）は約40日で1周すれば足りる。送信間隔0.5秒以上なので1回約0.6秒かかり、300回だと日次が約4分延びて Actions の無料枠（月2,000分）を圧迫する
 SEISAKUDB_RESERVE: int = 0               # 手動確認用に残す回数
 SEISAKUDB_RECENT_LIMIT: int = 500        # 直近イベントの取得件数
 SEISAKUDB_TOP_LIMIT: int = 2000          # 公的支出ランキングの取得件数
@@ -1735,6 +1735,7 @@ ALERT_SECTOR_TOP_COMPANIES: int = 3  # 業種のスクリーナー上位を出�
 # 米国株サマリー（us_screener / us_sectors）を日次メールに載せるか（alert_notifier.py）。
 ALERT_ON_US_SUMMARY: bool = True
 ALERT_US_TOP_PICKS:    int = 10  # USスクリーナー通過銘柄の表示件数
+ALERT_INTL_TOP_PICKS_PER_COUNTRY: int = 3  # 米国株スクリーナーの米国以外の通過銘柄を、国ごとに何社まで「🌏 海外株」節に出すか
 
 # アナリスト強気推奨アラート
 ALERT_ON_STRONG_BUY: bool = True

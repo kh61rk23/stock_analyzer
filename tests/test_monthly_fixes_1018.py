@@ -273,3 +273,52 @@ def test_monthly_mail_summary_lines():
                                "- 現在の経済サイクル象限: **A** / x\n- コモディティ配分合計: 6.0% / 現金") == (
         "象限 A ／ 配分合計 6.0%", True)
     assert mm.summarize_report("unknown.md", "x") == ("", False)
+
+
+# ── 日次メール: 米国株スクリーナーの銘柄を国別に分ける ───────────────
+
+def test_country_of_and_split():
+    import alert_notifier as an
+    assert [an.country_of(t) for t in ["GOOGL", "BRK-B", "000660.KS", "SESG.PA", "HBM.TO", "6758.T", "X.ZZ"]] == [
+        "米国", "米国", "韓国", "フランス", "カナダ", "日本", "その他（.ZZ）"]
+    lines = an.build_intl_pick_lines([{"ticker": "000660.KS", "composite_score": 88},
+                                      {"ticker": "005930.KS", "composite_score": 85},
+                                      {"ticker": "HBM.TO", "composite_score": 90}], per_country=1)
+    assert lines[0].startswith("  【カナダ】1社") and lines[2].startswith("  【韓国】2社通過（上位1社）")
+    assert len(lines) == 4
+
+
+def test_us_summary_excludes_non_us_and_sections_survive():
+    import alert_notifier as an
+    import config as cfg
+    picks = [{"ticker": "GOOGL", "composite_score": 99}, {"ticker": "000660.KS", "composite_score": 88}]
+    al = an.extract_alerts(cfg, {"us_screener": {"top_picks": picks, "pass_count": 2, "screened_count": 9,
+                                                  "candidates": [dict(p, div_yield=0.05) for p in picks]}})
+    by = {a["trigger"]: a for a in al}
+    assert "000660.KS" not in by["us_summary"]["body"] and "GOOGL" in by["us_summary"]["body"]
+    assert "【韓国】" in by["intl_summary"]["body"]
+    assert "海外1社" in by["high_dividend"]["title"]
+    # EdinetDB 節を通らない日でも、Path を使う節（不動産DB 等）が UnboundLocalError で消えない
+    assert "real_estate" in by
+
+
+def test_bi_export_skips_unchanged_copies():
+    import bi_export as b
+    from datetime import datetime, timezone
+    src = b.SOURCES[-1]
+    want = src["columns"] + src.get("optional_columns", [])
+
+    class C:
+        def __init__(self, s_mod, d_mod, cols=want):
+            self.m = {src["source"]: types.SimpleNamespace(modified=s_mod, schema=[], num_rows=5),
+                      b.table_ref(src["dest"]): types.SimpleNamespace(
+                          modified=d_mod, num_rows=7, schema=[types.SimpleNamespace(name=c) for c in cols])}
+
+        def get_table(self, ref):
+            return self.m[ref]
+
+    t1, t2 = datetime(2026, 10, 10, tzinfo=timezone.utc), datetime(2026, 10, 19, tzinfo=timezone.utc)
+    assert b.copy_is_current(C(t1, t2), src) == 7          # 元表は写し以降変わっていない
+    assert b.copy_is_current(C(t2, t1), src) is None       # 元表が新しい
+    assert b.copy_is_current(C(t1, t2, want[:-1]), src) is None   # 列の定義が変わった
+    assert b.copy_is_current(object(), src) is None        # 判断できない
