@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 import config
+from backtest.re_factor_panel import PANEL_SQL
 from real_estate_signal import (FV_BV_RANGE, METRO_PREF_CODES, blend_disclosed_gain, calc_real_estate_bonus,
                                 calibration_factor, region_of, summarize_holdings)
 
@@ -18,6 +19,7 @@ MARTS = REPO / "bi" / "marts"
 CAL_SQLS = {
     "m_re_holdings": (MARTS / "m_re_holdings.sql").read_text(encoding="utf-8"),
     "m_re_holdings_pref": (MARTS / "m_re_holdings_pref.sql").read_text(encoding="utf-8"),
+    "re_factor_panel": PANEL_SQL,
 }
 SCREENER_SQL = (MARTS / "m_screener.sql").read_text(encoding="utf-8")
 
@@ -49,6 +51,7 @@ def test_sql_judges_exclusion_before_calibration(name):
 def test_screener_fv_bv_range_matches_python():
     lo, hi = FV_BV_RANGE
     assert f"fair_value_m_yen / book_value_m_yen BETWEEN {lo:g} AND {hi:g}" in SCREENER_SQL
+    assert f"fair_value_m_yen / book_value_m_yen BETWEEN {lo:g} AND {hi:g}" in PANEL_SQL
 
 
 def test_calibration_keys_are_known_strata():
