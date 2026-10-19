@@ -86,6 +86,15 @@ _CACHE_STAMP: float = 0.0
 _EXPOSURE_BQ_DISABLED: bool = False
 _EXPOSURE_BQ_ERROR: str = ""
 
+# GEO_TAXONOMY_SOURCE="seed" で使う2つの正本の写し。
+#   _TAXONOMY_SCORE_CACHE: {4桁企業コード: {node_id: relevance_score}}（BQ taxonomy.company_taxonomy_map）
+#   _TAXONOMY_SCORE_FETCHED: 引き済みの企業コード（行が無い銘柄も入れ、再問い合わせを防ぐ）
+#   _SEED_PROPAGATION_CACHE: {資源コード: [node_id]}（承認済み seed の related_commodities の逆引き）
+_TAXONOMY_SCORE_CACHE: dict[str, dict] = {}
+_TAXONOMY_SCORE_FETCHED: set = set()
+_SEED_PROPAGATION_CACHE: dict | None = None
+_BQ_WRAPPER_CACHE: Any = None
+
 
 def _get_raw_bq(project_id: str = "stock-analyzer-edinet"):
     """BQ Client を返す（セッション内キャッシュ）。失敗時 None。"""
@@ -113,6 +122,7 @@ def _reset_daily_cache(cfg=None) -> None:
     """
     global _RISK_SCORE_CACHE, _EXPOSURE_CACHE, _CACHE_DATE, _CACHE_STAMP
     global _EXPOSURE_BQ_DISABLED, _EXPOSURE_BQ_ERROR
+    global _TAXONOMY_SCORE_CACHE, _TAXONOMY_SCORE_FETCHED
     ttl = float(getattr(cfg, "GEO_RISK_CACHE_TTL_SEC", 86400) or 86400)
     now = time.time()
     today = date.today().isoformat()
@@ -120,11 +130,89 @@ def _reset_daily_cache(cfg=None) -> None:
     if (now - _CACHE_STAMP) >= ttl or _CACHE_DATE != today:
         _RISK_SCORE_CACHE = {}
         _EXPOSURE_CACHE   = {}
+        _TAXONOMY_SCORE_CACHE   = {}
+        _TAXONOMY_SCORE_FETCHED = set()
         _CACHE_DATE       = today
         # サーキットブレーカーも解除する（列追加などで復旧している可能性があるため）
         _EXPOSURE_BQ_DISABLED = False
         _EXPOSURE_BQ_ERROR    = ""
         _CACHE_STAMP      = now
+
+
+# ==============================================================
+# BLOCK 1b: taxonomy 正本の読み出し（GEO_TAXONOMY_SOURCE="seed" のとき）
+# ==============================================================
+
+def _use_seed_taxonomy(cfg) -> bool:
+    """config.GEO_TAXONOMY_SOURCE が "seed" のとき True（既定は "legacy"）。"""
+    return str(getattr(cfg, "GEO_TAXONOMY_SOURCE", "legacy") or "legacy").lower() == "seed"
+
+
+def _seed_commodity_nodes() -> dict:
+    """承認済み seed の related_commodities を逆引きした {資源コード: [node_id, ...]}。"""
+    global _SEED_PROPAGATION_CACHE
+    if _SEED_PROPAGATION_CACHE is not None:
+        return _SEED_PROPAGATION_CACHE
+    out: dict = {}
+    try:
+        import taxonomy_loader as _tl
+        nodes, _skipped = _tl.select_approved_nodes(_tl.load_seed_batches())
+        for n in nodes:
+            if n.get("is_active") is False:
+                continue
+            for com in n.get("related_commodities") or []:
+                out.setdefault(str(com), []).append(str(n["node_id"]))
+        out = {k: sorted(set(v)) for k, v in out.items()}
+    except Exception as exc:
+        print(f"  ⚠️  geo_signal seed 逆引き失敗（伝播なし）: {str(exc)[:80]}")
+    _SEED_PROPAGATION_CACHE = out
+    return out
+
+
+def _company_code(ticker) -> str:
+    """"7203.T" → "7203"。"""
+    return str(ticker or "").split(".")[0].strip()
+
+
+def _get_bq_wrapper():
+    """EDINETBQClient（get_taxonomy_scores_bulk を持つ）を返す。失敗時 None。"""
+    global _BQ_WRAPPER_CACHE
+    if _BQ_WRAPPER_CACHE is not None:
+        return _BQ_WRAPPER_CACHE
+    try:
+        import edinet_bq_client as _m
+        _BQ_WRAPPER_CACHE = _m.EDINETBQClient()
+        return _BQ_WRAPPER_CACHE
+    except Exception:
+        return None
+
+
+def prefetch_taxonomy_scores(tickers, cfg=None) -> int:
+    """銘柄×ノードの relevance_score を1クエリで引いてキャッシュへ載せる（JPのみ）。
+
+    seed モード以外では何もしない。行の無い銘柄も「引き済み」として記録する。
+    Returns: 行のあった銘柄数
+    """
+    if not _use_seed_taxonomy(cfg):
+        return 0
+    _reset_daily_cache(cfg)
+    codes = sorted({_company_code(t) for t in (tickers or []) if _company_code(t)})
+    todo = [c for c in codes if c not in _TAXONOMY_SCORE_FETCHED]
+    if not todo:
+        return 0
+    bq = _get_bq_wrapper()
+    if bq is None:
+        return 0
+    try:
+        got = bq.get_taxonomy_scores_bulk(todo) or {}
+    except Exception as exc:
+        print(f"  ⚠️  geo_signal taxonomy 一括取得 失敗: {str(exc)[:80]}")
+        return 0
+    for c in todo:
+        _TAXONOMY_SCORE_FETCHED.add(c)
+        if got.get(c):
+            _TAXONOMY_SCORE_CACHE[c] = dict(got[c])
+    return sum(1 for c in todo if c in _TAXONOMY_SCORE_CACHE)
 
 
 # ==============================================================
@@ -147,6 +235,9 @@ def prefetch_exposures(tickers, market: str = "JP", cfg=None,
     global _EXPOSURE_BQ_DISABLED, _EXPOSURE_BQ_ERROR
     _reset_daily_cache(cfg)
     _pid = getattr(cfg, "GEO_BQ_PROJECT_ID", project_id) if cfg else project_id
+
+    if market == "JP":
+        prefetch_taxonomy_scores(tickers, cfg)
 
     wanted = sorted({str(t).strip() for t in (tickers or []) if str(t).strip()})
     todo = [t for t in wanted if f"{t}_{market}" not in _EXPOSURE_CACHE]
@@ -478,6 +569,7 @@ def _calc_taxonomy_propagation(
     sector_or_gics: str,
     market: str,
     cfg=None,
+    ticker: str | None = None,
 ) -> float:
     """
     Phase T クラスター伝播ロジック。
@@ -496,9 +588,18 @@ def _calc_taxonomy_propagation(
     if not cfg:
         return 0.0
 
-    propagation_map = getattr(cfg, "GEO_TAXONOMY_PROPAGATION", {})
+    use_seed = _use_seed_taxonomy(cfg)
+    if use_seed:
+        propagation_map = _seed_commodity_nodes()
+    else:
+        propagation_map = getattr(cfg, "GEO_TAXONOMY_PROPAGATION", {})
     if not propagation_map:
         return 0.0
+
+    # seed モードで JP 銘柄に company_taxonomy_map の行があれば、その関与度を使う
+    node_scores = None
+    if use_seed and market == "JP" and ticker:
+        node_scores = _TAXONOMY_SCORE_CACHE.get(_company_code(ticker)) or None
 
     _scale     = float(getattr(cfg, "GEO_IMPACT_SCALE", 0.30))
     _decay     = 0.3   # 伝播減衰係数（直接効果の30%）
@@ -524,9 +625,12 @@ def _calc_taxonomy_propagation(
             # セクターとノードの関連性を簡易判定
             # （完全実装は taxonomy.company_taxonomy_map JOIN だが
             #   Phase G では近似として secotr_or_gics のキーワード一致を使用）
-            relevance = _estimate_node_relevance(
-                node, sector_or_gics, market
-            )
+            if node_scores is not None:
+                relevance = max(0.0, min(1.0, float(node_scores.get(node, 0.0))))
+            else:
+                relevance = _estimate_node_relevance(
+                    node, sector_or_gics, market
+                )
             propagation = raw_impact * _decay * relevance
             total_propagation += propagation
 
@@ -669,7 +773,7 @@ def calc_geo_impact_bonus_jp(
 
         # ④ Phase T クラスター伝播
         propagation = _calc_taxonomy_propagation(
-            exposures, sector_code, "JP", cfg
+            exposures, sector_code, "JP", cfg, ticker=ticker
         )
 
         # ⑤ 最終スコア
@@ -782,7 +886,7 @@ def calc_geo_impact_bonus_us(
 
         # ④ Phase T クラスター伝播
         propagation = _calc_taxonomy_propagation(
-            exposures, gics_key, "US", cfg
+            exposures, gics_key, "US", cfg, ticker=ticker
         )
 
         # ⑤ 最終スコア

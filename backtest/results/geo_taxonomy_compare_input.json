@@ -1,0 +1,987 @@
+{
+ "as_of": "2026-10-19",
+ "universe": {
+  "1515.T": "holding",
+  "1803.T": "holding",
+  "1814.T": "holding+candidate",
+  "2181.T": "candidate",
+  "2185.T": "holding",
+  "228A.T": "holding",
+  "2307.T": "candidate",
+  "2436.T": "candidate",
+  "2477.T": "holding",
+  "2735.T": "holding",
+  "2809.T": "holding",
+  "2917.T": "holding",
+  "3038.T": "holding",
+  "3087.T": "holding",
+  "3107.T": "holding",
+  "3143.T": "holding",
+  "3236.T": "holding",
+  "3288.T": "candidate",
+  "3350.T": "holding",
+  "3407.T": "candidate",
+  "3435.T": "holding",
+  "3565.T": "candidate",
+  "3569.T": "holding",
+  "3625.T": "candidate",
+  "3633.T": "candidate",
+  "3640.T": "candidate",
+  "3768.T": "holding",
+  "3771.T": "candidate",
+  "3817.T": "holding",
+  "3911.T": "candidate",
+  "3932.T": "candidate",
+  "3935.T": "candidate",
+  "4008.T": "candidate",
+  "4040.T": "candidate",
+  "4044.T": "candidate",
+  "4095.T": "holding",
+  "4221.T": "candidate",
+  "4246.T": "candidate",
+  "4290.T": "candidate",
+  "4345.T": "holding",
+  "4386.T": "candidate",
+  "4439.T": "candidate",
+  "4445.T": "holding",
+  "4465.T": "candidate",
+  "4495.T": "candidate",
+  "4635.T": "candidate",
+  "4671.T": "holding",
+  "4709.T": "candidate",
+  "4931.T": "candidate",
+  "4956.T": "candidate",
+  "5013.T": "candidate",
+  "5018.T": "candidate",
+  "5019.T": "holding",
+  "5021.T": "holding",
+  "5032.T": "holding",
+  "5254.T": "holding",
+  "5288.T": "candidate",
+  "542A.T": "candidate",
+  "548A.T": "candidate",
+  "5658.T": "holding",
+  "5729.T": "candidate",
+  "5830.T": "holding",
+  "5844.T": "holding",
+  "6035.T": "candidate",
+  "6070.T": "candidate",
+  "6135.T": "candidate",
+  "6136.T": "holding",
+  "6143.T": "holding",
+  "6199.T": "candidate",
+  "6229.T": "candidate",
+  "6238.T": "candidate",
+  "6284.T": "candidate",
+  "6310.T": "holding",
+  "6326.T": "holding",
+  "6332.T": "holding",
+  "6349.T": "candidate",
+  "6351.T": "candidate",
+  "6357.T": "candidate",
+  "6384.T": "candidate",
+  "6391.T": "candidate",
+  "6418.T": "candidate",
+  "6448.T": "candidate",
+  "6454.T": "candidate",
+  "6551.T": "candidate",
+  "6555.T": "holding",
+  "6574.T": "holding",
+  "6592.T": "candidate",
+  "6632.T": "holding",
+  "6676.T": "candidate",
+  "6701.T": "candidate",
+  "6741.T": "candidate",
+  "6743.T": "candidate",
+  "6750.T": "candidate",
+  "6762.T": "holding",
+  "6770.T": "holding",
+  "6785.T": "candidate",
+  "6788.T": "candidate",
+  "6809.T": "candidate",
+  "6814.T": "candidate",
+  "6835.T": "candidate",
+  "6850.T": "candidate",
+  "6877.T": "candidate",
+  "6912.T": "candidate",
+  "6927.T": "candidate",
+  "6929.T": "candidate",
+  "6932.T": "candidate",
+  "6947.T": "candidate",
+  "6952.T": "candidate",
+  "7043.T": "holding",
+  "7089.T": "candidate",
+  "7102.T": "candidate",
+  "7131.T": "holding",
+  "7175.T": "candidate",
+  "7201.T": "holding",
+  "7244.T": "candidate",
+  "7255.T": "holding",
+  "7282.T": "candidate",
+  "7378.T": "candidate",
+  "7611.T": "holding",
+  "7844.T": "candidate",
+  "7874.T": "holding",
+  "7942.T": "candidate",
+  "8331.T": "holding",
+  "8591.T": "holding",
+  "9554.T": "candidate",
+  "9678.T": "candidate",
+  "9759.T": "holding",
+  "9845.T": "candidate",
+  "9880.T": "holding"
+ },
+ "sector": {
+  "1515.T": "1002",
+  "1803.T": "1003",
+  "1814.T": "1003",
+  "2181.T": "1033",
+  "2185.T": "1033",
+  "228A.T": "1025",
+  "2307.T": "1025",
+  "2436.T": "1033",
+  "2477.T": "1025",
+  "2735.T": "1027",
+  "2809.T": "1004",
+  "2917.T": "1004",
+  "3038.T": "1026",
+  "3087.T": "1027",
+  "3107.T": "1026",
+  "3143.T": "1026",
+  "3236.T": "1032",
+  "3288.T": "DYNAMIC",
+  "3350.T": "1026",
+  "3407.T": "DYNAMIC",
+  "3435.T": "1014",
+  "3565.T": "1026",
+  "3569.T": "1005",
+  "3625.T": "1025",
+  "3633.T": "1025",
+  "3640.T": "1025",
+  "3768.T": "1025",
+  "3771.T": "1025",
+  "3817.T": "1025",
+  "3911.T": "1025",
+  "3932.T": "1025",
+  "3935.T": "1025",
+  "4008.T": "1007",
+  "4040.T": "1007",
+  "4044.T": "1007",
+  "4095.T": "1007",
+  "4221.T": "1007",
+  "4246.T": "1007",
+  "4290.T": "1033",
+  "4345.T": "1033",
+  "4386.T": "1025",
+  "4439.T": "1025",
+  "4445.T": "1025",
+  "4465.T": "1007",
+  "4495.T": "1025",
+  "4635.T": "1007",
+  "4671.T": "1033",
+  "4709.T": "1025",
+  "4931.T": "1007",
+  "4956.T": "1007",
+  "5013.T": "1009",
+  "5018.T": "1009",
+  "5019.T": "1009",
+  "5021.T": "1009",
+  "5032.T": "1025",
+  "5254.T": "1025",
+  "5288.T": "1011",
+  "542A.T": "1007",
+  "548A.T": "1025",
+  "5658.T": "1012",
+  "5729.T": "1013",
+  "5830.T": "1028",
+  "5844.T": "1028",
+  "6035.T": "1033",
+  "6070.T": "1033",
+  "6135.T": "1015",
+  "6136.T": "1015",
+  "6143.T": "1015",
+  "6199.T": "1033",
+  "6229.T": "1015",
+  "6238.T": "1015",
+  "6284.T": "1015",
+  "6310.T": "1015",
+  "6326.T": "1015",
+  "6332.T": "1015",
+  "6349.T": "1015",
+  "6351.T": "1015",
+  "6357.T": "1015",
+  "6384.T": "1015",
+  "6391.T": "1015",
+  "6418.T": "1015",
+  "6448.T": "1016",
+  "6454.T": "1015",
+  "6551.T": "1033",
+  "6555.T": "1033",
+  "6574.T": "1033",
+  "6592.T": "1016",
+  "6632.T": "1016",
+  "6676.T": "1016",
+  "6701.T": "1016",
+  "6741.T": "1016",
+  "6743.T": "1016",
+  "6750.T": "1016",
+  "6762.T": "1016",
+  "6770.T": "1016",
+  "6785.T": "1016",
+  "6788.T": "1016",
+  "6809.T": "1016",
+  "6814.T": "1016",
+  "6835.T": "1016",
+  "6850.T": "1016",
+  "6877.T": "1016",
+  "6912.T": "1016",
+  "6927.T": "1016",
+  "6929.T": "1016",
+  "6932.T": "1016",
+  "6947.T": "1016",
+  "6952.T": "1016",
+  "7043.T": "1033",
+  "7089.T": "1033",
+  "7102.T": "1017",
+  "7131.T": "1026",
+  "7175.T": "1029",
+  "7201.T": "1017",
+  "7244.T": "1016",
+  "7255.T": "1017",
+  "7282.T": "1017",
+  "7378.T": "1033",
+  "7611.T": "1027",
+  "7844.T": "1025",
+  "7874.T": "1007",
+  "7942.T": "1007",
+  "8331.T": "1028",
+  "8591.T": "1031",
+  "9554.T": "1033",
+  "9678.T": "1033",
+  "9759.T": "1025",
+  "9845.T": "1007",
+  "9880.T": "1016"
+ },
+ "exposures": {
+  "1605.T": [
+   {
+    "country_code": "ARE",
+    "exposure_type": "",
+    "exposure_strength": 0.12,
+    "commodity_code": "crude_oil",
+    "composite_risk_score": 27.8
+   },
+   {
+    "country_code": "KAZ",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": "crude_oil",
+    "composite_risk_score": 17.04
+   },
+   {
+    "country_code": "IDN",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": "lng",
+    "composite_risk_score": 34.04
+   },
+   {
+    "country_code": "AUS",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": "lng",
+    "composite_risk_score": 24.3
+   },
+   {
+    "country_code": "AUS",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": "crude_oil",
+    "composite_risk_score": 24.3
+   }
+  ],
+  "5019.T": [
+   {
+    "country_code": "SAU",
+    "exposure_type": "",
+    "exposure_strength": 0.25,
+    "commodity_code": "crude_oil",
+    "composite_risk_score": 37.38
+   },
+   {
+    "country_code": "AUS",
+    "exposure_type": "",
+    "exposure_strength": 0.15,
+    "commodity_code": "crude_oil",
+    "composite_risk_score": 24.3
+   },
+   {
+    "country_code": "IDN",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": "coal",
+    "composite_risk_score": 34.04
+   },
+   {
+    "country_code": "AUS",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": "coal",
+    "composite_risk_score": 24.3
+   }
+  ],
+  "5020.T": [
+   {
+    "country_code": "ARE",
+    "exposure_type": "",
+    "exposure_strength": 0.08,
+    "commodity_code": "crude_oil",
+    "composite_risk_score": 27.8
+   },
+   {
+    "country_code": "SAU",
+    "exposure_type": "",
+    "exposure_strength": 0.3,
+    "commodity_code": "crude_oil",
+    "composite_risk_score": 37.38
+   }
+  ],
+  "5706.T": [
+   {
+    "country_code": "CHL",
+    "exposure_type": "",
+    "exposure_strength": 0.2,
+    "commodity_code": "copper",
+    "composite_risk_score": 23.86
+   },
+   {
+    "country_code": "PER",
+    "exposure_type": "",
+    "exposure_strength": 0.12,
+    "commodity_code": "zinc",
+    "composite_risk_score": 33.98
+   },
+   {
+    "country_code": "RUS",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": "crude_oil",
+    "composite_risk_score": 36.99
+   }
+  ],
+  "5707.T": [
+   {
+    "country_code": "PER",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": null,
+    "composite_risk_score": 33.98
+   }
+  ],
+  "5711.T": [
+   {
+    "country_code": "CAN",
+    "exposure_type": "",
+    "exposure_strength": 0.15,
+    "commodity_code": "copper",
+    "composite_risk_score": 13.97
+   },
+   {
+    "country_code": "AUS",
+    "exposure_type": "",
+    "exposure_strength": 0.12,
+    "commodity_code": "copper",
+    "composite_risk_score": 24.3
+   },
+   {
+    "country_code": "CHL",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": null,
+    "composite_risk_score": 23.86
+   }
+  ],
+  "5713.T": [
+   {
+    "country_code": "PHL",
+    "exposure_type": "",
+    "exposure_strength": 0.3,
+    "commodity_code": "nickel",
+    "composite_risk_score": 36.41
+   },
+   {
+    "country_code": "COD",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": "cobalt",
+    "composite_risk_score": 36.84
+   },
+   {
+    "country_code": "CHL",
+    "exposure_type": "",
+    "exposure_strength": 0.2,
+    "commodity_code": "copper",
+    "composite_risk_score": 23.86
+   },
+   {
+    "country_code": "IDN",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": null,
+    "composite_risk_score": 34.04
+   },
+   {
+    "country_code": "AUS",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": null,
+    "composite_risk_score": 24.3
+   }
+  ],
+  "6758.T": [
+   {
+    "country_code": "CHN",
+    "exposure_type": "",
+    "exposure_strength": 0.15,
+    "commodity_code": null,
+    "composite_risk_score": 32.73
+   },
+   {
+    "country_code": "USA",
+    "exposure_type": "",
+    "exposure_strength": 0.3,
+    "commodity_code": null,
+    "composite_risk_score": 37.49
+   }
+  ],
+  "7203.T": [
+   {
+    "country_code": "CHN",
+    "exposure_type": "",
+    "exposure_strength": 0.22,
+    "commodity_code": null,
+    "composite_risk_score": 32.73
+   },
+   {
+    "country_code": "USA",
+    "exposure_type": "",
+    "exposure_strength": 0.18,
+    "commodity_code": null,
+    "composite_risk_score": 37.49
+   }
+  ],
+  "8001.T": [
+   {
+    "country_code": "CHL",
+    "exposure_type": "",
+    "exposure_strength": 0.18,
+    "commodity_code": "copper",
+    "composite_risk_score": 23.86
+   },
+   {
+    "country_code": "IDN",
+    "exposure_type": "",
+    "exposure_strength": 0.08,
+    "commodity_code": "coal",
+    "composite_risk_score": 34.04
+   },
+   {
+    "country_code": "AUS",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": "iron_ore",
+    "composite_risk_score": 24.3
+   }
+  ],
+  "8002.T": [
+   {
+    "country_code": "BRA",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": "iron_ore",
+    "composite_risk_score": 32.58
+   },
+   {
+    "country_code": "AUS",
+    "exposure_type": "",
+    "exposure_strength": 0.14,
+    "commodity_code": "coal",
+    "composite_risk_score": 24.3
+   }
+  ],
+  "8031.T": [
+   {
+    "country_code": "SAU",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": "crude_oil",
+    "composite_risk_score": 37.38
+   },
+   {
+    "country_code": "AUS",
+    "exposure_type": "",
+    "exposure_strength": 0.2,
+    "commodity_code": "lng",
+    "composite_risk_score": 24.3
+   },
+   {
+    "country_code": "MOZ",
+    "exposure_type": "",
+    "exposure_strength": 0.15,
+    "commodity_code": "lng",
+    "composite_risk_score": 37.98
+   }
+  ],
+  "8053.T": [
+   {
+    "country_code": "COD",
+    "exposure_type": "",
+    "exposure_strength": 0.15,
+    "commodity_code": "cobalt",
+    "composite_risk_score": 36.84
+   },
+   {
+    "country_code": "AUS",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": "coal",
+    "composite_risk_score": 24.3
+   }
+  ],
+  "8058.T": [
+   {
+    "country_code": "CHL",
+    "exposure_type": "",
+    "exposure_strength": 0.2,
+    "commodity_code": "copper",
+    "composite_risk_score": 23.86
+   },
+   {
+    "country_code": "BRA",
+    "exposure_type": "",
+    "exposure_strength": 0.12,
+    "commodity_code": "iron_ore",
+    "composite_risk_score": 32.58
+   },
+   {
+    "country_code": "IDN",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": "coal",
+    "composite_risk_score": 34.04
+   },
+   {
+    "country_code": "AUS",
+    "exposure_type": "",
+    "exposure_strength": 0.18,
+    "commodity_code": "coal",
+    "composite_risk_score": 24.3
+   },
+   {
+    "country_code": "CAN",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": "lng",
+    "composite_risk_score": 13.97
+   },
+   {
+    "country_code": "CHL",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": null,
+    "composite_risk_score": 23.86
+   },
+   {
+    "country_code": "CHL",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": "copper",
+    "composite_risk_score": 23.86
+   },
+   {
+    "country_code": "PER",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": "copper",
+    "composite_risk_score": 33.98
+   },
+   {
+    "country_code": "SAU",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": "crude_oil",
+    "composite_risk_score": 37.38
+   },
+   {
+    "country_code": "AUS",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": "crude_oil",
+    "composite_risk_score": 24.3
+   },
+   {
+    "country_code": "AUS",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": null,
+    "composite_risk_score": 24.3
+   },
+   {
+    "country_code": "CHL",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": "crude_oil",
+    "composite_risk_score": 23.86
+   }
+  ],
+  "9531.T": [
+   {
+    "country_code": "IDN",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": "lng",
+    "composite_risk_score": 34.04
+   },
+   {
+    "country_code": "AUS",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": "lng",
+    "composite_risk_score": 24.3
+   },
+   {
+    "country_code": "RUS",
+    "exposure_type": "",
+    "exposure_strength": 0.1,
+    "commodity_code": "lng",
+    "composite_risk_score": 36.99
+   }
+  ]
+ },
+ "taxonomy_scores": {
+  "1605": {
+   "gas_utility": 1.0
+  },
+  "2809": {
+   "food_agri": 0.2732,
+   "food_manufacturer": 0.4277,
+   "logistics": 0.2992,
+   "resource_trading": 0.5,
+   "technology_trading": 0.5
+  },
+  "3143": {
+   "beverage_alcohol": 0.3125,
+   "food_agri": 0.5,
+   "trading_company": 0.1875
+  },
+  "3407": {
+   "housing_builder": 0.4252,
+   "materials": 0.3253,
+   "textile_fiber": 0.2495
+  },
+  "3435": {
+   "logistics": 0.5,
+   "renewable_generation": 0.5
+  },
+  "3565": {
+   "consulting": 0.6667,
+   "semiconductor_design": 0.3333
+  },
+  "4008": {
+   "materials": 1.0,
+   "photonics": 0.3333,
+   "sensor_image": 0.3333,
+   "sensor_radar": 0.3333
+  },
+  "4246": {
+   "ai_software": 0.5,
+   "auto_oem": 0.3846,
+   "auto_parts_tier1": 0.3077,
+   "housing_builder": 0.3077,
+   "saas_platform": 0.5
+  },
+  "4956": {
+   "adhesive_coating": 1.0
+  },
+  "5019": {
+   "ai_software": 0.2108,
+   "commodity_chemical": 0.1008,
+   "oil_gas_upstream": 0.8992,
+   "photonics": 0.1928,
+   "saas_platform": 0.2108,
+   "sensor_image": 0.1928,
+   "sensor_radar": 0.1928
+  },
+  "5020": {
+   "oil_gas_upstream": 1.0,
+   "photonics": 0.3333,
+   "sensor_image": 0.3333,
+   "sensor_radar": 0.3333
+  },
+  "5021": {
+   "oil_gas_upstream": 1.0
+  },
+  "5288": {
+   "ai_software": 0.5,
+   "saas_platform": 0.5
+  },
+  "5706": {
+   "ai_software": 0.2357,
+   "auto_oem": 0.3708,
+   "auto_parts_tier1": 0.3255,
+   "electronic_component": 0.1762,
+   "mobility_ev": 0.3037,
+   "saas_platform": 0.2357,
+   "semiconductor_logic": 0.1762,
+   "semiconductor_rf": 0.1762
+  },
+  "5707": {
+   "ai_software": 0.5,
+   "nonferrous_metals": 0.3111,
+   "plant_engineering": 0.1595,
+   "saas_platform": 0.5,
+   "waste_recycling": 0.5294
+  },
+  "5711": {
+   "cement_glass": 0.3348,
+   "materials": 0.3229,
+   "nonferrous_metals": 0.1271,
+   "waste_recycling": 0.2152
+  },
+  "5713": {
+   "ai_software": 0.5,
+   "catalyst": 0.4444,
+   "oil_gas_upstream": 0.5556,
+   "saas_platform": 0.5
+  },
+  "6070": {
+   "ai_software": 0.5,
+   "auto_oem": 0.2414,
+   "bpo_outsourcing": 0.2759,
+   "food_agri": 0.1379,
+   "saas_platform": 0.5,
+   "staffing_temp": 0.3448
+  },
+  "6136": {
+   "heavy_industry": 0.5,
+   "machine_tool": 0.5
+  },
+  "6326": {
+   "construction_machinery": 0.5714,
+   "general_machinery": 0.4286,
+   "power_semiconductor": 0.5,
+   "semiconductor_package": 0.5
+  },
+  "6384": {
+   "ai_software": 0.1444,
+   "electronic_component": 0.5625,
+   "etching_deposition": 0.25,
+   "photonics": 0.2371,
+   "saas_platform": 0.1444,
+   "semiconductor": 0.1875,
+   "sensor_image": 0.2371,
+   "sensor_radar": 0.2371
+  },
+  "6418": {
+   "ai_software": 0.2824,
+   "power_semiconductor": 0.2176,
+   "saas_platform": 0.2824,
+   "semiconductor_package": 0.2176
+  },
+  "6448": {
+   "ai_ml_framework": 0.1253,
+   "ai_software": 0.3883,
+   "power_semiconductor": 0.0491,
+   "saas_platform": 0.2631,
+   "semiconductor_package": 0.0491,
+   "telecom_software": 0.1253
+  },
+  "6676": {
+   "ai_ml_framework": 0.1658,
+   "ai_software": 0.1714,
+   "food_agri": 1.0,
+   "photonics": 0.1638,
+   "saas_platform": 0.0056,
+   "sensor_image": 0.1638,
+   "sensor_radar": 0.1638,
+   "telecom_software": 0.1658
+  },
+  "6701": {
+   "ai_ml_framework": 0.0807,
+   "ai_software": 0.4597,
+   "consulting": 1.0,
+   "saas_platform": 0.379,
+   "telecom_software": 0.0807
+  },
+  "6741": {
+   "ai_ml_framework": 0.1481,
+   "ai_software": 0.1481,
+   "electronic_component": 0.1853,
+   "semiconductor_logic": 0.1853,
+   "semiconductor_rf": 0.1853,
+   "telecom_software": 0.1481
+  },
+  "6758": {
+   "ai_ml_framework": 0.2274,
+   "ai_software": 0.2869,
+   "game_content": 0.2856,
+   "media_entertainment": 0.3699,
+   "music_live": 0.2813,
+   "photonics": 0.0663,
+   "saas_platform": 0.0595,
+   "sensor_image": 0.0663,
+   "sensor_radar": 0.0663,
+   "telecom_software": 0.2274
+  },
+  "6770": {
+   "ai_ml_framework": 0.2037,
+   "ai_software": 0.2037,
+   "electronic_component": 0.1297,
+   "logistics": 0.1077,
+   "mobility_ev": 0.2234,
+   "semiconductor_logic": 0.1297,
+   "semiconductor_rf": 0.1297,
+   "telecom_software": 0.2037
+  },
+  "6785": {
+   "power_semiconductor": 0.5,
+   "semiconductor_package": 0.5
+  },
+  "6814": {
+   "ai_ml_framework": 0.1268,
+   "ai_software": 0.1268,
+   "power_semiconductor": 0.3097,
+   "semiconductor_package": 0.3097,
+   "shipbuilding": 1.0,
+   "telecom_software": 0.1268
+  },
+  "6850": {
+   "ai_software": 0.0845,
+   "photonics": 0.277,
+   "plc_control": 1.0,
+   "saas_platform": 0.0845,
+   "sensor_image": 0.277,
+   "sensor_radar": 0.277
+  },
+  "6927": {
+   "ai_software": 0.1231,
+   "photonics": 0.0395,
+   "power_semiconductor": 0.3177,
+   "saas_platform": 0.1231,
+   "semiconductor_package": 0.3177,
+   "sensor_image": 0.0395,
+   "sensor_radar": 0.0395
+  },
+  "6932": {
+   "household_durables": 1.0,
+   "photonics": 0.3333,
+   "sensor_image": 0.3333,
+   "sensor_radar": 0.3333
+  },
+  "6952": {
+   "power_semiconductor": 0.5,
+   "semiconductor_package": 0.5
+  },
+  "7131": {
+   "food_agri": 0.273,
+   "logistics": 0.727
+  },
+  "7201": {
+   "auto_oem": 1.0,
+   "electronic_component": 0.3333,
+   "semiconductor_logic": 0.3333,
+   "semiconductor_rf": 0.3333
+  },
+  "7203": {
+   "auto_oem": 1.0,
+   "electronic_component": 0.3333,
+   "semiconductor_logic": 0.3333,
+   "semiconductor_rf": 0.3333
+  },
+  "7244": {
+   "auto_oem": 0.5411,
+   "auto_parts_tier1": 0.4589,
+   "electronic_component": 0.3333,
+   "semiconductor_logic": 0.3333,
+   "semiconductor_rf": 0.3333
+  },
+  "7282": {
+   "ai_software": 0.0038,
+   "auto_oem": 0.5,
+   "auto_parts_tier1": 0.5,
+   "electronic_component": 0.2745,
+   "photonics": 0.0125,
+   "resource_trading": 0.0656,
+   "saas_platform": 0.0038,
+   "semiconductor_logic": 0.2745,
+   "semiconductor_rf": 0.2745,
+   "sensor_image": 0.0125,
+   "sensor_radar": 0.0125,
+   "technology_trading": 0.0656
+  },
+  "8001": {
+   "auto_oem": 0.0589,
+   "bpo_outsourcing": 0.0589,
+   "food_agri": 0.0442,
+   "logistics": 0.0589,
+   "nonferrous_metals": 0.0884,
+   "oil_gas_upstream": 0.1031,
+   "paper_pulp": 0.0589,
+   "power_semiconductor": 0.5,
+   "public_social_infra": 0.0884,
+   "rubber_tire": 0.0589,
+   "semiconductor_package": 0.5,
+   "steel": 0.0736,
+   "textile_fiber": 0.1752,
+   "waste_recycling": 0.1326
+  },
+  "8031": {
+   "ai_software": 0.061,
+   "mining": 0.4879,
+   "oil_gas_upstream": 0.2494,
+   "power_semiconductor": 0.439,
+   "saas_platform": 0.061,
+   "semiconductor_package": 0.439,
+   "steel": 0.2627
+  },
+  "8058": {
+   "auto_oem": 0.106,
+   "electronic_component": 0.0582,
+   "food_agri": 0.2308,
+   "mining": 0.1824,
+   "mobility_ev": 0.106,
+   "oil_gas_upstream": 0.3748,
+   "power_semiconductor": 0.4127,
+   "semiconductor_logic": 0.0582,
+   "semiconductor_package": 0.4127,
+   "semiconductor_rf": 0.0582
+  },
+  "8591": {
+   "banking": 1.0
+  },
+  "9531": {
+   "ai_ml_framework": 0.3333,
+   "ai_software": 0.3333,
+   "gas_utility": 1.0,
+   "telecom_software": 0.3333
+  },
+  "9759": {
+   "ai_ml_framework": 0.0219,
+   "ai_software": 0.4431,
+   "consulting": 1.0,
+   "power_semiconductor": 0.046,
+   "saas_platform": 0.4212,
+   "semiconductor_package": 0.046,
+   "telecom_software": 0.0219
+  },
+  "9880": {
+   "ai_software": 0.2288,
+   "photonics": 0.1808,
+   "saas_platform": 0.2288,
+   "semiconductor": 0.5651,
+   "semiconductor_design": 0.4349,
+   "sensor_image": 0.1808,
+   "sensor_radar": 0.1808
+  }
+ }
+}

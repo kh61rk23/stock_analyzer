@@ -3706,6 +3706,12 @@ GEO_TAXONOMY_PROPAGATION: dict = {
     "crude_oil":  ["petrochemical", "synthetic_fiber", "plastic"],
 }
 
+# 資源→技術ノードの伝播と、銘柄とノードの関与度の出どころ。
+#   "legacy": 上の GEO_TAXONOMY_PROPAGATION と geo_signal の業種コード手書き表
+#   "seed"  : 承認済み seed（data/taxonomy_seed）の related_commodities の逆引き、
+#             関与度は BQ taxonomy.company_taxonomy_map（行の無い銘柄は手書き表）
+GEO_TAXONOMY_SOURCE = "legacy"
+
 # geo_signal の有効フラグ。True にすると base_agent.py と us_stock_screener.py が geo_impact_bonus を計算する。
 # 権益側（company_country_exposure）は geo_exposure_runner.py が供給する。
 # exposure が空の間も aggregate_geo_signal() は None を返し、signal_aggregator は w_geo=0.0 として

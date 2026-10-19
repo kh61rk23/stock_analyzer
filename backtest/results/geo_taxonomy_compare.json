@@ -1,0 +1,216 @@
+{
+ "as_of": "2026-10-19",
+ "taxonomy_bq_queries_per_version": 1,
+ "seed_commodity_nodes": {
+  "iron_ore": 7,
+  "coal": 7,
+  "crude_oil": 14,
+  "copper": 23,
+  "aluminum": 5,
+  "zinc": 1,
+  "nickel": 7,
+  "naphtha": 1,
+  "pulp": 1,
+  "natural_gas": 8,
+  "cement": 3,
+  "natural_rubber": 1,
+  "cotton": 2,
+  "steel": 11,
+  "lng": 7,
+  "gold": 1,
+  "uranium": 4,
+  "silicon": 7,
+  "gallium": 2,
+  "silicon_carbide": 4,
+  "gallium_arsenide": 1,
+  "gallium_nitride": 5,
+  "photoresist": 1,
+  "lithium": 10,
+  "cobalt": 5,
+  "graphite": 2,
+  "iron_phosphate": 1,
+  "sulfide_electrolyte": 1,
+  "lithium_salt": 1,
+  "neodymium": 3,
+  "dysprosium": 1,
+  "rare_earth": 5,
+  "silver": 1,
+  "iodine": 1,
+  "platinum": 4,
+  "iridium": 1,
+  "ammonia": 1,
+  "vanadium": 2,
+  "iron": 1,
+  "co2": 1,
+  "tritium": 1,
+  "titanium": 5,
+  "optical_fiber": 2,
+  "bitcoin": 1,
+  "acrylonitrile": 1,
+  "alumina": 1,
+  "fluorine": 1,
+  "palladium": 1,
+  "tungsten": 1,
+  "diesel": 2,
+  "jet_fuel": 3,
+  "lumber": 2,
+  "wheat": 2,
+  "corn": 2,
+  "soybean": 2,
+  "sugar": 2,
+  "palm_oil": 1,
+  "coffee": 1,
+  "barley": 1,
+  "beef": 1,
+  "rice": 1,
+  "fertilizer": 1,
+  "fishmeal": 1
+ },
+ "groups": {
+  "保有銘柄(紙の口座の全戦略)": {
+   "銘柄数": 50,
+   "権益あり": 1,
+   "差の平均": 0.0,
+   "差の絶対値の平均": 0.0,
+   "差の最大(絶対値)": 0.0,
+   "差が0でない銘柄": 0,
+   "符号が変わった銘柄": [],
+   "0から非0になった銘柄": [],
+   "非0から0になった銘柄": []
+  },
+  "スクリーナー候補(2026-10-19)": {
+   "銘柄数": 80,
+   "権益あり": 0,
+   "差の平均": 0.0,
+   "差の絶対値の平均": 0.0,
+   "差の最大(絶対値)": 0.0,
+   "差が0でない銘柄": 0,
+   "符号が変わった銘柄": [],
+   "0から非0になった銘柄": [],
+   "非0から0になった銘柄": []
+  },
+  "参考:権益のある全JP銘柄": {
+   "銘柄数": 15,
+   "権益あり": 15,
+   "差の平均": -0.0006,
+   "差の絶対値の平均": 0.0038,
+   "差の最大(絶対値)": 0.0273,
+   "差が0でない銘柄": 8,
+   "符号が変わった銘柄": [],
+   "0から非0になった銘柄": [
+    "1605.T",
+    "8001.T",
+    "8031.T",
+    "8058.T"
+   ],
+   "非0から0になった銘柄": []
+  }
+ },
+ "per_ticker_with_exposure": {
+  "1605.T": {
+   "sector": "1002",
+   "legacy": 0.0,
+   "seed": 0.0053,
+   "diff": 0.0053,
+   "taxonomy_rows": 1
+  },
+  "5019.T": {
+   "sector": "1009",
+   "legacy": 0.0629,
+   "seed": 0.0629,
+   "diff": 0.0,
+   "taxonomy_rows": 7
+  },
+  "5020.T": {
+   "sector": "1009",
+   "legacy": 0.0524,
+   "seed": 0.0524,
+   "diff": 0.0,
+   "taxonomy_rows": 4
+  },
+  "5706.T": {
+   "sector": "1013",
+   "legacy": 0.0186,
+   "seed": 0.0156,
+   "diff": -0.003,
+   "taxonomy_rows": 8
+  },
+  "5707.T": {
+   "sector": "1013",
+   "legacy": 0.0,
+   "seed": 0.0,
+   "diff": 0.0,
+   "taxonomy_rows": 5
+  },
+  "5711.T": {
+   "sector": "1013",
+   "legacy": 0.0195,
+   "seed": 0.017,
+   "diff": -0.0025,
+   "taxonomy_rows": 4
+  },
+  "5713.T": {
+   "sector": "1013",
+   "legacy": 0.0744,
+   "seed": 0.0471,
+   "diff": -0.0273,
+   "taxonomy_rows": 4
+  },
+  "6758.T": {
+   "sector": "1016",
+   "legacy": 0.0,
+   "seed": 0.0,
+   "diff": 0.0,
+   "taxonomy_rows": 10
+  },
+  "7203.T": {
+   "sector": "1017",
+   "legacy": 0.0,
+   "seed": 0.0,
+   "diff": 0.0,
+   "taxonomy_rows": 4
+  },
+  "8001.T": {
+   "sector": "1026",
+   "legacy": 0.0,
+   "seed": 0.0007,
+   "diff": 0.0007,
+   "taxonomy_rows": 14
+  },
+  "8002.T": {
+   "sector": "1026",
+   "legacy": 0.0,
+   "seed": 0.0,
+   "diff": 0.0,
+   "taxonomy_rows": 0
+  },
+  "8031.T": {
+   "sector": "1026",
+   "legacy": 0.0,
+   "seed": 0.0032,
+   "diff": 0.0032,
+   "taxonomy_rows": 7
+  },
+  "8053.T": {
+   "sector": "1026",
+   "legacy": 0.0,
+   "seed": 0.0,
+   "diff": 0.0,
+   "taxonomy_rows": 0
+  },
+  "8058.T": {
+   "sector": "1026",
+   "legacy": 0.0,
+   "seed": 0.0067,
+   "diff": 0.0067,
+   "taxonomy_rows": 10
+  },
+  "9531.T": {
+   "sector": "1020",
+   "legacy": -0.0143,
+   "seed": -0.0057,
+   "diff": 0.0086,
+   "taxonomy_rows": 4
+  }
+ }
+}
