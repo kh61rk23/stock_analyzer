@@ -269,6 +269,15 @@ def _fetch_recent_form4_filings(
 # BLOCK 5: Form 4 XML パース
 # ==============================================================
 
+def raw_form4_doc(doc_name: str) -> str:
+    """submissions の primaryDocument → 生の XML のファイル名（純関数）。
+
+    EDGAR は Form 4 の primaryDocument を「xslF345X06/wk-form4_….xml」のように XSL 表示用の
+    フォルダ付きで返す。そのまま取ると表示用の HTML が返りパースできないので、フォルダを外す。"""
+    head, sep, tail = (doc_name or "").partition("/")
+    return tail if sep and head.lower().startswith("xsl") else (doc_name or "")
+
+
 def _fetch_form4_xml(cik_int: int, accession_number: str, doc_name: str) -> Optional[str]:
     """
     個別 Form 4 XML ファイルを取得する。
@@ -284,6 +293,7 @@ def _fetch_form4_xml(cik_int: int, accession_number: str, doc_name: str) -> Opti
     try:
         # アクセッション番号のハイフンを除去してパス用に変換
         acc_no_slash = accession_number.replace("-", "")
+        doc_name = raw_form4_doc(doc_name)
         url = _EDGAR_ARCHIVE.format(
             cik        = cik_int,
             acc_no_slash = acc_no_slash,
@@ -348,7 +358,8 @@ def _parse_form4_xml(xml_text: str) -> Optional[dict]:
                         el = tx.find(path)
                         return (el.text or "").strip() if el is not None else ""
 
-                    tx_type   = _txval(".//transactionType")
+                    # 売買の区分は transactionCoding/transactionCode（P=市場買い・S=市場売り・A=付与 等）
+                    tx_type   = _txval(".//transactionCoding/transactionCode") or _txval(".//transactionType")
                     tx_date   = _txval(".//transactionDate/value")
                     tx_shares_raw = _txval(".//transactionShares/value")
                     tx_price_raw  = _txval(".//transactionPricePerShare/value")
@@ -557,65 +568,67 @@ def _score_filings(
 # BLOCK 7: yfinance フォールバック
 # ==============================================================
 
-def _calc_insider_bonus_yf(ticker: str, days: int | None = None) -> float:
-    """
-    yfinance の get_insider_transactions() を使ったフォールバック実装。
-    EDGAR が取得不可の場合に使用。
+def yf_transactions_summary(raw, days: int, now: datetime | None = None) -> dict:
+    """yfinance の get_insider_transactions() の表 → {insider_bonus, buy_count, sell_count}（純関数）。
 
-    Returns:
-        float: insider_bonus (-5.0〜+5.0)
-    """
+    yfinance は売却も Shares を正の数で返すので、売買は Text 列（"Purchase at …" / "Sale at …"）で決める。
+    株式報酬・贈与・オプション行使などは市場での売買ではないので数えない。
+    日付は Start Date 列（index は連番で日付ではない）。"""
+    out = {"insider_bonus": 0.0, "buy_count": 0, "sell_count": 0}
+    if raw is None or getattr(raw, "empty", True):
+        return out
+    now = now or datetime.now()
+    cutoff = now - timedelta(days=days)
+    total, buys, sells = 0.0, 0, 0
+    for _, row in raw.iterrows():
+        try:
+            when = row.get("Start Date")
+            if when is not None and str(when) != "NaT":
+                import pandas as pd
+                if pd.Timestamp(when).to_pydatetime().replace(tzinfo=None) < cutoff:
+                    continue
+            text = str(row.get("Text", "") or "").strip().lower()
+            if text.startswith("purchase"):
+                tx_type = "P"
+            elif text.startswith("sale"):
+                tx_type = "S"
+            else:
+                continue
+            value = float(row.get("Value", 0) or 0)
+            insider = str(row.get("Position", "") or row.get("Insider", "")).lower()
+            role_w = 1.5
+            for kw, wt in _ROLE_WEIGHTS.items():
+                if kw in insider:
+                    role_w = wt
+                    break
+            total += _calc_transaction_bonus({"type": tx_type, "value_usd": abs(value), "is_deriv": False}, role_w)
+            if tx_type == "P":
+                buys += 1
+            else:
+                sells += 1
+        except Exception:
+            continue
+    if buys >= 3:
+        total += 2.0
+    elif buys >= 2:
+        total += 1.0
+    out.update(insider_bonus=round(max(-5.0, min(5.0, total)), 2), buy_count=buys, sell_count=sells)
+    return out
+
+
+def _insider_yf(ticker: str, days: int | None = None) -> dict:
+    """EDGAR が使えない時の yfinance 版。{insider_bonus, buy_count, sell_count}。失敗時は0。"""
     try:
         days = _WINDOW_DAYS_DEFAULT if days is None else days
         import yf_cache as yf
-        t    = yf.Ticker(ticker)
-        raw  = t.get_insider_transactions()
-        if raw is None or raw.empty:
-            return 0.0
-
-        # 直近 days 日以内のデータをフィルタ
-        cutoff = datetime.now() - timedelta(days=days)
-        try:
-            raw = raw[raw.index >= cutoff]
-        except Exception:
-            pass
-
-        # Shares 列の正負から購買/売却を判定
-        total_bonus = 0.0
-        buy_count   = 0
-        sell_count  = 0
-
-        for _, row in raw.iterrows():
-            try:
-                shares = float(row.get("Shares", 0) or 0)
-                value  = float(row.get("Value", 0) or 0)
-                insider = str(row.get("Insider", "")).lower()
-                tx_type = "P" if shares > 0 else "S"
-
-                role_w = 1.5
-                for kw, wt in _ROLE_WEIGHTS.items():
-                    if kw in insider:
-                        role_w = wt
-                        break
-
-                tx = {"type": tx_type, "value_usd": abs(value), "is_deriv": False}
-                total_bonus += _calc_transaction_bonus(tx, role_w)
-                if tx_type == "P":
-                    buy_count += 1
-                else:
-                    sell_count += 1
-            except Exception:
-                continue
-
-        if buy_count >= 3:
-            total_bonus += 2.0
-        elif buy_count >= 2:
-            total_bonus += 1.0
-
-        return round(max(-5.0, min(5.0, total_bonus)), 2)
-
+        return yf_transactions_summary(yf.Ticker(ticker).get_insider_transactions(), days)
     except Exception:
-        return 0.0
+        return {"insider_bonus": 0.0, "buy_count": 0, "sell_count": 0}
+
+
+def _calc_insider_bonus_yf(ticker: str, days: int | None = None) -> float:
+    """互換用：yfinance 版の insider_bonus だけを返す。"""
+    return _insider_yf(ticker, days)["insider_bonus"]
 
 
 # ==============================================================
@@ -705,10 +718,11 @@ def get_insider_summary(
         cik = _get_cik(ticker, cfg)
         if not cik:
             # CIK 未解決 → yfinance フォールバック
-            bonus = _calc_insider_bonus_yf(ticker, days)
+            yfs = _insider_yf(ticker, days)
+            bonus = yfs["insider_bonus"]
             result = {
                 **_default,
-                "insider_bonus": bonus,
+                **yfs,
                 "source":        "yfinance",
                 "summary":       f"yfinance fallback (CIK未解決) bonus={bonus:+.1f}pt",
             }
@@ -719,10 +733,11 @@ def get_insider_summary(
         filings = _fetch_recent_form4_filings(cik, days)
         if not filings:
             # 提出なし or 取得失敗 → yfinance フォールバック
-            bonus = _calc_insider_bonus_yf(ticker, days)
+            yfs = _insider_yf(ticker, days)
+            bonus = yfs["insider_bonus"]
             result = {
                 **_default,
-                "insider_bonus": bonus,
+                **yfs,
                 "source":        "yfinance",
                 "summary":       f"yfinance fallback (Form4なし) bonus={bonus:+.1f}pt",
             }
@@ -760,10 +775,11 @@ def get_insider_summary(
             }
         else:
             # XML パース失敗 → yfinance フォールバック
-            bonus = _calc_insider_bonus_yf(ticker, days)
+            yfs = _insider_yf(ticker, days)
+            bonus = yfs["insider_bonus"]
             result = {
                 **_default,
-                "insider_bonus": bonus,
+                **yfs,
                 "source":        "yfinance",
                 "summary":       f"yfinance fallback (XMLパース失敗) bonus={bonus:+.1f}pt",
             }
