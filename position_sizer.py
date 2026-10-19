@@ -783,8 +783,10 @@ def run_position_sizer(
         usd_jpy = float(_sm.get("usd_jpy") or usd_jpy)
     except (OSError, ValueError):
         pass
+    # results["macro"] は実行済みの印（True）で辞書ではない。為替は macro_snapshot（MACRO_TICKERS の usdjpy）から取る
+    _snap = (results or {}).get("macro_snapshot")
     try:
-        _mx = ((results or {}).get("macro") or {}).get("usdjpy") or ((results or {}).get("macro_snapshot") or {}).get("usdjpy")
+        _mx = _snap.get("usdjpy") if isinstance(_snap, dict) else None
         if _mx:
             usd_jpy = float(_mx)
     except (TypeError, ValueError):

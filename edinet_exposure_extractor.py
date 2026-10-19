@@ -445,14 +445,57 @@ def _extract_exposure_from_text(
 # BLOCK 4: BQ から有報テキスト取得
 # ==============================================================
 
+def prefetch_text_sections(codes: list, cfg=None,
+                           project_id: str = "stock-analyzer-edinet") -> dict | None:
+    """対象会社の本文（edinet.text_analysis の最新10行）を1クエリでまとめて取る。
+
+    1社ずつ引くと、本文の表（約95MB）へのクエリが社数ぶん（既定50本）になり、
+    時間と課金が社数に比例する。行が無い会社も空の dict で埋める（埋めないと個別取得に戻る）。
+    Returns: {証券コード4桁: {section_type: text}}。BQ に届かなければ None（呼び出し側は1社ずつ取る）。
+    """
+    _pid = getattr(cfg, "GEO_BQ_PROJECT_ID", project_id) if cfg else project_id
+    codes = sorted({str(c).replace(".T", "").replace(".t", "") for c in codes if c})
+    if not codes:
+        return {}
+    try:
+        import importlib, sys as _sys
+        from pathlib import Path as _Path
+        for p in ["/content", str(_Path(__file__).parent)]:
+            if p not in _sys.path:
+                _sys.path.insert(0, p)
+        from google.cloud import bigquery
+        raw_bq = importlib.import_module("edinet_bq_client").EDINETBQClient().client
+        query = f"""
+        SELECT company_code, section_type, raw_text AS text_body
+        FROM `{_pid}.edinet.text_analysis`
+        WHERE company_code IN UNNEST(@codes)
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY company_code ORDER BY fiscal_year_end DESC) <= 10
+        ORDER BY company_code, fiscal_year_end DESC
+        """
+        job = raw_bq.query(query, job_config=bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ArrayQueryParameter("codes", "STRING", codes)]))
+        out: dict = {c: {} for c in codes}
+        for row in job.result():
+            if row.section_type and (row.text_body or "").strip():
+                out.setdefault(str(row.company_code), {}).setdefault(row.section_type, row.text_body)
+        return out
+    except Exception as e:
+        print(f"  ⚠️  edinet テキストの一括取得に失敗（1社ずつ取る）: {str(e)[:80]}")
+        return None
+
+
 def _get_edinet_text_sections(
     ticker: str,
     cfg=None,
     project_id: str = "stock-analyzer-edinet",
+    prefetched: dict | None = None,
+    allow_fallback: bool = True,
 ) -> dict[str, str]:
     """
     BQ の edinet.text_analysis または
     edinet_bq_client 経由で有報テキストセクションを取得する。
+    prefetched（prefetch_text_sections の戻り値）があれば BQ は引かない。
+    allow_fallback=False なら、BQ に本文が無い会社の有報 HTML 取得（遅い）をしない。
 
     Returns:
         {section_type: text} or {} (取得失敗時)
@@ -467,6 +510,11 @@ def _get_edinet_text_sections(
         for p in ["/content", str(_Path(__file__).parent)]:
             if p not in _sys.path:
                 _sys.path.insert(0, p)
+        if prefetched is not None:
+            from_bq = dict(prefetched.get(code) or {})
+            if from_bq or not allow_fallback:
+                return from_bq
+            return _sections_from_html(cfg, code, importlib)
         _bq_mod = importlib.import_module("edinet_bq_client")
         raw_bq  = _bq_mod.EDINETBQClient().client
 
@@ -489,31 +537,29 @@ def _get_edinet_text_sections(
             for row in rows
             if row.section_type and (row.text_body or "").strip()
         }
-        if from_bq:
+        if from_bq or not allow_fallback:
             return from_bq
-
-        # text_analysis が空の場合 → text_extractor 経由でセクション取得を試みる
-        #   EDINET HTML セクション抽出の実装を持つ text_extractor.extract_sections()
-        #   [E4-1] に委譲する（edinet_client.EDINETClient / get_section_text は存在しない）。
-        try:
-            _te_mod = importlib.import_module("text_extractor")
-            # extract_sections() の戻り値は {"securities_code", "company_name",
-            # ..., "sections": {business, risk, ...}}。本文は "sections" の中だけで、
-            # 外側の辞書を読むとメタ情報を本文として扱ってしまう。
-            _sections = (_te_mod.extract_sections(cfg, str(code)) or {}).get("sections") or {}
-            result = {
-                k: v for k, v in _sections.items()
-                if isinstance(v, str) and v.strip()
-            }
-            if result:
-                return result
-        except Exception:
-            pass
+        return _sections_from_html(cfg, code, importlib)
 
     except Exception as e:
         print(f"  ⚠️  edinet テキスト取得 [{ticker}]: {str(e)[:80]}")
 
     return {}
+
+
+def _sections_from_html(cfg, code: str, importlib) -> dict:
+    """text_analysis に本文が無い会社 → text_extractor.extract_sections()（EDINET の有報 HTML）で取る。
+    edinet_client.EDINETClient / get_section_text は存在しないので text_extractor [E4-1] に委譲する。
+    1社ごとに書類を取りに行くので遅い（呼び出し側が社数を絞る）。"""
+    try:
+        _te_mod = importlib.import_module("text_extractor")
+        # extract_sections() の戻り値は {"securities_code", "company_name",
+        # ..., "sections": {business, risk, ...}}。本文は "sections" の中だけで、
+        # 外側の辞書を読むとメタ情報を本文として扱ってしまう。
+        _sections = (_te_mod.extract_sections(cfg, str(code)) or {}).get("sections") or {}
+        return {k: v for k, v in _sections.items() if isinstance(v, str) and v.strip()}
+    except Exception:
+        return {}
 
 
 # ==============================================================
@@ -619,10 +665,20 @@ def run_edinet_exposure_extractor(
     processed:   list[str]  = []
     skipped:     list[str]  = []
 
+    # 本文は1クエリでまとめて取る。BQ に本文が無い会社だけ有報 HTML を取りに行くが、1社ずつで遅いので
+    # 1回の実行で GEO_EDINET_HTML_FALLBACK_MAX 社まで（月次ランナーの1ステップ900秒に収める）。
+    prefetched = prefetch_text_sections(tickers, cfg, _pid)
+    fallback_left = int(getattr(cfg, "GEO_EDINET_HTML_FALLBACK_MAX", 5) if cfg else 5)
+
     for ticker in tickers:
         try:
             print(f"   📋 [{ticker}] テキスト取得中...")
-            sections = _get_edinet_text_sections(ticker, cfg, _pid)
+            code = ticker.replace(".T", "").replace(".t", "")
+            need_html = prefetched is not None and not (prefetched.get(code) or {})
+            sections = _get_edinet_text_sections(ticker, cfg, _pid, prefetched=prefetched,
+                                                 allow_fallback=(not need_html) or fallback_left > 0)
+            if need_html and fallback_left > 0:
+                fallback_left -= 1
 
             if not sections:
                 print(f"   ⚠️  [{ticker}] テキスト未取得 → スキップ")

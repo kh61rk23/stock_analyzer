@@ -3576,6 +3576,8 @@ IMPORTANT_TICKERS_US: list = [
 # 権益マッピングの自動抽出信頼度の最低閾値
 # この値未満の exposure_strength は BQ に格納しない
 GEO_EXPOSURE_MIN_STRENGTH = 0.05
+# BQ（edinet.text_analysis）に本文が無い会社だけ有報 HTML を取りに行く上限社数（1回の実行。1社ずつで遅く、月次の1ステップ900秒に収めるため）
+GEO_EDINET_HTML_FALLBACK_MAX: int = 5
 
 # exposure_review_ui での手動確認が必要な exposure_strength の上限
 # この値未満は「要確認」フラグを立てる

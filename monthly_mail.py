@@ -47,6 +47,70 @@ def report_files(insights: Path, ym: str, tax_months: tuple = (1, 4, 7, 10, 11))
     return [(t, p) for t, p in cands if p.exists()]
 
 
+def _first(pattern: str, text: str):
+    m = re.search(pattern, text, re.M)
+    return m if m else None
+
+
+def summarize_report(name: str, text: str) -> tuple[str, bool]:
+    """レポート1本 → (要点1行, 健太の判断が要るか)（純関数）。読めない形なら ("", False)。
+
+    要点は各レポートが自分で書いている集計行から取る（数値を作り直さない）。"""
+    t = text.replace("**", "")
+    if name.startswith("strategy_review_"):
+        m = _first(r"当月の審議: (\d+)件（([^）]*)）", t)
+        old = _first(r"当月の審議/記帳エントリ: (\d+)件", t)
+        w = _first(r"当月の重み変更: (\d+)件", t)
+        parts = ([f"審議 {m.group(1)}件（{m.group(2)}）"] if m else [f"審議 {old.group(1)}件"] if old else [])
+        parts += [f"重み変更 {w.group(1)}件"] if w else ["重み変更なし"]
+        return (" ／ ".join(parts), bool(w))
+    if name.startswith("signal_culling_"):
+        m = _first(r"提案あり[:：]\s*(\d+)件\s*/\s*判定不能[:：]\s*(\d+)件", t)
+        return ((f"重みの変更提案 {m.group(1)}件・判定不能 {m.group(2)}件", int(m.group(1)) > 0) if m else ("", False))
+    if name.startswith("paper_"):
+        rows = re.findall(r"^\| (\S+) \| [\d,]+ \| [\d,]+ \| ([+-][\d,]+) \| ([+-][\d.]+%) \|", t, re.M)
+        if not rows:
+            return ("", False)
+        total = sum(int(r[1].replace(",", "")) for r in rows)
+        best = max(rows, key=lambda r: float(r[2].rstrip("%")))
+        worst = min(rows, key=lambda r: float(r[2].rstrip("%")))
+        promo = "🎯 昇格候補" in t
+        return (f"月次損益 合計 {total:+,}円（最良 {best[0]} {best[2]}・最悪 {worst[0]} {worst[2]}）"
+                + ("・昇格候補あり" if promo else ""), promo)
+    if name.startswith("allocation_proposal_"):
+        m = _first(r"カジノ枠: (¥[\d,]+) / (\d+)戦略に配分", t)
+        return ((f"カジノ枠 {m.group(1)}・{m.group(2)}戦略に配分", int(m.group(2)) > 0) if m else ("", False))
+    if name.startswith("commodity_alloc_"):
+        q = _first(r"象限: (\S+)", t)
+        a = _first(r"コモディティ配分合計: ([\d.]+%)", t)
+        busy = bool(a and float(a.group(1).rstrip("%")) > 0)
+        return (" ／ ".join(x for x in ((f"象限 {q.group(1)}" if q else ""), (f"配分合計 {a.group(1)}" if a else "")) if x), busy)
+    if name.startswith("tax_report_"):
+        m = _first(r"相殺可能額: (¥[\d,]+) → 節税額の目安: (¥[\d,]+)", t)
+        return ((f"損出しの相殺可能額 {m.group(1)}（節税の目安 {m.group(2)}）", m.group(1) != "¥0") if m else ("", False))
+    return ("", False)
+
+
+def summary_html(files: list) -> str:
+    """冒頭の「要点」節（各レポートの1行と、健太の判断が要るもの）。"""
+    rows, asks = [], []
+    for title, p in files:
+        try:
+            line, ask = summarize_report(p.name, p.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if line:
+            rows.append(f"<li><b>{html.escape(title)}</b>: {html.escape(line)}</li>")
+            if ask:
+                asks.append(html.escape(title))
+    if not rows:
+        return ""
+    out = ['<h3>📌 要点</h3>', "<ul>" + "".join(rows) + "</ul>"]
+    out.append(f"<div>🙋 判断が要るもの: {'・'.join(asks)}（各節の提案を確認）</div>" if asks
+               else "<div>🙋 判断が要るもの: なし</div>")
+    return "\n".join(out)
+
+
 def md_to_html(md: str) -> str:
     """最低限の Markdown → HTML（見出し・表・箇条書き・引用・強調）（純関数）。"""
     out, in_table = [], False
@@ -97,7 +161,7 @@ def build(ym: str, insights: Path, tax_months: tuple = (1, 4, 7, 10, 11), late_n
              *([f'<div style="color:#b45309">⚠️ {html.escape(late_note)}</div>'] if late_note else []),
              *([f'<div style="color:#b91c1c">❌ 次のステップは失敗が続いたため今月は作れていません（レポートに含まれない）: '
                 f'{html.escape(", ".join(gave_up))}</div>'] if gave_up else []),
-             "<ul>" + "".join(f"<li>{html.escape(t)}</li>" for t, _ in files) + "</ul>"]
+             summary_html(files) or ("<ul>" + "".join(f"<li>{html.escape(t)}</li>" for t, _ in files) + "</ul>")]
     for title, p in files:
         try:
             body = p.read_text(encoding="utf-8")
