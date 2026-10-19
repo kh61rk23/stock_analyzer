@@ -109,14 +109,29 @@ jobs:
 
       # ── 2. Python セットアップ ────────────────────────────
       - name: 🐍 Setup Python
+        id: setup-python
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-          cache: "pip"
-          cache-dependency-path: requirements.txt
+          # pip のダウンロード キャッシュは使わない（下でインストール済みの環境ごと戻すので、毎回の復元時間が無駄になる）
 
       # ── 3. 依存パッケージインストール ─────────────────────
+      # torch・transformers（FinBERT が毎日使う）を含むので、pip の展開だけで毎回約1分半かかる。
+      # インストール済みの Python ごと保存して戻し、当たった日は pip を飛ばす。
+      # requirements.txt は下限指定（>=）なので、キーに年月を入れて月に1回は入れ直す（yfinance 等の更新を取り込む）。
+      - name: 🗓️ Cache key month
+        id: ym
+        run: echo "ym=$(date -u +%Y%m)" >> "$GITHUB_OUTPUT"
+
+      - name: ♻️ Restore installed packages
+        id: deps-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.pythonLocation }}
+          key: pydeps-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('requirements.txt') }}-${{ steps.ym.outputs.ym }}
+
       - name: 📦 Install dependencies
+        if: steps.deps-cache.outputs.cache-hit != 'true'
         run: pip install -r requirements.txt
 
       # ── 3-A. 実行モード決定 ───────────────────────────────

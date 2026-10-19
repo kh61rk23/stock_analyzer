@@ -201,7 +201,8 @@ def test_build_alert_and_ci_flag(tmp_path, monkeypatch):
 
 def test_collect_file_issues_mac_only_on_actions(tmp_path, monkeypatch):
     oh = load_module("ops_health")
-    cfg = SimpleNamespace(LOG_DIR=tmp_path / "logs", DATA_DIR=tmp_path / "data")
+    cfg = SimpleNamespace(LOG_DIR=tmp_path / "logs", DATA_DIR=tmp_path / "data",
+                          HOLDINGS_SUMMARY_PATH=tmp_path / "data" / "portfolio_summary.json")
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     assert oh.collect_file_issues(cfg, datetime(2026, 10, 18)) == []
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
@@ -278,7 +279,8 @@ def test_collect_reads_bi_manifest(tmp_path, monkeypatch):
     (tmp_path / "bi").mkdir()
     (tmp_path / "bi" / "manifest.json").write_text(json.dumps(
         {"marts": [{"mart": "m_screener", "generated_at": "2026-10-10T05:00:00Z"}]}), encoding="utf-8")
-    cfg = SimpleNamespace(LOG_DIR=tmp_path / "logs", DATA_DIR=tmp_path / "data")
+    cfg = SimpleNamespace(LOG_DIR=tmp_path / "logs", DATA_DIR=tmp_path / "data",
+                          HOLDINGS_SUMMARY_PATH=tmp_path / "data" / "portfolio_summary.json")
     got = oh.collect_file_issues(cfg, datetime(2026, 10, 18, 14, 0))
     assert len(got) == 1 and "m_screener" in got[0]["text"]
 

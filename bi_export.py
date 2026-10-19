@@ -294,6 +294,24 @@ def finalize_entry(plan: dict, info: dict) -> dict:
     }
 
 
+def copy_is_current(client, src: dict) -> int | None:
+    """写し（bi.<dest>）が元表の最終更新より新しく、列も今の定義どおりなら、その行数を返す（写し直さない）。
+
+    us.* の元表は週に数回・手動でしか変わらないのに、毎日 list_rows で全行（segments は約52万行）を
+    読んで写し直すと、日次が数分延びる。メタデータ（get_table）は課金なし。判断できなければ None（写す）。"""
+    try:
+        s_meta = client.get_table(src["source"])
+        d_meta = client.get_table(table_ref(src["dest"]))
+    except Exception:
+        return None
+    want = src["columns"] + src.get("optional_columns", [])
+    if [f.name for f in d_meta.schema] != want or not d_meta.num_rows:
+        return None
+    if s_meta.modified is None or d_meta.modified is None or d_meta.modified < s_meta.modified:
+        return None
+    return int(d_meta.num_rows)
+
+
 def refresh_source(client, src: dict) -> int:
     """location が違う元表を bi.<dest> へ写す（list_rows と load job はどちらも無料）。0行は失敗。"""
     from google.cloud import bigquery
@@ -436,6 +454,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         ensure_dataset(client)  # 実体化できないなら parquet も更新しない（表と食い違うため）
         for src in sources_for(names):
+            current = copy_is_current(client, src)
+            if current is not None:
+                print(f"⏩ 元表の写し {src['source']}: 前回の写し以降に変更なし（{current:,}行・写し直さない）")
+                continue
             rows = refresh_source(client, src)
             print(f"✅ 元表の写し {src['source']} → {DATASET}.{src['dest']}: {rows:,}行")
     except Exception as e:  # noqa: BLE001

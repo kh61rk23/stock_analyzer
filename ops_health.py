@@ -7,7 +7,8 @@
 #   ② Mac の同期（obsidian_sync.py all が LOG_DIR/mac_sync_status.json を push する）
 #      承認の BQ 反映・部則のクラウド同期・vault ミラーは Mac が止まると全部止まる
 #   ③ 週次ループ（weekly_feedback_runner の結果。②の中に weekly_loop として載る）
-#   ④ 保有銘柄の鮮度（DATA_DIR/portfolio_summary.json の as_of＝家計簿締めの日）
+#   ④ 保有銘柄の鮮度（リポジトリ直下 data/portfolio_summary.json の as_of＝家計簿締めの日。
+#      書き手 sync_holdings は stock_data ではなくリポジトリ直下の data/ に書く）
 #   ⑤ クラウド審議 routine（deliberation_queue.get_routine_health の BQ 集計）
 #      「失敗」だけでなく、起動しない・途中で止まる（claimed のまま）も拾う
 #   ⑥ BI マート bi.m_screener の鮮度（stock_data/bi/manifest.json の generated_at）
@@ -26,6 +27,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 MAC_STATUS_FILE = "mac_sync_status.json"
+HOLDINGS_SUMMARY = Path(__file__).resolve().parent / "data" / "portfolio_summary.json"   # sync_holdings.OUT_SUMMARY と同じ
 ACTIONS_USAGE_FILE = "actions_usage.json"
 
 
@@ -182,7 +184,6 @@ def collect_file_issues(cfg, now: datetime | None = None) -> list:
     （Mac 自身で動かすと、自分の同期状況を自分で見ることになり意味がない）。"""
     now = now or datetime.now()
     log_dir = Path(_cfg(cfg, "LOG_DIR", "stock_data/logs"))
-    data_dir = Path(_cfg(cfg, "DATA_DIR", "stock_data/data"))
     issues = []
     issues += actions_usage_issues(_read_json(log_dir / ACTIONS_USAGE_FILE),
                                    int(_cfg(cfg, "OPS_ACTIONS_MONTHLY_MINUTES", 2000)),
@@ -191,7 +192,7 @@ def collect_file_issues(cfg, now: datetime | None = None) -> list:
         issues += mac_sync_issues(_read_json(log_dir / MAC_STATUS_FILE), now,
                                   float(_cfg(cfg, "OPS_MAC_SYNC_STALE_HOURS", 48)),
                                   float(_cfg(cfg, "OPS_WEEKLY_LOOP_STALE_DAYS", 9)))
-    issues += holdings_issues(_read_json(data_dir / "portfolio_summary.json"), now.date(),
+    issues += holdings_issues(_read_json(Path(_cfg(cfg, "HOLDINGS_SUMMARY_PATH", HOLDINGS_SUMMARY))), now.date(),
                               int(_cfg(cfg, "OPS_HOLDINGS_STALE_DAYS", 14)))
     # manifest の時刻は UTC。now（ローカル時刻・TZ=Asia/Tokyo）を UTC に直して比べる
     issues += bi_mart_issues(_read_json(log_dir.parent / "bi" / "manifest.json"),

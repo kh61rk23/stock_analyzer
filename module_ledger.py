@@ -126,6 +126,7 @@ def record_external(cfg, name: str, status: str, note: str = "",
     daily = _load_daily(cfg, date_str)
     if daily is not None:
         daily.setdefault("modules", {})[name] = entry
+        _apply_late_record(daily, name)
         payload = json.dumps(daily, ensure_ascii=False, indent=2)
         _daily_path(cfg, date_str).write_text(payload, encoding="utf-8")
         latest = _log_dir(cfg) / _LATEST_FILENAME
@@ -135,6 +136,32 @@ def record_external(cfg, name: str, status: str, note: str = "",
                     latest.write_text(payload, encoding="utf-8")
             except Exception:
                 pass
+
+
+def _stats_of(modules: dict) -> dict:
+    """モジュール別の状態 → 件数（warn / alert は要確認として数える。数えないと「失敗0」に見える）。"""
+    return {
+        "success": sum(1 for m in modules.values() if m.get("status") == "success"),
+        "error":   sum(1 for m in modules.values() if m.get("status") == "error"),
+        "skipped": sum(1 for m in modules.values() if m.get("status") == "skipped"),
+        "warn":    sum(1 for m in modules.values() if m.get("status") in ("warn", "alert")),
+        "total":   len(modules),
+    }
+
+
+def _apply_late_record(daily: dict, name: str) -> None:
+    """確定済みの日次台帳に、後から届いた記録を反映する（純関数に近い・daily を書き換える）。
+
+    日次台帳は分析の最後（finalize_daily_ledger）で確定し、その時点で「記録が来ない」を判定する。
+    daily_run の外側ステップ（bi_export など）はその後に記録するため、確定時には当日分がまだ無い。
+    届いた名前は external_stale と alerts から外し、件数を数え直す（残すと、動いているのに
+    「起動していない」と読める台帳が残る）。"""
+    stale = daily.get("external_stale")
+    if isinstance(stale, dict):
+        stale.pop(name, None)
+    daily["alerts"] = [a for a in daily.get("alerts") or []
+                       if not (a.get("kind") == "external_stale" and a.get("module") == name)]
+    daily["stats"] = _stats_of(daily.get("modules") or {})
 
 
 def build_daily_ledger(cfg, logs: list, date_str: str = None) -> dict:
@@ -167,14 +194,7 @@ def build_daily_ledger(cfg, logs: list, date_str: str = None) -> dict:
     # warn / alert は success でも error でもないため、数えないと「失敗0」に見え、
     # 成果ゼロで alert を出しているモジュールが健全に見えてしまう。
     # 要確認として明示的に数える。
-    stats = {
-        "success": sum(1 for m in modules.values() if m["status"] == "success"),
-        "error":   sum(1 for m in modules.values() if m["status"] == "error"),
-        "skipped": sum(1 for m in modules.values() if m["status"] == "skipped"),
-        "warn":    sum(1 for m in modules.values()
-                       if m["status"] in ("warn", "alert")),
-        "total":   len(modules),
-    }
+    stats = _stats_of(modules)
 
     # DAILY_MODULES に登録されているのに当日記録が無いモジュール
     # （ENABLE=False の意図的スキップはログに "skipped" が残る想定のため、

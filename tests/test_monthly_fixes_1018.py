@@ -183,3 +183,142 @@ def test_rule_optimizer_month_end_window(tmp_path):
     (tmp_path / "rule_optimizer_meta.json").write_text(json.dumps({"last_update_month": "2026-10"}), encoding="utf-8")
     assert ro.updated_this_month(cfg, date(2026, 10, 27))
     assert not ro.updated_this_month(cfg, date(2026, 11, 30))
+
+
+# ── 実行台帳: 確定後に届いた外側ステップの記録で「記録が来ない」を取り消す ──
+
+def test_late_record_clears_external_stale(tmp_path):
+    ml = load_module("module_ledger")
+    cfg = types.SimpleNamespace(LOG_DIR=tmp_path)
+    day = "2026-10-19"
+    daily = {"date": day, "modules": {"a": {"status": "success"}},
+             "stats": {"success": 1, "error": 0, "skipped": 0, "warn": 0, "total": 1},
+             "external_stale": {"bi_export": 14, "daily_state_push": 14},
+             "alerts": [{"kind": "external_stale", "module": "bi_export", "days": 14, "note": ""},
+                        {"kind": "external_stale", "module": "daily_state_push", "days": 14, "note": ""},
+                        {"kind": "consecutive_failure", "module": "x", "days": 3, "note": ""}]}
+    (tmp_path / f"module_ledger_{day}.json").write_text(json.dumps(daily), encoding="utf-8")
+    (tmp_path / "module_ledger_latest.json").write_text(json.dumps(daily), encoding="utf-8")
+    ml.record_external(cfg, "bi_export", "success", "step", date_str=day)
+    for name in (f"module_ledger_{day}.json", "module_ledger_latest.json"):
+        d = json.loads((tmp_path / name).read_text(encoding="utf-8"))
+        assert d["external_stale"] == {"daily_state_push": 14}
+        assert [a["module"] for a in d["alerts"]] == ["daily_state_push", "x"]
+        assert d["stats"]["success"] == 2 and d["stats"]["total"] == 2
+
+
+# ── 運用の監視: 保有銘柄の要約はリポジトリ直下の data/ にある ─────────
+
+def test_holdings_summary_path_is_repo_data():
+    oh = load_module("ops_health")
+    sh = load_module("sync_holdings")
+    assert oh.HOLDINGS_SUMMARY == sh.OUT_SUMMARY
+
+
+# ── ポジションサイジング: results["macro"] は True（辞書ではない）──────
+
+def test_position_sizer_handles_macro_flag(tmp_path, monkeypatch):
+    import position_sizer as ps
+    monkeypatch.setattr(ps, "calc_atr", lambda t: {"atr14": 10.0, "current_price": 1000.0,
+                                                   "price_52w_high": 1100.0, "price_52w_low": 900.0})
+    monkeypatch.setattr(ps, "FETCH_DELAY", 0)
+    cfg = types.SimpleNamespace(DATA_DIR=tmp_path, DRIVE_BASE=tmp_path)
+    r = ps.run_position_sizer(cfg, 10_000_000, tickers_override=["NVDA"],
+                              results={"macro": True, "macro_snapshot": {"usdjpy": 150.0}},
+                              screener_result={"candidates": []})
+    assert len(r["positions"]) == 1 and not r["positions"][0].get("error")
+
+
+# ── 地政学: EDINET 本文は1クエリでまとめて取る ─────────────────────
+
+def test_edinet_exposure_prefetches_in_one_query(monkeypatch):
+    import sys
+    queries = []
+
+    class _Row:
+        def __init__(self, code, sec, text):
+            self.company_code, self.section_type, self.text_body = code, sec, text
+
+    class _Client:
+        def query(self, q, job_config=None):
+            queries.append(q)
+            rows = [_Row("1605", "事業の概況", "海外" * 80), _Row("8058", "海外事業", "")]
+            return types.SimpleNamespace(result=lambda: rows)
+
+    bq = types.ModuleType("edinet_bq_client")
+    bq.EDINETBQClient = lambda: types.SimpleNamespace(client=_Client())
+    html_calls = []
+    te = types.ModuleType("text_extractor")
+    te.extract_sections = lambda cfg, code: (html_calls.append(code), {"sections": {}})[1]
+    monkeypatch.setitem(sys.modules, "edinet_bq_client", bq)
+    monkeypatch.setitem(sys.modules, "text_extractor", te)
+    m = load_module("edinet_exposure_extractor")
+    cfg = types.SimpleNamespace(GEO_EDINET_HTML_FALLBACK_MAX=1)
+    m.run_edinet_exposure_extractor(cfg, target_tickers=["1605.T", "8058.T", "9999.T"], dry_run=True)
+    assert len(queries) == 1 and "UNNEST(@codes)" in queries[0]
+    assert html_calls == ["8058"]          # 本文が無い会社だけ・上限1社まで
+
+
+# ── 月次メールの要点 ─────────────────────────────────────────
+
+def test_monthly_mail_summary_lines():
+    mm = load_module("monthly_mail")
+    assert mm.summarize_report("signal_culling_202611.md", "提案あり: 2件 / 判定不能: 21件") == (
+        "重みの変更提案 2件・判定不能 21件", True)
+    line, ask = mm.summarize_report("paper_202610.md",
+                                    "| pead | 2,000,000 | 2,014,145 | +14,145 | +0.71% | 14 |\n"
+                                    "| screener_topN | 2,000,000 | 1,946,918 | -53,082 | -2.65% | 14 |")
+    assert line.startswith("月次損益 合計 -38,937円") and "最良 pead" in line and not ask
+    assert mm.summarize_report("commodity_alloc_202611.md",
+                               "- 現在の経済サイクル象限: **A** / x\n- コモディティ配分合計: 6.0% / 現金") == (
+        "象限 A ／ 配分合計 6.0%", True)
+    assert mm.summarize_report("unknown.md", "x") == ("", False)
+
+
+# ── 日次メール: 米国株スクリーナーの銘柄を国別に分ける ───────────────
+
+def test_country_of_and_split():
+    import alert_notifier as an
+    assert [an.country_of(t) for t in ["GOOGL", "BRK-B", "000660.KS", "SESG.PA", "HBM.TO", "6758.T", "X.ZZ"]] == [
+        "米国", "米国", "韓国", "フランス", "カナダ", "日本", "その他（.ZZ）"]
+    lines = an.build_intl_pick_lines([{"ticker": "000660.KS", "composite_score": 88},
+                                      {"ticker": "005930.KS", "composite_score": 85},
+                                      {"ticker": "HBM.TO", "composite_score": 90}], per_country=1)
+    assert lines[0].startswith("  【カナダ】1社") and lines[2].startswith("  【韓国】2社通過（上位1社）")
+    assert len(lines) == 4
+
+
+def test_us_summary_excludes_non_us_and_sections_survive():
+    import alert_notifier as an
+    import config as cfg
+    picks = [{"ticker": "GOOGL", "composite_score": 99}, {"ticker": "000660.KS", "composite_score": 88}]
+    al = an.extract_alerts(cfg, {"us_screener": {"top_picks": picks, "pass_count": 2, "screened_count": 9,
+                                                  "candidates": [dict(p, div_yield=0.05) for p in picks]}})
+    by = {a["trigger"]: a for a in al}
+    assert "000660.KS" not in by["us_summary"]["body"] and "GOOGL" in by["us_summary"]["body"]
+    assert "【韓国】" in by["intl_summary"]["body"]
+    assert "海外1社" in by["high_dividend"]["title"]
+    # EdinetDB 節を通らない日でも、Path を使う節（不動産DB 等）が UnboundLocalError で消えない
+    assert "real_estate" in by
+
+
+def test_bi_export_skips_unchanged_copies():
+    import bi_export as b
+    from datetime import datetime, timezone
+    src = b.SOURCES[-1]
+    want = src["columns"] + src.get("optional_columns", [])
+
+    class C:
+        def __init__(self, s_mod, d_mod, cols=want):
+            self.m = {src["source"]: types.SimpleNamespace(modified=s_mod, schema=[], num_rows=5),
+                      b.table_ref(src["dest"]): types.SimpleNamespace(
+                          modified=d_mod, num_rows=7, schema=[types.SimpleNamespace(name=c) for c in cols])}
+
+        def get_table(self, ref):
+            return self.m[ref]
+
+    t1, t2 = datetime(2026, 10, 10, tzinfo=timezone.utc), datetime(2026, 10, 19, tzinfo=timezone.utc)
+    assert b.copy_is_current(C(t1, t2), src) == 7          # 元表は写し以降変わっていない
+    assert b.copy_is_current(C(t2, t1), src) is None       # 元表が新しい
+    assert b.copy_is_current(C(t1, t2, want[:-1]), src) is None   # 列の定義が変わった
+    assert b.copy_is_current(object(), src) is None        # 判断できない

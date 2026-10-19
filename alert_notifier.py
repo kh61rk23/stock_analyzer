@@ -31,10 +31,12 @@
 # 【呼出】from alert_notifier import run_alert_notifier
 # ==============================================================
 
+import json
 import smtplib
 import urllib.parse
 import urllib.request
 from datetime import date, datetime, timezone
+from pathlib import Path
 
 
 
@@ -70,6 +72,56 @@ DELIBERATION_QUEUE_MARKER = "DELIBERATION_QUEUE_V1:"
 
 
 # ── fmt_cap: 時価総額・FCF等の大数値フォーマット ──────────────
+# 取引所の接尾辞 → 国。米国株スクリーナー（us_stock_screener）のテーマ別リスト（data/custom_universe/）は
+# 韓国・欧州・日本などの銘柄も意図して含むので、メールでは国ごとに分けて出す。接尾辞なしは米国。
+_SUFFIX_COUNTRY = {
+    "T": "日本", "KS": "韓国", "KQ": "韓国", "HK": "香港", "SS": "中国", "SZ": "中国",
+    "TW": "台湾", "TWO": "台湾", "L": "英国", "PA": "フランス", "DE": "ドイツ", "F": "ドイツ",
+    "AS": "オランダ", "MC": "スペイン", "SW": "スイス", "MI": "イタリア", "LS": "ポルトガル",
+    "BR": "ベルギー", "ST": "スウェーデン", "CO": "デンマーク", "OL": "ノルウェー", "HE": "フィンランド",
+    "TO": "カナダ", "V": "カナダ", "AX": "オーストラリア", "NZ": "ニュージーランド", "KL": "マレーシア",
+    "SI": "シンガポール", "TA": "イスラエル", "SA": "ブラジル", "MX": "メキシコ", "NS": "インド", "BO": "インド",
+}
+
+
+def country_of(ticker) -> str:
+    """ティッカー → 国（純関数）。'BRK-B' のように点の無いものは米国。未知の接尾辞は 'その他（.XX）'。"""
+    t = str(ticker or "").strip().upper()
+    if "." not in t:
+        return "米国"
+    suf = t.rsplit(".", 1)[1]
+    return _SUFFIX_COUNTRY.get(suf, f"その他（.{suf}）")
+
+
+def pick_line(c: dict) -> str:
+    """スクリーナー通過銘柄1件の行（米国株サマリーと海外株で共通）。"""
+    _nm = str(_jname(c) or c.get("ticker", ""))[:20]
+    _pp = []
+    if c.get("per"):
+        _pp.append(f"PER:{c['per']:.1f}x")
+    if c.get("roe"):
+        _pp.append(f"ROE:{c['roe']*100:.0f}%")
+    if c.get("div_yield"):
+        _pp.append(f"配当:{c['div_yield']*100:.1f}%")
+    if c.get("analyst_upside") is not None:
+        _pp.append(f"目標乖離:{c['analyst_upside']*100:+.0f}%")
+    _detail = f" | {' | '.join(_pp)}" if _pp else ""
+    return f"    📌 {_nm}（{c.get('ticker','')}）: {c.get('composite_score', 0):.0f}点 | {c.get('sector','')}{_detail}"
+
+
+def build_intl_pick_lines(picks: list, per_country: int = 3) -> list:
+    """米国以外の通過銘柄を国ごとにまとめる（国は最高点の順・各国は点数順に per_country 社まで）。"""
+    by: dict = {}
+    for c in picks:
+        by.setdefault(country_of(c.get("ticker")), []).append(c)
+    lines = []
+    for country, cs in sorted(by.items(), key=lambda kv: -max(float(x.get("composite_score") or 0) for x in kv[1])):
+        cs = sorted(cs, key=lambda x: -float(x.get("composite_score") or 0))
+        lines.append(f"  【{country}】{len(cs)}社通過（上位{min(per_country, len(cs))}社）")
+        lines += [pick_line(c) for c in cs[:per_country]]
+    return lines
+
+
 def fmt_cap(val) -> str:
     """大きな数値を兆・億単位で整形（finance_logic.fmt_large 相当）"""
     if val is None:
@@ -387,39 +439,35 @@ def extract_alerts(cfg, results: dict) -> list:
                     _us_lines.append(
                         f"    {_nm}（{_s.get('etf','')}）: {_sr.get('score', 0):.0f}点{_risk_s}")
 
-            # (b) USスクリーナー通過上位（us_stock_screener）
+            # (b) USスクリーナー通過上位（us_stock_screener）。米国以外の銘柄は下の「海外株」節へ国別に回す
             _us_scr = results.get("us_screener", {}) or {}
+            _intl_lines = []
             if not _us_scr.get("skipped"):
-                _picks = _us_scr.get("top_picks") or _us_scr.get("passed") or []
+                _all_picks = [c for c in (_us_scr.get("top_picks") or _us_scr.get("passed") or [])
+                              if isinstance(c, dict)]
+                _picks = [c for c in _all_picks if country_of(c.get("ticker")) == "米国"]
+                _intl_lines = build_intl_pick_lines(
+                    [c for c in _all_picks if country_of(c.get("ticker")) != "米国"],
+                    int(getattr(cfg, "ALERT_INTL_TOP_PICKS_PER_COUNTRY", 3)))
                 if _picks:
                     _pn = int(getattr(cfg, "ALERT_US_TOP_PICKS", 10))
                     _us_lines.append(
-                        f"  【スクリーニング】{_us_scr.get('pass_count', 0)}社通過 "
-                        f"/ {_us_scr.get('screened_count', 0)}社中")
-                    for c in _picks[:_pn]:
-                        if not isinstance(c, dict):
-                            continue
-                        _nm = str(_jname(c) or c.get("ticker", ""))[:20]
-                        _pp = []
-                        if c.get("per"):
-                            _pp.append(f"PER:{c['per']:.1f}x")
-                        if c.get("roe"):
-                            _pp.append(f"ROE:{c['roe']*100:.0f}%")
-                        if c.get("div_yield"):
-                            _pp.append(f"配当:{c['div_yield']*100:.1f}%")
-                        if c.get("analyst_upside") is not None:
-                            _pp.append(f"目標乖離:{c['analyst_upside']*100:+.0f}%")
-                        _detail = f" | {' | '.join(_pp)}" if _pp else ""
-                        _us_lines.append(
-                            f"    📌 {_nm}（{c.get('ticker','')}）: "
-                            f"{c.get('composite_score', 0):.0f}点"
-                            f" | {c.get('sector','')}{_detail}")
+                        f"  【スクリーニング】米国 {len(_picks)}社通過（全体 {_us_scr.get('pass_count', 0)}社通過 "
+                        f"/ {_us_scr.get('screened_count', 0)}社中・米国以外は下の海外株）")
+                    _us_lines += [pick_line(c) for c in _picks[:_pn]]
 
             if _us_lines:
                 alerts.append({
                     "trigger":  "us_summary",
                     "title":    "🇺🇸 米国株サマリー（本日）",
                     "body":     "\n".join(_us_lines),
+                    "severity": "info",
+                })
+            if _intl_lines:
+                alerts.append({
+                    "trigger":  "intl_summary",
+                    "title":    "🌏 海外株（テーマ別リストの米国以外・国別）",
+                    "body":     "\n".join(_intl_lines),
                     "severity": "info",
                 })
         except Exception as _us_err:
@@ -1913,8 +1961,6 @@ def extract_alerts(cfg, results: dict) -> list:
     if getattr(cfg, "ALERT_ON_EDINETDB_INGEST", True):
         ing = results.get("edinetdb_ingest") or {}
         if isinstance(ing, dict) and not ing.get("skipped") and "success" in ing:
-            from pathlib import Path
-            import json
             _dd = Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
             _today = datetime.now().strftime("%Y-%m-%d")
             def _jl(p):
@@ -2030,15 +2076,17 @@ def collect_high_dividend(cfg, results: dict, sector_results: dict | None = None
         _add(c.get("ticker"), _jname(c), c.get("dividend_yield"), c.get("payout_ratio"),
              c.get("sector_name"), "JP")
     for c in ((results.get("us_screener") or {}).get("candidates") or []):
+        # 米国株スクリーナーのテーマ別リストには米国以外も入る。国で分け、日本株は日本側に入れる
+        _cty = country_of(c.get("ticker"))
         _add(c.get("ticker"), _jname(c), c.get("div_yield"), c.get("payout_ratio"),
-             c.get("sector"), "US")
+             c.get("sector"), "US" if _cty == "米国" else "JP" if _cty == "日本" else "INTL")
     for code, r in (sector_results or {}).items():
         if isinstance(r, dict):
             for c in r.get("top_companies", []) or []:
                 if c.get("fetch_ok"):
                     _add(c.get("ticker"), _jname(c), c.get("dividend_yield"),
                          c.get("payout_ratio"), r.get("sector_name_ja", code), "JP")
-    out = {"JP": [], "US": []}
+    out = {"JP": [], "US": [], "INTL": []}
     for v in sorted(seen.values(), key=lambda x: -x["dy"]):
         out[v["market"]].append(v)
     return out
@@ -2046,24 +2094,26 @@ def collect_high_dividend(cfg, results: dict, sector_results: dict | None = None
 
 def build_high_dividend_alert(cfg, results: dict, sector_results: dict | None = None):
     found = collect_high_dividend(cfg, results, sector_results)
-    n_jp, n_us = len(found["JP"]), len(found["US"])
-    if not n_jp and not n_us:
+    n_jp, n_us, n_intl = len(found["JP"]), len(found["US"]), len(found.get("INTL", []))
+    if not n_jp and not n_us and not n_intl:
         return None
     min_dy = float(getattr(cfg, "ALERT_MIN_DIVIDEND_YIELD", 0.04))
     lines = []
-    for mk, label, top in (("JP", "日本株", 12), ("US", "米国株", 8)):
-        rows = found[mk]
+    for mk, label, top in (("JP", "日本株", 12), ("US", "米国株", 8), ("INTL", "海外（米国以外）", 8)):
+        rows = found.get(mk) or []
         if not rows:
             continue
         lines.append(f"  【{label}】{len(rows)}社（上位{min(top, len(rows))}社）")
         for v in rows[:top]:
             pr = f" | 配当性向{v['payout']*100:.0f}%" if v["payout"] is not None else ""
             warn = " ⚠️性向100%超" if v["payout"] is not None and v["payout"] > 1.0 else ""
+            cty = f"{country_of(v['ticker'])}・" if mk == "INTL" else ""
             lines.append(f"    {v['name'][:16]}（{v['ticker']}）: {v['dy']*100:.1f}%"
-                         f"{pr} | {v['sector'][:12]}{warn}")
+                         f"{pr} | {cty}{v['sector'][:12]}{warn}")
     return {
         "trigger":  "high_dividend",
-        "title":    f"💰 高配当銘柄 日本{n_jp}社・米国{n_us}社（{min_dy*100:.0f}%以上）",
+        "title":    f"💰 高配当銘柄 日本{n_jp}社・米国{n_us}社" + (f"・海外{n_intl}社" if n_intl else "")
+                    + f"（{min_dy*100:.0f}%以上）",
         "body":     "\n".join(lines),
         "severity": "info",
     }
