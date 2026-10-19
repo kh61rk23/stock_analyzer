@@ -1337,6 +1337,11 @@ FUDOSAN_AREA_TABLE: str = "area_profile_p1"
 FUDOSAN_MIN_INTERVAL_SEC: float = 0.5
 RE_BONUS_MIN: float = -2.0
 RE_BONUS_MAX: float = 3.0
+# 推定時価（土地面積×参照地価）の補正係数。キーは「参照地価の種別|地域」（地域 metro＝三大都市圏の都府県、other＝それ以外）。
+# 値は開示時価（賃貸等不動産・IFRS 投資不動産）との比較で、時価÷簿価の対数比の中央値を exp で戻したもの。
+# 10社未満の層は載せない（係数1.0）。BIマート m_re_holdings・m_re_holdings_pref の cal CTE と同じ値にする
+# （tests/test_real_estate_calibration.py が一致を検査する）。
+RE_EST_CALIBRATION: dict = {"industrial|metro": 1.02, "commercial|metro": 0.77}
 # 有報の注記「賃貸等不動産関係」（rental_property_ingestor.py・EdinetDB real-estate）。EdinetDB の日次枠を日次取り込みと分け合う
 ENABLE_ALERT_STORE: bool = True          # 日次メールの全節と銘柄を analytics.alert_sections / alert_items へ（alert_store.py）
 ENABLE_RENTAL_PROPERTY_FV: bool = True    # True＝毎日 RENTAL_FV_DAILY_BUDGET 社を取る。False＝RENTAL_FV_TRIAL_LIMIT 社を1回だけ試行

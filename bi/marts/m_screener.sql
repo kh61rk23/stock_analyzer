@@ -16,7 +16,8 @@
 -- 多面的な指標（式・単位・注意の正本は SPEC_bi_marts §11）:
 --   資本効率 roic（NOPAT÷(有利子負債＋純資産)の期末ベース。税率は effective_tax_rate が 5〜50% なら報告値、無ければ法定実効税率の近似 30.6%）・営業CF率・FCF率・粗利率の前年差、
 --   企業価値倍率 ev（時価総額＋有利子負債−現金）・ev_ebitda（EBITDA＝営業利益＋減価償却費）・ev_sales・psr・peg（PER÷純利益3年CAGR%）・fcf_yield・earnings_yield、
---   資産の裏付け re_*（bi.m_re_holdings_pref の最新年度を会社で合計した土地の含み益目安。施設ごとの簿価20倍超除外はそちらで適用済み）・adj_pbr・asset_value_ratio、
+--   資産の裏付け re_*（bi.m_re_holdings_pref の最新年度を会社で合計した土地の含み益目安。補正係数と施設ごとの簿価20倍超除外はそちらで適用済み。
+--   開示時価〔real_estate.rental_property_fv〕がある会社は賃貸分を開示の含み益に置き換える。re_unrealized_gain が置き換え後、re_unrealized_gain_est が推定だけ、根拠は re_gain_basis）・adj_pbr・asset_value_ratio、
 --   安全性と質 interest_coverage・current_ratio・goodwill_to_equity・accrual_ratio・f_score（ピオトロスキー。前年が取れる項目だけ）、
 --   還元 buyback_est（自己株式簿価の増加＋消却額。簿価は会社により負値（純資産の控除）で入るので絶対値で比べる。下限寄りの推定）・total_payout_yield・doe、成長の質 op_income_cagr_3y・net_income_cagr_3y・consec_up_years。
 -- 含み益が時価総額の3倍超の会社は re_gain_flag='gt_3x_mcap' とし、含み益を使う派生列（re_gain_to_mcap・re_land_value_to_mcap・adj_pbr・asset_value_ratio・re_gain_after_tax）を空にする（再取得・単位違いの疑い）。re_unrealized_gain は元の値のまま残す。
@@ -96,16 +97,66 @@ grow AS (
   FROM grow_flag
 ),
 -- 土地の含み益目安は最新年度を会社で合計（円）。unrealized は土地簿価のある施設だけの（時価目安−簿価）なので、簿価の無い施設（不動産業の販売用不動産など）は入らない
-re AS (
+re_est AS (
   SELECT edinet_code,
     fiscal_year AS re_fiscal_year,
     SUM(facility_count) AS re_facility_count,
     SUM(est_excluded_count) AS re_est_excluded_count,
     SUM(land_value_est_m_yen) * 1e6 AS re_land_value_est,
-    SUM(unrealized_gain_est_m_yen) * 1e6 AS re_gain_raw
+    SUM(unrealized_gain_est_m_yen) * 1e6 AS re_gain_est
   FROM `stock-analyzer-edinet.bi.m_re_holdings_pref`
   GROUP BY edinet_code, fiscal_year
   QUALIFY fiscal_year = MAX(fiscal_year) OVER (PARTITION BY edinet_code)
+),
+-- 保有不動産（主要設備）の最新年度の簿価（土地＋建物・円）。賃貸分の割合の分母
+re_book AS (
+  SELECT edinet_code, (SUM(IFNULL(book_value_land_m_yen, 0)) + SUM(IFNULL(book_value_buildings_m_yen, 0))) * 1e6 AS re_book_total
+  FROM (
+    SELECT edinet_code, book_value_land_m_yen, book_value_buildings_m_yen
+    FROM `stock-analyzer-edinet.real_estate.corporate_holdings_p1`
+    WHERE TRUE
+    QUALIFY fiscal_year = MAX(fiscal_year) OVER (PARTITION BY edinet_code)
+  )
+  GROUP BY edinet_code
+),
+-- 開示された時価（rental_property_fv。EdinetDB の賃貸等不動産＝日本基準と、政府 EDINET の IFRS 投資不動産の公正価値）。
+-- 年度：会社ごとに時価のある最新年度を1行。今年から2年より前の年度は、保有不動産の今の姿と離れるので使わない。
+-- 単位：表は百万円で、ここで円にする。時価÷簿価が 0.1〜30 の外の行は抽出誤り・単位違いの疑いで使わない（EdinetDB 側の除外と同じ範囲）。
+-- source：キー（edinet_code, fiscal_year）で1行なので通常は重ならない。重なったときは政府 EDINET を先にする
+--   （有報の XBRL から直接読んだ値で、EdinetDB は IFRS の公正価値を抽出しないため）。
+rental AS (
+  SELECT edinet_code, fiscal_year AS re_rental_fv_year, source AS re_rental_fv_source,
+    book_value_m_yen * 1e6 AS rental_book, fair_value_m_yen * 1e6 AS rental_fair
+  FROM `stock-analyzer-edinet.real_estate.rental_property_fv`
+  WHERE fair_value_m_yen > 0 AND book_value_m_yen > 0
+    AND fair_value_m_yen / book_value_m_yen BETWEEN 0.1 AND 30
+    AND fiscal_year >= EXTRACT(YEAR FROM CURRENT_DATE('Asia/Tokyo')) - 2
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY edinet_code ORDER BY fiscal_year DESC, IF(source = 'edinet_gov_xbrl', 0, 1)) = 1
+),
+-- 推定の含み益のうち賃貸分を開示の含み益（時価−簿価）に置き換える（real_estate_signal.blend_disclosed_gain と同じ規則）。
+-- どの施設が賃貸用かは分からないので、賃貸分の簿価が保有不動産の簿価に占める割合（re_rental_share、上限1）だけ推定を減らす。
+-- 賃貸分が主要設備に載っていなければ割合が大きめに出て推定を多めに外す（二重に数えない側）。保有不動産の簿価が無ければ割合1。
+re_mix AS (
+  SELECT COALESCE(e.edinet_code, r.edinet_code) AS edinet_code,
+    COALESCE(e.re_fiscal_year, r.re_rental_fv_year) AS re_fiscal_year,
+    e.re_facility_count, e.re_est_excluded_count, e.re_land_value_est, e.re_gain_est,
+    r.re_rental_fv_year, r.re_rental_fv_source, r.rental_book, r.rental_fair,
+    IF(r.edinet_code IS NULL, NULL, IF(b.re_book_total > 0, LEAST(1, r.rental_book / b.re_book_total), 1)) AS re_rental_share
+  FROM re_est AS e
+  FULL OUTER JOIN rental AS r ON r.edinet_code = e.edinet_code
+  LEFT JOIN re_book AS b ON b.edinet_code = COALESCE(e.edinet_code, r.edinet_code)
+),
+re AS (
+  SELECT edinet_code, re_fiscal_year, re_facility_count, re_est_excluded_count, re_land_value_est, re_gain_est,
+    re_rental_fv_year, re_rental_fv_source, re_rental_share,
+    rental_fair - rental_book AS re_rental_gain,
+    CASE WHEN re_rental_share IS NULL THEN re_gain_est
+         WHEN re_gain_est IS NULL OR re_rental_share >= 1 THEN rental_fair - rental_book
+         ELSE re_gain_est * (1 - re_rental_share) + (rental_fair - rental_book) END AS re_gain_raw,
+    CASE WHEN re_rental_share IS NULL THEN IF(re_gain_est IS NULL, NULL, 'estimate')
+         WHEN re_gain_est IS NULL OR re_rental_share >= 1 THEN 'disclosed'
+         ELSE 'estimate+disclosed' END AS re_gain_basis
+  FROM re_mix
 ),
 latest AS (
   SELECT * FROM fin WHERE net_sales IS NOT NULL
@@ -255,6 +306,12 @@ j AS (
     r.re_facility_count AS re_facility_count,
     r.re_est_excluded_count AS re_est_excluded_count,
     r.re_land_value_est AS re_land_value_est,
+    r.re_gain_est AS re_gain_est,
+    r.re_rental_fv_year AS re_rental_fv_year,
+    r.re_rental_fv_source AS re_rental_fv_source,
+    r.re_rental_share AS re_rental_share,
+    r.re_rental_gain AS re_rental_gain,
+    r.re_gain_basis AS re_gain_basis,
     r.re_gain_raw AS re_gain_raw
   FROM latest AS l
   JOIN `stock-analyzer-edinet.edinet.company` AS c ON c.edinet_code = l.edinet_code
@@ -433,6 +490,12 @@ SELECT
   re_est_excluded_count,
   re_land_value_est,
   re_gain_raw AS re_unrealized_gain,
+  re_gain_est AS re_unrealized_gain_est,
+  re_rental_gain,
+  re_rental_share,
+  re_rental_fv_year,
+  re_rental_fv_source,
+  re_gain_basis,
   re_gain_flag,
   re_gain_to_mcap,
   re_land_value_to_mcap,
