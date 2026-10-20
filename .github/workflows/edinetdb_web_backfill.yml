@@ -32,6 +32,8 @@ jobs:
     timeout-minutes: 350
     env:
       TZ: Asia/Tokyo
+      # 状態の置き場（config BLOCK 64）。git / dual / bq。Actions の変数 STATE_STORE_MODE で切り替える（未設定は dual）
+      STATE_STORE_MODE: ${{ vars.STATE_STORE_MODE || 'dual' }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -41,6 +43,12 @@ jobs:
           cache-dependency-path: requirements.txt
       - name: Install dependencies
         run: pip install google-cloud-bigquery google-auth pandas requests
+      # dual: checkout 直後の sha を基準として記録 ／ bq: BigQuery から状態を書き戻す（失敗したら止める）
+      - name: Prepare state
+        env:
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+        run: python state_store.py prepare || [ "$STATE_STORE_MODE" = "dual" ]
       - name: Backfill from EdinetDB web pages
         id: backfill
         env:
@@ -51,16 +59,28 @@ jobs:
           # 6時間のジョブ上限より手前で止め、メタを保存してから終える（次回は続きから）
           ARGS="--scope ${{ inputs.scope }} --years ${{ inputs.years }} --time-budget-min 320"
           if [ -n "${{ inputs.limit }}" ]; then ARGS="$ARGS --limit ${{ inputs.limit }}"; fi
-          python -u edinetdb_web_backfill.py $ARGS
+          python actions_log.py --workflow edinetdb_web_backfill --step backfill -- python -u edinetdb_web_backfill.py $ARGS
+      # 変わったファイルだけを load job で BigQuery（private.state_files）へ
+      - name: Save state to BigQuery
+        if: always() && env.STATE_STORE_MODE != 'git'
+        env:
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+        run: |
+          python state_store.py save --source edinetdb_web_backfill || {
+            echo "::warning::状態を BigQuery に保存できなかった"
+            [ "$STATE_STORE_MODE" = "dual" ]
+          }
       - name: Commit state
         if: always()
         run: |
+          if [ "$STATE_STORE_MODE" = "bq" ]; then echo "⏩ STATE_STORE_MODE=bq: git には commit しない"; exit 0; fi
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add stock_data/data/edinetdb_rotation_meta.json stock_data/data/edinetdb_web_last.json
           git diff --cached --quiet && exit 0
-          git commit -m "auto: edinetdb web backfill state"
-          for i in 1 2 3; do git pull --rebase --autostash -X theirs origin main && git push && exit 0; git rebase --abort 2>/dev/null || true; sleep 15; done
+          git commit -q -m "auto: edinetdb web backfill state"
+          for i in 1 2 3; do git pull -q --rebase --autostash -X theirs origin main && git push -q && exit 0; git rebase --abort 2>/dev/null || true; sleep 15; done
           echo "::error::状態ファイルを push できなかった（この回の結果は保存されていない）"; exit 1
       # 2026-10-03: 時間切れで中断した場合は、同じ条件で自分をもう一度起動する（全社は約7〜8時間かかる）。
       # GITHUB_TOKEN による workflow_dispatch は新しい実行を作れる（GitHub の例外規定）。

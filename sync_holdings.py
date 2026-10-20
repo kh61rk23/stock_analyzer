@@ -14,6 +14,8 @@
 #   Excel側の値は excel_avg_cost_jpy 列に残す。
 # 【実行】python3 sync_holdings.py [--src <csv>] [--commit]
 #   --commit: 変化があれば2ファイルだけ git commit & push（obsidian_sync の Mac 側定期実行から呼ぶ）
+#   --root  : 出力先と会社マスタの読み先をリポジトリ直下の代わりにこのフォルダにする
+#             （STATE_STORE_MODE=bq の Mac は ~/.stock_analyzer_sync/state_root に書き、BigQuery へ保存する）
 # ==============================================================
 from __future__ import annotations
 
@@ -203,7 +205,13 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", default=str(SRC_DEFAULT))
     ap.add_argument("--commit", action="store_true")
+    ap.add_argument("--root", default="")
     a = ap.parse_args(argv)
+    if a.root:
+        global REPO, OUT_CSV, OUT_SUMMARY
+        REPO = Path(a.root).expanduser().resolve()
+        OUT_CSV, OUT_SUMMARY = REPO / "data" / OUT_CSV.name, REPO / "data" / OUT_SUMMARY.name
+        OUT_CSV.parent.mkdir(parents=True, exist_ok=True)
     src = Path(a.src)
     if not src.exists():
         print(f"⚠️ 保有銘柄CSVが無い: {src}")

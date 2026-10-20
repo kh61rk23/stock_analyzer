@@ -56,6 +56,10 @@ SYNC_CACHE = Path.home() / ".stock_analyzer_sync" / "repo"
 # run_apps.sh が STOCK_ANALYZER_BASE で同じ場所を全ジョブ（週次・月次・board）へ渡す。
 MIRROR_BASE = Path.home() / ".stock_analyzer_sync" / "stock_data_mirror"
 MIRROR_SUBDIRS = ("data", "insights", "logs", "cache", "bi", "paper", "ontology")
+# STATE_STORE_MODE=bq のときの状態の置き場（リポジトリ直下に相当: stock_data/・data/portfolio_*）。
+# BigQuery（state_store.py）から書き戻し、Mac が作る承認・保有・審議済み・同期状況もここに書いて BigQuery へ保存する。
+# git / dual のときは同期用 clone（SYNC_CACHE）を使う（今のまま）。
+STATE_ROOT = Path.home() / ".stock_analyzer_sync" / "state_root"
 
 AUTO_BEGIN = "<!-- AUTO-QUEUE:BEGIN（obsidian_sync.py が再生成。手動編集禁止） -->"
 AUTO_END   = "<!-- AUTO-QUEUE:END -->"
@@ -89,6 +93,86 @@ def _load_json(p: Path):
     except Exception:
         pass
     return None
+
+
+# ==============================================================
+# 状態の置き場の切り替え（STATE_STORE_MODE: git / dual / bq）
+# ==============================================================
+# BigQuery の認証は環境変数だけを読む（Mac は run_apps.sh が GOOGLE_APPLICATION_CREDENTIALS に鍵のパスを入れる）。
+
+def _state_mode(cfg) -> str:
+    import state_store
+    return state_store.resolve_mode(cfg)
+
+
+def _state_dir(cfg) -> Path:
+    """承認・保有・審議済み・同期状況を書く場所（bq は STATE_ROOT、それ以外は同期用 clone）。"""
+    return STATE_ROOT if _state_mode(cfg) == "bq" else SYNC_CACHE
+
+
+def _has_bq_credentials() -> bool:
+    return any(os.environ.get(k) for k in ("BQ_CREDENTIALS", "BQ_CREDENTIALS_PATH", "GOOGLE_APPLICATION_CREDENTIALS"))
+
+
+def _state_save(cfg, rels: list, source: str) -> bool:
+    """STATE_ROOT の rels（リポジトリ直下からの相対）だけを BigQuery に保存する（load job・無料）。"""
+    import state_store as ss
+    try:
+        r = ss.save(ss.BQBackend(cfg), STATE_ROOT, tuple(str(x) for x in rels),
+                    tuple(getattr(cfg, "STATE_STORE_EXCLUDE", ())), source=source,
+                    chunk_bytes=int(getattr(cfg, "STATE_STORE_CHUNK_BYTES", 4 * 1024 ** 2)))
+    except Exception as e:
+        print(f"  ❌ BigQuery への保存に失敗: {type(e).__name__}: {str(e)[:160]}")
+        return False
+    print(f"  {'✅' if r.ok else '❌'} BigQuery へ保存: {r.uploaded}件・削除の印{r.deleted}件")
+    return r.ok
+
+
+def _publish(cfg, rel: Path, msg: str, label: str) -> bool:
+    """_state_dir に書いた1ファイルを送る。bq は BigQuery へ save、git / dual は同期用 clone で commit & push。"""
+    if _state_mode(cfg) == "bq":
+        return _state_save(cfg, [rel.as_posix()], f"mac:{label}")
+    g = ["git", "-C", str(SYNC_CACHE)]
+    for step in (g + ["add", str(rel)], g + ["commit", "-q", "-m", msg]):
+        r = subprocess.run(step, capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            print(f"❌ {label}: {' '.join(step[3:5])} 失敗: {(r.stderr or r.stdout)[:200]}")
+            return False
+    for _ in range(2):
+        r = _git_with_retry(g + ["push", "-q", "origin", "HEAD:main"], 120)
+        if r.returncode == 0:
+            return True
+        # Actions の auto コミットと競合したら取り込み直して再送
+        _git_with_retry(g + ["pull", "--rebase", "-q", "origin", "main"], 300)
+    print(f"❌ {label}: push 失敗: {(r.stderr or '')[:200]}")
+    return False
+
+
+def restore_state(cfg) -> Path | None:
+    """bq: BigQuery から STATE_ROOT へ状態を書き戻し、STATE_ROOT/stock_data を返す（失敗は None）。"""
+    import state_store as ss
+    try:
+        be = ss.BQBackend(cfg)
+        r = ss.restore(be, STATE_ROOT, list(getattr(cfg, "STATE_STORE_PATHS", ())),
+                       excludes=tuple(getattr(cfg, "STATE_STORE_EXCLUDE", ())))
+    except Exception as e:
+        print(f"❌ BigQuery からの書き戻しに失敗: {type(e).__name__}: {str(e)[:160]}")
+        return None
+    print(f"{'✅' if not r.bad else '⚠️'} BigQuery から書き戻し: 書き戻し{r.written}・同じ{r.unchanged}・不整合{r.bad}")
+    return STATE_ROOT / "stock_data"
+
+
+def restore_actions_logs(cfg) -> None:
+    """dual: Actions の全出力（git に入れていない actions_*.log）を BigQuery から Mac 用 stock_data/logs へ写す。
+    BigQuery の認証が無ければ何もしない。"""
+    if not _has_bq_credentials():
+        return
+    import state_store as ss
+    try:
+        r = ss.restore(ss.BQBackend(cfg), Path(cfg.DRIVE_BASE), ["stock_data/logs/actions_"], strip="stock_data/")
+        print(f"✅ Actions ログ（BigQuery）: 書き戻し{r.written}・同じ{r.unchanged}")
+    except Exception as e:
+        print(f"⚠️ Actions ログの書き戻しに失敗: {type(e).__name__}: {str(e)[:160]}")
 
 
 # ==============================================================
@@ -130,14 +214,18 @@ def _git_with_retry(args: list, timeout: int, tries: int = 6, wait: int = 30):
 
 def cmd_pull(cfg, repo_url: str) -> bool:
     repo_url = repo_url or os.environ.get("STOCK_ANALYZER_REPO_URL", "")
-    if not repo_url:
+    mode = _state_mode(cfg)
+    if not repo_url and mode != "bq":
         print("⏩ pull スキップ: リポジトリ未指定"
               "（--repo か STOCK_ANALYZER_REPO_URL を設定）")
         print("   ※ GDrive 同期クライアント等で stock_data を取得済みなら"
               " pull なしでも queue 以降は動作する")
         return
     SYNC_CACHE.parent.mkdir(parents=True, exist_ok=True)
-    if (SYNC_CACHE / ".git").exists():
+    r = None
+    if not repo_url:
+        pass
+    elif (SYNC_CACHE / ".git").exists():
         # 同期用 clone には mirror / approvals / holdings の自動コミットが積まれる。ネットワーク断で push できなかった
         # コミットが残ると早送りできず、以後の pull が毎回失敗する（審議結果が vault に届かなくなる）。
         # rebase で GitHub の後ろに並べ直し、取り残したコミットはここで送り出す。
@@ -154,13 +242,22 @@ def cmd_pull(cfg, repo_url: str) -> bool:
     else:
         r = _git_with_retry(["git", "clone", "--depth", "1", repo_url,
                              str(SYNC_CACHE)], 600)
-    if r.returncode != 0:
+    # bq でも同期用 clone は使う（部則の同期 rules と sync_holdings.py の置き場）。状態は BigQuery から取る
+    git_ok = r is not None and r.returncode == 0
+    if r is not None and r.returncode != 0:
         print(f"❌ git 失敗: {r.stderr[:200]}")
-        return False
-    print(f"✅ リポジトリ同期: {SYNC_CACHE}")
+        if mode != "bq":
+            return False
+    elif git_ok:
+        print(f"✅ リポジトリ同期: {SYNC_CACHE}")
 
     # ① Mac 用の stock_data（作業コピーの外）へミラー（パケット・board /bi /screening /risk が読む）
-    src = SYNC_CACHE / "stock_data"
+    if mode == "bq":
+        src = restore_state(cfg)
+        if src is None:
+            return False
+    else:
+        src = SYNC_CACHE / "stock_data"
     if src.exists():
         for sub in MIRROR_SUBDIRS:
             s = src / sub
@@ -168,6 +265,8 @@ def cmd_pull(cfg, repo_url: str) -> bool:
                 shutil.copytree(s, Path(cfg.DRIVE_BASE) / sub,
                                 dirs_exist_ok=True)
         print(f"✅ stock_data ミラー: {cfg.DRIVE_BASE}")
+    if mode == "dual":
+        restore_actions_logs(cfg)
 
     # ② vault 05_最新データ/ へ主要成果物を転記
     dest = _vault(cfg) / "05_最新データ"
@@ -190,11 +289,11 @@ def cmd_pull(cfg, repo_url: str) -> bool:
     (dest / "データ同期状況.md").write_text(
         f"# データ同期状況\n\n- 最終同期: "
         f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-        f"- 取得元: `{repo_url}`\n"
+        f"- 取得元: `{repo_url if mode != 'bq' else 'BigQuery private.state_files'}`\n"
         f"- 転記: {', '.join(copied) if copied else 'なし'}\n",
         encoding="utf-8")
     print(f"✅ vault 転記: {dest}（{len(copied)}ファイル）")
-    return True
+    return git_ok or mode != "bq" or not repo_url
 
 
 # ==============================================================
@@ -216,10 +315,10 @@ def cmd_mirror(cfg) -> bool:
     if not tickers:
         print("⏩ mirror: 判断台帳を読めない／審議済み0件（push しない）")
         return True
-    if not (SYNC_CACHE / ".git").exists():
+    if _state_mode(cfg) != "bq" and not (SYNC_CACHE / ".git").exists():
         print("⏩ mirror: 同期用cloneが無い（先に pull が必要）")
         return False
-    target = SYNC_CACHE / MIRROR_REL
+    target = _state_dir(cfg) / MIRROR_REL
     try:
         current = sorted(json.loads(target.read_text(encoding="utf-8")).get("tickers") or [])
     except (OSError, ValueError):
@@ -252,24 +351,13 @@ def cmd_mirror(cfg) -> bool:
         "verified_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "source": "40_判断台帳.md",
     }, ensure_ascii=False, indent=2), encoding="utf-8")
-    g = ["git", "-C", str(SYNC_CACHE)]
     added = sorted(set(tickers) - set(current or []))
     msg = (f"auto: 審議済みミラー更新（{len(tickers)}銘柄" + (f"・追加 {', '.join(added)}" if added else "") + "）"
            if current != tickers else f"auto: 審議済みミラー照合（{len(tickers)}銘柄・変更なし）")
-    for step in (g + ["add", str(MIRROR_REL)], g + ["commit", "-q", "-m", msg]):
-        r = subprocess.run(step, capture_output=True, text=True, timeout=60)
-        if r.returncode != 0:
-            print(f"❌ mirror: {' '.join(step[3:5])} 失敗: {(r.stderr or r.stdout)[:200]}")
-            return False
-    for attempt in range(2):
-        r = _git_with_retry(g + ["push", "-q", "origin", "HEAD:main"], 120)
-        if r.returncode == 0:
-            _copy_to_mac_base()
-            print(f"✅ mirror: push 完了 — {msg}")
-            return True
-        # Actions の auto コミットと競合したら取り込み直して再送
-        _git_with_retry(g + ["pull", "--rebase", "-q", "origin", "main"], 300)
-    print(f"❌ mirror: push 失敗: {(r.stderr or '')[:200]}")
+    if _publish(cfg, MIRROR_REL, msg, "mirror"):
+        _copy_to_mac_base()
+        print(f"✅ mirror: 送信完了 — {msg}")
+        return True
     return False
 
 
@@ -381,7 +469,7 @@ def mirror_deliberations_to_vault(records: list, bdir: Path, today: str | None =
 
 
 def _find_deliberations_json(cfg) -> Path | None:
-    for p in (SYNC_CACHE / "stock_data" / "data" / DELIB_JSON, Path(cfg.DATA_DIR) / DELIB_JSON):
+    for p in (_state_dir(cfg) / "stock_data" / "data" / DELIB_JSON, Path(cfg.DATA_DIR) / DELIB_JSON):
         if p.exists():
             return p
     return None
@@ -410,10 +498,10 @@ def cmd_approvals(cfg) -> bool:
     if not approvals:
         print("⏩ approvals: 台帳に承認済みの行が無い／読めない（push しない）")
         return True
-    if not (SYNC_CACHE / ".git").exists():
+    if _state_mode(cfg) != "bq" and not (SYNC_CACHE / ".git").exists():
         print("⏩ approvals: 同期用cloneが無い（先に pull が必要）")
         return False
-    target = SYNC_CACHE / APPROVALS_REL
+    target = _state_dir(cfg) / APPROVALS_REL
     prev = (_load_json(target) or {}).get("approvals")
     if prev == approvals:
         print(f"✅ approvals: 変更なし（{len(approvals)}件）")
@@ -423,21 +511,11 @@ def cmd_approvals(cfg) -> bool:
         "approvals": approvals, "approved_by": APPROVED_BY,
         "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "source": "40_判断台帳.md"}, ensure_ascii=False, indent=1), encoding="utf-8")
-    g = ["git", "-C", str(SYNC_CACHE)]
     changed = sorted(c for c in approvals if (prev or {}).get(c) != approvals[c])
     msg = f"auto: 承認ミラー更新（{len(approvals)}件・変更 {len(changed)}件）"
-    for step in (g + ["add", str(APPROVALS_REL)], g + ["commit", "-q", "-m", msg]):
-        r = subprocess.run(step, capture_output=True, text=True, timeout=60)
-        if r.returncode != 0:
-            print(f"❌ approvals: {' '.join(step[3:5])} 失敗: {(r.stderr or r.stdout)[:200]}")
-            return False
-    for _ in range(2):
-        r = _git_with_retry(g + ["push", "-q", "origin", "HEAD:main"], 120)
-        if r.returncode == 0:
-            print(f"✅ approvals: push 完了 — {msg}")
-            return True
-        _git_with_retry(g + ["pull", "--rebase", "-q", "origin", "main"], 300)
-    print(f"❌ approvals: push 失敗: {(r.stderr or '')[:200]}")
+    if _publish(cfg, APPROVALS_REL, msg, "approvals"):
+        print(f"✅ approvals: 送信完了 — {msg}")
+        return True
     return False
 
 
@@ -448,6 +526,14 @@ def cmd_holdings(cfg) -> bool:
     週次の総評価額・ポジションサイジング・ストレステストはリポジトリ側の
     保有CSVで計算するため、これが更新されないと古い保有で計算される。
     """
+    if _state_mode(cfg) == "bq":
+        # 作業コピーの sync_holdings.py で STATE_ROOT/data/ に書き、その2ファイルだけを BigQuery へ保存する
+        r = subprocess.run([sys.executable, str(REPO_ROOT / "sync_holdings.py"), "--root", str(STATE_ROOT)],
+                           cwd=REPO_ROOT, capture_output=True, text=True, timeout=300)
+        print((r.stdout or "").strip() or (r.stderr or "").strip()[:300])
+        if r.returncode != 0:
+            return False
+        return _state_save(cfg, ["data/portfolio_holdings.csv", "data/portfolio_summary.json"], "mac:holdings")
     if not (SYNC_CACHE / ".git").exists():
         print("⏩ holdings: 同期用cloneが無い（先に pull が必要）")
         return False
@@ -698,16 +784,17 @@ def should_push_status(prev: dict | None, new: dict, now: datetime, push_hours: 
     return (now - last).total_seconds() >= push_hours * 3600
 
 
-def cmd_status(steps: dict) -> bool:
+def cmd_status(steps: dict, cfg=None) -> bool:
     """同期用 clone に mac_sync_status.json を書いて、その1ファイルだけ commit & push する。
 
     Mac がスリープ・オフライン・電源オフだと承認の BQ 反映・部則のクラウド同期が止まるが、
     Actions 側からは見えない。日次メール（ops_health）はこのファイルの last_success_at の古さで気づく。
     週次ループ（weekly_feedback_runner）の結果も、Mac にしか残らないのでここに載せて送る。"""
-    if not (SYNC_CACHE / ".git").exists():
+    bq = _state_mode(cfg) == "bq"
+    if not bq and not (SYNC_CACHE / ".git").exists():
         print("⏩ status: 同期用cloneが無い")
         return False
-    target = SYNC_CACHE / STATUS_REL
+    target = (STATE_ROOT if bq else SYNC_CACHE) / STATUS_REL
     prev = _load_json(target)
     base_env = os.environ.get("STOCK_ANALYZER_BASE", "")
     weekly = _load_json((Path(base_env).expanduser() if base_env else MIRROR_BASE) / WEEKLY_LOOP_REL.name)
@@ -718,20 +805,11 @@ def cmd_status(steps: dict) -> bool:
         return True
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(new, ensure_ascii=False, indent=2), encoding="utf-8")
-    g = ["git", "-C", str(SYNC_CACHE)]
     msg = f"auto: Mac同期の状況（{'成功' if new['last_ok'] else '一部失敗'}）"
-    for step in (g + ["add", str(STATUS_REL)], g + ["commit", "-q", "-m", msg]):
-        r = subprocess.run(step, capture_output=True, text=True, timeout=60)
-        if r.returncode != 0:
-            print(f"❌ status: {' '.join(step[3:5])} 失敗: {(r.stderr or r.stdout)[:200]}")
-            return False
-    for _ in range(2):
-        r = _git_with_retry(g + ["push", "-q", "origin", "HEAD:main"], 120)
-        if r.returncode == 0:
-            print(f"✅ status: push 完了 — {msg}")
-            return True
-        _git_with_retry(g + ["pull", "--rebase", "-q", "origin", "main"], 300)
-    print(f"⚠️ status: push 失敗（次回の pull で取り残しを送る）: {(r.stderr or '')[:200]}")
+    if _publish(cfg, STATUS_REL, msg, "status"):
+        print(f"✅ status: 送信完了 — {msg}")
+        return True
+    print("⚠️ status: 送信失敗（次回の pull で取り残しを送る）")
     return False
 
 
@@ -765,6 +843,6 @@ if __name__ == "__main__":
         steps["rules"] = bool(cmd_rules())
     ok = all(steps.values())
     if args.command == "all":
-        cmd_status(steps)
+        cmd_status(steps, cfg)
     # pull / mirror の失敗は非0で返す（rc=0 だと run_apps.log 上は「成功」に見える）。
     sys.exit(0 if ok else 1)

@@ -79,7 +79,7 @@ def test_daily_workflow_runs_edinet_after_provider_refresh():
     #   UTC では日曜になり、下の weekly 判定が一度も成立しなくなる。
     assert 'cron: "17 0 * * 1-6"' in workflow
     assert '$(date -u +%u)" = "1"' in workflow
-    assert "python setup_db_integration_bq.py" in workflow
+    assert "-- python -u setup_db_integration_bq.py" in workflow
     # BQスキーマ準備は本体より先。EdinetDB同期そのものは本体側で走る。
     assert workflow.index("setup_db_integration_bq.py") < workflow.index(
         "🚀 Run analyzer")

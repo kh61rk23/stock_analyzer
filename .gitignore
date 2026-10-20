@@ -13,3 +13,7 @@ pytest_cache/
 
 # Claude Code のサブエージェント用 git worktree（ローカルの作業場所）
 .claude/worktrees/
+
+# state_store.py の基準ファイル（実行ごとの一時物）と、actions_log.py の全出力（BigQuery の state_store にだけ置く）
+.state_store_baseline.json
+stock_data/logs/actions_*.log

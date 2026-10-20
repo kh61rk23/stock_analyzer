@@ -5301,3 +5301,41 @@ DELIB_RESCORE_JUMP: float = 15.0    # 前回審議時より final_score がこ�
 DELIB_HOLDING_MAX: int = 3          # キューに入れる保有見直しの上限
 DELIB_PACKET_TOP_N: int = 5         # 審議パケットを作ってキューに保存する上位件数
 DELIB_BATCH_SIZE: int = 3           # クラウド定時実行1回で審議する件数
+
+
+# ==============================================================
+# BLOCK 64: 状態の置き場（state_store.py）
+# ==============================================================
+# Actions が実行のたびに持ち越す状態（stock_data/ と保有銘柄のファイル）の置き場。
+#   git  : git に commit・push して持ち越す（BQ には書かない）
+#   dual : git にも commit しつつ BQ にも保存する。読み出し（checkout 後の状態）は git のまま
+#   bq   : checkout 直後に BQ から戻し、実行後は BQ だけに保存する（git には commit しない）
+# workflow は env の STATE_STORE_MODE（Actions の変数 vars.STATE_STORE_MODE、未設定なら dual）で上書きする。
+STATE_STORE_MODE: str = os.getenv("STATE_STORE_MODE", "dual")
+STATE_STORE_DATASET: str = "private"
+STATE_STORE_TABLE: str = "state_files"
+STATE_STORE_LOCATION: str = "asia-northeast1"
+# 保存する対象（リポジトリ直下からの相対パス。末尾 / はフォルダごと）。
+# stock_data/bi/ の parquet も入れる: マートから作り直せるが、作り直しは1マート1クエリかかり、
+# Mac の board（/bi）は parquet を直接読むため。外部 API 由来の財務も含むので public の git には置けない。
+STATE_STORE_PATHS: tuple = (
+    "stock_data/",
+    "data/portfolio_holdings.csv",
+    "data/portfolio_summary.json",
+    "data/holdings_domain.csv",
+)
+# 入れないもの（.gitignore と同じ重量物・作り直せる生成物）。前方一致。名前だけのものは全階層で一致
+STATE_STORE_EXCLUDE: tuple = (
+    "stock_data/models/",
+    "stock_data/data/us_fundamentals_db/",
+    "__pycache__/",
+    ".DS_Store",
+)
+# gzip 後のバイト列をこの大きさで分けて1行ずつ持つ（行の上限 100MB と、tabledata.list の1応答の大きさに余裕を持たせる）
+STATE_STORE_CHUNK_BYTES: int = 4 * 1024 ** 2
+# 1回の load job に載せる量の目安（超えたら load job を分ける）
+STATE_STORE_LOAD_BATCH_BYTES: int = 256 * 1024 ** 2
+# 掃除（state_store.py prune）でパスごとに残す版の数
+STATE_STORE_KEEP_VERSIONS: int = 3
+# 掃除のクエリの上限（dryRun で見積もってこれを超えたら実行しない）
+STATE_STORE_PRUNE_MAX_BYTES: int = 1024 ** 3

@@ -42,6 +42,9 @@ jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    env:
+      # 状態の置き場（config BLOCK 64）。git / dual / bq。Actions の変数 STATE_STORE_MODE で切り替える（未設定は dual）
+      STATE_STORE_MODE: ${{ vars.STATE_STORE_MODE || 'dual' }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -55,6 +58,12 @@ jobs:
             price_universe_*|us_company_facts_*|stock_real_estate|alert_backfill|ontology_export|edinet_gov_probe|edinet_gov_fv_ingest) pip install -r requirements-prices.txt ;;
             *) pip install -r requirements.txt ;;
           esac
+      # dual: checkout 直後の sha を基準として記録 ／ bq: BigQuery から状態を書き戻す（失敗したら止める）
+      - name: Prepare state
+        env:
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+        run: python state_store.py prepare || [ "$STATE_STORE_MODE" = "dual" ]
       - name: Run task
         id: run
         env:
@@ -72,8 +81,10 @@ jobs:
           FUDOSAN_API_KEY: ${{ secrets.FUDOSAN_API_KEY }}
           POLICY_FRED_API_KEY: ${{ secrets.POLICY_FRED_API_KEY }}
           STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
+        # Python の出力は stock_data/logs/actions_manual_task_<日付>.log へ（actions_log.py）。ログには要約だけを出す。
         run: |
-          case "${{ inputs.task }}" in
+          cat > "$RUNNER_TEMP/task.sh" <<'TASK'
+          case "$TASK" in
             geo_exposure_force) python -u geo_exposure_runner.py --force ;;
             country_profile) python -u country_profile_builder.py ;;
             monthly_mail_prev_month) python -u monthly_mail.py "$(date -d "$(date +%Y-%m-01) -1 day" +%Y%m)" ;;
@@ -105,9 +116,26 @@ jobs:
             # 政府 EDINET API で IFRS 会社の最新の有報から投資不動産の帳簿価額・公正価値を取り、real_estate.rental_property_fv へ書く（EDINET_GOV_API_KEY が要る・1日の社数は EDINET_GOV_FV_DAILY_LIMIT）
             edinet_gov_fv_ingest) python -u edinet_gov_xbrl.py --ingest ;;
           esac
+          TASK
+          TASK="${{ inputs.task }}" python actions_log.py --workflow manual_task --step "${{ inputs.task }}" -- bash "$RUNNER_TEMP/task.sh"
+      # 変わったファイルだけを load job で BigQuery（private.state_files）へ
+      - name: Save state to BigQuery
+        if: always() && env.STATE_STORE_MODE != 'git'
+        env:
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+        run: |
+          EXCL=""
+          # タスクが失敗した回は stock_data/bi を保存しない（bi_export は全部成功か全部なし）
+          if [ "${{ steps.run.outcome }}" != "success" ]; then EXCL="--exclude stock_data/bi/"; fi
+          python state_store.py save --source "manual_task:${{ inputs.task }}" $EXCL || {
+            echo "::warning::状態を BigQuery に保存できなかった"
+            [ "$STATE_STORE_MODE" = "dual" ]
+          }
       - name: Commit state
         if: always()
         run: |
+          if [ "$STATE_STORE_MODE" = "bq" ]; then echo "⏩ STATE_STORE_MODE=bq: git には commit しない"; exit 0; fi
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           # タスクが失敗した回は stock_data/bi を前回のコミットへ戻す（bi_export は全部成功か全部なし）
@@ -121,6 +149,6 @@ jobs:
           # 月次の作り直し等が書くレポートとペーパー口座（ここに無いと作っても保存されない）
           git add stock_data/insights/ stock_data/paper/ 2>/dev/null || true
           git diff --cached --quiet && exit 0
-          git commit -m "auto: manual task ${{ inputs.task }}"
-          for i in 1 2 3; do git pull --rebase --autostash -X theirs origin main && git push && exit 0; git rebase --abort 2>/dev/null || true; sleep 15; done
+          git commit -q -m "auto: manual task ${{ inputs.task }}"
+          for i in 1 2 3; do git pull -q --rebase --autostash -X theirs origin main && git push -q && exit 0; git rebase --abort 2>/dev/null || true; sleep 15; done
           echo "::error::状態ファイルを push できなかった（この回の結果は保存されていない）"; exit 1

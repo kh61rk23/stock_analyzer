@@ -61,9 +61,15 @@ def test_daily_run_records_outer_steps_and_push():
     for name in ("bi_export=${{ steps.bi-export.outcome }}",
                  "edinetdb_web_refresh=${{ steps.web-refresh.outcome }}"):
         assert name in rec["run"]
-    commit = next(s for s in steps if s.get("name", "").startswith("📊 Commit"))
-    assert "daily_state_push=success" in commit["run"]
-    assert commit["run"].index("daily_state_push") < commit["run"].index("git add stock_data/data/")
+    # 保存の印は commit（git）と save（BigQuery）の両方に載るよう、その前のステップで書く
+    names = [s.get("name", "") for s in steps]
+    mark = next(s for s in steps if s.get("name", "").startswith("🏷️ Mark state"))
+    assert "daily_state_push=success" in mark["run"] and mark["if"] == "always()"
+    i_mark = names.index(mark["name"])
+    i_save = next(i for i, n in enumerate(names) if n.startswith("☁️ Save state"))
+    i_commit = next(i for i, n in enumerate(names) if n.startswith("📊 Commit"))
+    assert i_mark < i_save < i_commit
+    assert "git add stock_data/data/" in steps[i_commit]["run"]
     assert wf["permissions"]["actions"] == "read"
 
 

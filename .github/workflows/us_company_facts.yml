@@ -25,6 +25,8 @@ jobs:
     env:
       TZ: Asia/Tokyo
       STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
+      # 状態の置き場（config BLOCK 64）。git / dual / bq。Actions の変数 STATE_STORE_MODE で切り替える（未設定は dual）
+      STATE_STORE_MODE: ${{ vars.STATE_STORE_MODE || 'dual' }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -34,6 +36,12 @@ jobs:
           cache-dependency-path: requirements-prices.txt
       - name: Install dependencies
         run: pip install -r requirements-prices.txt
+      # dual: checkout 直後の sha を基準として記録 ／ bq: BigQuery から状態を書き戻す（失敗したら止める）
+      - name: Prepare state
+        env:
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+        run: python state_store.py prepare || [ "$STATE_STORE_MODE" = "dual" ]
       - name: Fetch SEC facts and load to BigQuery
         id: run
         env:
@@ -43,7 +51,7 @@ jobs:
           ALERT_GMAIL_FROM: ${{ secrets.ALERT_GMAIL_FROM }}
           ALERT_GMAIL_PASSWORD: ${{ secrets.ALERT_GMAIL_PASSWORD }}
           ALERT_GMAIL_TO: ${{ secrets.ALERT_GMAIL_TO }}
-        run: python -u us_company_facts.py --mode update --budget-minutes 25
+        run: python actions_log.py --workflow us_company_facts --step us_company_facts -- python -u us_company_facts.py --mode update --budget-minutes 25
       - name: Segment revenue and operating income (SEC Financial Statement Data Sets)
         if: always()
         env:
@@ -53,14 +61,26 @@ jobs:
           ALERT_GMAIL_FROM: ${{ secrets.ALERT_GMAIL_FROM }}
           ALERT_GMAIL_PASSWORD: ${{ secrets.ALERT_GMAIL_PASSWORD }}
           ALERT_GMAIL_TO: ${{ secrets.ALERT_GMAIL_TO }}
-        run: python -u us_segments.py
+        run: python actions_log.py --workflow us_company_facts --step us_segments -- python -u us_segments.py
+      # 変わったファイルだけを load job で BigQuery（private.state_files）へ
+      - name: Save state to BigQuery
+        if: always() && env.STATE_STORE_MODE != 'git'
+        env:
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+        run: |
+          python state_store.py save --source us_company_facts || {
+            echo "::warning::状態を BigQuery に保存できなかった"
+            [ "$STATE_STORE_MODE" = "dual" ]
+          }
       - name: Commit state
         if: always()
         run: |
+          if [ "$STATE_STORE_MODE" = "bq" ]; then echo "⏩ STATE_STORE_MODE=bq: git には commit しない"; exit 0; fi
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add stock_data/data/us_company_facts/ stock_data/logs/ 2>/dev/null || true
           git diff --cached --quiet && exit 0
-          git commit -m "auto: us company facts $(date '+%Y-%m-%d %H:%M')"
-          for i in 1 2 3; do git pull --rebase --autostash -X theirs origin main && git push && exit 0; git rebase --abort 2>/dev/null || true; sleep 15; done
+          git commit -q -m "auto: us company facts $(date '+%Y-%m-%d %H:%M')"
+          for i in 1 2 3; do git pull -q --rebase --autostash -X theirs origin main && git push -q && exit 0; git rebase --abort 2>/dev/null || true; sleep 15; done
           echo "::error::状態ファイルを push できなかった（この回の結果は保存されていない）"; exit 1

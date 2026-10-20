@@ -99,6 +99,8 @@ jobs:
     env:
       TZ: Asia/Tokyo
       BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+      # 状態の置き場（config BLOCK 64）。git / dual / bq。Actions の変数 STATE_STORE_MODE で切り替える（未設定は dual）
+      STATE_STORE_MODE: ${{ vars.STATE_STORE_MODE || 'dual' }}
     # BQ_CREDENTIALSは各stepで個別指定（JSONをそのままenvに渡すため）
     steps:
       # ── 1. リポジトリのチェックアウト ─────────────────────
@@ -133,6 +135,15 @@ jobs:
       - name: 📦 Install dependencies
         if: steps.deps-cache.outputs.cache-hit != 'true'
         run: pip install -r requirements.txt
+
+      # ── 3-0. 状態の準備（state_store.py）─────────────────────
+      # dual: checkout 直後のファイルの sha を基準として記録する（save が「この実行で変えたファイル」を見分ける）。
+      # bq  : BigQuery の private.state_files から状態を書き戻す。失敗したら状態なしで走らせないよう止める。
+      # 下の Set execution mode が stock_data/data/last_weekly_run.json を読むので、それより前に置く。
+      - name: ☁️ Prepare state
+        env:
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+        run: python state_store.py prepare || [ "$STATE_STORE_MODE" = "dual" ]
 
       # ── 3-A. 実行モード決定 ───────────────────────────────
       #   手動実行       → inputs.mode を使用（daily / weekly / all / single）
@@ -174,7 +185,7 @@ jobs:
           STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
           BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
           BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
-        run: python setup_db_integration_bq.py
+        run: python actions_log.py --workflow daily_run --step setup_db_integration_bq -- python -u setup_db_integration_bq.py
 
       # ── 3-B2. EdinetDB同期は削除（2026-09-09）─────────────────
       #   ここに run_edinetdb_ingest / run_doc_indexer を直接呼ぶ専用ステップが
@@ -276,8 +287,8 @@ jobs:
           BQ_PROJECT_ID:       ${{ secrets.BQ_PROJECT_ID }}
           EDINETDB_API_KEY:    ${{ secrets.EDINETDB_API_KEY }}
         run: |
-          python -u taxonomy_loader.py 2>&1
-          python -u taxonomy_company_mapper.py 2>&1
+          python actions_log.py --workflow daily_run --step taxonomy_loader -- python -u taxonomy_loader.py
+          python actions_log.py --workflow daily_run --step taxonomy_company_mapper -- python -u taxonomy_company_mapper.py
 
       # ── 5. アナライザー実行 ───────────────────────────────
       # github actionsのAPIキーやファイルパスをそれぞれ定義している。
@@ -293,7 +304,7 @@ jobs:
           STOCK_ANALYZER_BASE:  ${{ github.workspace }}/stock_data
           BQ_PROJECT_ID:        ${{ secrets.BQ_PROJECT_ID }}
           BQ_CREDENTIALS:       ${{ secrets.BQ_CREDENTIALS }}
-        run: python -u edinetdb_web_backfill.py --scope due --years 3 --time-budget-min 15 2>&1
+        run: python actions_log.py --workflow daily_run --step edinetdb_web_refresh -- python -u edinetdb_web_backfill.py --scope due --years 3 --time-budget-min 15
 
       # 当月の Actions 使用分数を数えて logs/actions_usage.json へ（日次メールの「運用の監視」が読む）。
       # 無料枠を超えると月末まで全 workflow が止まり、メールも来なくなるので、超える前に知らせる。
@@ -303,7 +314,7 @@ jobs:
         env:
           GH_TOKEN:            ${{ secrets.GITHUB_TOKEN }}
           STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
-        run: python -u actions_usage.py 2>&1
+        run: python actions_log.py --workflow daily_run --step actions_usage -- python -u actions_usage.py
 
       - name: 🚀 Run analyzer
         id: analyzer
@@ -339,9 +350,9 @@ jobs:
         run: |
           if [ "${{ github.event.inputs.mode }}" = "single" ]; then
             SINGLE_MODULE="${{ github.event.inputs.module }}" \
-              python -u run_headless.py --mode all 2>&1
+              python actions_log.py --workflow daily_run --step analyzer -- python -u run_headless.py --mode all
           else
-            python -u run_headless.py --mode ${{ steps.set-mode.outputs.mode }} 2>&1
+            python actions_log.py --workflow daily_run --step analyzer -- python -u run_headless.py --mode ${{ steps.set-mode.outputs.mode }}
           fi
 
       # ── 5-A2. 月次・四半期ランナー（2026-07-25 B-5追加）──────────
@@ -367,7 +378,7 @@ jobs:
           STOCK_ANALYZER_BASE:  ${{ github.workspace }}/stock_data
           BQ_PROJECT_ID:        ${{ secrets.BQ_PROJECT_ID }}
           BQ_CREDENTIALS:       ${{ secrets.BQ_CREDENTIALS }}
-        run: python -u db_catalog_gen.py 2>&1
+        run: python actions_log.py --workflow daily_run --step db_catalog -- python -u db_catalog_gen.py
 
       - name: 🗓️ Run monthly runner (month start only)
         id: monthly
@@ -385,7 +396,7 @@ jobs:
           ALERT_GMAIL_FROM:     ${{ secrets.ALERT_GMAIL_FROM }}
           ALERT_GMAIL_PASSWORD: ${{ secrets.ALERT_GMAIL_PASSWORD }}
           ALERT_GMAIL_TO:       ${{ secrets.ALERT_GMAIL_TO }}
-        run: python -u monthly_runner.py 2>&1
+        run: python actions_log.py --workflow daily_run --step monthly_runner -- python -u monthly_runner.py
 
       # insights 以下の md レポート（マクロ・業種・ニュース・ETF・IMF・政府統計・週次ほか全部）を読んで BigQuery analytics に追記する
       # （load job・無料）。取り込み記録 data/report_store_state.json と違うファイルだけ。BI export より前に置き、当日分をマートに載せる。
@@ -397,7 +408,7 @@ jobs:
           STOCK_ANALYZER_BASE:  ${{ github.workspace }}/stock_data
           BQ_PROJECT_ID:        ${{ secrets.BQ_PROJECT_ID }}
           BQ_CREDENTIALS:       ${{ secrets.BQ_CREDENTIALS }}
-        run: python -u report_store.py 2>&1
+        run: python actions_log.py --workflow daily_run --step report_store -- python -u report_store.py
 
       # BI基盤のマート（bi/marts/*.sql）を parquet にして stock_data/bi/ へ書き出す。
       # 1マート1クエリ。内容が前回と同じなら parquet は書き換えない（git肥大の防止）。
@@ -412,7 +423,7 @@ jobs:
           BQ_PROJECT_ID:        ${{ secrets.BQ_PROJECT_ID }}
           BQ_CREDENTIALS:       ${{ secrets.BQ_CREDENTIALS }}
         run: |
-          python -u bi_export.py 2>&1 || { echo "❌ bi_export が失敗しました（日次本体は継続・stock_data/bi は前回のまま）"; exit 1; }
+          python actions_log.py --workflow daily_run --step bi_export -- python -u bi_export.py || { echo "❌ bi_export が失敗しました（日次本体は継続・stock_data/bi は前回のまま）"; exit 1; }
 
       # ── 5-A3. 外側ステップの結果を実行台帳へ ─────────────────────
       # ここまでの continue-on-error ステップは run_all_tasks の外なので RunLogger に載らず、
@@ -425,7 +436,7 @@ jobs:
         env:
           STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
         run: |
-          python module_ledger.py steps \
+          python actions_log.py --workflow daily_run --step record_outer_steps -- python module_ledger.py steps \
             setup_db_integration_bq=${{ steps.db-schema.outcome }} \
             taxonomy_load=${{ steps.taxonomy.outcome }} \
             edinetdb_web_refresh=${{ steps.web-refresh.outcome }} \
@@ -433,6 +444,44 @@ jobs:
             monthly_runner=${{ steps.monthly.outcome }} \
             report_store_step=${{ steps.report-store.outcome }} \
             bi_export=${{ steps.bi-export.outcome }}
+
+      # ── 5-B0. 保存の前に書く印 ─────────────────────────────────
+      # git の commit と BigQuery の save の両方に載るよう、保存より前に書く。
+      - name: 🏷️ Mark state before saving
+        if: always()
+        env:
+          STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
+        run: |
+            # 週次の分析が成功した回だけ印を書く（上の Set execution mode が、抜けた週を翌日以降に weekly で追いつかせる）
+            if [ "${{ steps.analyzer.outcome }}" = "success" ] && { [ "${{ steps.set-mode.outputs.mode }}" = "weekly" ] || [ "${{ steps.set-mode.outputs.mode }}" = "all" ]; }; then
+              echo "{\"date\": \"$(date -u '+%Y-%m-%d')\", \"run_id\": \"${{ github.run_id }}\"}" > stock_data/data/last_weekly_run.json
+            fi
+            # 保存できた日の印。保存に失敗すると記録ごと届かないので、翌日以降「記録が来ない」で気づける
+            python actions_log.py --workflow daily_run --step daily_state_push_mark -- python module_ledger.py steps daily_state_push=success || true
+
+      # ── 5-B1. 状態を BigQuery へ（state_store.py）────────────────
+      # 変わったファイルだけを load job（無料）で private.state_files に追記する。git モードでは走らない。
+      # bi_export が失敗した回は stock_data/bi を保存しない（git 側と同じく前回の版のまま）。
+      # dual では失敗しても git への commit は続ける。bq では失敗＝状態が残らないので赤にする。
+      - name: ☁️ Save state to BigQuery
+        if: always() && env.STATE_STORE_MODE != 'git'
+        env:
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+        run: |
+          EXCL=""
+          if [ "${{ steps.bi-export.outcome }}" = "failure" ]; then EXCL="--exclude stock_data/bi/"; fi
+          python state_store.py save --source daily_run $EXCL || {
+            echo "::warning::状態を BigQuery に保存できなかった"
+            [ "$STATE_STORE_MODE" = "dual" ]
+          }
+
+      # 版が増えすぎないよう、週次の回だけパスごとに新しい3版を残して古い版を消す（dryRun で見積もり・1GB を超えたら実行しない）。
+      - name: 🧽 Prune old state versions (weekly)
+        if: always() && env.STATE_STORE_MODE != 'git' && steps.set-mode.outputs.mode == 'weekly'
+        continue-on-error: true
+        env:
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+        run: python state_store.py prune
 
       # ── 5-B. 状態ファイル・キャッシュをリポジトリにコミット ───────
       # 2026-07-12 BUG-03対応: .iqy生成（Excel Webクエリ）は廃止（ENABLE_EXCEL_EXPORT=False）。
@@ -442,6 +491,10 @@ jobs:
       - name: 📊 Commit state files
         if: always()
         run: |
+            if [ "$STATE_STORE_MODE" = "bq" ]; then
+              echo "⏩ STATE_STORE_MODE=bq: 状態は BigQuery に保存済み（git には commit しない）"
+              exit 0
+            fi
             git config user.name  "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             # bi_export が失敗した回は stock_data/bi を前回のコミットへ戻す（途中まで書かれた成功分を commit しない）。
@@ -470,12 +523,7 @@ jobs:
             # （models/ と data/us_fundamentals_db/）は .gitignore 済みなので、
             # ディレクトリごと add しても増える分は実行の成果物だけになる。
             # 新しい状態ファイルを足しても、ここを触らずに永続化される。
-            # 週次の分析が成功した回だけ印を書く（上の Set execution mode が、抜けた週を翌日以降に weekly で追いつかせる）
-            if [ "${{ steps.analyzer.outcome }}" = "success" ] && { [ "${{ steps.set-mode.outputs.mode }}" = "weekly" ] || [ "${{ steps.set-mode.outputs.mode }}" = "all" ]; }; then
-              echo "{\"date\": \"$(date -u '+%Y-%m-%d')\", \"run_id\": \"${{ github.run_id }}\"}" > stock_data/data/last_weekly_run.json
-            fi
-            # 保存できた日の印。push に失敗すると記録ごと origin に届かないので、翌日以降「記録が来ない」で気づける
-            STOCK_ANALYZER_BASE="${{ github.workspace }}/stock_data" python module_ledger.py steps daily_state_push=success || true
+            # 週次の印（last_weekly_run.json）と保存の印（daily_state_push）は上の Mark state before saving で書く
             git add stock_data/data/ 2>/dev/null || true
             git add stock_data/cache/ 2>/dev/null || true
             git add stock_data/insights/ 2>/dev/null || true
@@ -485,12 +533,12 @@ jobs:
             git add stock_data/ontology/ 2>/dev/null || true
             git add stock_data/bi/ 2>/dev/null || true
             git add stock_data/*.json 2>/dev/null || true
-            git diff --cached --quiet || git commit -m "auto: daily update $(date '+%Y-%m-%d')"
+            git diff --cached --quiet || git commit -q -m "auto: daily update $(date '+%Y-%m-%d')"
             # 同じ時間帯に別の workflow や手元の push で origin が先に進んでいても保存できるよう、
             # 未ステージ分は --autostash で退避し、状態ファイルの衝突はこの回の内容（-X theirs＝再適用する側）を採る。
             # 次の実行は新しくチェックアウトするので再試行にはならない。3回とも失敗したら赤にして気づけるようにする。
             for i in 1 2 3; do
-              git pull --rebase --autostash -X theirs origin main && git push \
+              git pull -q --rebase --autostash -X theirs origin main && git push -q \
                 && { echo "✅ 状態ファイル・キャッシュをコミット/プッシュしました"; exit 0; }
               git rebase --abort 2>/dev/null || true
               sleep 15
@@ -508,16 +556,8 @@ jobs:
           echo "::error::通知が届いていない: ${NOTIFY_FAILED}"
           exit 1
 
-      # ── 6. 結果を Artifacts として保存（7日間保持）──────
-      - name: 📁 Upload results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: analyzer-results-${{ github.run_number }}
-          path: |
-            stock_data/insights/
-            stock_data/logs/
-          retention-days: 7
+      # ── 6. Artifacts は出さない（公開に備え、insights・logs は BigQuery の state_store にだけ置く）──
+      #   後続の workflow・スクリプトで artifacts を読むものは無い。
 
       # ── 7. 失敗時のサマリー出力 ───────────────────────────
       - name: 📋 Output summary
