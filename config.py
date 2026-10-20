@@ -4553,7 +4553,7 @@ UNIFIED_SCORE_PHASE_B_ENABLED: bool = True
 UNIFIED_SCORE_DCF_MAX_ADJ:  float = 5.0   # DCF調整の上限（±pt）
 UNIFIED_SCORE_TECH_MAX_ADJ: float = 5.0   # テクニカル調整の上限（±pt）
 UNIFIED_SCORE_GEO_MAX_ADJ:  float = 3.0   # 地政学調整の上限（±pt）
-UNIFIED_SCORE_RE_MAX_ADJ:   float = 1.5   # 不動産調整の上限（±pt）。含み益ファクターは時点整合バックテストで通常PBRを上回らず、開示時価での補正後に再検証するまで暫定で半分に絞る
+UNIFIED_SCORE_RE_MAX_ADJ:   float = 0.5   # 不動産調整の上限（±pt）。含み益ファクターは校正・開示時価での置き換え後も時点整合バックテストで通常PBRを上回らない（採用基準未達）。開示時価が1年分たまる2027年の有報シーズン後に再検証するまで小さく残す
 
 # ==============================================================
 # BLOCK 57: APIキー生存判定設定（Issue J-2 / api_key_health）
