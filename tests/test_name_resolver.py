@@ -2,7 +2,9 @@
 import name_resolver as n
 
 
-def test_enrich_text_adds_names_but_keeps_machine_lines():
+def test_enrich_text_adds_names_but_keeps_machine_lines(monkeypatch):
+    # 名前の対応表は stock_data のキャッシュから作る（git に無い）ので、テストでは小さな表に差し替える
+    monkeypatch.setattr(n, "_maps", lambda: ({"8058": "三菱商事", "8306": "三菱UFJ"}, {}))
     out = n.enrich_text("📌 8058.T 90点\n[1028] → [1029]\nDELIBERATION_QUEUE_V1: 8058.T,8306.T\n三菱商事（8058.T）")
     lines = out.split("\n")
     assert lines[0].startswith("📌 8058.T 三菱商事")

@@ -1,0 +1,86 @@
+{
+ "data": {
+  "facilities": [],
+  "real_estate_notes": [
+   {
+    "bs": {
+     "buildings_m_yen": 1600200.0,
+     "investment_property_m_yen": null,
+     "land_m_yen": 2486061.0,
+     "real_estate_total_m_yen": 4086261.0
+    },
+    "fiscal_year": 2026,
+    "land_price_benchmark": {
+     "national_commercial_median_jpy_per_m2": 52050,
+     "national_industrial_median_jpy_per_m2": 45950,
+     "national_residential_median_jpy_per_m2": 31300,
+     "note": "都道府県情報は注記の region_description から抽出。一致した都道府県の商業地・住宅地・工業地中央値を表示",
+     "prefecture_benchmarks": [
+      {
+       "commercial_max_jpy_per_m2": 67100000,
+       "commercial_median_jpy_per_m2": 587000,
+       "commercial_p90_jpy_per_m2": 2140000,
+       "commercial_point_count": 849,
+       "industrial_median_jpy_per_m2": 186000,
+       "prefecture": "東京都",
+       "residential_median_jpy_per_m2": 347000
+      }
+     ],
+     "prefectures_from_disclosure": [
+      "東京都"
+     ],
+     "source": "FudosanDB / 国土交通省 公示地価"
+    },
+    "lease_disclosure": {
+     "book_value_gap_m_yen": 5010320.0,
+     "book_value_m_yen": 4484015.0,
+     "doc_id": "S100YBLA",
+     "extraction_status": "ok",
+     "fair_value_m_yen": 9494335.0,
+     "fv_bv_ratio": 2.117373603790353,
+     "region_description": "東京都その他の地域及び海外（米国、英国等）",
+     "rental_expense_m_yen": 399566.0,
+     "rental_profit_m_yen": 176076.0,
+     "rental_revenue_m_yen": 575642.0,
+     "valuation_method": "mixed"
+    }
+   },
+   {
+    "bs": {
+     "buildings_m_yen": 846652.0,
+     "investment_property_m_yen": null,
+     "land_m_yen": 1839707.0,
+     "real_estate_total_m_yen": 2686359.0
+    },
+    "fiscal_year": 2015,
+    "land_price_benchmark": {
+     "national_commercial_median_jpy_per_m2": 54500,
+     "national_industrial_median_jpy_per_m2": 39000,
+     "national_residential_median_jpy_per_m2": 32900,
+     "note": "都道府県情報は注記の region_description から抽出。一致した都道府県の商業地・住宅地・工業地中央値を表示",
+     "prefecture_benchmarks": [],
+     "prefectures_from_disclosure": [],
+     "source": "FudosanDB / 国土交通省 公示地価"
+    }
+   },
+   {
+    "bs": {
+     "buildings_m_yen": null,
+     "investment_property_m_yen": null,
+     "land_m_yen": null,
+     "real_estate_total_m_yen": null
+    },
+    "fiscal_year": 2014,
+    "land_price_benchmark": {
+     "national_commercial_median_jpy_per_m2": 55850,
+     "national_industrial_median_jpy_per_m2": 39050,
+     "national_residential_median_jpy_per_m2": 33200,
+     "note": "都道府県情報は注記の region_description から抽出。一致した都道府県の商業地・住宅地・工業地中央値を表示",
+     "prefecture_benchmarks": [],
+     "prefectures_from_disclosure": [],
+     "source": "FudosanDB / 国土交通省 公示地価"
+    }
+   }
+  ]
+ }
+}

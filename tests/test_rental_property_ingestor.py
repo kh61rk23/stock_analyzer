@@ -3,7 +3,8 @@ from pathlib import Path
 
 import rental_property_ingestor as rp
 
-PROBE = Path(__file__).resolve().parent.parent / "stock_data" / "data" / "edinetdb_real_estate_probe_E03856.json"
+# 三井不動産（E03856）の EdinetDB 応答のうち、テストに使う3年度だけを抜いた写し（stock_data は git に無い）
+PROBE = Path(__file__).resolve().parent / "fixtures" / "edinetdb_real_estate_E03856_min.json"
 
 
 def test_map_real_estate_from_saved_response():
