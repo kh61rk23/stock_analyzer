@@ -23,6 +23,7 @@
 #             成績列に還流 [DEPT-2③]
 #   deliberations  クラウド審議の結果を vault（30_レポート/20_審議/40_判断台帳）へ新規分だけミラー
 #   approvals      台帳の承認を invest_approvals.json に書いて push（DB へは Actions が反映）
+#   rules          投資部の部則・審議スキルを vault から BigQuery（private.state_files）へ保存
 #   all       pull → deliberations → mirror → approvals → holdings → queue → journal → feedback → rules
 #
 # 【定期実行（launchd 例・毎朝9時）】
@@ -56,6 +57,8 @@ SYNC_CACHE = Path.home() / ".stock_analyzer_sync" / "repo"
 # run_apps.sh が STOCK_ANALYZER_BASE で同じ場所を全ジョブ（週次・月次・board）へ渡す。
 MIRROR_BASE = Path.home() / ".stock_analyzer_sync" / "stock_data_mirror"
 MIRROR_SUBDIRS = ("data", "insights", "logs", "cache", "bi", "paper", "ontology")
+# 部則・審議スキルを BigQuery へ保存する前の写し先（rules）。git の作業コピー・同期用 clone の外に置く
+RULES_STAGE = Path.home() / ".stock_analyzer_sync" / "invest_rules"
 # STATE_STORE_MODE=bq のときの状態の置き場（リポジトリ直下に相当: stock_data/・data/portfolio_*）。
 # BigQuery（state_store.py）から書き戻し、Mac が作る承認・保有・審議済み・同期状況もここに書いて BigQuery へ保存する。
 # git / dual のときは同期用 clone（SYNC_CACHE）を使う（今のまま）。
@@ -242,7 +245,7 @@ def cmd_pull(cfg, repo_url: str) -> bool:
     else:
         r = _git_with_retry(["git", "clone", "--depth", "1", repo_url,
                              str(SYNC_CACHE)], 600)
-    # bq でも同期用 clone は使う（部則の同期 rules と sync_holdings.py の置き場）。状態は BigQuery から取る
+    # bq でも同期用 clone は使う（sync_holdings.py の置き場）。状態は BigQuery から取る
     git_ok = r is not None and r.returncode == 0
     if r is not None and r.returncode != 0:
         print(f"❌ git 失敗: {r.stderr[:200]}")
@@ -726,19 +729,16 @@ def cmd_feedback(cfg) -> None:
 
 
 def cmd_rules() -> bool:
-    """投資部の部則・審議スキル（vault が正本）に変更があれば GitHub へ同期・push する。
+    """投資部の部則・審議スキル（vault が正本）を BigQuery（private.state_files）へ保存する。
 
-    クラウドの定時審議はリポジトリ内のコピー（investment_dept/・.claude/skills/）しか読めないため、
-    vault で部則を直したら次の定期実行でここが反映する。差分が無ければ commit も push もしない。
+    部則は公開しないため git には入れない。クラウドの定時審議は state_store.py restore で BQ から取り出して読む。
+    写し先は作業コピー・同期用 clone の外（RULES_STAGE）。差分が無ければ load job も出さない。
+    BQ の認証は run_apps.sh が渡す GOOGLE_APPLICATION_CREDENTIALS（子プロセスに引き継がれる）。
     """
     import subprocess
-    # 同期用 clone（SYNC_CACHE）で commit・push する。作業コピー（01_System）で autostash・rebase すると
-    # 改修途中のファイルと交錯するため、mirror / approvals / holdings と同じく clone 側だけを動かす。
-    if not (SYNC_CACHE / ".git").exists():
-        print("⏩ rules: 同期用cloneが無い（先に pull が必要）")
-        return False
+    RULES_STAGE.mkdir(parents=True, exist_ok=True)
     r = subprocess.run([sys.executable, str(REPO_ROOT / "tools" / "sync_invest_rules.py"), "--apply",
-                        "--repo", str(SYNC_CACHE)],
+                        "--root", str(RULES_STAGE)],
                        cwd=REPO_ROOT, text=True, capture_output=True)
     out = (r.stdout or "") + (r.stderr or "")
     print(out.strip()[-1500:])

@@ -1,45 +1,53 @@
 #!/usr/bin/env python3
-"""投資部の部則・ツール・審議スキルを vault から repo へ同期して push する（vault が正本・repo は読み取り専用コピー）。
+"""投資部の部則・ツール・審議スキルを vault から BigQuery（private.state_files）へ保存する（vault が正本）。
+
+部則は公開しないため git には入れない。vault から写し先（--root。既定は作業コピー）の下の
+investment_dept/・.claude/skills/invest-*/（git 管理外）へ写し、state_store.save_scoped(source="invest-rules")
+で BQ へ保存する（load job だけ・無料）。クラウドの routine は
+`python3 state_store.py restore --prefix investment_dept/ .claude/skills/invest- --force` で取り出して読む。
 
 同期元（vault: Vault2_ClaudeCode_Local/CEO室/departments/B-investment）:
   B1-bull.md / B2-bear.md / B3-devil.md / B4-analyst.md / _運用ルール.md / CLAUDE.md / README.md /
   F補遺_作成指示.md / 25_デビル校正ノート.md          → investment_dept/
   tools/fundamental_packet.py                       → investment_dept/tools/
-  skills/invest-*/（SKILL.md ほかテキスト）           → .claude/skills/invest-*/   （クラウド routine が読む）
+  skills/invest-*/（SKILL.md ほかテキスト）           → .claude/skills/invest-*/
 
-既定は dry-run（コピー・commit・push をしない）。実行するには --apply。--no-push で commit まで。
+既定は dry-run（コピー・保存をしない）。実行するには --apply。
 
 安全策（sync_config_docs.py と同じ）:
 - 認証情報らしいファイル名・バックアップ（*.bak*）・dist/（.skill の zip）は同期しない
-- 同期候補と同期先の全テキストを秘密情報パターンでスキャンし、1件でも検出したら何もコピーせず中止
-- git add は investment_dept/ と .claude/skills/invest-* だけ。他にステージ済みの変更があれば中止
-- main 以外のブランチでは push しない
-- vault 側に無くなったファイルは --prune を付けたときだけ repo 側から消す
-- commit 前に対象の index を作り直す（macOS の日本語ファイル名 NFD/NFC 差で未追跡に見えるのを防ぐ）
+- 同期候補と写し先の全テキストを秘密情報パターンでスキャンし、1件でも検出したら何もコピーせず中止
+- vault 側に無くなったファイルは --prune を付けたときだけ写し先から消し、BQ に削除の印を付ける
+  （既定は追加・更新だけ。写し先が空でも BQ の部則は消えない）
+- 同期対象が0件なら中止する（空のまま保存すると BQ の部則すべてに削除の印が付くため）
+- 写し先のファイル名は NFC にそろえてから保存する（クラウドの前方一致・版の照合を外さないため）
+- BQ の認証が無いときは、コピーまでして「BQ に保存できなかった」と exit 7 で知らせる
 """
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import fnmatch
 import filecmp
+import importlib.util
 import re
 import shutil
-import subprocess
 import sys
 import unicodedata
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent            # 同期先の git リポジトリ（--repo で差し替える）
+REPO = Path(__file__).resolve().parent.parent            # 写し先（--root で差し替える）。BQ のパスはここからの相対
 SRC = (Path.home() / "Documents" / "Obsidian_Local" / "Vault2_ClaudeCode_Local" / "CEO室"
        / "departments" / "B-investment")
 DST_RULES = "investment_dept"
 DST_SKILLS = ".claude/skills"
+BQ_SOURCE = "invest-rules"
 
 RULE_FILES = ["B1-bull.md", "B2-bear.md", "B3-devil.md", "B4-analyst.md", "_運用ルール.md", "CLAUDE.md",
               "README.md", "F補遺_作成指示.md", "25_デビル校正ノート.md"]
 TOOL_FILES = ["tools/fundamental_packet.py"]
 SKILL_PREFIX = "invest-"
+# vault から一時的に消えても、BQ の版に削除の印を付けられるよう範囲に入れておくスキル
+KNOWN_SKILLS = ("invest-dept", "invest-b1-bull", "invest-b2-bear", "invest-b3-devil", "invest-b4-reporter")
 SKILL_EXCLUDE_DIRS = {"dist"}
 
 EXCLUDE_NAME_PATTERNS = [          # 小文字で比較する
@@ -59,24 +67,23 @@ SECRET_PATTERNS = [
     re.compile(r'"client_secret"\s*:\s*"'),
 ]
 
-COMMIT_TRAILERS = "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n"
 
-
-def git(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "-c", "core.quotepath=off", *args], cwd=REPO, text=True, capture_output=True)
+def nfc(s: str) -> str:
+    return unicodedata.normalize("NFC", s)
 
 
 def is_excluded(rel: str) -> bool:
     """同期しないパスか。ファイル名の除外パターン、または除外フォルダ（dist 等）配下。"""
-    parts = Path(unicodedata.normalize("NFC", rel)).parts
+    parts = Path(nfc(rel)).parts
     if any(p in SKILL_EXCLUDE_DIRS for p in parts[:-1]):
         return True
     low = parts[-1].lower()
     return any(fnmatch.fnmatch(low, pat) for pat in EXCLUDE_NAME_PATTERNS)
 
 
-def collect(src: Path = SRC) -> tuple:
-    """Returns: (同期候補 [(元パス, 先の相対パス)], 除外した相対パス, 非テキストでスキップした相対パス)"""
+def collect(src: Path | None = None) -> tuple:
+    """Returns: (同期候補 [(元パス, 先の相対パス NFC)], 除外した相対パス, 非テキストでスキップした相対パス)"""
+    src = src or SRC
     pairs, excluded, skipped = [], [], []
 
     def consider(p: Path, dst_rel: str, rel: str):
@@ -85,7 +92,7 @@ def collect(src: Path = SRC) -> tuple:
         elif p.suffix.lower() not in TEXT_SUFFIXES:
             skipped.append(rel)
         else:
-            pairs.append((p, dst_rel))
+            pairs.append((p, nfc(dst_rel)))
 
     for rel in RULE_FILES:
         p = src / rel
@@ -115,48 +122,63 @@ def scan(path: Path) -> list:
     return [pat.pattern for pat in SECRET_PATTERNS if pat.search(text)]
 
 
-def _dst_files() -> list:
-    """repo 側の同期先に今あるファイル（相対パス）。"""
+def _skill_dirs(root: Path) -> list:
+    skills = Path(root) / DST_SKILLS
+    if not skills.is_dir():
+        return []
+    return [d.name for d in sorted(skills.iterdir()) if d.is_dir() and d.name.startswith(SKILL_PREFIX)]
+
+
+def _dst_files(root: Path) -> list:
+    """写し先に今あるファイル（root からの相対パス）。"""
     out = []
-    roots = [REPO / DST_RULES]
-    skills = REPO / DST_SKILLS
-    if skills.is_dir():
-        roots += [d for d in sorted(skills.iterdir()) if d.is_dir() and d.name.startswith(SKILL_PREFIX)]
+    roots = [Path(root) / DST_RULES] + [Path(root) / DST_SKILLS / n for n in _skill_dirs(root)]
     for r in roots:
         if r.is_dir():
-            out += [str(p.relative_to(REPO)) for p in sorted(r.rglob("*"))
+            out += [str(p.relative_to(root)) for p in sorted(r.rglob("*"))
                     if p.is_file() and p.name != ".DS_Store"]
     return out
 
 
-def add_targets() -> list:
-    """git add / index 再作成の対象（investment_dept と .claude/skills/invest-*）。"""
-    t = [DST_RULES]
-    skills = REPO / DST_SKILLS
-    if skills.is_dir():
-        t += [f"{DST_SKILLS}/{d.name}" for d in sorted(skills.iterdir())
-              if d.is_dir() and d.name.startswith(SKILL_PREFIX)]
-    return t
+def save_paths(root: Path, pairs) -> tuple:
+    """BQ へ保存する範囲（root からの相対・フォルダは末尾 /）。investment_dept/ と invest-* のスキルごとのフォルダ。
+    state_store の範囲はフォルダ単位なので、.claude/skills/ 全体ではなく invest-* だけを並べる
+    （他のスキルを範囲に入れると、手元に無いだけで削除の印が付く）。"""
+    names = set(KNOWN_SKILLS) | set(_skill_dirs(root))
+    for _, d in pairs:
+        parts = d.split("/")
+        if d.startswith(DST_SKILLS + "/") and len(parts) > 3:
+            names.add(parts[2])
+    return (f"{DST_RULES}/",) + tuple(f"{DST_SKILLS}/{n}/" for n in sorted(names))
 
 
-def main() -> int:
+def _load_sync_config_docs():
+    spec = importlib.util.spec_from_file_location("sync_config_docs", str(Path(__file__).with_name("sync_config_docs.py")))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def main(argv=None) -> int:
+    global REPO
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--apply", action="store_true", help="コピー・commit・push を実行（既定は dry-run）")
-    ap.add_argument("--no-push", action="store_true", help="commit までで止める")
-    ap.add_argument("--prune", action="store_true", help="vault に無い repo 側のファイルを削除する")
-    ap.add_argument("--repo", default="", help="同期先の git リポジトリ（既定はこのファイルのある repo）。"
-                                              "obsidian_sync は同期用 clone を渡し、作業コピーで rebase・push しない")
-    args = ap.parse_args()
-    if args.repo:
-        global REPO
-        REPO = Path(args.repo).expanduser().resolve()
+    ap.add_argument("--apply", action="store_true", help="コピーと BQ への保存を実行（既定は dry-run）")
+    ap.add_argument("--prune", action="store_true", help="vault に無い写し先のファイルを削除し、BQ に削除の印を付ける")
+    ap.add_argument("--root", "--repo", dest="root", default="",
+                    help="写し先（リポジトリ直下に当たるフォルダ。既定はこのファイルのある作業コピー）。"
+                         "obsidian_sync rules は ~/.stock_analyzer_sync/invest_rules を渡す")
+    args = ap.parse_args(argv)
+    if args.root:
+        REPO = Path(args.root).expanduser().resolve()
 
     if not SRC.is_dir():
         print(f"中止: 同期元がない: {SRC}")
         return 1
 
     pairs, excluded, skipped = collect()
-    nfc = lambda s: unicodedata.normalize("NFC", s)
+    if not pairs:
+        print(f"中止: 同期対象が0件: {SRC}")
+        return 1
     todo = []
     for p, dst_rel in pairs:
         target = REPO / dst_rel
@@ -164,20 +186,20 @@ def main() -> int:
             todo.append((p, dst_rel, "+"))
         elif not filecmp.cmp(p, target, shallow=False):
             todo.append((p, dst_rel, "~"))
-    keep = {nfc(d) for _, d in pairs}
-    orphans = [f for f in _dst_files() if nfc(f) not in keep]
+    keep = {d for _, d in pairs}
+    orphans = [f for f in _dst_files(REPO) if nfc(f) not in keep]
 
     hits = {}
     for p, dst_rel, _ in todo:
         h = scan(p)
         if h:
             hits[f"[vault] {dst_rel}"] = h
-    for f in _dst_files():
+    for f in _dst_files(REPO):
         p = REPO / f
         if p.suffix.lower() in TEXT_SUFFIXES:
             h = scan(p)
             if h:
-                hits[f"[repo] {f}"] = h
+                hits[f"[写し先] {f}"] = h
     if hits:
         print("中止: 秘密情報らしき記述を検出した。何もコピーしていない。")
         for k, v in hits.items():
@@ -185,9 +207,9 @@ def main() -> int:
         return 2
 
     print(f"同期元: {SRC}")
-    print(f"同期先: {REPO}/{DST_RULES} と {DST_SKILLS}/{SKILL_PREFIX}*")
+    print(f"写し先: {REPO}/{DST_RULES} と {DST_SKILLS}/{SKILL_PREFIX}*（git 管理外）→ BQ private.state_files")
     print(f"同期対象: {len(pairs)}件 / 追加・更新: {len(todo)}件 / 除外: {len(excluded)}件 / "
-          f"非テキストでスキップ: {len(skipped)}件 / repoのみ（{'削除する' if args.prune else '削除しない'}）: {len(orphans)}件")
+          f"非テキストでスキップ: {len(skipped)}件 / 写し先のみ（{'削除する' if args.prune else '削除しない'}）: {len(orphans)}件")
     for _, dst_rel, mark in todo:
         print(f"  {mark} {dst_rel}")
     for rel in excluded:
@@ -195,24 +217,11 @@ def main() -> int:
     for rel in skipped:
         print(f"  skip(非テキスト): {rel}")
     for rel in orphans:
-        print(f"  {'削除予定' if args.prune else 'only-in-repo'}: {rel}")
+        print(f"  {'削除予定' if args.prune else 'only-in-写し先'}: {rel}")
 
     if not args.apply:
         print("\ndry-run です。実行するには --apply を付ける。")
         return 0
-
-    branch = git("branch", "--show-current").stdout.strip()
-    if branch != "main":
-        print(f"中止: 現在のブランチは {branch}。main でのみ実行する。")
-        return 3
-    targets = add_targets()
-    staged = git("diff", "--cached", "--name-only").stdout.splitlines()
-    foreign = [f for f in staged if not any(f == t or f.startswith(t + "/") for t in targets)]
-    if foreign:
-        print("中止: 同期対象以外のステージ済み変更がある。先に解除すること:")
-        for f in foreign[:20]:
-            print(f"  {f}")
-        return 4
 
     for p, dst_rel, _ in todo:
         target = REPO / dst_rel
@@ -223,46 +232,12 @@ def main() -> int:
         for rel in orphans:
             (REPO / rel).unlink()
         print(f"削除: {len(orphans)}件")
-
-    # index を作り直す。追加対象は「同期したファイル」と「既に追跡済みで残すファイル」だけ
-    # （routine 実行で生まれるキャッシュ等の未追跡ファイルは add しない）
-    tracked = [f for f in git("ls-files", "--", *targets).stdout.splitlines() if (REPO / f).exists()]
-    rm = git("rm", "-r", "--cached", "--quiet", "--ignore-unmatch", "--", *targets)
-    if rm.returncode != 0:
-        print("index の作り直しに失敗:\n" + rm.stderr)
-        return 5
-    to_add = sorted({d for _, d in pairs} | set(tracked))
-    add = git("add", "--", *to_add)
-    if add.returncode != 0:
-        print("git add 失敗:\n" + add.stderr)
-        return 5
-    if git("diff", "--cached", "--quiet", "--", *targets).returncode == 0:
-        print("変更なし。commit・push しない。")
-        return 0
-
-    msg = f"docs: 投資部の部則・審議スキルをvaultから同期（{dt.date.today().isoformat()}）\n\n{COMMIT_TRAILERS}"
-    commit = git("commit", "-m", msg)
-    if commit.returncode != 0:
-        print("commit 失敗:\n" + commit.stderr)
-        return 5
-    print("commit 完了")
-
-    if args.no_push:
-        print("--no-push のため push していない。")
-        return 0
-    # Actions が1日に何度も stock_data/ を自動コミットするので、先にリベースで取り込む
-    # （履歴は書き換えない。衝突したら中止して報告する）
-    pull = git("pull", "--rebase", "--autostash", "origin", "main")
-    if pull.returncode != 0:
-        git("rebase", "--abort")
-        print("push 前の取り込み（pull --rebase）に失敗:\n" + pull.stderr)
-        return 6
-    push = git("-c", "http.postBuffer=524288000", "push", "origin", "main")
-    if push.returncode != 0:
-        print("push 失敗:\n" + push.stderr)
-        return 6
-    print("push 完了: origin/main")
-    return 0
+    scd = _load_sync_config_docs()
+    renamed = sum(scd.normalize_names(REPO / r) for r in [DST_RULES] + [f"{DST_SKILLS}/{n}" for n in _skill_dirs(REPO)])
+    if renamed:
+        print(f"ファイル名を NFC にそろえた: {renamed}件")
+    # 削除の印は --prune のときだけ（既定は追加・更新だけ）
+    return scd.save_to_bq(REPO, save_paths(REPO, pairs), BQ_SOURCE, delete_missing=args.prune)
 
 
 if __name__ == "__main__":

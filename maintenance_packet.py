@@ -146,7 +146,7 @@ def build_packet() -> str:
         "2. config.py 変更後は `python3 config_audit.py`（重複定義は後勝ち上書きで黙って壊れる）",
         "3. main 変更後は `python3 pipeline_registry_gen.py` で registry 再生成",
         "4. results キー追加時は results_schema.py の SCHEMA に追記",
-        "5. 改修完了時は pytest 全通過を確認し、開発ログ台帳（devlog.py add）と構成管理資料を更新して tools/sync_config_docs.py で push",
+        "5. 改修完了時は pytest 全通過を確認し、開発ログ台帳（devlog.py add）と構成管理資料を更新して tools/sync_config_docs.py --apply で BigQuery へ保存",
         "",
     ]
     return "\n".join(lines)

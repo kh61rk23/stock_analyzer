@@ -60,3 +60,94 @@ def test_scan_detects_secrets(tmp_path):
     assert sir.scan(p)
     p.write_text("ふつうの部則", encoding="utf-8")
     assert sir.scan(p) == []
+
+
+# ── 保存先は BigQuery（git には入れない） ─────────────────────
+
+def _vault(tmp_path):
+    src = tmp_path / "vault"
+    for rel in ["B1-bull.md", "_運用ルール.md", "tools/fundamental_packet.py", "skills/invest-dept/SKILL.md",
+                "skills/invest-b1-bull/SKILL.md"]:
+        p = src / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(rel, encoding="utf-8")
+    return src
+
+
+class _FakeDocs:
+    """sync_config_docs の normalize_names / save_to_bq の代わり（BQ に触れない）。"""
+
+    def __init__(self, rc=0):
+        self.calls = []
+        self.rc = rc
+
+    def normalize_names(self, root):
+        return 0
+
+    def save_to_bq(self, root, paths, source, delete_missing):
+        self.calls.append((Path(root), paths, source, delete_missing))
+        return self.rc
+
+
+def test_save_paths_lists_invest_skill_folders_only(tmp_path):
+    (tmp_path / ".claude/skills/invest-new").mkdir(parents=True)
+    (tmp_path / ".claude/skills/other").mkdir(parents=True)
+    paths = sir.save_paths(tmp_path, [(None, ".claude/skills/invest-x/SKILL.md")])
+    assert paths[0] == "investment_dept/"
+    assert set(paths[1:]) == {f".claude/skills/{n}/" for n in
+                              list(sir.KNOWN_SKILLS) + ["invest-new", "invest-x"]}
+    assert all(p.endswith("/") for p in paths)
+
+
+def test_main_apply_copies_and_saves_to_bq_without_git(tmp_path, monkeypatch):
+    monkeypatch.setattr(sir, "SRC", _vault(tmp_path))
+    fake = _FakeDocs()
+    monkeypatch.setattr(sir, "_load_sync_config_docs", lambda: fake)
+    root = tmp_path / "stage"
+    assert sir.main(["--apply", "--root", str(root)]) == 0
+    assert (root / "investment_dept/_運用ルール.md").read_text(encoding="utf-8") == "_運用ルール.md"
+    assert (root / ".claude/skills/invest-b1-bull/SKILL.md").exists()
+    assert not (root / ".git").exists()
+    (r, paths, source, delete_missing) = fake.calls[0]
+    assert r == root and source == "invest-rules" and delete_missing is False
+    assert "investment_dept/" in paths and ".claude/skills/invest-dept/" in paths
+
+
+def test_main_prune_marks_deletions(tmp_path, monkeypatch):
+    monkeypatch.setattr(sir, "SRC", _vault(tmp_path))
+    fake = _FakeDocs()
+    monkeypatch.setattr(sir, "_load_sync_config_docs", lambda: fake)
+    root = tmp_path / "stage"
+    stale = root / "investment_dept/old.md"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("x", encoding="utf-8")
+    assert sir.main(["--apply", "--prune", "--root", str(root)]) == 0
+    assert not stale.exists() and fake.calls[0][3] is True
+
+
+def test_main_dry_run_does_not_copy_or_save(tmp_path, monkeypatch):
+    monkeypatch.setattr(sir, "SRC", _vault(tmp_path))
+    fake = _FakeDocs()
+    monkeypatch.setattr(sir, "_load_sync_config_docs", lambda: fake)
+    root = tmp_path / "stage"
+    assert sir.main(["--root", str(root)]) == 0
+    assert not root.exists() and fake.calls == []
+
+
+def test_main_returns_nonzero_when_bq_save_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(sir, "SRC", _vault(tmp_path))
+    monkeypatch.setattr(sir, "_load_sync_config_docs", lambda: _FakeDocs(rc=7))
+    root = tmp_path / "stage"
+    assert sir.main(["--apply", "--root", str(root)]) == 7
+    assert (root / "investment_dept/B1-bull.md").exists()      # コピーまでは済んでいる
+
+
+def test_main_aborts_on_secret_without_copying(tmp_path, monkeypatch):
+    src = _vault(tmp_path)
+    (src / "B1-bull.md").write_text('"private_key": "abc"', encoding="utf-8")
+    monkeypatch.setattr(sir, "SRC", src)
+    fake = _FakeDocs()
+    monkeypatch.setattr(sir, "_load_sync_config_docs", lambda: fake)
+    root = tmp_path / "stage"
+    assert sir.main(["--apply", "--root", str(root)]) == 2
+    assert not root.exists() and fake.calls == []

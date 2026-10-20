@@ -6,6 +6,9 @@
 #   content（ファイル全体を gzip したバイト列を STATE_STORE_CHUNK_BYTES ごとに分けたもの）・run_id・source。
 #   削除は deleted=TRUE・content なしの行（削除の印）で表す。パスごとに saved_at（同時刻なら version_id）が
 #   最も新しい版が「今の中身」。同時に走った workflow は、パスごとに最後に保存した方が勝つ。
+#   公開しない資料（構成管理資料/・investment_dept/・.claude/skills/invest-*）も同じ表に置く（save_scoped）。
+#   これらは STATE_STORE_PATHS に入れない。save は対象のパスの範囲にしか削除の印を付けないので、
+#   Actions の save が「手元に無い」資料を削除と見なすことはない。
 # 【費用】
 #   書き込み … load job だけ（無料）。ストリーミング挿入は課金されるので使わない。
 #   読み出し … tabledata.list（client.list_rows）だけ（無料）。クエリで読むとクエリ枠を使うため使わない。
@@ -415,8 +418,10 @@ def _now_iso() -> str:
 
 def save(backend, root: Path, paths, excludes, *, source: str, run_id: str = "",
          baseline_path: Path | None = None, chunk_bytes: int = 4 * 1024 ** 2,
-         batch_bytes: int = 256 * 1024 ** 2, tmpdir: Path | None = None) -> SaveResult:
-    """paths（root からの相対）を走査し、BQ の最新と違うファイルだけを load job で追記する。"""
+         batch_bytes: int = 256 * 1024 ** 2, tmpdir: Path | None = None,
+         delete_missing: bool = True) -> SaveResult:
+    """paths（root からの相対）を走査し、BQ の最新と違うファイルだけを load job で追記する。
+    delete_missing=False なら、手元に無いファイルにも削除の印を付けない（追加・更新だけ）。"""
     root = Path(root)
     res = SaveResult()
     backend.ensure()
@@ -426,6 +431,8 @@ def save(backend, root: Path, paths, excludes, *, source: str, run_id: str = "",
     base, base_at = read_baseline(baseline_path) if baseline_path else (None, None)
     plan = plan_changes(local, latest, base, base_at, scope_paths=paths, excludes=excludes)
     res.skipped_newer = plan["skipped_newer"]
+    if not delete_missing:
+        plan["delete"] = []
     if not plan["upload"] and not plan["delete"]:
         return res
     saved_at = _now_iso()
@@ -480,6 +487,18 @@ def save(backend, root: Path, paths, excludes, *, source: str, run_id: str = "",
             p.unlink(missing_ok=True)
         work.rmdir()
     return res
+
+
+def save_scoped(root: Path, paths, *, source: str, delete_missing: bool = True, cfg=None,
+                backend=None) -> SaveResult:
+    """Actions の対象（STATE_STORE_PATHS）の外に置くもの（構成管理資料・投資部の部則など）を基準なしで保存する。
+    削除の印は paths の範囲の中だけに付く（範囲外の版には触れない）。BQ の認証が無ければ例外のまま返す。"""
+    cfg = cfg if cfg is not None else load_config()
+    backend = backend if backend is not None else BQBackend(cfg)
+    return save(backend, root, tuple(paths), tuple(getattr(cfg, "STATE_STORE_EXCLUDE", ())), source=source,
+                chunk_bytes=int(getattr(cfg, "STATE_STORE_CHUNK_BYTES", 4 * 1024 ** 2)),
+                batch_bytes=int(getattr(cfg, "STATE_STORE_LOAD_BATCH_BYTES", 256 * 1024 ** 2)),
+                delete_missing=delete_missing)
 
 
 @dataclass
@@ -645,6 +664,14 @@ def main(argv=None) -> int:
     if a.command == "save" and mode == "git" and not a.force:
         print("⏩ state_store save: STATE_STORE_MODE=git（BQ に保存しない）")
         return 0
+
+    if a.command == "save" and a.paths:
+        # 手で範囲を渡す save（クラウドで直した資料を戻すなど）で、その範囲が手元に1件も無いのは
+        # restore を忘れた状態。そのまま保存すると範囲の全ファイルに削除の印が付くので止める
+        empty = [p for p in paths if not scan(root, (p,), excludes)]
+        if empty:
+            print(f"❌ state_store save: 手元に1件も無い範囲がある（{len(empty)}件）。先に restore するか --paths を見直す")
+            return 1
 
     backend = BQBackend(cfg)
     if a.command in ("restore", "prepare"):

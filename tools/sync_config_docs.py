@@ -1,38 +1,42 @@
 #!/usr/bin/env python3
-"""構成管理資料の同期と push（02_Configuration_Management → 01_System/構成管理資料）。
+"""構成管理資料を BigQuery（private.state_files）へ保存する（02_Configuration_Management → 構成管理資料/ → BQ）。
 
-既定は dry-run（コピー・commit・push をしない）。実行するには --apply を付ける。
---no-push を付けると commit までで止まる。
---prune を付けると、02 に無くなったファイル（フォルダ再編・改名の跡）を 01 側からも消す。
+構成管理資料は公開しないため git には入れない。02（正本）を作業コピーの 構成管理資料/（git 管理外）へ写し、
+state_store.save_scoped(paths=("構成管理資料/",), source="docs-sync") で BQ へ保存する（load job だけ・無料）。
+クラウドの開発セッションは `python3 state_store.py restore --prefix 構成管理資料/ --force` で取り出す。
+
+既定は dry-run（コピー・保存をしない）。実行するには --apply を付ける。
+--prune を付けると、02 に無くなったファイル（フォルダ再編・改名の跡）を 構成管理資料/ からも消し、BQ には削除の印を付ける。
 
 安全策:
 - 認証情報らしいファイル名は同期しない（EXCLUDE_NAME_PATTERNS）
 - 認証情報置き場のフォルダは丸ごと同期しない（EXCLUDE_DIRS）
 - 同期候補と同期先の全テキストを秘密情報パターンでスキャンし、1件でも検出したら何もコピーせず中止する
 - テキスト以外の形式（zip・numbers など）は同期しない（一覧に出す）
-- git add は 構成管理資料/ だけに限る。index に他のステージ済み変更があれば中止する
-- main 以外のブランチでは push しない
-- 01 側にしか無いファイルは --prune を付けたときだけ削除する（既定は一覧に出すだけ）
-- commit 前に 構成管理資料/ の index を作り直す。macOS の日本語ファイル名は NFD/NFC の
-  2通りで index に載ることがあり、片方が「未追跡」に見えて同期漏れになるため
+- 構成管理資料/ にしか無いファイルは --prune を付けたときだけ削除する（既定は一覧に出すだけ）。
+  BQ の削除の印も --prune のときだけ付ける（既定は追加・更新だけ）
+- 同期対象が0件なら中止する（空のまま保存すると BQ の資料すべてに削除の印が付くため）
+- ファイル名は NFC にそろえてから保存する。macOS の日本語名は NFD のことがあり、そのまま保存すると
+  クラウド（Linux）で `--prefix 構成管理資料/` の前方一致や他の版との照合が外れるため
+- BQ の認証が無いときは、コピーまでして「BQ に保存できなかった」と exit 7 で知らせる
 """
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import fnmatch
 import filecmp
+import os
 import re
 import shutil
-import subprocess
 import sys
 import unicodedata
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent            # 01_System（gitリポジトリ）
+REPO = Path(__file__).resolve().parent.parent            # 01_System（作業コピー）
 SRC = REPO.parent / "02_Configuration_Management"         # vault 側（正本）
 DST_NAME = "構成管理資料"
 DST = REPO / DST_NAME
+BQ_SOURCE = "docs-sync"
 
 EXCLUDE_NAME_PATTERNS = [          # 小文字で比較する
     ".ds_store", ".env*", "*.pem", "*.p12",
@@ -56,16 +60,9 @@ SECRET_PATTERNS = [
     re.compile(r'"client_secret"\s*:\s*"'),
 ]
 
-COMMIT_TRAILERS = (
-    "Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>\n"
-    "Claude-Session: https://claude.ai/code/session_01QVnwQZtSo5nAgbCJmyZ4oH\n"
-)
 
-
-def git(*args: str) -> subprocess.CompletedProcess:
-    # core.quotepath=off: 日本語のファイル名が octal エスケープされて比較が狂うのを防ぐ
-    return subprocess.run(["git", "-c", "core.quotepath=off", *args],
-                          cwd=REPO, text=True, capture_output=True)
+def nfc(s: str) -> str:
+    return unicodedata.normalize("NFC", s)
 
 
 def is_excluded(name: str) -> bool:
@@ -73,16 +70,17 @@ def is_excluded(name: str) -> bool:
     return any(fnmatch.fnmatch(low, pat) for pat in EXCLUDE_NAME_PATTERNS)
 
 
-def collect() -> tuple[list[Path], list[str], list[str]]:
+def collect(src: Path | None = None) -> tuple[list[Path], list[str], list[str]]:
     """同期候補・除外（認証情報等）・スキップ（非テキスト）を返す。"""
+    src = src or SRC
     copy, excluded, skipped = [], [], []
-    for p in sorted(SRC.rglob("*")):
+    for p in sorted(src.rglob("*")):
         if not p.is_file():
             continue
-        rel = p.relative_to(SRC)
+        rel = p.relative_to(src)
         if ".git" in rel.parts:
             continue
-        if unicodedata.normalize("NFC", rel.parts[0]) in EXCLUDE_DIRS or is_excluded(p.name):
+        if nfc(rel.parts[0]) in EXCLUDE_DIRS or is_excluded(p.name):
             excluded.append(str(rel))
         elif p.suffix.lower() not in TEXT_SUFFIXES:
             skipped.append(str(rel))
@@ -99,27 +97,68 @@ def scan(path: Path) -> list[str]:
     return [pat.pattern for pat in SECRET_PATTERNS if pat.search(text)]
 
 
-def main() -> int:
+def normalize_names(root: Path) -> int:
+    """root 以下のファイル名・フォルダ名を NFC に改名する（深い方から）。改名した数を返す。
+    APFS は正規化違いを同じ名前と見なすので、一度別名を経由して付け直す。"""
+    n = 0
+    if not root.is_dir():
+        return 0
+    for dirpath, dirnames, filenames in os.walk(root, topdown=False):
+        for name in filenames + dirnames:
+            if name == nfc(name):
+                continue
+            p = Path(dirpath) / name
+            tmp = p.with_name(nfc(name) + ".nfc_tmp")
+            os.rename(p, tmp)
+            os.rename(tmp, p.with_name(nfc(name)))
+            n += 1
+    return n
+
+
+def save_to_bq(root: Path, paths: tuple, source: str, delete_missing: bool) -> int:
+    """root（リポジトリ直下に当たるフォルダ）の paths を BQ へ保存する。成功 0・保存できなければ 7。"""
+    if str(REPO) not in sys.path:
+        sys.path.insert(0, str(REPO))
+    try:
+        import state_store as ss
+        r = ss.save_scoped(root, paths, source=source, delete_missing=delete_missing)
+    except (Exception, SystemExit) as e:   # 認証が無いと make_client は SystemExit を投げる
+        print(f"❌ BQ に保存できなかった（{type(e).__name__}: {str(e)[:160]}）。"
+              f"コピーは {root} に済んでいる。BQ の認証（BQ_CREDENTIALS・BQ_CREDENTIALS_PATH・"
+              "GOOGLE_APPLICATION_CREDENTIALS）を確かめて --apply をやり直す")
+        return 7
+    print(f"{'✅' if r.ok else '❌'} BQ private.state_files へ保存: 走査{r.scanned}・保存{r.uploaded}"
+          f"（{r.bytes_raw / 1024 ** 2:.1f}MB）・削除の印{r.deleted}・load job {r.jobs}本")
+    return 0 if r.ok else 7
+
+
+def main(argv=None) -> int:
+    global SRC
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--apply", action="store_true", help="コピー・commit・push を実行（既定は dry-run）")
-    ap.add_argument("--no-push", action="store_true", help="commit までで止める")
-    ap.add_argument("--prune", action="store_true", help="02 に無い 01 側のファイルを削除する")
-    args = ap.parse_args()
+    ap.add_argument("--apply", action="store_true", help="コピーと BQ への保存を実行（既定は dry-run）")
+    ap.add_argument("--prune", action="store_true",
+                    help="02 に無い 構成管理資料/ のファイルを削除し、BQ に削除の印を付ける")
+    ap.add_argument("--src", default="", help="同期元（既定は作業コピーの隣の 02_Configuration_Management）")
+    args = ap.parse_args(argv)
+    if args.src:
+        SRC = Path(args.src).expanduser().resolve()
 
     if not SRC.is_dir():
         print(f"中止: 同期元がない: {SRC}")
         return 1
 
     copy, excluded, skipped = collect()
+    if not copy:
+        print(f"中止: 同期対象が0件: {SRC}")
+        return 1
     todo = []
     for p in copy:
-        target = DST / p.relative_to(SRC)
+        target = DST / nfc(str(p.relative_to(SRC)))
         if not target.exists():
             todo.append((p, "+"))
         elif not filecmp.cmp(p, target, shallow=False):
             todo.append((p, "~"))
 
-    nfc = lambda s: unicodedata.normalize("NFC", s)
     src_rel = {nfc(str(p.relative_to(SRC))) for p in copy}
     # 非テキストでスキップしたものは 02 に実在するので、--prune でも消さない
     keep_rel = src_rel | {nfc(s) for s in skipped}
@@ -149,7 +188,7 @@ def main() -> int:
         return 2
 
     print(f"同期元: {SRC}")
-    print(f"同期先: {DST}")
+    print(f"同期先: {DST}（git 管理外）→ BQ private.state_files")
     print(f"同期対象: {len(copy)}件 / 追加・更新: {len(todo)}件 / "
           f"除外（認証情報等）: {len(excluded)}件 / 非テキストでスキップ: {len(skipped)}件 / "
           f"01のみ（{'削除する' if args.prune else '削除しない'}）: {len(orphans)}件")
@@ -166,20 +205,8 @@ def main() -> int:
         print("\ndry-run です。実行するには --apply を付ける。")
         return 0
 
-    branch = git("branch", "--show-current").stdout.strip()
-    if branch != "main":
-        print(f"中止: 現在のブランチは {branch}。main でのみ実行する。")
-        return 3
-    staged = git("diff", "--cached", "--name-only").stdout.splitlines()
-    foreign = [f for f in staged if not f.startswith(DST_NAME + "/")]
-    if foreign:
-        print("中止: 構成管理資料以外のステージ済み変更がある。先に解除すること:")
-        for f in foreign[:20]:
-            print(f"  {f}")
-        return 4
-
     for p, _ in todo:
-        target = DST / p.relative_to(SRC)
+        target = DST / nfc(str(p.relative_to(SRC)))
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(p, target)
     print(f"コピー: {len(todo)}件")
@@ -191,43 +218,11 @@ def main() -> int:
             if not left:
                 shutil.rmtree(d)
         print(f"削除: {len(orphans)}件")
-
-    rm = git("rm", "-r", "--cached", "--quiet", "--ignore-unmatch", "--", DST_NAME)
-    if rm.returncode != 0:
-        print("index の作り直しに失敗:\n" + rm.stderr)
-        return 5
-    add = git("add", "--", DST_NAME)
-    if add.returncode != 0:
-        print("git add 失敗:\n" + add.stderr)
-        return 5
-    if git("diff", "--cached", "--quiet", "--", DST_NAME).returncode == 0:
-        print("変更なし。commit・push しない。")
-        return 0
-
-    msg = f"docs: 構成管理資料を02から同期（{dt.date.today().isoformat()}）\n\n{COMMIT_TRAILERS}"
-    commit = git("commit", "-m", msg)
-    if commit.returncode != 0:
-        print("commit 失敗:\n" + commit.stderr)
-        return 5
-    print("commit 完了")
-
-    if args.no_push:
-        print("--no-push のため push していない。")
-        return 0
-    # Actions が1日に何度も stock_data/ を自動コミットするので、先にリベースで取り込む
-    # （履歴は書き換えない。衝突したら中止して報告する）
-    pull = git("pull", "--rebase", "--autostash", "origin", "main")
-    if pull.returncode != 0:
-        git("rebase", "--abort")
-        print("push 前の取り込み（pull --rebase）に失敗:\n" + pull.stderr)
-        return 6
-    # 資料の一括移動など送信量が大きいと既定バッファでは HTTP 408 で切れるため広げる
-    push = git("-c", "http.postBuffer=524288000", "push", "origin", "main")
-    if push.returncode != 0:
-        print("push 失敗:\n" + push.stderr)
-        return 6
-    print("push 完了: origin/main")
-    return 0
+    renamed = normalize_names(DST)
+    if renamed:
+        print(f"ファイル名を NFC にそろえた: {renamed}件")
+    # 削除の印は --prune のときだけ（既定は追加・更新だけ。02 に無いだけの資料を BQ から消さない）
+    return save_to_bq(REPO, (DST_NAME + "/",), BQ_SOURCE, delete_missing=args.prune)
 
 
 if __name__ == "__main__":

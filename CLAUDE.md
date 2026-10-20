@@ -8,7 +8,20 @@
 - 提案・検証記録: `05_提案・検証記録/` ／ BI: `06_BI基盤/` ／ BQスナップショット: `07_DBスキーマ/`
 - 認証情報: `09_認証情報_同期対象外/`（git に入れない） ／ 旧資料・退避: `99_old/`（退避は `99_old/bk/`）
 - CHANGELOG は 2026-09-26 に凍結（`04_進捗管理/CHANGELOG_凍結_20260926.md`）。変更履歴は board の開発ログ台帳へ移設。
-- repo 内の `構成管理資料/` は 02 の同期コピー（直接編集しない。手順5で同期する）。
+- 構成管理資料は**公開しないため repo（git）に無い**。置き場は BigQuery の `private.state_files`（`state_store.py`）。
+  Mac の作業コピーの `構成管理資料/` は 02 の写し（git 管理外・直接編集しない。手順5で BQ へ保存する）。
+  投資部の部則（`investment_dept/`・`.claude/skills/invest-*`）も同じく git に無く、BQ に置く。
+
+### クラウドの開発セッション（Mac の 02 が無い環境）で資料を読む・直す
+
+- 読む: `python3 state_store.py restore --prefix 構成管理資料/ --force`（BQ 認証が要る。環境変数 `BQ_CREDENTIALS`。
+  依存は `python3 -m pip install -q --ignore-installed packaging -r requirements-invest.txt`）。
+  repo 直下に `構成管理資料/` ができる（.gitignore 済み。commit しない）。部則は `--prefix investment_dept/ .claude/skills/invest-`
+- 直したら戻す: `python3 state_store.py save --paths 構成管理資料/ --source cloud-docs --no-baseline --force`
+  （手元に無い資料は BQ で削除扱いになる。必ず restore してから直すこと。手元に1件も無ければ save は止まる）
+- 正本は Mac の 02。Mac 側の `tools/sync_config_docs.py --apply` が 02 から上書き保存するので、クラウドで直した資料は
+  そのままだと次の同期で 02 の版に戻る。**最後の報告に「直した資料の一覧」（パスと要点）を書く**。健太（または Mac 側の
+  セッション）が `restore` で取り出して 02 に取り込む
 
 ## 絶対禁止
 
@@ -59,7 +72,7 @@ python3 maintenance_packet.py   # 全監査+台帳+直近変更を MAINTENANCE_P
 2. 開発ログ台帳に記録（2026-09-26〜。CHANGELOG.md は凍結）:
    `python3 ~/Documents/Obsidian_Local/Vault2_ClaudeCode_Local/board/devlog.py add --project stock_analyzer --kind 修正 --title "…" --detail "…" --files a.py --commit abc1234`
    （board「システム › 開発」/dev で全プロジェクト横断に見られる）
-3. **構成管理資料を必ず更新する**（2026-10-03 健太指示：改修のたびに更新。正本は `../02_Configuration_Management/`。repo 内の `構成管理資料/` は手順5で同期する）
+3. **構成管理資料を必ず更新する**（2026-10-03 健太指示：改修のたびに更新。正本は `../02_Configuration_Management/`。BigQuery へは手順5で保存する）
    - `../02_Configuration_Management/02_台帳・リファレンス/MODULE_INDEX.md`：追加・変更したモジュールとワークフローの行
    - `../02_Configuration_Management/01_設計書/SPEC_db_schema.md`：テーブル・列・書き手・実測行数（§0-1）を変えたら必ず（更新前は `99_old/bk/設計書/` に退避）
    - `../02_Configuration_Management/02_台帳・リファレンス/CONFIG_REFERENCE.md`：`python3 config_reference_gen.py` で再生成（手編集しない）
@@ -69,12 +82,16 @@ python3 maintenance_packet.py   # 全監査+台帳+直近変更を MAINTENANCE_P
    - 進捗が動いたら `../02_Configuration_Management/04_進捗管理/TODO_LIST.md`、調査・提案のレポートは `05_提案・検証記録/` に置く
 4. **開発ダッシュボードを更新する**：board の G-dev `10_案件台帳.md` の stock_analyzer 行
    （概要・現在地／次アクション）を最新にする（開発ログ＝/dev の明細と、台帳＝現在地の両方）
-5. **構成管理資料を push する**（2026-10-15 健太指示：改修のたびに最新版を push）
+5. **構成管理資料を BigQuery へ保存する**（改修のたびに最新版を保存。資料は公開しないため git には入れない）
    - `python3 tools/sync_config_docs.py` で dry-run の内容を確認してから `python3 tools/sync_config_docs.py --apply` を実行する
-   - 02 側でファイルを移動・改名・削除したときは `--prune` を付ける（02 に無い 01 側のファイルを消す。dry-run で「削除予定」を確認してから）
-   - 02 → `構成管理資料/` へ同期し、commit して origin/main へ push する。対象は `構成管理資料/` のみ
+   - 02 → `構成管理資料/`（作業コピー内・git 管理外）へ写し、`state_store.save_scoped` で BQ の `private.state_files` へ保存する
+     （load job だけ・無料）。commit・push はしない。BQ 認証は `GOOGLE_APPLICATION_CREDENTIALS` 等（run_apps.sh と同じ鍵）
+   - 02 側でファイルを移動・改名・削除したときは `--prune` を付ける（02 に無い `構成管理資料/` のファイルを消し、BQ に削除の印を付ける。
+     dry-run で「削除予定」を確認してから）。`--prune` なしでは BQ の資料は消えない
    - 認証情報らしいファイルは同期しない（除外は tools/sync_config_docs.py の EXCLUDE_NAME_PATTERNS と EXCLUDE_DIRS）。秘密情報を検出したら何もコピーせず中止する
-   - 中止（exit 2〜6）したら表示された理由を健太に報告する。強制 push や除外リストの書き換えで通さない
+   - 中止（exit 1・2）や「BQ に保存できなかった」（exit 7）は表示された理由を健太に報告する。除外リストの書き換えで通さない
+   - `構成管理資料/`・`investment_dept/`・`.claude/skills/invest-*` は config の `STATE_STORE_PATHS` に入れない
+     （Actions の save が「手元に無い」を削除と見なして BQ の資料を消すため）
 
 ## このシステムの構造（30秒）
 
@@ -88,7 +105,8 @@ python3 maintenance_packet.py   # 全監査+台帳+直近変更を MAINTENANCE_P
 - データ契約: results_schema.py（150キー）
 - 日本株スクリーナー: 全上場の一次採点（screener_universe.py・既存の評価部品を全上場に当てる・時価総額で足切りしない）→ 上位だけ二次評価（stock_screener.py）
 - 投資審議: 日次で審議キューを BQ invest.deliberation_queue へ（deliberation_queue.py）→ Claude Code クラウド定時実行（隔週）が `.claude/skills/invest-dept` のクラウド審議モードで4エージェント審議し invest.deliberations へ登録。
-  部則・審議スキルの正本は vault の B-investment。repo の `investment_dept/`・`.claude/skills/invest-*` は同期コピー（直接編集しない。obsidian_sync rules → tools/sync_invest_rules.py が push）
+  部則・審議スキルの正本は vault の B-investment。git には入れず、obsidian_sync rules → tools/sync_invest_rules.py が BQ `private.state_files` へ保存する。
+  routine は最初に `python3 state_store.py restore --prefix investment_dept/ .claude/skills/invest- --force` で取り出して読む（取り出した写しは直接編集しない）
 - 観測性: module_ledger.py（実行台帳・連続失敗アラート・配線漏れ検出）
 - 投資部連携: agent_packet_exporter.py → Obsidian vault（B-investment）
 - ローカル同期: obsidian_sync.py（GitHub→Mac→iCloud vault / launchd は setup/ 参照）

@@ -154,11 +154,16 @@ def test_obsidian_status_build_and_push_rule():
     assert os_.should_push_status(None, same, now)
 
 
-def test_rules_sync_uses_sync_clone():
+def test_rules_sync_stages_outside_git_and_saves_to_bq():
     text = (REPO / "obsidian_sync.py").read_text(encoding="utf-8")
-    body = text[text.index("def cmd_rules"):text.index("def build_mac_status")]
-    assert '"--repo", str(SYNC_CACHE)' in body
-    assert "--repo" in (REPO / "tools/sync_invest_rules.py").read_text(encoding="utf-8")
+    start = text.index("def cmd_rules")
+    body = text[start:text.index("# ======", start)]
+    # 写し先は作業コピー・同期用 clone の外。部則は git に入れない（commit・push しない）
+    assert '"--root", str(RULES_STAGE)' in body
+    code = body.split('"""')[2]
+    assert "SYNC_CACHE" not in code and "push" not in code and "git" not in code
+    tool = (REPO / "tools/sync_invest_rules.py").read_text(encoding="utf-8")
+    assert "save_to_bq" in tool and '"push"' not in tool and '"commit"' not in tool
 
 
 # ── 保有銘柄 ────────────────────────────────────────────────────

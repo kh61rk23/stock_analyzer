@@ -17,3 +17,10 @@ pytest_cache/
 # state_store.py の基準ファイル（実行ごとの一時物）と、actions_log.py の全出力（BigQuery の state_store にだけ置く）
 .state_store_baseline.json
 stock_data/logs/actions_*.log
+
+# 公開しない資料（置き場は BigQuery の private.state_files。tools/sync_config_docs.py・tools/sync_invest_rules.py が保存し、
+# state_store.py restore --prefix … で取り出す。作業コピーにある写しは commit しない）
+/構成管理資料/
+/説明書_構成管理資料同期_2026-10-15.md
+/investment_dept/
+/.claude/skills/invest-*/
