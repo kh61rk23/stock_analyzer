@@ -24,3 +24,10 @@ stock_data/logs/actions_*.log
 /説明書_構成管理資料同期_2026-10-15.md
 /investment_dept/
 /.claude/skills/invest-*/
+
+# 状態・キャッシュ・ログ・個人データは BigQuery（private.state_files）に置き、git には入れない（公開に備えて）
+stock_data/
+data/portfolio_holdings.csv
+data/portfolio_summary.json
+data/holdings_domain.csv
+.state_store_baseline.json
