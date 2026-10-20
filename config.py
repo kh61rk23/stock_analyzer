@@ -1506,7 +1506,7 @@ IMF_COUNTRIES = ["JPN", "USA", "CHN", "DEU", "EA19", "W"]
 # Step E: SEC 10-K / 有報 Claude API 要約設定
 ENABLE_SEC_SUMMARIZER: bool = False   # ANTHROPIC_API_KEY 設定後に True へ変更
 ANTHROPIC_API_KEY: str = ""           # GitHub Secrets で設定（下記参照）
-SEC_USER_AGENT: str = "StockAnalyzer REDACTED_EMAIL"
+SEC_USER_AGENT: str = os.getenv("SEC_USER_AGENT", "")  # SEC EDGAR の名乗り（連絡先メール入り）。値は GitHub Secret SEC_USER_AGENT にだけ置く（公開に備えてコードに書かない）
 SUMMARY_MAX_TICKERS: int = 10         # 要約する最大銘柄数（コスト管理）
 
 # Step C': テーマETFトラッキング設定

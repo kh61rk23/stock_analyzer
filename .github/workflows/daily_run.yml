@@ -312,6 +312,7 @@ jobs:
           STOCK_ANALYZER_BASE:  ${{ github.workspace }}/stock_data
           BQ_CREDENTIALS:       ${{ secrets.BQ_CREDENTIALS }}
           BQ_PROJECT_ID:        ${{ secrets.BQ_PROJECT_ID }}
+          SEC_USER_AGENT:       ${{ secrets.SEC_USER_AGENT }}
           ALERT_GMAIL_FROM:     ${{ secrets.ALERT_GMAIL_FROM }}
           ALERT_GMAIL_PASSWORD: ${{ secrets.ALERT_GMAIL_PASSWORD }}
           ALERT_GMAIL_TO:       ${{ secrets.ALERT_GMAIL_TO }}
@@ -380,6 +381,7 @@ jobs:
           FUDOSAN_API_KEY:      ${{ secrets.FUDOSAN_API_KEY }}
           POLICY_FRED_API_KEY:  ${{ secrets.POLICY_FRED_API_KEY }}
           # 2026-10-05: 月次メール（monthly_mail.py）用
+          SEC_USER_AGENT:       ${{ secrets.SEC_USER_AGENT }}
           ALERT_GMAIL_FROM:     ${{ secrets.ALERT_GMAIL_FROM }}
           ALERT_GMAIL_PASSWORD: ${{ secrets.ALERT_GMAIL_PASSWORD }}
           ALERT_GMAIL_TO:       ${{ secrets.ALERT_GMAIL_TO }}
