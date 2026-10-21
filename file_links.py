@@ -1,10 +1,11 @@
 # ==============================================================
-# file_links.py — メールから保存ファイル（GitHub・Google Drive）へ飛ぶリンク
+# file_links.py — メールから保存ファイル（Google Drive）へ飛ぶリンク
 #
+# 保存ファイル（stock_data/ 配下）は公開しないので git には無い（BigQuery private.state_files と Drive にだけある）。
 # 日次メールは解析の途中で送られ、Google Drive への同期（run_headless の最後）はその後なので、
-# 送信時点ではDriveのファイルIDがまだ決まらない。そこでリンクは次の2つにする:
-#   GitHub : https://github.com/<repo>/blob/main/<repoからの相対パス>（同じジョブの最後にpushされる・mdは整形表示）
+# 送信時点ではDriveのファイルIDがまだ決まらない。そこでリンクは
 #   Drive  : ファイル名でのDrive検索URL（IDが無くても開ける）＋ 同期先フォルダ（GOOGLE_DRIVE_FOLDER_ID）
+# にする。github_url は git にあるファイル（コード等）を指すときだけ使う。
 # ==============================================================
 from __future__ import annotations
 
@@ -60,18 +61,18 @@ def index_files(paths: list[Path]) -> dict[str, Path]:
 
 
 def linkify(body_html: str, index: dict[str, Path]) -> str:
-    """本文中のファイル名（例 screener_2026-10-06.md）をGitHubへのリンクにする（純関数）。"""
+    """本文中のファイル名（例 screener_2026-10-06.md）をDrive検索へのリンクにする（純関数）。"""
     def _sub(m):
         name = m.group(1)
         p = index.get(name)
         if not p:
             return name
-        return f'<a href="{html.escape(github_url(p))}">{html.escape(name)}</a>'
+        return f'<a href="{html.escape(drive_search_url(p.name))}">{html.escape(name)}</a>'
     return _FILE_RE.sub(_sub, body_html)
 
 
 def files_section_html(paths: list[Path]) -> str:
-    """メール末尾の「保存ファイル」節（GitHub・Drive検索のリンク付き一覧）。"""
+    """メール末尾の「保存ファイル」節（Drive検索のリンク付き一覧）。"""
     if not paths:
         return ""
     # 同じフォルダに本日分が多い（業種別レポート33件など）ときはフォルダ1行にまとめる
@@ -83,15 +84,12 @@ def files_section_html(paths: list[Path]) -> str:
             if p.parent in shown_dirs:
                 continue
             shown_dirs.add(p.parent)
-            gh = github_url(p.parent).replace("/blob/", "/tree/")
             rows.append(f'<li>{html.escape(p.parent.name)}/（本日{per_dir[p.parent]}件） — '
-                        f'<a href="{html.escape(gh)}">GitHub</a></li>')
+                        f'<a href="{html.escape(drive_search_url(p.parent.name))}">Drive</a></li>')
             continue
         name = p.name + ("/" if p.is_dir() else "")
-        gh = github_url(p).replace("/blob/", "/tree/") if p.is_dir() else github_url(p)
         rows.append(
-            f'<li>{html.escape(name)} — <a href="{html.escape(gh)}">GitHub</a>'
-            f' / <a href="{html.escape(drive_search_url(p.name))}">Drive</a></li>')
+            f'<li>{html.escape(name)} — <a href="{html.escape(drive_search_url(p.name))}">Drive</a></li>')
     folder = drive_folder_url()
     head = "📎 本日の保存ファイル"
     if folder:

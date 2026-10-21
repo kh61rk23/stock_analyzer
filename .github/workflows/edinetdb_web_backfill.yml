@@ -32,8 +32,8 @@ jobs:
     timeout-minutes: 350
     env:
       TZ: Asia/Tokyo
-      # 状態の置き場（config BLOCK 64）。git / dual / bq。Actions の変数 STATE_STORE_MODE で切り替える（未設定は dual）
-      STATE_STORE_MODE: ${{ vars.STATE_STORE_MODE || 'dual' }}
+      # 状態の置き場（config BLOCK 64）。git / dual / bq。Actions の変数 STATE_STORE_MODE で切り替える（未設定は bq）
+      STATE_STORE_MODE: ${{ vars.STATE_STORE_MODE || 'bq' }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6

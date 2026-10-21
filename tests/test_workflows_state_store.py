@@ -24,7 +24,7 @@ def test_all_workflows_parse(path):
 def test_stateful_workflow_prepare_save_commit_order(name):
     d = _load(name)
     (job,) = d["jobs"].values()
-    assert job["env"]["STATE_STORE_MODE"] == "${{ vars.STATE_STORE_MODE || 'dual' }}"
+    assert job["env"]["STATE_STORE_MODE"] == "${{ vars.STATE_STORE_MODE || 'bq' }}"
     steps = job["steps"]
     runs = [str(s.get("run", "")) for s in steps]
     i_prep = next(i for i, r in enumerate(runs) if "state_store.py prepare" in r)

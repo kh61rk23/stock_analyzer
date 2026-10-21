@@ -5310,8 +5310,8 @@ DELIB_BATCH_SIZE: int = 3           # クラウド定時実行1回で審議す�
 #   git  : git に commit・push して持ち越す（BQ には書かない）
 #   dual : git にも commit しつつ BQ にも保存する。読み出し（checkout 後の状態）は git のまま
 #   bq   : checkout 直後に BQ から戻し、実行後は BQ だけに保存する（git には commit しない）
-# workflow は env の STATE_STORE_MODE（Actions の変数 vars.STATE_STORE_MODE、未設定なら dual）で上書きする。
-STATE_STORE_MODE: str = os.getenv("STATE_STORE_MODE", "dual")
+# workflow は env の STATE_STORE_MODE（Actions の変数 vars.STATE_STORE_MODE、未設定なら bq）で上書きする。
+STATE_STORE_MODE: str = os.getenv("STATE_STORE_MODE", "bq")
 STATE_STORE_DATASET: str = "private"
 STATE_STORE_TABLE: str = "state_files"
 STATE_STORE_LOCATION: str = "asia-northeast1"

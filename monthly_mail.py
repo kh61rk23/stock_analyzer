@@ -167,10 +167,9 @@ def build(ym: str, insights: Path, tax_months: tuple = (1, 4, 7, 10, 11), late_n
             body = p.read_text(encoding="utf-8")
         except OSError:
             continue
-        try:   # 元ファイルへのリンク（GitHub・Drive検索）
+        try:   # 元ファイルへのリンク（Drive検索。保存ファイルは公開しないので git には無い）
             import file_links as fl
-            link = (f' — <a href="{html.escape(fl.github_url(p))}">GitHub</a>'
-                    f' / <a href="{html.escape(fl.drive_search_url(p.name))}">Drive</a>')
+            link = f' — <a href="{html.escape(fl.drive_search_url(p.name))}">Drive</a>'
         except Exception:
             link = ""
         parts.append(f'<hr><h2>{html.escape(title)}</h2>'
