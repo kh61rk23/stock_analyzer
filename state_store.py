@@ -381,7 +381,13 @@ def make_client(cfg):
     js = os.environ.get("BQ_CREDENTIALS", "")
     path = (os.environ.get("BQ_CREDENTIALS_PATH") or getattr(cfg, "BQ_CREDENTIALS_PATH", "") or "").strip()
     if js:
-        info = json.loads(js)
+        try:
+            info = json.loads(js)
+        except ValueError:
+            raise SystemExit(
+                f"❌ BQ_CREDENTIALS が JSON として読めない（長さ {len(js)} 文字・先頭が '{{' でない）。"
+                "鍵ファイルのパスではなく、ファイルの中身そのものを入れる"
+                "（gh secret set BQ_CREDENTIALS < 鍵.json）")
         creds = service_account.Credentials.from_service_account_info(info, scopes=scopes)
         project = project or info.get("project_id", "")
     elif path:

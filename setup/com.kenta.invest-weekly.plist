@@ -17,7 +17,7 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>/Users/kentaryobe/Documents/Obsidian_Local/司令塔シェル_動かさない/run_apps.sh</string>
+    <string>/Users/<ユーザー名>/Documents/Obsidian_Local/司令塔シェル_動かさない/run_apps.sh</string>
     <string>invest-weekly</string>
   </array>
 

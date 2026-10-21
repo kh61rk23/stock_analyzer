@@ -4252,8 +4252,8 @@ ALERT_ON_DELIBERATION_QUEUE: bool = True
 # 実働の正本はローカル側 Vault2_ClaudeCode_Local（iCloud側 Vault2_ClaudeCode は凍結・書込禁止）。
 INVESTMENT_DEPT_VAULT_DIR: str = os.getenv(
     "INVESTMENT_DEPT_VAULT_DIR",
-    "/Users/kentaryobe/Documents/Obsidian_Local/Vault2_ClaudeCode_Local/"
-    "CEO室/departments/B-investment",
+    os.path.join(os.path.expanduser("~"), "Documents/Obsidian_Local/Vault2_ClaudeCode_Local/"
+                 "CEO室/departments/B-investment"),
 )
 
 # ── BLOCK 38b: パイプライン実行フラグ（stock_analyzer_main / 各モジュールが読む）─────
