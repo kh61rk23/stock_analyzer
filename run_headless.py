@@ -62,7 +62,6 @@ def apply_env_overrides(cfg):
         "SEC_USER_AGENT":             "SEC_USER_AGENT",
         "GOOGLE_CSE_API_KEY":         "GOOGLE_CSE_API_KEY",
         "GOOGLE_CSE_ID":              "GOOGLE_CSE_ID",
-        "GDRIVE_DASHBOARD_FILE_ID":  "GDRIVE_DASHBOARD_FILE_ID",
         "DEEPL_API_KEY":              "DEEPL_API_KEY",
         "ESTAT_API_KEY":              "ESTAT_API_KEY",
         "GOOGLE_OAUTH_CLIENT_ID":     "GOOGLE_OAUTH_CLIENT_ID",

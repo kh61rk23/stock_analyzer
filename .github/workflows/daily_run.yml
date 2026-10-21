@@ -31,7 +31,6 @@
 #   ANTHROPIC_API_KEY     Claude API キー（任意）
 #   GOOGLE_CSE_API_KEY    Google Custom Search API キー（任意）
 #   GOOGLE_CSE_ID         Google CSE ID（任意）
-#   GDRIVE_DASHBOARD_FILE_ID  ダッシュボード CSV の GDrive ファイル ID
 #   GOOGLE_OAUTH_*        Google Drive OAuth 認証（3種）
 #   GOOGLE_DRIVE_FOLDER_ID    GDrive バックアップ先フォルダ ID
 #   ESTAT_API_KEY         e-Stat API キー（任意）
@@ -333,7 +332,6 @@ jobs:
           ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
           GOOGLE_CSE_API_KEY:   ${{ secrets.GOOGLE_CSE_API_KEY }}
           GOOGLE_CSE_ID:        ${{ secrets.GOOGLE_CSE_ID }}
-          GDRIVE_DASHBOARD_FILE_ID:   ${{ secrets.GDRIVE_DASHBOARD_FILE_ID }}
           GOOGLE_OAUTH_CLIENT_ID:     ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
           GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
           GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
