@@ -105,5 +105,5 @@ class TestReport:
             120_000, RATE)
         md = build_report(harvest, [], nisa_usage([], 2_400_000, 12_000_000), 2026)
         assert "税・NISA最適化レポート 2026年" in md
-        assert "税務の最終判断は健太" in md            # 免責明記
+        assert "税務の最終判断は利用者" in md            # 免責明記
         assert "損出し候補" in md and "wash sale" in md

@@ -44,7 +44,7 @@ def test_build_row_uses_report_memos_and_ledger():
     assert row["case_id"] == "2026-07-07_1605T" and row["run_env"] == "backfill"
     assert row["company_name"] == "ＩＮＰＥＸ" and row["bull_conviction"] == 3 and row["bear_conviction"] == 2
     assert row["devil_unresolved"] == 0 and row["devil_reversal"] == 1
-    assert row["approved_by"] == "健太" and row["approved_at"] == "2026-07-08T00:00:00+09:00"
+    assert row["approved_by"] == "利用者" and row["approved_at"] == "2026-07-08T00:00:00+09:00"
     assert row["review_on"] == "2026-10-06"
     assert row["deliberated_at"].startswith("2026-07-07T12:00")
     assert row["bull_memo"] is None and row["report_md"] == report

@@ -20,7 +20,7 @@
 - 直したら戻す: `python3 state_store.py save --paths 構成管理資料/ --source cloud-docs --no-baseline --force`
   （手元に無い資料は BQ で削除扱いになる。必ず restore してから直すこと。手元に1件も無ければ save は止まる）
 - 正本は Mac の 02。Mac 側の `tools/sync_config_docs.py --apply` が 02 から上書き保存するので、クラウドで直した資料は
-  そのままだと次の同期で 02 の版に戻る。**最後の報告に「直した資料の一覧」（パスと要点）を書く**。健太（または Mac 側の
+  そのままだと次の同期で 02 の版に戻る。**最後の報告に「直した資料の一覧」（パスと要点）を書く**。利用者（または Mac 側の
   セッション）が `restore` で取り出して 02 に取り込む
 
 ## 絶対禁止
@@ -41,14 +41,14 @@ python3 maintenance_packet.py   # 全監査+台帳+直近変更を MAINTENANCE_P
 ```
 総合判定が ❌ なら、依頼内容より先に監査NGの修復を提案すること。
 
-## コメントの書き方（2026-10-07 健太方針）
+## コメントの書き方（2026-10-07 利用者方針）
 
 - コードのコメントには「今どう動くか」と「なぜそうしているか（知らずに直すと壊れる理由）」だけを書く。
 - 日付・「旧実装は〜だった」・バッチ/Wave番号・誰の指示か、といった**経緯は書かない**。経緯は
   開発ログ（`devlog.py add`）とコミットメッセージに書く。過去分は G-dev `41_stock_analyzer_コード内修正履歴.md` に移設済み。
 - コメントだけを直したときは `python3 tools/history_comments.py same-code <rev>` でコード（AST）が変わっていないことを確かめる。
 
-## 役割分担（2026-10-08 健太方針）
+## 役割分担（2026-10-08 利用者方針）
 
 複数タスクにまたがる開発は役割を分け、上位モデルから下位へ移譲する。
 - 構想（仕様・判断）: Opus 5.5 ／ 実装: Sonnet 5.5
@@ -72,7 +72,7 @@ python3 maintenance_packet.py   # 全監査+台帳+直近変更を MAINTENANCE_P
 2. 開発ログ台帳に記録（2026-09-26〜。CHANGELOG.md は凍結）:
    `python3 ~/Documents/Obsidian_Local/Vault2_ClaudeCode_Local/board/devlog.py add --project stock_analyzer --kind 修正 --title "…" --detail "…" --files a.py --commit abc1234`
    （board「システム › 開発」/dev で全プロジェクト横断に見られる）
-3. **構成管理資料を必ず更新する**（2026-10-03 健太指示：改修のたびに更新。正本は `../02_Configuration_Management/`。BigQuery へは手順5で保存する）
+3. **構成管理資料を必ず更新する**（2026-10-03 利用者指示：改修のたびに更新。正本は `../02_Configuration_Management/`。BigQuery へは手順5で保存する）
    - `../02_Configuration_Management/02_台帳・リファレンス/MODULE_INDEX.md`：追加・変更したモジュールとワークフローの行
    - `../02_Configuration_Management/01_設計書/SPEC_db_schema.md`：テーブル・列・書き手・実測行数（§0-1）を変えたら必ず（更新前は `99_old/bk/設計書/` に退避）
    - `../02_Configuration_Management/02_台帳・リファレンス/CONFIG_REFERENCE.md`：`python3 config_reference_gen.py` で再生成（手編集しない）
@@ -89,7 +89,7 @@ python3 maintenance_packet.py   # 全監査+台帳+直近変更を MAINTENANCE_P
    - 02 側でファイルを移動・改名・削除したときは `--prune` を付ける（02 に無い `構成管理資料/` のファイルを消し、BQ に削除の印を付ける。
      dry-run で「削除予定」を確認してから）。`--prune` なしでは BQ の資料は消えない
    - 認証情報らしいファイルは同期しない（除外は tools/sync_config_docs.py の EXCLUDE_NAME_PATTERNS と EXCLUDE_DIRS）。秘密情報を検出したら何もコピーせず中止する
-   - 中止（exit 1・2）や「BQ に保存できなかった」（exit 7）は表示された理由を健太に報告する。除外リストの書き換えで通さない
+   - 中止（exit 1・2）や「BQ に保存できなかった」（exit 7）は表示された理由を利用者に報告する。除外リストの書き換えで通さない
    - `構成管理資料/`・`investment_dept/`・`.claude/skills/invest-*` は config の `STATE_STORE_PATHS` に入れない
      （Actions の save が「手元に無い」を削除と見なして BQ の資料を消すため）
 

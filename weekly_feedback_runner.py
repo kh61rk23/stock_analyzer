@@ -3,7 +3,7 @@
 # 審議→成績→デビル校正 クローズドループの週次自動実行
 # ==============================================================
 # 【役割】
-#   launchd（毎週日曜21:00・setup/com.kenta.invest-weekly.plist）から起動し、
+#   launchd（毎週日曜21:00・setup/com.user.invest-weekly.plist）から起動し、
 #     1) obsidian_sync.py journal   … 承認済みBuyの台帳記帳（冪等）
 #     2) obsidian_sync.py feedback  … 成績還流（performance_tracker連携）
 #     3) devil_calibration.py       … 25_デビル校正ノート.md 更新
@@ -16,7 +16,7 @@
 #   --if-stale: 前回「成功」から7日未満なら何もしない（追いつき用ガード）
 #
 # 【二重の起動経路】
-#   本線     : launchd com.kenta.invest-weekly（毎週日曜21:00）
+#   本線     : launchd com.user.invest-weekly（毎週日曜21:00）
 #              → 司令塔シェル run_apps.sh invest-weekly → 無条件実行
 #   バックアップ: Claude予定タスク（毎週月曜10:00）→ --if-stale で実行
 #              日曜21時にMacが落ちていた回を翌日拾う。本線が走っていれば

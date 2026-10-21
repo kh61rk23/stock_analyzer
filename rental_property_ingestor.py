@@ -25,7 +25,7 @@
 #   RENTAL_FV_DAILY_BUDGET 回までを使い、残りを日次取り込みが使う。枠切れ（last_error="budget"）で打ち切る。
 # 【段階】
 #   ENABLE_RENTAL_PROPERTY_FV が False の間は、RENTAL_FV_TRIAL_LIMIT 社だけを1回試す（検証用）。
-#   試した結果を確認し、健太の承認後に True にして定常で回す。
+#   試した結果を確認し、利用者の承認後に True にして定常で回す。
 # 【実行】 python3 rental_property_ingestor.py [--limit N] [--probe E03856]
 # ==============================================================
 from __future__ import annotations

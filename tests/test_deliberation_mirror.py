@@ -81,7 +81,7 @@ def test_export_results_zero_rows_keeps_file(tmp_path):
 
 def test_parse_approval_variants():
     p = osy.parse_approval
-    assert p("**承認（2026-09-29）**＝全件承認（健太指示）") == ("承認", "2026-09-29")
+    assert p("**承認（2026-09-29）**＝全件承認（利用者指示）") == ("承認", "2026-09-29")
     assert p("承認待ち") == (None, None)
     assert p("承認済み") == ("承認", None)
     assert p("否認（2026-10-01）＝理由") == ("否認", "2026-10-01")

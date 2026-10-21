@@ -53,7 +53,7 @@ def _first(pattern: str, text: str):
 
 
 def summarize_report(name: str, text: str) -> tuple[str, bool]:
-    """レポート1本 → (要点1行, 健太の判断が要るか)（純関数）。読めない形なら ("", False)。
+    """レポート1本 → (要点1行, 利用者の判断が要るか)（純関数）。読めない形なら ("", False)。
 
     要点は各レポートが自分で書いている集計行から取る（数値を作り直さない）。"""
     t = text.replace("**", "")
@@ -92,7 +92,7 @@ def summarize_report(name: str, text: str) -> tuple[str, bool]:
 
 
 def summary_html(files: list) -> str:
-    """冒頭の「要点」節（各レポートの1行と、健太の判断が要るもの）。"""
+    """冒頭の「要点」節（各レポートの1行と、利用者の判断が要るもの）。"""
     rows, asks = [], []
     for title, p in files:
         try:

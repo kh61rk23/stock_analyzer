@@ -168,7 +168,7 @@ def build_review(sources: dict, yyyymm: str) -> str:
     lines += _paper_month_table(sources.get("paper_accounts", {}), yyyymm)
 
     lines += ["", "---",
-              "## 次月への申し送り（健太記入欄）",
+              "## 次月への申し送り（利用者記入欄）",
               "- [ ] 承認が必要な提案（E4淘汰 / S11配分 / ML適用）の要否",
               "- [ ] 戦略の停止/再開判断（S2成績・M2/M3マイルストーン）",
               "- [ ] DD状態（E9）と縮退モードの整合確認"]

@@ -21,7 +21,7 @@ bull_conviction: 4
 bear_conviction: 3
 unresolved: 2
 status: 承認待ち
-approved_by: 健太
+approved_by: 利用者
 approved_at: 2026-10-21
 ---
 # 投資判断レポート

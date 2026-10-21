@@ -116,7 +116,7 @@ def main():
     st.set_page_config(page_title="リスク管制", page_icon="🛡️", layout="wide")
     st.title("🛡️ リスク管制ダッシュボード（S9）")
     st.caption("読取専用。唯一の書込みは「新規注文票発行停止」トグル（halt_flag.json）のみ。"
-               "発注は常に健太が手動（D-01）。")
+               "発注は常に利用者が手動（D-01）。")
 
     cfg = _load_cfg()
     P = _paths(cfg)

@@ -118,7 +118,7 @@ def build_row(entry: dict, report_md: str | None, memos: dict) -> dict:
         "models": None,
         "run_env": "backfill",
         "approval_status": entry["approval_status"],
-        "approved_by": "健太" if entry["approval_status"] == "承認" else None,
+        "approved_by": "利用者" if entry["approval_status"] == "承認" else None,
         "approved_at": f"{approved_at}T00:00:00+09:00" if approved_at else None,
         "review_on": review_on,
     }

@@ -6,7 +6,7 @@
 #   保有銘柄（data/portfolio_holdings.csv）× ドメイン分類
 #   （data/holdings_domain.csv）に対し、投資哲学.md の売却ルールを
 #   毎日評価し、接近(near)/発火(fire) を results["exit_alerts"] に格納。
-#   発火時は注文票（order_ticket）を生成する（発注は健太が手動 = D-01）。
+#   発火時は注文票（order_ticket）を生成する（発注は利用者が手動 = D-01）。
 #
 # 【ルール一覧】要件定義書_統合改修_20260705.md §R0-6 の表と同一
 #   R-A  恩株化   : +200%で元本分売却（180%接近）

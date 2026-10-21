@@ -18,7 +18,7 @@
 #   1日の社数は EDINET_GOV_FV_DAILY_LIMIT、政府 API への連続アクセスは EDINET_GOV_MIN_INTERVAL_SEC 以上空ける。
 #   EdinetDB 側の rental_property_ingestor は、ここで ok になった会社を対象から外す
 #   （EdinetDB の行は公正価値が空で、同じキーの MERGE が公正価値を消すため）。
-# 【キー】GitHub Secret EDINET_GOV_API_KEY（健太が登録して設定する）。無ければ何もしない。
+# 【キー】GitHub Secret EDINET_GOV_API_KEY（利用者が登録して設定する）。無ければ何もしない。
 #   要求 URL にキーが入るので、例外の本文は出さず型名だけを出す。
 # 【実行】python3 edinet_gov_xbrl.py --probe E03516 [E02513 ...]（manual_task edinet_gov_probe）
 #         python3 edinet_gov_xbrl.py --ingest [--limit N]（manual_task edinet_gov_fv_ingest・日次処理からも呼ぶ）
@@ -361,7 +361,7 @@ def ingest(cfg, limit: int | None = None) -> dict:
 def probe(cfg, codes: list[str]) -> int:
     key = os.environ.get("EDINET_GOV_API_KEY", "").strip()
     if not key:
-        print("⏩ EDINET_GOV_API_KEY が無い（健太が政府 EDINET API のキーを登録して Secret に入れると動く）")
+        print("⏩ EDINET_GOV_API_KEY が無い（利用者が政府 EDINET API のキーを登録して Secret に入れると動く）")
         return 0
     import requests
     from google.cloud import bigquery

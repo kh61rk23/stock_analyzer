@@ -99,7 +99,7 @@ def build_report(accounts: dict, yyyymm: str, cfg=None, events: list | None = No
     lines = [f"# ペーパートレード月次成績 {ym}",
              "",
              "> S2仮想口座（実発注なし=D-01）。実弾昇格判定はM2基準"
-             "（取引数>=30・PF>=1.3・bootstrap p<0.10・健太承認）。",
+             "（取引数>=30・PF>=1.3・bootstrap p<0.10・利用者承認）。",
              "",
              "| 戦略 | 月初equity | 月末equity | 月次損益 | 月次リターン | 記録日数 |",
              "|---|---|---|---|---|---|"]
@@ -118,7 +118,7 @@ def build_report(accounts: dict, yyyymm: str, cfg=None, events: list | None = No
                      f"{ret:+.2%} | {len(hist)} |")
     # ── 実弾昇格M2判定 ─────────────
     lines += ["", "## 実弾昇格M2判定",
-              "", "> 3基準を全て満たすと「昇格候補」。**最終判断は健太**（D-01）。",
+              "", "> 3基準を全て満たすと「昇格候補」。**最終判断は利用者**（D-01）。",
               "", "| 戦略 | 取引数 | PF | bootstrap p | 判定 | 未達項目 |",
               "|---|---|---|---|---|---|"]
     for sid, acc in sorted(accounts.items()):

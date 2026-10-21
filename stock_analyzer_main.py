@@ -4116,7 +4116,7 @@ def run_all_tasks(mode: str = "all") -> dict:
         
         # ── 出口戦略エンジン ──────────────────────
         # 投資哲学の売却ルールを日次評価 → 接近/発火アラート＋注文票生成。
-        # 発注は健太が手動（D-01）。アラート通知より前に実行し
+        # 発注は利用者が手動（D-01）。アラート通知より前に実行し
         # results["exit_alerts"] を alert_notifier のブリーフに載せる。
     if getattr(cfg, "ENABLE_EXIT_ENGINE", False):
         try:
@@ -5396,7 +5396,7 @@ def run_all_tasks(mode: str = "all") -> dict:
             logger.add("ml_meta_dataset", "error", str(e)[:100])
             print(f"  ⚠️  ML特徴量スナップショットエラー: {str(e)[:80]}")
         # ── MLメタモデル: 補正テーブル適用 ──────────
-        # ML_META_ENABLED=True（昇格基準クリア＋健太承認）の場合のみ。
+        # ML_META_ENABLED=True（昇格基準クリア＋利用者承認）の場合のみ。
         # 昇格基準（IC>=0.02・t>=2.0）はテーブル読込時にも再検証される。
     if getattr(cfg, "ML_META_ENABLED", False) and _in_mode("ml_meta"):
         try:

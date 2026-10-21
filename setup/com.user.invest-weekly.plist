@@ -6,18 +6,18 @@
      リポジトリのパス解決・実在チェック・中央ログ記録を担うため、ここには
      WorkingDirectory を書かない（リポジトリを移すと plist が黙って壊れるため）。
      登録手順（1回だけ）:
-     1) cp setup/com.kenta.invest-weekly.plist ~/Library/LaunchAgents/
-     2) launchctl load ~/Library/LaunchAgents/com.kenta.invest-weekly.plist
-     解除: launchctl unload ~/Library/LaunchAgents/com.kenta.invest-weekly.plist -->
+     1) cp setup/com.user.invest-weekly.plist ~/Library/LaunchAgents/（中の USERNAME を自分のユーザー名に変える）
+     2) launchctl load ~/Library/LaunchAgents/com.user.invest-weekly.plist
+     解除: launchctl unload ~/Library/LaunchAgents/com.user.invest-weekly.plist -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.kenta.invest-weekly</string>
+  <string>com.user.invest-weekly</string>
 
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>/Users/<ユーザー名>/Documents/Obsidian_Local/司令塔シェル_動かさない/run_apps.sh</string>
+    <string>/Users/USERNAME/Documents/Obsidian_Local/司令塔シェル_動かさない/run_apps.sh</string>
     <string>invest-weekly</string>
   </array>
 

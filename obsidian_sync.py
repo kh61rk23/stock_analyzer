@@ -370,8 +370,8 @@ def cmd_mirror(cfg) -> bool:
 # ==============================================================
 DELIB_JSON = "invest_deliberations.json"
 APPROVALS_REL = Path("stock_data") / "data" / "invest_approvals.json"
-APPROVED_BY = "健太（台帳）"
-# 状態列の結論は 承認／否認／保留 の3つ（健太決定・C-07）。承認済・却下は書き癖として受け、3つへ寄せる
+APPROVED_BY = "利用者（台帳）"
+# 状態列の結論は 承認／否認／保留 の3つ（利用者決定・C-07）。承認済・却下は書き癖として受け、3つへ寄せる
 _APPROVAL_RE = re.compile(r"^(承認待ち|承認済み?|承認|否認|却下|保留)")
 _DATE_RE = re.compile(r"^\s*[（(]\s*(\d{4}-\d{2}-\d{2})")
 

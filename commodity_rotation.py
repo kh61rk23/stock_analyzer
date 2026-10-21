@@ -179,7 +179,7 @@ def _estimate_total_assets(cfg) -> float:
 def build_report(plan: dict, yyyymm: str) -> str:
     lines = [f"# コモディティ・ローテーション提案 {yyyymm[:4]}-{yyyymm[4:]}（S6）",
              "",
-             "> 月次配分提案（合計≤総資産10%）。発注は健太手動（D-01）。"
+             "> 月次配分提案（合計≤総資産10%）。発注は利用者手動（D-01）。"
              "12-1モメンタム×経済サイクル4象限。",
              "",
              f"- 現在の経済サイクル象限: **{plan.get('regime','?')}** "

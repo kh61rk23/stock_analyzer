@@ -248,7 +248,7 @@ def _total_assets(cfg) -> float:
 def build_report(plan: dict, yyyymm: str) -> str:
     lines = [f"# マルチ戦略資金配分 提案書 {yyyymm[:4]}-{yyyymm[4:]}（S11）",
              "",
-             "> 分数ケリー(0.25)×リスクパリティ。**健太承認後に** config "
+             "> 分数ケリー(0.25)×リスクパリティ。**利用者承認後に** config "
              "PAPER_STRATEGIES の枠値を変更。コア長期枠は本レイヤ対象外（不可侵）。",
              f"> カジノ枠: ¥{plan.get('casino_budget',0):,.0f} / {plan.get('reason','')}",
              "",

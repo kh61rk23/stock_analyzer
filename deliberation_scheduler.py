@@ -163,7 +163,7 @@ def build_launch_prompts(case_id: str, ticker: str) -> str:
                   "```",
                   ""]
     lines += ["## 完了後",
-              "- ⑤ 人間承認欄付きレポートを健太が確認（Buy/Watch/Avoid）",
+              "- ⑤ 人間承認欄付きレポートを利用者が確認（Buy/Watch/Avoid）",
               "- ⑥ 完了を翌朝ブリーフに掲載（未完了なら『審議未完了』表示）",
               "- 途中停止時は途中成果物を 20_審議/ に残し、翌日再開する"]
     return "\n".join(lines) + "\n"

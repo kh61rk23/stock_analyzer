@@ -6,7 +6,7 @@
     "generated_by": "claude (T-1 AI叩き台)",
     "generated_at": "2026-07-01",
     "status": "APPROVED_承認済み",
-    "approved_by": "健太（2026-07-08 チャット指示による承認・D-07）",
+    "approved_by": "利用者（2026-07-08 チャット指示による承認・D-07）",
     "approved_at": "2026-07-08",
     "review": "承認済み。全ノードに verified_flag=true / is_active=true 付与済み。T-1後半の taxonomy_loader で BQ taxonomy.taxonomy_node へ投入可",
     "naming_rule": "lowercase snake_case <domain>_<subdomain>。既存アンカー(semiconductor_logic/semiconductor_rf/semiconductor_package/power_semiconductor/electronic_component/ai_ml_framework/ai_software)は size_tier_classifier.py / cluster_graph_exporter.py と一致必須",

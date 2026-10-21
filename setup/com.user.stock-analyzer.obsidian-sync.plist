@@ -6,7 +6,7 @@
   <!-- stock_analyzer → Obsidian vault 日次同期（DEPT-2）
        インストール: setup/install_launchd.sh を実行（このファイルは直接編集不要） -->
   <key>Label</key>
-  <string>com.kentaryobe.stock-analyzer.obsidian-sync</string>
+  <string>com.user.stock-analyzer.obsidian-sync</string>
 
   <key>ProgramArguments</key>
   <array>

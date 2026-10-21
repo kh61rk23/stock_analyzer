@@ -9,7 +9,7 @@
 #      類似度 >= SEGMENT_VERIFIED_AUTO (0.90) → verified_flag=True で確定
 #      類似度 >= SEGMENT_SIMILARITY_THRESHOLD (0.85) → 暫定確定
 #      類似度 <  SEGMENT_SIMILARITY_THRESHOLD (0.85) → Gemini API に委譲
-#   2. Gemini API 判定結果も確信度低い場合 → verified_flag=False で健太確認キューへ
+#   2. Gemini API 判定結果も確信度低い場合 → verified_flag=False で利用者確認キューへ
 #   3. マッピング結果は CACHE_DIR/segment/segment_map_cache.json に保存
 #      TTL: SEGMENT_MAPPER_TTL_DAYS (90日)
 #
@@ -20,8 +20,8 @@
 #     sector_name_ja    STRING   業種名（日本語）
 #     similarity_score  FLOAT64  コサイン類似度
 #     mapped_by         STRING   "sentence_transformers" | "gemini" | "manual"
-#     verified_flag     BOOL     健太が確認済みか
-#     review_queue      BOOL     確信度低→健太確認キュー入り
+#     verified_flag     BOOL     利用者が確認済みか
+#     review_queue      BOOL     確信度低→利用者確認キュー入り
 #     created_at        TIMESTAMP
 #     updated_at        TIMESTAMP
 #
@@ -443,7 +443,7 @@ def _write_to_bq(cfg, result: dict, segment_raw_name: str) -> None:
       similarity_score  FLOAT64   コサイン類似度（または Gemini confidence）
       mapped_by         STRING    "sentence_transformers" | "gemini" | "manual"
       verified_flag     BOOL      確認済みフラグ
-      review_queue      BOOL      健太確認キュー入りフラグ
+      review_queue      BOOL      利用者確認キュー入りフラグ
       created_at        TIMESTAMP 初回登録日時
       updated_at        TIMESTAMP 最終更新日時
     """
@@ -500,7 +500,7 @@ class SegmentMapper:
         # 複数一括処理
         results = mapper.map_batch(["食品事業", "物流事業", "???事業"])
 
-        # 確認キュー（健太が手動確認すべきリスト）を表示
+        # 確認キュー（利用者が手動確認すべきリスト）を表示
         mapper.print_review_queue()
     """
 
@@ -598,7 +598,7 @@ class SegmentMapper:
         return results
 
     def print_review_queue(self) -> None:
-        """確認キューをコンソールに出力する（健太への確認依頼用）。"""
+        """確認キューをコンソールに出力する（利用者への確認依頼用）。"""
         if not self._review_queue:
             print("  ✅ [segment_mapper] 確認キュー: 0件（全マッピング確定済み）")
             return

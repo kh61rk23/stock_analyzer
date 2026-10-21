@@ -57,7 +57,7 @@ def test_edinet_ingest_skips_cleanly_without_optional_key():
 def test_daily_edinet_route_uses_edinetdb_not_government_api():
     """日次経路は EdinetDB を使い、退役した政府EDINET直取得は使わないこと。
 
-    2026-07-30（健太決定）で方針を一部変更した。
+    2026-07-30（利用者決定）で方針を一部変更した。
     - 変更前: 日次は「BQ読み取り専用」で EdinetDB も叩かなかった
     - 変更後: 日次でも EdinetDB を叩く（月次枠を使い切ったら自動スキップ）
 

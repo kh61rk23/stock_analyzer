@@ -331,7 +331,7 @@ def run_daily(cfg, candidates: list, today: date | None = None, client=None) -> 
 
 EXPORT_FILE = "invest_deliberations.json"
 APPROVALS_FILE = "invest_approvals.json"
-APPROVED_BY = "健太（台帳）"
+APPROVED_BY = "利用者（台帳）"
 EXPORT_COLUMNS = ("case_id", "ticker", "company_name", "deliberated_at", "verdict", "conviction",
                   "layer", "devil_unresolved", "devil_reversal", "kpi", "bull_memo", "bear_memo",
                   "devil_memo", "report_md", "packet_md", "run_env", "approval_status",

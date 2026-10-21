@@ -4336,7 +4336,7 @@ OPTIONS_MIN_SCORE_FOR_CSP: float = 70.0     # cash-secured put 提案の最低co
 # BLOCK 44: 出口戦略エンジン設定
 # ==============================================================
 # exit_rule_engine.py が参照。投資哲学.md の売却ルールのコード化。
-# 発注は常に健太が手動（D-01）。本エンジンは注文票生成まで。
+# 発注は常に利用者が手動（D-01）。本エンジンは注文票生成まで。
 
 ENABLE_EXIT_ENGINE: bool = True
 EXIT_ONKABU_FIRE_PCT: float = 200.0   # R-A: 恩株化発火（+200%=3倍）
@@ -4458,7 +4458,7 @@ DD_DEFENSE_EXIT: float = 0.20   # DEFENSE→CAUTION 復帰（dd<20%・ヒステ�
 # ==============================================================
 # BLOCK 52: 税・NISA最適化設定
 # ==============================================================
-# tax_optimizer.py が参照。税務の最終判断は健太（レポートに明記）。
+# tax_optimizer.py が参照。税務の最終判断は利用者（レポートに明記）。
 
 ENABLE_TAX_OPTIMIZER: bool = True
 TAX_RATE_NISA: float = 0.20315        # 特定口座の譲渡益課税率（NISAは非課税=0）
@@ -4470,7 +4470,7 @@ NISA_LONG_HOLD_MONTHS: int = 12       # NISA推奨の想定保有下限（>1年�
 # ==============================================================
 # BLOCK 45: イベントドリブン短期戦略設定
 # ==============================================================
-# event_strategy_runner.py が参照。プレイブックはYAML（playbooks/）で外部化。発注は健太手動（D-01）。
+# event_strategy_runner.py が参照。プレイブックはYAML（playbooks/）で外部化。発注は利用者手動（D-01）。
 
 ENABLE_EVENT_STRATEGY: bool = True
 PLAYBOOK_DIR: str = "playbooks"
@@ -4506,7 +4506,7 @@ CMD_REGIME_ALLOW: dict = {
 # ==============================================================
 # BLOCK 50: マルチ戦略資金配分メタ設定
 # ==============================================================
-# allocation_meta.py が参照（月次）。分数ケリー×リスクパリティ。健太承認後にconfig反映。
+# allocation_meta.py が参照（月次）。分数ケリー×リスクパリティ。利用者承認後にconfig反映。
 
 ENABLE_ALLOCATION_META: bool = True
 KELLY_FRACTION: float = 0.25       # 分数ケリー（フルケリーの1/4）
@@ -4518,14 +4518,14 @@ CULL_P_TH: float = 0.5             # 淘汰: bootstrap p がこれ超
 # ==============================================================
 # BLOCK 51: MLメタモデル設定
 # ==============================================================
-# ml/ が参照。LightGBM回帰・Purged Walk-Forward CV。フラグ変更は健太承認。
+# ml/ が参照。LightGBM回帰・Purged Walk-Forward CV。フラグ変更は利用者承認。
 
 # ※ 既存 BLOCK RESEARCH-4（旧XGBoost ML_CORRECTION_*）とは別系統のため ML_META_* で命名。
 ML_META_TARGET_HORIZON_D: int = 20   # 目的変数の先読み営業日数
 ML_META_EMBARGO_D: int = 20          # Purged CV の embargo（リーク防止・最重要）
 ML_META_PROMOTE_IC: float = 0.02     # 昇格: OOS rank IC 下限
 ML_META_PROMOTE_T: float = 2.0       # 昇格: t統計量 下限
-ML_META_ENABLED: bool = False        # 補正テーブルの日次適用（昇格＋健太承認後にTrue）
+ML_META_ENABLED: bool = False        # 補正テーブルの日次適用（昇格＋利用者承認後にTrue）
 ML_META_MAX_PT: float = 10.0         # composite への補正上限（±pt）
 ML_META_N_DECILES: int = 10          # 予測を十分位に量子化（→補正テーブルのキー）
 ML_META_CV_FOLDS: int = 5            # Purged Walk-Forward CV のフォールド数

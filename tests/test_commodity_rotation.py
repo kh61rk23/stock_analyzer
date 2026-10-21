@@ -2,7 +2,7 @@
 # tests/test_commodity_rotation.py — R4-2 コモディティローテーションの受入テスト
 # ==============================================================
 # 受入条件（要件定義書 §R4-2）:
-#   （S1で過去3年月次リバランスバックテストは backtest.cli で健太が実行）
+#   （S1で過去3年月次リバランスバックテストは backtest.cli で利用者が実行）
 #   ここでは純粋ロジック（12-1モメンタム・象限別配分・絶対モメンタム）を検証。
 # ==============================================================
 import sys
@@ -86,7 +86,7 @@ class TestOrderTickets:
         # 目標 50万 / 5000円 = 100口
         assert t["qty"] == 100
         assert t["strategy"] == "commodity" and t["side"] == "BUY"
-        assert t["status"] == "pending"        # 発注は健太手動
+        assert t["status"] == "pending"        # 発注は利用者手動
 
     def test_zero_price_skipped(self):
         tickets = build_order_tickets({"X.T": 5.0}, 10_000_000,

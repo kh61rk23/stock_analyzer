@@ -6,12 +6,12 @@
     "generated_by": "claude (T-1 AI叩き台・第3次拡張=業態・全産業統合)",
     "generated_at": "2026-07-10",
     "status": "APPROVED_承認済み",
-    "approved_by": "健太（2026-07-10 チャット指示による承認）",
+    "approved_by": "利用者（2026-07-10 チャット指示による承認）",
     "approved_at": "2026-07-10",
     "review": "承認済み。全ノードに verified_flag=true / is_active=true 付与済み",
     "naming_rule": "lowercase snake_case。HANDOFF_2026-06-30 §4-4 準拠",
     "anchors_included": [],
-    "note": "第3次拡張の方針（健太指示2026-07-10）: 技術だけでなく業態・ビジネスモデルを含めて全産業を統合する。粒度の例=物流でも倉庫/運送/3PL/コールドチェーンまで細分化",
+    "note": "第3次拡張の方針（利用者指示2026-07-10）: 技術だけでなく業態・ビジネスモデルを含めて全産業を統合する。粒度の例=物流でも倉庫/運送/3PL/コールドチェーンまで細分化",
     "schema_ref": "SPEC_db_schema.md §2-1 taxonomy.taxonomy_node"
   },
   "nodes": [
