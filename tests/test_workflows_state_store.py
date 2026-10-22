@@ -15,6 +15,12 @@ def _load(name):
     return yaml.safe_load((WF / name).read_text(encoding="utf-8"))
 
 
+def _main_job(d):
+    """本処理のジョブ。daily_run は前に「今日の実行が要るか」の gate ジョブがあるので、それを除いた1つ。"""
+    (job,) = [j for k, j in d["jobs"].items() if k != "gate"]
+    return job
+
+
 @pytest.mark.parametrize("path", sorted(WF.glob("*.yml")), ids=lambda p: p.name)
 def test_all_workflows_parse(path):
     assert isinstance(yaml.safe_load(path.read_text(encoding="utf-8")), dict)
@@ -23,7 +29,7 @@ def test_all_workflows_parse(path):
 @pytest.mark.parametrize("name", STATEFUL)
 def test_stateful_workflow_prepare_save_commit_order(name):
     d = _load(name)
-    (job,) = d["jobs"].values()
+    job = _main_job(d)
     assert job["env"]["STATE_STORE_MODE"] == "${{ vars.STATE_STORE_MODE || 'bq' }}"
     steps = job["steps"]
     runs = [str(s.get("run", "")) for s in steps]
@@ -47,7 +53,7 @@ def test_stateful_workflow_prepare_save_commit_order(name):
 @pytest.mark.parametrize("name", STATEFUL)
 def test_no_artifacts_and_python_output_goes_to_file(name):
     d = _load(name)
-    (job,) = d["jobs"].values()
+    job = _main_job(d)
     for s in job["steps"]:
         assert "upload-artifact" not in str(s.get("uses", ""))
         run = str(s.get("run", ""))
@@ -70,3 +76,17 @@ def test_daily_marks_written_before_save():
     i_save = next(i for i, r in enumerate(runs) if "state_store.py save" in r)
     assert i_mark < i_save
     assert "--exclude stock_data/bi/" in runs[i_save]
+
+
+def test_daily_run_gate_only_filters_schedule_and_backup_crons_stay_same_utc_day():
+    d = _load("daily_run.yml")
+    crons = [c["cron"] for c in d[True]["schedule"]]
+    assert crons[0] == "17 0 * * 1-6"
+    # 予備も UTC 00〜23 時の同じ日の中（前倒しすると月曜の weekly 判定が壊れる）
+    assert all(c.split()[1].isdigit() and int(c.split()[1]) < 15 and c.split()[4] == "1-6" for c in crons)
+    gate = d["jobs"]["gate"]["steps"][0]["run"]
+    assert '"${{ github.event_name }}" != "schedule"' in gate          # 手動は必ず走る
+    assert "select(.id != ${{ github.run_id }})" in gate               # 自分自身は数えない
+    assert '-ge 2' in gate                                             # 失敗2回で打ち止め
+    main = _main_job(d)
+    assert main["needs"] == "gate" and main["if"] == "needs.gate.outputs.run == 'true'"

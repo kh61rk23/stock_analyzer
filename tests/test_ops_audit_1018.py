@@ -12,19 +12,19 @@ from conftest import load_module
 REPO = Path(__file__).parent.parent
 
 
-# ── 米国株価の取得は週3回（UTC 月・水・金 = JST 火・木・土）─────────────
+# ── 株価の取得は日米とも平日毎日（米国は UTC 月〜金 22:47 = JST 火〜土）─────────────
 
-def test_price_universe_us_runs_three_times_a_week():
+def test_price_universe_runs_every_weekday():
     wf = yaml.safe_load((REPO / ".github/workflows/price_universe.yml").read_text(encoding="utf-8"))
     crons = [c["cron"] for c in wf[True]["schedule"]]
     assert "47 7 * * 1-5" in crons          # 日本株は従来どおり平日毎日
-    assert "47 22 * * 1,3,5" in crons       # 米国株は週3回
+    assert "47 22 * * 1-5" in crons         # 米国株も米国の平日毎日
     assert len(crons) == 2
 
 
 def test_price_universe_daily_period_covers_the_gap():
     pu = load_module("price_universe")
-    # 最も空く 土→火 でも2営業日。1回失敗しても次の回で取り戻せる幅（5営業日）を取る
+    # 1回失敗したり捨てられたりしても、次の回で取り戻せる幅（5営業日）を取る
     assert pu.DAILY_PERIOD == "5d"
 
 
