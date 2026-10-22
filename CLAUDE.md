@@ -97,7 +97,8 @@ python3 maintenance_packet.py   # 全監査+台帳+直近変更を MAINTENANCE_P
 
 - エントリ: GitHub Actions（cron "17 0 * * 1-6" = 月〜土 09:17 JST / 月曜のみ自動でweeklyモード）
   → run_headless.py → stock_analyzer_main.run_all_tasks()
-  ※ 日曜は市場が動かないため停止（Actions 無料枠 2,000分/月の節約）。
+  ※ 日曜は市場が動かないため停止。public リポジトリなので Actions の分数に上限は無い。
+    予備の起動（UTC 03:17・06:17）は、その日に成功・実行中の回が無い時だけ本処理へ進む（gate ジョブ）。
     UTC 00:00 ちょうどはジョブが集中し実測で3〜4時間の遅延が出るため :17 へずらしてある。
     **前倒し（UTC 23:40 等）は不可** — JST月曜の回が UTC では日曜になり weekly 判定が壊れる。
 - 設定SSOT: config.py（BLOCK 0〜63・他moduleをimportしない）
