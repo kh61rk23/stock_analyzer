@@ -4221,7 +4221,7 @@ LEDGER_EXTERNAL_EXPECT: dict = {
 
 # 運用の監視（ops_health.py → 日次メール「🩺 運用の監視」）。run_all_tasks の外で止まるものを見る。
 ALERT_ON_OPS_HEALTH: bool = True
-OPS_ACTIONS_MONTHLY_MINUTES: int = 2000    # Actions の月の無料枠（Free プラン。Pro なら 3000）
+OPS_ACTIONS_MONTHLY_MINUTES: int = 0       # Actions の月の分数の上限。0＝見ない（public リポジトリは上限なし。private に戻すなら Free は 2000）
 OPS_ACTIONS_WARN_RATIO: float = 0.8        # 使用量がこの割合を超える（または月末見込みが枠を超える）と警告
 OPS_MAC_SYNC_STALE_HOURS: int = 48         # Mac の同期（obsidian_sync all）の最終成功からの許容時間
 OPS_WEEKLY_LOOP_STALE_DAYS: int = 9        # 週次ループ（日曜21時）の最終成功からの許容日数

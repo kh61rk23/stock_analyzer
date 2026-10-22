@@ -4,14 +4,15 @@
 # ==============================================================
 # 【スケジュール】
 #   デイリー : 月〜土 09:17 JST (= UTC 00:17)  cron "17 0 * * 1-6"
+#   予備     : 同じ日の 12:17・15:17 JST（UTC 03:17・06:17）。その日（UTC）に成功した回か
+#              実行中の回があれば何もしない（GitHub の定時実行は遅れたり捨てられたりするため）
 #   ウィークリー: 毎週月曜 09:17 JST に自動切替
 #       └ デイリー cron は月〜土の UTC 00:17 に発火する。月曜 UTC 00:17 =
 #         月曜 09:17 JST であり、その回を "Set execution mode" が
 #         UTC 月曜と判定して weekly モードへ自動昇格する。
 #         専用 cron は不要（重複起動を避けるため）。
-#   ※ 2026-09-09 に "0 0 * * *"（毎日 UTC 00:00）から変更。理由は
-#     UTC 00:00 のジョブ集中による遅延回避と、日曜実行の停止による
-#     Actions 無料枠（2,000分/月）の節約。詳細は下の `on:` 直上を参照。
+#   ※ UTC 00:00 ちょうどはジョブが集中して遅れるため :17 にずらしている。日曜は日米とも市場が
+#     動かないので止める。詳細は下の `on:` 直上を参照。
 #
 # 【手動実行】
 #   GitHub の Actions タブ → "Run workflow" でも実行可能
@@ -49,8 +50,7 @@ on:
   #   日本は DST がないため UTC+9 固定。UTC 00:17 = JST 09:17。
   #   月曜 JST（= 月曜 UTC）の回は "Set execution mode" が weekly に昇格する。
   #   日曜だけ止める: 土 09:17 JST は米国金曜の引け後で取得価値があるが、
-  #   日 09:17 JST は日米とも市場が動いておらず、Actions 無料枠を
-  #   消費するだけになる（2026-09 に月間枠 2,000分を超過した経緯）。
+  #   日 09:17 JST は日米とも市場が動いておらず、新しく取るものが無い。
   #
   #   ★ 2026-09-09: UTC 00:00 ちょうどは世界中のジョブが集中し、実測で
   #     10日連続 3時間20分〜4時間13分の遅延が発生していた（GitHubは高負荷時の
@@ -60,6 +60,10 @@ on:
   #     同じUTC日の中でずらせば曜日ロジックに一切触れずに済む。
   schedule:
     - cron: "17 0 * * 1-6"    # UTC 00:17 = JST 09:17（月〜土）
+    # 予備の起動。本番の回が捨てられた・失敗した日だけ動く（判定は下の gate ジョブ）。
+    # 同じ UTC 日の中に置くので、月曜の weekly 判定は変わらない。
+    - cron: "17 3 * * 1-6"    # UTC 03:17 = JST 12:17
+    - cron: "17 6 * * 1-6"    # UTC 06:17 = JST 15:17
 
   # ── 手動実行 ──────────────────────────────────────────────
   # 実行モードは四種類ある。
@@ -91,8 +95,41 @@ permissions:
   actions: read     # actions_usage.py が当月の実行履歴（使用分数）を読む
 
 jobs:
+  # 定時の回だけ、その日（UTC）にもう済んでいるかを見る。手動実行は必ず走らせる。
+  # 済み＝成功した回か実行中の回がある、または失敗が2回ある（同じ失敗の繰り返しで API の日次枠を使い切らないため）。
+  # mode=single の手動実行も「成功した回」に数えるので、その日の定時の回が見送られる点に注意。
+  gate:
+    name: 🚦 今日の実行が要るか
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          TODAY=$(date -u +%F)
+          COUNTS=$(gh api "repos/${{ github.repository }}/actions/workflows/daily_run.yml/runs?created=%3E%3D${TODAY}&per_page=50" \
+            --jq "[.workflow_runs[] | select(.id != ${{ github.run_id }})] as \$r |
+                  \"\([\$r[] | select(.status != \"completed\" or .conclusion == \"success\")] | length) \([\$r[] | select(.conclusion == \"failure\" or .conclusion == \"timed_out\")] | length)\"") || {
+            echo "::warning::今日の実行履歴を読めなかったので、そのまま走らせる"; echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; }
+          read DONE FAILED <<< "$COUNTS"
+          if [ "$DONE" -gt 0 ] || [ "$FAILED" -ge 2 ]; then
+            echo "⏩ 今日（UTC ${TODAY}）は済み（成功・実行中 ${DONE}回／失敗 ${FAILED}回）。この回は何もしない"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "▶️ 今日（UTC ${TODAY}）はまだ（失敗 ${FAILED}回）。この回で実行する"
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
   run-analyzer:
     name: 📈 アナライザー実行
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 180   # タイムアウト 180分
     env:
