@@ -62,6 +62,17 @@ jobs:
           ALERT_GMAIL_PASSWORD: ${{ secrets.ALERT_GMAIL_PASSWORD }}
           ALERT_GMAIL_TO: ${{ secrets.ALERT_GMAIL_TO }}
         run: python actions_log.py --workflow us_company_facts --step us_segments -- python -u us_segments.py
+      # 取り込んだ内容（ステップの成否・要点・表の行数の増減・保存量）を Gmail で知らせる（workflow_notify.py）
+      - name: Notify
+        if: always()
+        continue-on-error: true
+        env:
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+          ALERT_GMAIL_FROM: ${{ secrets.ALERT_GMAIL_FROM }}
+          ALERT_GMAIL_PASSWORD: ${{ secrets.ALERT_GMAIL_PASSWORD }}
+          ALERT_GMAIL_TO: ${{ secrets.ALERT_GMAIL_TO }}
+        run: python workflow_notify.py --workflow us_company_facts --title "米国株の財務・企業情報の更新" --tables us.company_facts,us.segment_financials
       # 変わったファイルだけを load job で BigQuery（private.state_files）へ
       - name: Save state to BigQuery
         if: always() && env.STATE_STORE_MODE != 'git'

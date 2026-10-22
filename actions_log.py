@@ -9,10 +9,13 @@
 #   子の GITHUB_STEP_SUMMARY はログファイル側へ回す（保有・スコアが要約欄に出ないように）。
 #   GITHUB_OUTPUT・GITHUB_ENV はそのまま渡す（後続ステップの判定に使う）。
 #   終了コードは子のものをそのまま返す。
+#   ステップの結果（成否・秒数・件数・✅❌⏩⚠️ で始まる要点の行）は stock_data/logs/step_results_<workflow>_<実行ID>.jsonl に
+#   1行ずつ残す。workflow の最後に workflow_notify.py がこれをまとめてメールで送る（Actions のログには出さない）。
 # ==============================================================
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -25,6 +28,8 @@ from pathlib import Path
 ERROR_HINTS = ("Traceback", "Error", "Exception", "❌", "失敗", "FAILED", "fatal")
 MAX_ERROR_LINES = 8
 TAIL_LINES = 200
+MAX_HIGHLIGHTS = 15
+_HIGHLIGHT = re.compile(r"^\s*(✅|❌|⏩|⚠️|📥|↩️)")
 _LONG_NUM = re.compile(r"(?<![A-Za-z_])(?:\d[\d,]{3,}(?:\.\d+)?|\d+\.\d{2,})")
 _LINE_NO = re.compile(r"(line \d+)")
 
@@ -65,6 +70,21 @@ def summarize(lines: list, rc: int, seconds: float, step: str) -> list:
             out.append("  末尾のエラー行（数字は伏せる）:")
             out += [f"    {l}" for l in picked]
     return out
+
+
+def results_path(base: Path, workflow: str, run_id: str | None = None) -> Path:
+    run_id = run_id or os.environ.get("GITHUB_RUN_ID") or datetime.now().strftime("%Y-%m-%d")
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", workflow) or "workflow"
+    return Path(base) / "logs" / f"step_results_{safe}_{run_id}.jsonl"
+
+
+def step_record(lines: list, rc: int, seconds: float, step: str) -> dict:
+    """ステップの結果（通知用）。要点は ✅❌⏩⚠️ で始まる行の末尾 MAX_HIGHLIGHTS 本。"""
+    hl = [l.strip()[:300] for l in lines if _HIGHLIGHT.match(l)][-MAX_HIGHLIGHTS:]
+    return {"step": step, "rc": rc, "seconds": round(seconds), "lines": len(lines),
+            "ok": sum(1 for l in lines if "✅" in l), "warn": sum(1 for l in lines if "⚠" in l),
+            "err": sum(1 for l in lines if "❌" in l), "highlights": hl,
+            "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
 
 def main(argv=None) -> int:
@@ -118,6 +138,11 @@ def main(argv=None) -> int:
         body = body[:body.index(cut)]
     lines = summarize(body, rc, sec, a.step)
     print("\n".join(lines))
+    try:
+        with open(results_path(Path(a.base), a.workflow), "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(step_record(body, rc, sec, a.step), ensure_ascii=False) + "\n")
+    except OSError:
+        pass
     if real_summary:
         try:
             with open(real_summary, "a", encoding="utf-8") as fh:

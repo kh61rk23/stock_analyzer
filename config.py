@@ -5364,3 +5364,11 @@ EDINET_GOV_DOCS_TIME_BUDGET_MIN: float = 30.0   # 1回の実行で使う時間�
 BQ_STORAGE_STOP_GB: float = 8.0
 BQ_STORAGE_WARN_GB: float = 7.0
 BQ_STORAGE_HIGH_GB: float = 9.0
+
+# ==============================================================
+# BLOCK 67: 取得系 workflow の終了通知（workflow_notify.py）
+# ==============================================================
+# 取得系の workflow（fetch_jp_filings・edinet_gov_backfill・price_universe・us_company_facts・manual_task・
+# edinetdb_web_backfill）の最後に、取り込んだ内容（ステップの成否・要点・表の行数の増減・保存量）を Gmail で送る。
+# 日次（daily_run）は自分のメールがあるので送らない。
+WORKFLOW_NOTIFY_ENABLED: bool = True

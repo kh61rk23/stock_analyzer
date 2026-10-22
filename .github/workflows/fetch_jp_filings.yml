@@ -107,6 +107,17 @@ jobs:
           BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
           EDINET_GOV_API_KEY: ${{ secrets.EDINET_GOV_API_KEY }}
         run: python actions_log.py --workflow fetch_jp_filings --step edinet_gov_docs -- python -u edinet_gov_docs.py --budget-min 30
+      # 取り込んだ内容（ステップの成否・要点・表の行数の増減・保存量）を Gmail で知らせる（workflow_notify.py）
+      - name: Notify
+        if: always()
+        continue-on-error: true
+        env:
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+          ALERT_GMAIL_FROM: ${{ secrets.ALERT_GMAIL_FROM }}
+          ALERT_GMAIL_PASSWORD: ${{ secrets.ALERT_GMAIL_PASSWORD }}
+          ALERT_GMAIL_TO: ${{ secrets.ALERT_GMAIL_TO }}
+        run: python workflow_notify.py --workflow fetch_jp_filings --title "日本企業の開示データ取得" --tables edinet.gov_documents,edinet.gov_doc_facts,edinet.financials,edinet.doc_index,edinet.text_analysis,real_estate.rental_property_fv,real_estate.corporate_holdings_p1
       # 変わったファイルだけを load job で BigQuery（private.state_files）へ
       - name: Save state to BigQuery
         if: always() && env.STATE_STORE_MODE != 'git'

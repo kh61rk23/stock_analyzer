@@ -118,6 +118,17 @@ jobs:
           esac
           TASK
           TASK="${{ inputs.task }}" python actions_log.py --workflow manual_task --step "${{ inputs.task }}" -- bash "$RUNNER_TEMP/task.sh"
+      # 取り込んだ内容（ステップの成否・要点・表の行数の増減・保存量）を Gmail で知らせる（workflow_notify.py）
+      - name: Notify
+        if: always()
+        continue-on-error: true
+        env:
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+          ALERT_GMAIL_FROM: ${{ secrets.ALERT_GMAIL_FROM }}
+          ALERT_GMAIL_PASSWORD: ${{ secrets.ALERT_GMAIL_PASSWORD }}
+          ALERT_GMAIL_TO: ${{ secrets.ALERT_GMAIL_TO }}
+        run: python workflow_notify.py --workflow manual_task --title "手動タスク ${{ inputs.task }}"
       # 変わったファイルだけを load job で BigQuery（private.state_files）へ
       - name: Save state to BigQuery
         if: always() && env.STATE_STORE_MODE != 'git'
