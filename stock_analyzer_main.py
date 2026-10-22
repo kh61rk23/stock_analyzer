@@ -1415,85 +1415,18 @@ def run_all_tasks(mode: str = "all") -> dict:
         except Exception as _khe:
             print(f"  ⚠️  APIキー生存判定エラー（スキップ）: {_khe}")
 
-    # ── [DB統合 W3] EdinetDBを唯一のEDINET一次取得元としてBQへ格納 ──
-    if getattr(cfg, "ENABLE_EDINETDB_INGEST", True) and _in_mode("edinetdb_ingest"):
-        # 賃貸等不動産（EdinetDB real-estate）を、日次取り込みの前に RENTAL_FV_DAILY_BUDGET 社まで取る
-        # （無効の間は RENTAL_FV_TRIAL_LIMIT 社を1回だけ試す）。残りの枠を日次取り込みが使う
-        try:
-            import rental_property_ingestor as _rpi
-            results["rental_property_fv"] = _rpi.run(cfg)
-        except Exception as _rpe:
-            results["rental_property_fv"] = {"error": str(_rpe)[:150]}
-            print(f"  ⚠️  賃貸等不動産の取得エラー（スキップ）: {str(_rpe)[:80]}")
-        # IFRS 会社の投資不動産の公正価値（政府 EDINET API）。キーが無ければ何もしない。失敗しても本処理は続ける
-        import os as _os
-        if _os.environ.get("EDINET_GOV_API_KEY") or getattr(cfg, "EDINET_GOV_API_KEY", ""):
-            try:
-                import edinet_gov_xbrl as _egx
-                results["edinet_gov_fv"] = _egx.ingest(cfg)
-            except Exception as _ege:
-                results["edinet_gov_fv"] = {"error": type(_ege).__name__}
-                print(f"  ⚠️  政府 EDINET の公正価値取得エラー（スキップ）: {type(_ege).__name__}")
-        try:
-            _edi = _load_local_module("edinetdb_ingestor", "/content/edinetdb_ingestor.py", cfg.DRIVE_BASE / "edinetdb_ingestor.py")
-            if _edi:
-                results["edinetdb_ingest"] = _edi.run_edinetdb_ingest(cfg)
-                source_ingest_done["edinet"] = True
-                value = results["edinetdb_ingest"]
-                                # value["failure"] には「EdinetDBにデータ無し」（404）が混ざるので、実問題だけで判定する。
-                                # データ無しのみの場合は success（件数は note に残る）。対象があるのに取り込み0社は warn。
-                if value.get("skipped"):
-                    _st = "skipped"
-                elif value.get("failure"):
-                    _st = "alert"
-                elif value.get("targets") and not value.get("success"):
-                    _st = "warn"
-                else:
-                    _st = "success"
-                _names = "、".join(
-                    f"{c.get('sec_code') or c.get('edinet_code')} {c.get('name', '')}".strip()
-                    for c in value.get("ingested", []) or []) or "なし"
-                logger.add(
-                    "edinetdb_ingest", _st,
-                    f"取込{value.get('success', 0)}社 / データ無し{value.get('missing', 0)}社 / "
-                    f"失敗{value.get('failure', 0)}社 / 書類{value.get('doc_index_rows', 0)}件 / "
-                    f"API{value.get('api_calls', 0)}回 | 取込: {_names}",
-                )
-        except Exception as exc:
-            logger.add("edinetdb_ingest", "error", str(exc)[:100])
+    # ── EdinetDB・政府 EDINET・不動産DB の取り込み（fetch_stages.jp_filings）──────
+    # 取得 workflow（fetch_jp_filings.yml）が朝に済ませていれば、その結果を写すだけにする。
+    # 無ければ（workflow が落ちた・まだ終わっていない・Mac で動かした等）この回で取る。
+    try:
+        import fetch_stages as _fs
+        if not _fs.apply_external(cfg, "jp_filings", results, logger):
+            _fs.run_jp_filings(cfg, results, logger, _in_mode)
+        source_ingest_done["edinet"] = "edinetdb_ingest" in results
+        source_ingest_done["fudosan"] = "fudosan_ingest" in results
+    except Exception as exc:
+        logger.add("edinetdb_ingest", "error", f"fetch_stages: {str(exc)[:100]}")
 
-    # ── [DB統合 W4] 政府EDINET検索を使わず有報doc_indexを更新 ─────
-    if _in_mode("edinet_doc_index"):
-        try:
-            _indexer = _load_local_module("edinet_doc_indexer", "/content/edinet_doc_indexer.py", cfg.DRIVE_BASE / "edinet_doc_indexer.py")
-            if _indexer:
-                results["edinet_doc_index"] = _indexer.run_doc_indexer(cfg=cfg)
-                value = results["edinet_doc_index"]
-                logger.add(
-                    "edinet_doc_index",
-                    "skipped" if value.get("skipped") else "success",
-                    str(value),
-                )
-        except Exception as exc:
-            logger.add("edinet_doc_index", "error", str(exc)[:100])
-
-    # ── [DB統合 W5] 不動産DB P1をBQへ格納 ─────────────────────
-    if getattr(cfg, "ENABLE_FUDOSAN_INGEST", True) and _in_mode("fudosan_ingest"):
-        try:
-            _fudo = _load_local_module("fudosan_ingestor", "/content/fudosan_ingestor.py", cfg.DRIVE_BASE / "fudosan_ingestor.py")
-            if _fudo:
-                results["fudosan_ingest"] = _fudo.run_fudosan_ingest(cfg)
-                source_ingest_done["fudosan"] = True
-                value = results["fudosan_ingest"]
-                logger.add(
-                    "fudosan_ingest",
-                    "skipped" if value.get("skipped") else (
-                        "success" if not value.get("failure") else "alert"
-                    ),
-                    str(value),
-                )
-        except Exception as exc:
-            logger.add("fudosan_ingest", "error", str(exc)[:100])
     if getattr(cfg, "ENABLE_US_FUNDAMENTALS", True) and _in_mode("us_fundamentals"):
         try:
             _ufr = _load_local_module("us_fundamental_rotator", "/content/us_fundamental_rotator.py", cfg.DRIVE_BASE / "us_fundamental_rotator.py")

@@ -355,6 +355,8 @@ jobs:
         env:
           STOCK_ANALYZER_MODE:  ${{ steps.set-mode.outputs.mode }}
           STOCK_ANALYZER_BASE:  ${{ github.workspace }}/stock_data
+          # 取得 workflow（fetch_jp_filings.yml）が朝に済ませた分は取得を省く（結果ファイルが無ければ自分で取る）
+          STOCK_ANALYZER_FETCH_EXTERNAL: jp_filings
           BQ_CREDENTIALS:       ${{ secrets.BQ_CREDENTIALS }}
           BQ_PROJECT_ID:        ${{ secrets.BQ_PROJECT_ID }}
           SEC_USER_AGENT:       ${{ secrets.SEC_USER_AGENT }}

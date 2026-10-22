@@ -8,7 +8,7 @@ import yaml
 
 WF = Path(__file__).resolve().parent.parent / ".github" / "workflows"
 STATEFUL = ("daily_run.yml", "price_universe.yml", "us_company_facts.yml", "manual_task.yml",
-            "edinetdb_web_backfill.yml")
+            "edinetdb_web_backfill.yml", "fetch_jp_filings.yml")
 
 
 def _load(name):
@@ -16,7 +16,7 @@ def _load(name):
 
 
 def _main_job(d):
-    """本処理のジョブ。daily_run は前に「今日の実行が要るか」の gate ジョブがあるので、それを除いた1つ。"""
+    """本処理のジョブ。daily_run・fetch_jp_filings は前に「今日の実行が要るか」の gate ジョブがあるので、それを除いた1つ。"""
     (job,) = [j for k, j in d["jobs"].items() if k != "gate"]
     return job
 
@@ -90,3 +90,17 @@ def test_daily_run_gate_only_filters_schedule_and_backup_crons_stay_same_utc_day
     assert '-ge 2' in gate                                             # 失敗2回で打ち止め
     main = _main_job(d)
     assert main["needs"] == "gate" and main["if"] == "needs.gate.outputs.run == 'true'"
+
+
+def test_daily_run_reads_jp_filings_from_fetch_workflow():
+    d = _load("daily_run.yml")
+    an = next(s for s in _main_job(d)["steps"] if s.get("id") == "analyzer")
+    assert an["env"]["STOCK_ANALYZER_FETCH_EXTERNAL"] == "jp_filings"
+    f = _load("fetch_jp_filings.yml")
+    # 取得は日次（UTC 00:17）より前・同じ JST 日の朝（UTC 20〜23 時の日〜金 = JST 月〜土）
+    for c in [c["cron"] for c in f[True]["schedule"]]:
+        hh, dow = int(c.split()[1]), c.split()[4]
+        assert 20 <= hh <= 23 and dow == "0-5"
+    gate = f["jobs"]["gate"]["steps"][0]["run"]
+    assert "-ge 9" in gate                         # 日次本体が自分で取る時刻を過ぎたら取らない（二重取得を避ける）
+    assert "fetch_runner.py jp_filings" in str(_main_job(f)["steps"])

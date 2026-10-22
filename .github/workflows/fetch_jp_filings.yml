@@ -1,0 +1,121 @@
+name: 日本企業の開示データ取得
+
+# 日次の分析（daily_run・09:17 JST）より前に、EdinetDB・政府 EDINET・不動産DB の取り込みを済ませておく。
+#   python fetch_runner.py jp_filings → fetch_stages.run_jp_filings（日次本体と同じ関数）
+#   結果の要約と実行台帳の記録は stock_data/data/fetch_external/jp_filings_<日付>.json（状態として BigQuery へ）。
+#   日次本体はそのファイルがあれば取得を省き、無ければ自分で取る（この workflow が落ちてもデータは欠けない）。
+# 時刻: 月〜土 05:17 JST（cron UTC 20:17 日〜金）。予備は 07:17 JST（UTC 22:17）。
+#   gate ジョブが、その日（JST）に成功・実行中の回があるか、JST 09 時を過ぎていれば（日次本体が自分で取る時刻）何もしない。
+on:
+  schedule:
+    - cron: "17 20 * * 0-5"
+    - cron: "17 22 * * 0-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read     # gate がこの workflow の今日の実行履歴を読む
+
+concurrency:
+  group: fetch-jp-filings
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: 🚦 今日の取得が要るか
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "$(TZ=Asia/Tokyo date +%H)" -ge 9 ]; then
+            echo "⏩ JST 09 時を過ぎた（日次本体が自分で取る）。この回は何もしない"
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # 「今日」は JST の日付で数える（結果ファイルの名前も JST の日付。前夜の手動実行で翌朝の回を止めない）
+          TODAY=$(TZ=Asia/Tokyo date +%F)
+          SINCE=$(date -u -d "${TODAY} 00:00 +0900" +%Y-%m-%dT%H:%M:%SZ)
+          DONE=$(gh api "repos/${{ github.repository }}/actions/workflows/fetch_jp_filings.yml/runs?created=%3E%3D${SINCE}&per_page=50" \
+            --jq "[.workflow_runs[] | select(.id != ${{ github.run_id }}) | select(.status != \"completed\" or .conclusion == \"success\")] | length") || DONE=0
+          if [ "$DONE" -gt 0 ]; then
+            echo "⏩ 今日（JST ${TODAY}）は済み（${DONE}回）。この回は何もしない"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  run:
+    name: 📥 取得
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      TZ: Asia/Tokyo
+      STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
+      # 状態の置き場（config BLOCK 64）。git / dual / bq。Actions の変数 STATE_STORE_MODE で切り替える（未設定は bq）
+      STATE_STORE_MODE: ${{ vars.STATE_STORE_MODE || 'bq' }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup Python
+        id: setup-python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      # daily_run と同じキーで、インストール済みの Python ごと戻す（当たった日は pip を飛ばす）
+      - name: Cache key month
+        id: ym
+        run: echo "ym=$(date -u +%Y%m)" >> "$GITHUB_OUTPUT"
+      - name: Restore installed packages
+        id: deps-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.pythonLocation }}
+          key: pydeps-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('requirements.txt') }}-${{ steps.ym.outputs.ym }}
+      - name: Install dependencies
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: pip install -r requirements.txt
+      # dual: checkout 直後の sha を基準として記録 ／ bq: BigQuery から状態を書き戻す（失敗したら止める）
+      - name: Prepare state
+        env:
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+        run: python state_store.py prepare || [ "$STATE_STORE_MODE" = "dual" ]
+      - name: Fetch
+        env:
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+          EDINETDB_API_KEY: ${{ secrets.EDINETDB_API_KEY }}
+          EDINET_GOV_API_KEY: ${{ secrets.EDINET_GOV_API_KEY }}
+          FUDOSAN_API_KEY: ${{ secrets.FUDOSAN_API_KEY }}
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+        run: python actions_log.py --workflow fetch_jp_filings --step jp_filings -- python -u fetch_runner.py jp_filings
+      # 変わったファイルだけを load job で BigQuery（private.state_files）へ
+      - name: Save state to BigQuery
+        if: always() && env.STATE_STORE_MODE != 'git'
+        env:
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+        run: |
+          python state_store.py save --source fetch_jp_filings || {
+            echo "::warning::状態を BigQuery に保存できなかった"
+            [ "$STATE_STORE_MODE" = "dual" ]
+          }
+      - name: Commit state
+        if: always()
+        run: |
+          if [ "$STATE_STORE_MODE" = "bq" ]; then echo "⏩ STATE_STORE_MODE=bq: git には commit しない"; exit 0; fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add stock_data/data/ stock_data/logs/ 2>/dev/null || true
+          git diff --cached --quiet && exit 0
+          git commit -q -m "auto: fetch jp filings $(date '+%Y-%m-%d %H:%M')"
+          for i in 1 2 3; do git pull -q --rebase --autostash -X theirs origin main && git push -q && exit 0; git rebase --abort 2>/dev/null || true; sleep 15; done
+          echo "::error::状態ファイルを push できなかった（この回の結果は保存されていない）"; exit 1
