@@ -8,7 +8,7 @@ import yaml
 
 WF = Path(__file__).resolve().parent.parent / ".github" / "workflows"
 STATEFUL = ("daily_run.yml", "price_universe.yml", "us_company_facts.yml", "manual_task.yml",
-            "edinetdb_web_backfill.yml", "fetch_jp_filings.yml")
+            "edinetdb_web_backfill.yml", "fetch_jp_filings.yml", "edinet_gov_backfill.yml")
 
 
 def _load(name):

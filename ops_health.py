@@ -172,6 +172,24 @@ def bi_mart_issues(manifest: dict | None, now: datetime, stale_days: float,
 
 # ── 読み込み ──────────────────────────────────────────────────
 
+def bq_storage_issues(status: dict | None, now: datetime, warn_gb: float, high_gb: float, stop_gb: float) -> list:
+    """BigQuery の保存量（bq_storage.json）。無料枠は保存 10GB/月で、その月の合計にかかる。測っていない・古い時も出す。"""
+    if not status:
+        return []
+    out = []
+    at = _parse_dt(status.get("measured_at"))
+    if at and (now - at).days >= 3:
+        out.append(_issue("medium", f"BigQuery の保存量を {(now - at).days}日 測っていない（最後 {at:%Y-%m-%d}）。"
+                                    "溜める取り込み（edinet_gov_docs 等）が止まっている可能性"))
+    gb = float(status.get("total_gb") or 0)
+    if gb >= warn_gb:
+        top = ", ".join(f"{k} {v:.2f}GB" for k, v in list((status.get("top_tables") or {}).items())[:3])
+        out.append(_issue("high" if gb >= high_gb else "medium",
+                          f"BigQuery の保存量 {gb:.2f}GB（無料枠 10GB/月）。溜める取り込みは {stop_gb:g}GB で止まる"
+                          f"（大きい表: {top}）"))
+    return out
+
+
 def _read_json(p: Path):
     try:
         return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
@@ -194,6 +212,9 @@ def collect_file_issues(cfg, now: datetime | None = None) -> list:
                                   float(_cfg(cfg, "OPS_WEEKLY_LOOP_STALE_DAYS", 9)))
     issues += holdings_issues(_read_json(Path(_cfg(cfg, "HOLDINGS_SUMMARY_PATH", HOLDINGS_SUMMARY))), now.date(),
                               int(_cfg(cfg, "OPS_HOLDINGS_STALE_DAYS", 14)))
+    issues += bq_storage_issues(_read_json(log_dir / "bq_storage.json"), now,
+                                float(_cfg(cfg, "BQ_STORAGE_WARN_GB", 7.0)), float(_cfg(cfg, "BQ_STORAGE_HIGH_GB", 9.0)),
+                                float(_cfg(cfg, "BQ_STORAGE_STOP_GB", 8.0)))
     # manifest の時刻は UTC。now（ローカル時刻・TZ=Asia/Tokyo）を UTC に直して比べる
     issues += bi_mart_issues(_read_json(log_dir.parent / "bi" / "manifest.json"),
                              now.astimezone(timezone.utc).replace(tzinfo=None),

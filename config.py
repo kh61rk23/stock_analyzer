@@ -5339,3 +5339,28 @@ STATE_STORE_LOAD_BATCH_BYTES: int = 256 * 1024 ** 2
 STATE_STORE_KEEP_VERSIONS: int = 3
 # 掃除のクエリの上限（dryRun で見積もってこれを超えたら実行しない）
 STATE_STORE_PRUNE_MAX_BYTES: int = 1024 ** 3
+
+# ==============================================================
+# BLOCK 65: 政府 EDINET の書類一覧と書類の中身（edinet_gov_docs.py）
+# ==============================================================
+# 書類一覧（documents.json）は全書類（投信を含む）を日ごとに edinet.gov_documents へ入れる（1日1回の呼び出し）。
+# 中身（CSV＝XBRL の事実）は EDINET_GOV_FACT_DOC_TYPES の書類だけ edinet.gov_doc_facts へ入れる。
+#   350 大量保有報告書 / 360 変更報告書 / 370 訂正報告書（大量保有）/ 180 臨時報告書 / 190 訂正臨時報告書
+# 過去分は新しい日から古い日へ遡る。下限は EDINET_GOV_BACKFILL_FLOOR（API が出す範囲より古い日は空で返る）。
+# BigQuery の保存が BQ_STORAGE_STOP_GB（全体・BLOCK 66）か EDINET_GOV_FACTS_MAX_GB（この表）を超えたら中身の取り込みを止める。
+EDINET_GOV_FACT_DOC_TYPES: tuple = ("350", "360", "370", "180", "190")
+EDINET_GOV_BACKFILL_FLOOR: str = "2016-01-01"
+EDINET_GOV_RECENT_DAYS: int = 7            # 直近この日数は毎回一覧を取り直す（取り下げ・訂正・遅れて出る書類）
+EDINET_GOV_TEXT_MAX_CHARS: int = 2000      # 文字の値（テキストブロック等）はここで切る
+EDINET_GOV_FACTS_MAX_GB: float = 2.5       # edinet.gov_doc_facts だけでこれを超えたら中身を取らない（他のデータ源の余地を残す）
+EDINET_GOV_DOCS_TIME_BUDGET_MIN: float = 30.0   # 1回の実行で使う時間（日次の取得 workflow の既定）
+
+# ==============================================================
+# BLOCK 66: BigQuery の保存量の上限（bq_storage.py）
+# ==============================================================
+# 無料枠は保存 10GB/月で、その月に保存している合計にかかる（溜めた分は毎月数え直される）。合計を 10GB 未満に保つ。
+# データを溜める取り込みは、全表の論理サイズが BQ_STORAGE_STOP_GB 以上なら書かない。
+# 日次メールの「運用の監視」は BQ_STORAGE_WARN_GB 以上で注意、BQ_STORAGE_HIGH_GB 以上で重要として出す。
+BQ_STORAGE_STOP_GB: float = 8.0
+BQ_STORAGE_WARN_GB: float = 7.0
+BQ_STORAGE_HIGH_GB: float = 9.0
