@@ -1,17 +1,14 @@
 # ==============================================================
-# file_links.py — メールから保存ファイル（Google Drive）へ飛ぶリンク
+# file_links.py — メール末尾の「本日の保存ファイル」一覧
 #
-# 保存ファイル（stock_data/ 配下）は公開しないので git には無い（BigQuery private.state_files と Drive にだけある）。
-# 日次メールは解析の途中で送られ、Google Drive への同期（run_headless の最後）はその後なので、
-# 送信時点ではDriveのファイルIDがまだ決まらない。そこでリンクは
-#   Drive  : ファイル名でのDrive検索URL（IDが無くても開ける）＋ 同期先フォルダ（GOOGLE_DRIVE_FOLDER_ID）
-# にする。github_url は git にあるファイル（コード等）を指すときだけ使う。
+# 保存ファイル（stock_data/ 配下）は公開しないので git には無い。置き場は BigQuery の private.state_files で、
+# md の全文は report_store が analytics.report_texts に入れる（種類・日付で検索できる）。メールには名前だけを並べる。
+# github_url は git にあるファイル（コード等）を指すときだけ使う。
 # ==============================================================
 from __future__ import annotations
 
 import html
 import os
-import re
 from datetime import date
 from pathlib import Path
 from urllib.parse import quote
@@ -19,7 +16,6 @@ from urllib.parse import quote
 REPO = Path(__file__).resolve().parent
 GITHUB_BLOB = os.environ.get("STOCK_ANALYZER_GITHUB_BLOB",
                              "https://github.com/kh61rk23/stock_analyzer/blob/main/")
-_FILE_RE = re.compile(r"(?<![\w/.-])([\w.-]+_\d{4}-?\d{2}(?:-?\d{2})?[\w.-]*\.(?:md|csv|xlsx|json|html))")
 
 
 def github_url(path: Path | str) -> str:
@@ -29,15 +25,6 @@ def github_url(path: Path | str) -> str:
     except ValueError:
         rel = p
     return GITHUB_BLOB + quote(rel.as_posix())
-
-
-def drive_search_url(name: str) -> str:
-    return "https://drive.google.com/drive/search?q=" + quote(f'"{name}"')
-
-
-def drive_folder_url() -> str:
-    fid = os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "")
-    return f"https://drive.google.com/drive/folders/{fid}" if fid else ""
 
 
 def todays_files(insight_dir: Path | str, today: date | None = None, limit: int = 400) -> list[Path]:
@@ -56,23 +43,8 @@ def todays_files(insight_dir: Path | str, today: date | None = None, limit: int 
     return uniq[:limit]
 
 
-def index_files(paths: list[Path]) -> dict[str, Path]:
-    return {p.name: p for p in paths}
-
-
-def linkify(body_html: str, index: dict[str, Path]) -> str:
-    """本文中のファイル名（例 screener_2026-10-06.md）をDrive検索へのリンクにする（純関数）。"""
-    def _sub(m):
-        name = m.group(1)
-        p = index.get(name)
-        if not p:
-            return name
-        return f'<a href="{html.escape(drive_search_url(p.name))}">{html.escape(name)}</a>'
-    return _FILE_RE.sub(_sub, body_html)
-
-
 def files_section_html(paths: list[Path]) -> str:
-    """メール末尾の「保存ファイル」節（Drive検索のリンク付き一覧）。"""
+    """メール末尾の「保存ファイル」節（名前の一覧）。"""
     if not paths:
         return ""
     # 同じフォルダに本日分が多い（業種別レポート33件など）ときはフォルダ1行にまとめる
@@ -84,18 +56,11 @@ def files_section_html(paths: list[Path]) -> str:
             if p.parent in shown_dirs:
                 continue
             shown_dirs.add(p.parent)
-            rows.append(f'<li>{html.escape(p.parent.name)}/（本日{per_dir[p.parent]}件） — '
-                        f'<a href="{html.escape(drive_search_url(p.parent.name))}">Drive</a></li>')
+            rows.append(f'<li>{html.escape(p.parent.name)}/（本日{per_dir[p.parent]}件）</li>')
             continue
-        name = p.name + ("/" if p.is_dir() else "")
-        rows.append(
-            f'<li>{html.escape(name)} — <a href="{html.escape(drive_search_url(p.name))}">Drive</a></li>')
-    folder = drive_folder_url()
-    head = "📎 本日の保存ファイル"
-    if folder:
-        head += f'（<a href="{html.escape(folder)}">Driveの保存先フォルダ</a>）'
+        rows.append(f'<li>{html.escape(p.name + ("/" if p.is_dir() else ""))}</li>')
     return (f'<div style="padding:12px 16px;font-size:12px;color:#374151;">'
-            f'<div style="font-weight:bold;margin-bottom:4px;">{head}</div>'
+            f'<div style="font-weight:bold;margin-bottom:4px;">📎 本日の保存ファイル</div>'
             f'<ul style="margin:0;padding-left:18px;">{"".join(rows)}</ul>'
-            f'<div style="color:#9ca3af;margin-top:4px;">GitHubは実行の最後にpushされてから・'
-            f'Driveは同期の後（実行終了から数分）に開けます。</div></div>')
+            f'<div style="color:#9ca3af;margin-top:4px;">md の全文は BigQuery analytics.report_texts'
+            f'（kind・report_date で検索）にある。</div></div>')

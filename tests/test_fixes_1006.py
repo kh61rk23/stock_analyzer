@@ -83,16 +83,14 @@ def test_infotable_thousands_detected_by_price():
     assert r[0]["value_usd"] == 46243000
 
 
-def test_linkify_only_known_files(tmp_path):
-    p = tmp_path / "screener_2026-10-07.md"
+def test_files_section_lists_names_without_links(tmp_path):
+    d = tmp_path / "screener"
+    d.mkdir()
+    p = d / "screener_2026-10-07.md"
     p.write_text("x")
-    html = file_links.linkify("保存: screener_2026-10-07.md / other_2026-10-07.md", {p.name: p})
-    assert html.count("<a href=") == 1
-    assert "other_2026-10-07.md" in html
-
-
-def test_drive_search_url_quotes_name():
-    assert file_links.drive_search_url("a b.md").endswith("%22a%20b.md%22")
+    html = file_links.files_section_html([p])
+    assert "screener_2026-10-07.md" in html and "<a href=" not in html
+    assert "analytics.report_texts" in html
 
 
 def test_fund_names_are_excluded_from_13f_changes():

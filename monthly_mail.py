@@ -167,13 +167,8 @@ def build(ym: str, insights: Path, tax_months: tuple = (1, 4, 7, 10, 11), late_n
             body = p.read_text(encoding="utf-8")
         except OSError:
             continue
-        try:   # 元ファイルへのリンク（Drive検索。保存ファイルは公開しないので git には無い）
-            import file_links as fl
-            link = f' — <a href="{html.escape(fl.drive_search_url(p.name))}">Drive</a>'
-        except Exception:
-            link = ""
         parts.append(f'<hr><h2>{html.escape(title)}</h2>'
-                     f'<div style="font-size:12px;color:#888">{p.name}{link}</div>')
+                     f'<div style="font-size:12px;color:#888">{p.name}</div>')
         parts.append(md_to_html(body))
     if not files:
         parts.append("<div>⚠️ 対象月のレポートが見つかりませんでした。</div>")

@@ -137,20 +137,6 @@ def classify_deepl(status_code: Optional[int]) -> str:
     return STATE_LIMITED
 
 
-def classify_google_oauth(status_code: Optional[int], body_text: str = "") -> str:
-    """
-    Google OAuth の refresh token 判定: 200=✅ / 400 の invalid_grant・401 の invalid_client=❌ / それ以外=⚠️。
-    同意画面が「テスト」のままだと refresh token は7日で、使わなければ6か月で invalid_grant になる。
-    """
-    if status_code == 200:
-        return STATE_ALIVE
-    body = (body_text or "").lower()
-    if status_code in (400, 401) and ("invalid_grant" in body or "invalid_client" in body
-                                      or "unauthorized_client" in body):
-        return STATE_DEAD
-    return STATE_LIMITED
-
-
 def prev_business_day(today: Optional[_dt.date] = None) -> _dt.date:
     """
     前営業日（土日をスキップ）を返す。EDINET documents.json のプローブ日付に使う。
@@ -475,27 +461,6 @@ def _probe_notion(key: str) -> dict:
         return _entry(STATE_LIMITED, "判定不能（通信エラー・タイムアウト）")
 
 
-def _probe_google_oauth(client_id: str, client_secret: str, refresh_token: str) -> dict:
-    """refresh token でアクセストークンを1回取り直して判定する（Drive へのバックアップが使う経路）。
-    失効すると run_headless の WARNING だけでバックアップが黙って止まるため、ここで❌にする。"""
-    req = _requests()
-    if req is None:
-        return _entry(STATE_LIMITED, "判定不能（requests 未導入）")
-    try:
-        resp = req.post(
-            "https://oauth2.googleapis.com/token",
-            data={"client_id": client_id, "client_secret": client_secret,
-                  "refresh_token": refresh_token, "grant_type": "refresh_token"},
-            timeout=PROBE_TIMEOUT,
-        )
-        state = classify_google_oauth(resp.status_code, resp.text[:500] if resp.text else "")
-        if state == STATE_DEAD:
-            return _entry(state, f"HTTP {resp.status_code}（refresh token 失効の疑い・再発行が必要）")
-        return _entry(state, _http_msg(state, resp.status_code))
-    except Exception:
-        return _entry(STATE_LIMITED, "判定不能（通信エラー・タイムアウト）")
-
-
 def _probe_bq(cfg) -> dict:
     """既存 edinet_bq_client を生成し SELECT 1 を実行。成功=✅ / 失敗=❌。"""
     try:
@@ -646,18 +611,6 @@ def run_key_health(cfg) -> dict:
     # ── 対象外（将来枠）: 今回はプローブしない ──
     # ANTHROPIC_API_KEY: SEC要約（ENABLE_SEC_SUMMARIZER）有効化時に probe を追加する枠。
     entries["ANTHROPIC_API_KEY"] = _entry(STATE_SKIPPED, "チェック対象外（将来枠）")
-
-    # ── GOOGLE_OAUTH_*: refresh token でアクセストークンを取り直せるか ──
-    import os as _os
-    _oa = {k: (g(k) or _os.environ.get(k, "")) for k in
-           ("GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_OAUTH_REFRESH_TOKEN")}
-    if any(is_unset(v) for v in _oa.values()):
-        entries["GOOGLE_OAUTH"] = _entry(STATE_UNSET, "未設定（CLIENT_ID/SECRET/REFRESH_TOKEN のいずれかが空）")
-    else:
-        try:
-            entries["GOOGLE_OAUTH"] = _probe_google_oauth(*_oa.values())
-        except Exception:
-            entries["GOOGLE_OAUTH"] = _entry(STATE_LIMITED, "判定不能（プローブ内例外）")
 
     # ── 出力 ──
     summary = build_summary(entries)

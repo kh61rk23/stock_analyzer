@@ -223,15 +223,6 @@ def test_collect_file_issues_mac_only_on_actions(tmp_path, monkeypatch):
 
 # ── キー判定 ────────────────────────────────────────────────────
 
-def test_classify_google_oauth():
-    kh = load_module("api_key_health")
-    assert kh.classify_google_oauth(200) == kh.STATE_ALIVE
-    assert kh.classify_google_oauth(400, '{"error": "invalid_grant"}') == kh.STATE_DEAD
-    assert kh.classify_google_oauth(401, '{"error": "invalid_client"}') == kh.STATE_DEAD
-    assert kh.classify_google_oauth(500, "") == kh.STATE_LIMITED
-    assert kh.classify_google_oauth(None) == kh.STATE_LIMITED
-
-
 def test_gmail_dead_flags_ci(monkeypatch, tmp_path):
     kh = load_module("api_key_health")
     env = tmp_path / "env"
