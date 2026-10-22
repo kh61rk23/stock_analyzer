@@ -656,15 +656,22 @@ def fetch_fred_series(series_id: str, api_key: str = "", limit: int = 36):
         return None, "requests なし"
     rows = []
     try:
+        api_ok = False
         if api_key:
             r = requests.get(FRED_API_URL, params={
                 "series_id": series_id, "api_key": api_key, "file_type": "json",
                 "sort_order": "desc", "limit": str(limit)}, timeout=30)
             if r.status_code != 200:
                 return None, f"HTTP {r.status_code}"
-            for o in r.json().get("observations", []):
+            # 200 でも JSON でない本文（混雑時の案内ページ等）が返ることがあるので、その時は公開CSVで取り直す
+            try:
+                obs = r.json().get("observations", [])
+                api_ok = True
+            except ValueError:
+                obs = []
+            for o in obs:
                 rows.append((o.get("date", ""), o.get("value", "")))
-        else:
+        if not api_ok:
             r = requests.get(FRED_CSV_URL, params={"id": series_id}, timeout=30)
             if r.status_code != 200 or "," not in r.text[:200]:
                 return None, f"HTTP {r.status_code}"

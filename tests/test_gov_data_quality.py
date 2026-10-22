@@ -122,6 +122,24 @@ class TestFredSource:
         recs, err = g.fetch_fred_series("X")
         assert err == "" and [r["time"] for r in recs] == ["2026-06", "2026-04"]
 
+    def test_api_non_json_falls_back_to_csv(self, monkeypatch):
+        import types
+        import requests
+        import gov_data_pipeline as g
+        csv = "observation_date,X\n2026-05-01,1.5\n2026-06-01,2.0\n"
+        calls = []
+
+        def fake_get(url, params=None, timeout=None):
+            calls.append(url)
+            if url == g.FRED_API_URL:
+                return types.SimpleNamespace(status_code=200, text="<html>busy</html>",
+                                             json=lambda: (_ for _ in ()).throw(ValueError("not json")))
+            return types.SimpleNamespace(status_code=200, text=csv)
+        monkeypatch.setattr(requests, "get", fake_get)
+        recs, err = g.fetch_fred_series("X", api_key="k")
+        assert calls == [g.FRED_API_URL, g.FRED_CSV_URL]
+        assert err == "" and [r["time"] for r in recs] == ["2026-06", "2026-05"]
+
     def test_yoy_series_is_used_as_is(self):
         import gov_data_pipeline as g
         ch = g.fred_changes([{"time": "2026-06", "value": 2.46}, {"time": "2026-05", "value": 0.7}], "yoy")
