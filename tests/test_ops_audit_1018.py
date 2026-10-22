@@ -53,14 +53,14 @@ def test_daily_run_records_outer_steps_and_push():
     wf = yaml.safe_load(text)
     steps = wf["jobs"]["run-analyzer"]["steps"]
     ids = {s.get("id") for s in steps}
-    for need in ("db-schema", "taxonomy", "web-refresh", "analyzer", "db-catalog", "monthly",
+    for need in ("db-schema", "taxonomy", "analyzer", "db-catalog", "monthly",
                  "report-store", "bi-export"):
         assert need in ids, need
     rec = next(s for s in steps if s.get("name", "").startswith("📒 Record outer"))
     assert rec["if"] == "always()"
-    for name in ("bi_export=${{ steps.bi-export.outcome }}",
-                 "edinetdb_web_refresh=${{ steps.web-refresh.outcome }}"):
-        assert name in rec["run"]
+    assert "bi_export=${{ steps.bi-export.outcome }}" in rec["run"]
+    # EdinetDB の Web サイトの読み取りは利用規約で禁止なので、日次に Web 補完のステップは無い
+    assert "edinetdb_web_backfill.py" not in text and "web-refresh" not in text
     # 保存の印は commit（git）と save（BigQuery）の両方に載るよう、その前のステップで書く
     names = [s.get("name", "") for s in steps]
     mark = next(s for s in steps if s.get("name", "").startswith("🏷️ Mark state"))
@@ -75,8 +75,28 @@ def test_daily_run_records_outer_steps_and_push():
 
 def test_ledger_expects_outer_steps():
     cfg = load_module("config")
-    for name in ("bi_export", "edinetdb_web_refresh", "daily_state_push"):
+    for name in ("bi_export", "daily_state_push"):
         assert cfg.LEDGER_EXTERNAL_EXPECT[name] >= 3   # 日曜休み（土→月）で鳴らない
+    assert "edinetdb_web_refresh" not in cfg.LEDGER_EXTERNAL_EXPECT
+
+
+def test_edinetdb_website_is_not_scraped():
+    """EdinetDB の Web サイトをプログラムで読むのは利用規約で禁止。会社ページを読む経路は全部止まっている。"""
+    cfg = load_module("config")
+    assert cfg.EDINETDB_WEB_SCRAPE_ALLOWED is False
+    assert cfg.EDINETDB_WEB_PRECHECK is False and cfg.EDINETDB_ANNUAL_FROM_WEB is False
+    ei = load_module("edinetdb_ingestor")
+    import requests
+    called = []
+    orig = requests.get
+    requests.get = lambda *a, **k: called.append(a) or None
+    try:
+        assert ei._web_check("E00001", cfg)["has"] is None
+        wb = load_module("edinetdb_web_backfill")
+        assert wb.run(cfg, "due", 1, 1).get("skipped") is True
+    finally:
+        requests.get = orig
+    assert called == []
 
 
 # ── 週次の追いつき ──────────────────────────────────────────────

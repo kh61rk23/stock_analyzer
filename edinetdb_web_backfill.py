@@ -1,5 +1,7 @@
 # ==============================================================
 # edinetdb_web_backfill.py — EdinetDB の会社ページから財務を補完する（API枠を使わない）
+# 【停止中】Web サイトをプログラムで読むのは EdinetDB の利用規約（https://edinetdb.com/legal/terms）で禁止。
+#   config EDINETDB_WEB_SCRAPE_ALLOWED=False の間は何もしない。年次財務は edinetdb_ingestor が API で取る。
 # 【背景】API の余り枠で1社1回ずつ財務を埋めると数週間かかる。
 #   公開の会社ページ（https://edinetdb.jp/company/<EDINETコード>）には、API の
 #   /financials と同じ約200項目が全年度ぶん JSON で埋め込まれている（キャメルケース）。
@@ -121,6 +123,11 @@ def _targets(bq, scope: str, companies: list[dict], meta: dict | None = None) ->
 def run(cfg, scope: str = "ingested", limit: int | None = None, years: int = 10,
         sleep_sec: float = 1.0, flush_every: int = 25, redo: bool = False,
         time_budget_min: float | None = None) -> dict:
+    if not getattr(cfg, "EDINETDB_WEB_SCRAPE_ALLOWED", False):
+        # 会社ページをプログラムで読むのは EdinetDB の利用規約で禁止。年次財務は edinetdb_ingestor が API で取る
+        print("⏩ EdinetDB の Web サイトの読み取りは利用規約で禁止のため何もしない（EDINETDB_WEB_SCRAPE_ALLOWED=False）")
+        return {"ok": 0, "no_data": 0, "error": 0, "skipped": True, "paused": False,
+                "rows": {"financials": 0, "financial_items": 0, "doc_index": 0}}
     from edinet_bq_client import EDINETBQClient
     import requests
     bq = EDINETBQClient()

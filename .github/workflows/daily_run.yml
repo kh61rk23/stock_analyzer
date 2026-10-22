@@ -327,19 +327,6 @@ jobs:
       # ── 5. アナライザー実行 ───────────────────────────────
       # github actionsのAPIキーやファイルパスをそれぞれ定義している。
       # シングルモードの時は指定モジュールを実行。そうでないときはrun_headless.pyから参照する。
-      # 2026-10-03（利用者決定）: 年次財務は EdinetDB の会社ページから取る。
-      # 2026-10-05: 分析の前に移動（API取込が held_fy を使い、メールが結果を載せるため）。新しい年度の有報が出た会社と
-      # 未取得の会社を最大100社（1秒1社・15分で打ち切り）。API は本文・セグメント・四半期に使う。
-      - name: 🌐 EdinetDB web refresh (annual financials)
-        id: web-refresh
-        if: steps.set-mode.outputs.mode != 'single'
-        continue-on-error: true
-        env:
-          STOCK_ANALYZER_BASE:  ${{ github.workspace }}/stock_data
-          BQ_PROJECT_ID:        ${{ secrets.BQ_PROJECT_ID }}
-          BQ_CREDENTIALS:       ${{ secrets.BQ_CREDENTIALS }}
-        run: python actions_log.py --workflow daily_run --step edinetdb_web_refresh -- python -u edinetdb_web_backfill.py --scope due --years 3 --time-budget-min 15
-
       # 当月の Actions 使用分数を数えて logs/actions_usage.json へ（日次メールの「運用の監視」が読む）。
       # 無料枠を超えると月末まで全 workflow が止まり、メールも来なくなるので、超える前に知らせる。
       - name: ⏱️ Count Actions usage
@@ -470,7 +457,6 @@ jobs:
           python actions_log.py --workflow daily_run --step record_outer_steps -- python module_ledger.py steps \
             setup_db_integration_bq=${{ steps.db-schema.outcome }} \
             taxonomy_load=${{ steps.taxonomy.outcome }} \
-            edinetdb_web_refresh=${{ steps.web-refresh.outcome }} \
             db_catalog=${{ steps.db-catalog.outcome }} \
             monthly_runner=${{ steps.monthly.outcome }} \
             report_store_step=${{ steps.report-store.outcome }} \

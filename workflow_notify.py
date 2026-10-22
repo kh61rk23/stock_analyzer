@@ -20,6 +20,7 @@ import json
 import os
 import sys
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 import actions_log
@@ -120,7 +121,8 @@ def main(argv=None) -> int:
         storage = None
     srv, repo, rid = (os.environ.get(k, "") for k in ("GITHUB_SERVER_URL", "GITHUB_REPOSITORY", "GITHUB_RUN_ID"))
     run_url = f"{srv}/{repo}/actions/runs/{rid}" if srv and repo and rid else ""
-    subject, body = build_mail(a.title, a.workflow, steps, counts, delta, storage, run_url, datetime.now())
+    subject, body = build_mail(a.title, a.workflow, steps, counts, delta, storage, run_url,
+                               datetime.now(ZoneInfo("Asia/Tokyo")))
     from alert_notifier import send_gmail
     ok, _err = send_gmail(os.environ.get("ALERT_GMAIL_FROM", ""), os.environ.get("ALERT_GMAIL_PASSWORD", ""),
                           os.environ.get("ALERT_GMAIL_TO", ""), subject, body)

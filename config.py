@@ -1281,8 +1281,12 @@ ENABLE_EDINETDB_INGEST: bool = os.getenv(
 EDINETDB_RECONCILE_WITH_BQ: bool = True
 ENABLE_EDINET_DIRECT_FETCH: bool = False
 EDINETDB_BASE_URL: str = os.getenv("EDINETDB_BASE_URL", "https://edinetdb.jp/v1")
-# 取り込み前に EdinetDB の公開Webページで財務の有無を確認し、無ければ次の候補へ
-EDINETDB_WEB_PRECHECK: bool = True
+# EdinetDB の Web サイト（edinetdb.jp / edinetdb.com）をプログラムで読むこと（スクレイピング・クローリング）は
+# 利用規約で禁止（https://edinetdb.com/legal/terms・robots.txt にも明記。違反は IP 単位の遮断あり）。データは API だけで取る。
+# 会社ページを読む経路（取り込み前の財務の有無の確認・edinetdb_web_backfill）はこの値が False の間は動かない。
+EDINETDB_WEB_SCRAPE_ALLOWED: bool = False
+# 取り込み前に EdinetDB の公開Webページで財務の有無を確認し、無ければ次の候補へ（規約上使えないので False）
+EDINETDB_WEB_PRECHECK: bool = False
 EDINETDB_WEB_BASE: str = "https://edinetdb.jp/company/"
 EDINETDB_WEB_RECHECK_DAYS: int = 7     # 財務なしの会社を再確認するまでの日数
 EDINETDB_WEB_MAX_CHECKS: int = 300  # 1日のWeb確認の上限（1秒に1回＝最大約5分）。API 枠を使い切るまで次の候補を確かめ続けるための安全上限
@@ -1297,10 +1301,9 @@ EDINETDB_MONTHLY_GUARD: int = 3100
 EDINETDB_COMPANY_CACHE_DAYS: int = 7   # 会社マスタ（社名・上場区分）の取り直し間隔
 # 財務三表の細目（edinet.financial_items）。取得済みの会社は残り枠で /financials だけ取り直して細目を埋める（1社1回）
 EDINETDB_ITEMS_BACKFILL: bool = False  # 年次はWeb補完で取るので API での細目補完はしない
-# 年次財務は会社ページ（edinetdb_web_backfill・日次 --scope due）から取り、
-# API の1日100回は ①有報本文・セグメント（新しい年度が出た会社だけ・1社2回）と
-# ②四半期財務（保有・スクリーナー候補・30日に1回・1社1回）に使う
-EDINETDB_ANNUAL_FROM_WEB: bool = True
+# 年次財務も API（/financials）で取る（1社3回＝財務・セグメント・本文〔EDINETDB_TEXTBLOCK_EVERY_N 回に1回〕）。
+# True にすると年次財務を会社ページ（edinetdb_web_backfill）に任せて API を節約するが、規約上使えない
+EDINETDB_ANNUAL_FROM_WEB: bool = False
 EDINETDB_QUARTERLY_DAILY_CALLS: int = 40
 EDINETDB_QUARTERLY_REFRESH_DAYS: int = 30
 EDINETDB_WEB_DAILY_LIMIT: int = 100      # 日次のWeb更新（新年度の有報が出た会社＋未取得）の社数上限
@@ -4211,11 +4214,10 @@ LEDGER_UNRECORDED_DAYS: int = 2     # DAILY_MODULES の「記録なし」がこ�
 # daily_state_push は commit 直前に記録して一緒に push する。push に失敗した日は記録ごと消えるので「来ない」で気づく。
 LEDGER_EXTERNAL_EXPECT: dict = {
     "price_universe_jp": 4,
-    "price_universe_us": 4,          # 米国株は火・木・土（土→火で3日空く）
+    "price_universe_us": 4,          # 米国株は火〜土
     "us_company_facts_update": 4,
     "report_store": 3,
     "bi_export": 3,
-    "edinetdb_web_refresh": 3,
     "daily_state_push": 3,
 }
 

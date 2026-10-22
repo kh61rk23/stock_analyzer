@@ -639,6 +639,9 @@ def parse_company_page(html: str | None, status: int = 200) -> dict:
 
 
 def _web_check(code: str, cfg) -> dict:
+    # Web サイトをプログラムで読むのは EdinetDB の利用規約で禁止（config EDINETDB_WEB_SCRAPE_ALLOWED）
+    if not getattr(cfg, "EDINETDB_WEB_SCRAPE_ALLOWED", False):
+        return {"has": None, "latest_fy": None, "fy_month": None}
     base = getattr(cfg, "EDINETDB_WEB_BASE", "https://edinetdb.jp/company/")
     try:
         import requests
