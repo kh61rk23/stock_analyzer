@@ -4,7 +4,7 @@ name: 日本企業の開示データ取得
 #   python fetch_runner.py jp_filings → fetch_stages.run_jp_filings（日次本体と同じ関数）
 #   結果の要約と実行台帳の記録は stock_data/data/fetch_external/jp_filings_<日付>.json（状態として BigQuery へ）。
 #   日次本体はそのファイルがあれば取得を省き、無ければ自分で取る（この workflow が落ちてもデータは欠けない）。
-# あわせて政府 EDINET の書類一覧と中身を溜める（edinet_gov_docs.py・30分ぶん）。夜の遡りは edinet_gov_backfill.yml。
+# あわせて政府 EDINET の書類一覧と中身（edinet_gov_docs.py・10分）と、その日の有報の本文（edinet_gov_text.py・10分）を溜める。夜の遡りは edinet_gov_backfill.yml。
 # 時刻: 月〜土 08:17 JST（cron UTC 23:17 日〜金）。予備は 08:47 JST。EdinetDB の公開データは毎日 08:00 JST に更新されるので、その後に取る。
 #   終わったら日次の分析（daily_run）が連鎖して起動する（workflow_run）。
 #   gate ジョブ（tools/run_gate.py）が、その日（JST）に取得が済んだ・実行中の回があるか、分析がもう済んでいれば何もしない。
@@ -92,7 +92,15 @@ jobs:
           BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
           BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
           EDINET_GOV_API_KEY: ${{ secrets.EDINET_GOV_API_KEY }}
-        run: python actions_log.py --workflow fetch_jp_filings --step edinet_gov_docs -- python -u edinet_gov_docs.py --budget-min 30
+        run: python actions_log.py --workflow fetch_jp_filings --step edinet_gov_docs -- python -u edinet_gov_docs.py --budget-min 10
+      # その日に出た有報の本文（全上場の最初の一巡は夜の edinet_gov_backfill.yml が進める）
+      - name: EDINET annual report text
+        continue-on-error: true
+        env:
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+          EDINET_GOV_API_KEY: ${{ secrets.EDINET_GOV_API_KEY }}
+        run: python actions_log.py --workflow fetch_jp_filings --step edinet_gov_text -- python -u edinet_gov_text.py --budget-min 10
       # 取り込んだ内容（ステップの成否・要点・表の行数の増減・保存量）を Gmail で知らせる（workflow_notify.py）
       - name: Notify
         if: always()
@@ -103,7 +111,7 @@ jobs:
           ALERT_GMAIL_FROM: ${{ secrets.ALERT_GMAIL_FROM }}
           ALERT_GMAIL_PASSWORD: ${{ secrets.ALERT_GMAIL_PASSWORD }}
           ALERT_GMAIL_TO: ${{ secrets.ALERT_GMAIL_TO }}
-        run: python workflow_notify.py --workflow fetch_jp_filings --title "日本企業の開示データ取得" --tables edinet.gov_documents,edinet.gov_doc_facts,edinet.financials,edinet.doc_index,edinet.text_analysis,real_estate.rental_property_fv,real_estate.corporate_holdings_p1
+        run: python workflow_notify.py --workflow fetch_jp_filings --title "日本企業の開示データ取得" --tables edinet.gov_documents,edinet.gov_doc_facts,edinet.gov_text_blocks,edinet.financials,edinet.doc_index,edinet.text_analysis,real_estate.rental_property_fv,real_estate.corporate_holdings_p1
       # 変わったファイルだけを load job で BigQuery（private.state_files）へ
       - name: Save state to BigQuery
         if: always() && env.STATE_STORE_MODE != 'git'

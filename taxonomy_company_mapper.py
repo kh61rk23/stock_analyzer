@@ -397,9 +397,10 @@ def fetch_segments_from_bq(cfg) -> dict:
 
 
 def fetch_texts_from_bq(cfg, sections: list[str]) -> dict:
-    """edinet.text_analysis の指定節（既定は「事業の内容」）を会社ごと最新年度1件ずつ取得。
+    """有報の本文の指定節（既定は「事業の内容」）を会社ごと最新年度1件ずつ取得。
 
-    raw_text 列の走査は約95MB（無料枠 1TB/月 に対して週1本）。空・失敗なら {}。
+    edinet.text_analysis と edinet.gov_text_blocks の両方から。raw_text 列の走査は合わせて数百MB
+    （無料枠 1TB/月 に対して週1本）。空・失敗なら {}。
     """
     secs = [str(x).replace("'", "") for x in (sections or []) if str(x).strip()]
     if not secs:
@@ -412,14 +413,24 @@ def fetch_texts_from_bq(cfg, sections: list[str]) -> dict:
             or bq.project
         )
         in_list = ", ".join(f"'{x}'" for x in secs)
+        # 本文は2か所から: EdinetDB の text_analysis（約580社）と、政府 EDINET の gov_text_blocks（全上場・edinet_gov_text.py）。
+        # 同じ会社・節は決算期の新しい方を使う
         sql = f"""
-        SELECT company_code, section_type, raw_text
-        FROM `{project}.edinet.text_analysis`
-        WHERE section_type IN ({in_list}) AND raw_text IS NOT NULL
-          AND REGEXP_CONTAINS(company_code, r'^[0-9A-Z]{{4}}$')
+        WITH t AS (
+          SELECT company_code, section_type, raw_text, fiscal_year_end, updated_at AS ts
+          FROM `{project}.edinet.text_analysis`
+          WHERE section_type IN ({in_list}) AND raw_text IS NOT NULL
+          UNION ALL
+          SELECT LEFT(c.sec_code, 4), g.section_type, g.raw_text, g.fiscal_year_end, g.fetched_at AS ts
+          FROM `{project}.edinet.gov_text_blocks` g
+          JOIN `{project}.edinet.company` c USING (edinet_code)
+          WHERE g.section_type IN ({in_list}) AND g.raw_text IS NOT NULL AND c.sec_code IS NOT NULL
+        )
+        SELECT company_code, section_type, raw_text FROM t
+        WHERE REGEXP_CONTAINS(company_code, r'^[0-9A-Z]{{4}}$')
         QUALIFY ROW_NUMBER() OVER (
           PARTITION BY company_code, section_type
-          ORDER BY fiscal_year_end DESC, updated_at DESC) = 1
+          ORDER BY fiscal_year_end DESC, ts DESC) = 1
         """
         df = bq.query_to_df(sql)
         out: dict = {}

@@ -5387,3 +5387,11 @@ SEC_FILINGS_RECENT_DAYS: int = 5
 SEC_FILINGS_MIN_INTERVAL_SEC: float = 0.15
 SEC_FILINGS_MAX_GB: float = 0.6            # us.sec_filings＋sec_13dg＋sec_filers の合計の上限（米国の配分 1.0GB の内）
 SEC_FILINGS_TIME_BUDGET_MIN: float = 20.0
+
+# ==============================================================
+# BLOCK 69: 有報の本文（政府 EDINET・edinet_gov_text.py）
+# ==============================================================
+# 全上場の最新の有報から節ごとの本文を edinet.gov_text_blocks へ（技術マップの語の照合・分析の材料）。
+EDINET_GOV_TEXT_TIME_BUDGET_MIN: float = 60.0
+EDINET_GOV_TEXT_SECTION_MAX_CHARS: int = 20000   # 1節の上限（超えた分は切る）
+EDINET_GOV_TEXT_MAX_GB: float = 0.4              # この表の上限（1年で約 0.1GB の見込み）
