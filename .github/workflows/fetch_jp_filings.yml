@@ -111,7 +111,7 @@ jobs:
           ALERT_GMAIL_FROM: ${{ secrets.ALERT_GMAIL_FROM }}
           ALERT_GMAIL_PASSWORD: ${{ secrets.ALERT_GMAIL_PASSWORD }}
           ALERT_GMAIL_TO: ${{ secrets.ALERT_GMAIL_TO }}
-        run: python workflow_notify.py --workflow fetch_jp_filings --title "日本企業の開示データ取得" --tables edinet.gov_documents,edinet.gov_doc_facts,edinet.gov_text_blocks,edinet.financials,edinet.doc_index,edinet.text_analysis,real_estate.rental_property_fv,real_estate.corporate_holdings_p1
+        run: python workflow_notify.py --workflow fetch_jp_filings --title "日本企業の開示データ取得" --tables edinet.gov_documents,edinet.gov_doc_facts,edinet.gov_text_blocks,edinet.edinetdb_extras,edinet.financials,edinet.doc_index,edinet.text_analysis,real_estate.rental_property_fv,real_estate.corporate_holdings_p1
       # 変わったファイルだけを load job で BigQuery（private.state_files）へ
       - name: Save state to BigQuery
         if: always() && env.STATE_STORE_MODE != 'git'

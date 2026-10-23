@@ -1579,6 +1579,7 @@ DAILY_MODULES = [
     "anomaly",         # 統計的異常値検出（価格・出来高・スコア）
     "imf",           # IMF グローバルマクロパイプライン
     "etf_tracker",   # テーマETFトラッキング（Step C'）
+    "edinetdb_extras",  # EdinetDB の追加の窓口（決算短信・政策保有株・関係会社・主要販売先・1日 EDINETDB_EXTRAS_DAILY_CALLS 回）
     "tech_map",      # 技術マップのまとめ（tech_profile.run_digest・スクリーナー通過銘柄×技術ノード×熱度 → メール）
     "news",          # ニュースRSSパイプライン（Step B）
     "screener",      # スキャナーの追加
@@ -5405,3 +5406,11 @@ EDINET_GOV_TEXT_MAX_GB: float = 0.4              # この表の上限（1年で�
 ENABLE_TECH_MAP_DIGEST: bool = True
 TECH_MAP_DIGEST_NODES: int = 5       # メールに出すノード数
 TECH_MAP_DIGEST_PER_NODE: int = 5    # 1ノードに出す候補銘柄の数
+
+# ==============================================================
+# BLOCK 71: EdinetDB の追加の窓口（edinetdb_extras.py）
+# ==============================================================
+# API の1日100回のうち、この回数を本体の取り込みから残して、追加の窓口（決算短信・政策保有株・関係会社・主要販売先）に使う
+# 20回だと、本体の年次財務の一巡は約190日（0回なら約150日）。
+EDINETDB_EXTRAS_DAILY_CALLS: int = 20
+EDINETDB_EXTRAS_MAX_GB: float = 0.3

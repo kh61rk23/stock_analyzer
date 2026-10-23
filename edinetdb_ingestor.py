@@ -858,9 +858,10 @@ def _plan_targets(companies: list[dict], cfg, meta: dict, budget: int) -> list[s
 
 
 def _w3_company_budget(cfg, daily_budget: int) -> int:
-    """usage/company-master/W4 doc-index分を除いた個社3 endpoint枠。"""
+    """usage/company-master/W4 doc-index分と、後で動く追加の窓口（edinetdb_extras）の分を除いた個社3 endpoint枠。"""
     doc_reserve = max(0, int(getattr(cfg, "EDINETDB_DOC_INDEX_RESERVE", 11)))
-    return max(0, int(daily_budget) - 2 - doc_reserve)
+    extras = max(0, int(getattr(cfg, "EDINETDB_EXTRAS_DAILY_CALLS", 0)))
+    return max(0, int(daily_budget) - 2 - doc_reserve - extras)
 
 
 def run_edinetdb_ingest(

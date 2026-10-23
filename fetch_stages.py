@@ -8,7 +8,8 @@
 #   日次本体は環境変数 STOCK_ANALYZER_FETCH_EXTERNAL にグループ名があり、その日のファイルがあれば
 #   取得をせずに中身を results と台帳へ写す（apply_external）。ファイルが無ければ今までどおり自分で取る。
 # 【グループ】
-#   jp_filings … 賃貸等不動産（EdinetDB）・政府 EDINET の公正価値・EdinetDB の財務と有報・書類索引・不動産DB
+#   jp_filings … 賃貸等不動産（EdinetDB）・政府 EDINET の公正価値・EdinetDB の財務と有報・書類索引・不動産DB・
+#                EdinetDB の追加の窓口（edinetdb_extras・本体の後で残しておいた枠を使う）
 # 【なぜ分けるか】
 #   どれも BigQuery に書くだけで、後ろの分析はメモリ上の結果ではなく BQ を読む。
 #   results に残すのはメールの要約と実行台帳に使う小さな dict だけなので、ファイルで受け渡せる。
@@ -21,7 +22,8 @@ import os
 from datetime import date
 from pathlib import Path
 
-GROUPS = {"jp_filings": ("rental_property_fv", "edinet_gov_fv", "edinetdb_ingest", "edinet_doc_index", "fudosan_ingest")}
+GROUPS = {"jp_filings": ("rental_property_fv", "edinet_gov_fv", "edinetdb_ingest", "edinet_doc_index", "fudosan_ingest",
+                        "edinetdb_extras")}
 EXTERNAL_ENV = "STOCK_ANALYZER_FETCH_EXTERNAL"
 
 
@@ -113,6 +115,18 @@ def run_jp_filings(cfg, results: dict, logger, in_mode=lambda key: True) -> None
         except Exception as exc:
             logger.add("fudosan_ingest", "error", str(exc)[:100])
 
+
+    # EdinetDB の追加の窓口（決算短信・政策保有株・関係会社・主要販売先）。本体が残した EDINETDB_EXTRAS_DAILY_CALLS 回で回す
+    if getattr(cfg, "ENABLE_EDINETDB_INGEST", True) and in_mode("edinetdb_extras"):
+        try:
+            import edinetdb_extras as _ex
+            value = results["edinetdb_extras"] = _ex.run(cfg)
+            logger.add("edinetdb_extras", "skipped" if value.get("skipped") else "success",
+                       f"取得{value.get('ok', 0)}件 / データ無し{value.get('no_data', 0)}件"
+                       f"{' / 止まった理由 ' + str(value['stopped']) if value.get('stopped') else ''}"
+                       f" | 進み具合 {value.get('progress', {})}" if not value.get("skipped") else value.get("reason", ""))
+        except Exception as exc:
+            logger.add("edinetdb_extras", "error", str(exc)[:100])
 
 RUNNERS = {"jp_filings": run_jp_filings}
 
