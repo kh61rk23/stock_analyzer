@@ -4,8 +4,10 @@
 # ==============================================================
 # 【スケジュール】
 #   デイリー : 月〜土 09:17 JST (= UTC 00:17)  cron "17 0 * * 1-6"
-#   予備     : 同じ日の 12:17・15:17 JST（UTC 03:17・06:17）。その日（UTC）に成功した回か
-#              実行中の回があれば何もしない（GitHub の定時実行は遅れたり捨てられたりするため）
+#   連鎖     : 取得 workflow（日本企業の開示データ取得・08:17 JST）が終わったら起動する（workflow_run）。
+#              GitHub の定時実行は数時間遅れたり捨てられたりするので、データが揃った合図で動かすのを本線にする。
+#   予備     : 同じ日の 12:17・15:17 JST（UTC 03:17・06:17）。gate ジョブ（tools/run_gate.py）が、その日（JST）に
+#              分析が済んだ・実行中の回があるか、取得が実行中（終われば連鎖する）なら何もしない
 #   ウィークリー: 毎週月曜 09:17 JST に自動切替
 #       └ デイリー cron は月〜土の UTC 00:17 に発火する。月曜 UTC 00:17 =
 #         月曜 09:17 JST であり、その回を "Set execution mode" が
@@ -53,15 +55,18 @@ on:
   #   ★ 2026-09-09: UTC 00:00 ちょうどは世界中のジョブが集中し、実測で
   #     10日連続 3時間20分〜4時間13分の遅延が発生していた（GitHubは高負荷時の
   #     遅延とドロップを公式に明記）。混雑を避けるため :17 へずらす。
-  #   ★ 前倒し（UTC 23:40）は採らない。JST月曜の回が UTC では日曜になり、
-  #     weekly 判定（UTC曜日で月曜を見る）が一度も成立しなくなるため。
-  #     同じUTC日の中でずらせば曜日ロジックに一切触れずに済む。
+  #   曜日（月曜の weekly 昇格）と「今日」は日本時間で判定する（取得の終わりに連鎖して起動すると UTC では前日のことがあるため）。
   schedule:
     - cron: "17 0 * * 1-6"    # UTC 00:17 = JST 09:17（月〜土）
     # 予備の起動。本番の回が捨てられた・失敗した日だけ動く（判定は下の gate ジョブ）。
     # 同じ UTC 日の中に置くので、月曜の weekly 判定は変わらない。
     - cron: "17 3 * * 1-6"    # UTC 03:17 = JST 12:17
     - cron: "17 6 * * 1-6"    # UTC 06:17 = JST 15:17
+
+  # ── 連鎖: 取得 workflow が終わったら（取得が見送られた回でも。二重は gate が止める）──
+  workflow_run:
+    workflows: ["日本企業の開示データ取得"]
+    types: [completed]
 
   # ── 手動実行 ──────────────────────────────────────────────
   # 実行モードは四種類ある。
@@ -96,6 +101,8 @@ jobs:
   # 定時の回だけ、その日（UTC）にもう済んでいるかを見る。手動実行は必ず走らせる。
   # 済み＝成功した回か実行中の回がある、または失敗が2回ある（同じ失敗の繰り返しで API の日次枠を使い切らないため）。
   # mode=single の手動実行も「成功した回」に数えるので、その日の定時の回が見送られる点に注意。
+  # 定時・連鎖の回だけ、今日（JST）もう要らないかを見る（tools/run_gate.py）。手動実行は必ず走らせる。
+  # 日曜（JST）は動かさない。mode=single の手動実行も本処理ジョブが成功すると「済み」に数える点に注意。
   gate:
     name: 🚦 今日の実行が要るか
     runs-on: ubuntu-latest
@@ -103,26 +110,13 @@ jobs:
     outputs:
       run: ${{ steps.check.outputs.run }}
     steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: tools
       - id: check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [ "${{ github.event_name }}" != "schedule" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          TODAY=$(date -u +%F)
-          COUNTS=$(gh api "repos/${{ github.repository }}/actions/workflows/daily_run.yml/runs?created=%3E%3D${TODAY}&per_page=50" \
-            --jq "[.workflow_runs[] | select(.id != ${{ github.run_id }})] as \$r |
-                  \"\([\$r[] | select(.status != \"completed\" or .conclusion == \"success\")] | length) \([\$r[] | select(.conclusion == \"failure\" or .conclusion == \"timed_out\")] | length)\"") || {
-            echo "::warning::今日の実行履歴を読めなかったので、そのまま走らせる"; echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; }
-          read DONE FAILED <<< "$COUNTS"
-          if [ "$DONE" -gt 0 ] || [ "$FAILED" -ge 2 ]; then
-            echo "⏩ 今日（UTC ${TODAY}）は済み（成功・実行中 ${DONE}回／失敗 ${FAILED}回）。この回は何もしない"
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "▶️ 今日（UTC ${TODAY}）はまだ（失敗 ${FAILED}回）。この回で実行する"
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          fi
+        run: python3 tools/run_gate.py --workflow daily_run.yml --job "📈 アナライザー実行" --skip-if-running fetch_jp_filings.yml --skip-weekday 7
 
   run-analyzer:
     name: 📈 アナライザー実行
@@ -189,10 +183,8 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             MODE="${{ github.event.inputs.mode }}"
-          elif [ "$(date -u +%u)" = "1" ]; then
-            # 月曜 UTC 00:17 = 月曜 JST 09:17 → weekly
-            # ※ cron を UTC 00:xx に保つ限り UTC曜日 = JST曜日 で一致する。
-            #   前倒しして UTC 23:xx にすると日付がずれてこの判定が壊れる。
+          elif [ "$(TZ=Asia/Tokyo date +%u)" = "1" ]; then
+            # 日本時間の月曜 → weekly（取得の終わりに連鎖して起動すると UTC では日曜のことがあるので JST で見る）
             MODE="weekly"
           else
             MODE="daily"
@@ -471,7 +463,7 @@ jobs:
         run: |
             # 週次の分析が成功した回だけ印を書く（上の Set execution mode が、抜けた週を翌日以降に weekly で追いつかせる）
             if [ "${{ steps.analyzer.outcome }}" = "success" ] && { [ "${{ steps.set-mode.outputs.mode }}" = "weekly" ] || [ "${{ steps.set-mode.outputs.mode }}" = "all" ]; }; then
-              echo "{\"date\": \"$(date -u '+%Y-%m-%d')\", \"run_id\": \"${{ github.run_id }}\"}" > stock_data/data/last_weekly_run.json
+              echo "{\"date\": \"$(TZ=Asia/Tokyo date '+%Y-%m-%d')\", \"run_id\": \"${{ github.run_id }}\"}" > stock_data/data/last_weekly_run.json
             fi
             # 保存できた日の印。保存に失敗すると記録ごと届かないので、翌日以降「記録が来ない」で気づける
             python actions_log.py --workflow daily_run --step daily_state_push_mark -- python module_ledger.py steps daily_state_push=success || true

@@ -75,10 +75,9 @@ def test_daily_workflow_runs_edinet_after_provider_refresh():
         encoding="utf-8"
     )
     # UTC 00:17 = JST 09:17。UTC 00:00 ちょうどは混雑で数時間遅延するため分をずらす。
-    # ⚠️ UTC 00:xx を維持すること。前倒しして 23:xx にすると JST月曜の回が
-    #   UTC では日曜になり、下の weekly 判定が一度も成立しなくなる。
+    # 取得の終わりに連鎖して起動すると UTC では前日のことがあるので、月曜の weekly 判定は日本時間で見る。
     assert 'cron: "17 0 * * 1-6"' in workflow
-    assert '$(date -u +%u)" = "1"' in workflow
+    assert '$(TZ=Asia/Tokyo date +%u)" = "1"' in workflow
     assert "-- python -u setup_db_integration_bq.py" in workflow
     # BQスキーマ準備は本体より先。EdinetDB同期そのものは本体側で走る。
     assert workflow.index("setup_db_integration_bq.py") < workflow.index(

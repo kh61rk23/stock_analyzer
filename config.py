@@ -5374,3 +5374,16 @@ BQ_STORAGE_HIGH_GB: float = 9.0
 # edinetdb_web_backfill）の最後に、取り込んだ内容（ステップの成否・要点・表の行数の増減・保存量）を Gmail で送る。
 # 日次（daily_run）は自分のメールがあるので送らない。
 WORKFLOW_NOTIFY_ENABLED: bool = True
+
+# ==============================================================
+# BLOCK 68: SEC EDGAR の提出一覧・8-K の項目・13D/13G（sec_filings.py）
+# ==============================================================
+# 日次の提出一覧（daily-index/master.YYYYMMDD.idx・全書類）を us.sec_filings へ日ごとに入れ替えて溜める。
+# 8-K（と 8-K/A）は書類の目次ページから項目番号（2.02 決算・5.02 役員交代 等）を読む。
+# 13D/13G は XML 形式（2024-12 以降の SCHEDULE 13D/13G）を読み、報告者ごとに us.sec_13dg へ入れる。
+# SEC は1秒10回まで（SEC_USER_AGENT で名乗る）。ここでは SEC_FILINGS_MIN_INTERVAL_SEC 空ける。
+SEC_FILINGS_BACKFILL_FLOOR: str = "2016-01-01"
+SEC_FILINGS_RECENT_DAYS: int = 5
+SEC_FILINGS_MIN_INTERVAL_SEC: float = 0.15
+SEC_FILINGS_MAX_GB: float = 0.6            # us.sec_filings＋sec_13dg＋sec_filers の合計の上限（米国の配分 1.0GB の内）
+SEC_FILINGS_TIME_BUDGET_MIN: float = 20.0

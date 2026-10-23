@@ -5,12 +5,13 @@ name: 日本企業の開示データ取得
 #   結果の要約と実行台帳の記録は stock_data/data/fetch_external/jp_filings_<日付>.json（状態として BigQuery へ）。
 #   日次本体はそのファイルがあれば取得を省き、無ければ自分で取る（この workflow が落ちてもデータは欠けない）。
 # あわせて政府 EDINET の書類一覧と中身を溜める（edinet_gov_docs.py・30分ぶん）。夜の遡りは edinet_gov_backfill.yml。
-# 時刻: 月〜土 05:17 JST（cron UTC 20:17 日〜金）。予備は 07:17 JST（UTC 22:17）。
-#   gate ジョブが、その日（JST）に成功・実行中の回があるか、JST 09 時を過ぎていれば（日次本体が自分で取る時刻）何もしない。
+# 時刻: 月〜土 08:17 JST（cron UTC 23:17 日〜金）。予備は 08:47 JST。EdinetDB の公開データは毎日 08:00 JST に更新されるので、その後に取る。
+#   終わったら日次の分析（daily_run）が連鎖して起動する（workflow_run）。
+#   gate ジョブ（tools/run_gate.py）が、その日（JST）に取得が済んだ・実行中の回があるか、分析がもう済んでいれば何もしない。
 on:
   schedule:
-    - cron: "17 20 * * 0-5"
-    - cron: "17 22 * * 0-5"
+    - cron: "17 23 * * 0-5"
+    - cron: "47 23 * * 0-5"
   workflow_dispatch:
 
 permissions:
@@ -29,28 +30,13 @@ jobs:
     outputs:
       run: ${{ steps.check.outputs.run }}
     steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: tools
       - id: check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [ "${{ github.event_name }}" != "schedule" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          if [ "$(TZ=Asia/Tokyo date +%H)" -ge 9 ]; then
-            echo "⏩ JST 09 時を過ぎた（日次本体が自分で取る）。この回は何もしない"
-            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          # 「今日」は JST の日付で数える（結果ファイルの名前も JST の日付。前夜の手動実行で翌朝の回を止めない）
-          TODAY=$(TZ=Asia/Tokyo date +%F)
-          SINCE=$(date -u -d "${TODAY} 00:00 +0900" +%Y-%m-%dT%H:%M:%SZ)
-          DONE=$(gh api "repos/${{ github.repository }}/actions/workflows/fetch_jp_filings.yml/runs?created=%3E%3D${SINCE}&per_page=50" \
-            --jq "[.workflow_runs[] | select(.id != ${{ github.run_id }}) | select(.status != \"completed\" or .conclusion == \"success\")] | length") || DONE=0
-          if [ "$DONE" -gt 0 ]; then
-            echo "⏩ 今日（JST ${TODAY}）は済み（${DONE}回）。この回は何もしない"
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          fi
+        run: python3 tools/run_gate.py --workflow fetch_jp_filings.yml --job "📥 取得" --skip-if-done "daily_run.yml:📈 アナライザー実行"
 
   run:
     name: 📥 取得

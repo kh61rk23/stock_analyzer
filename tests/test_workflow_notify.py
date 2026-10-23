@@ -10,7 +10,7 @@ import workflow_notify as wn
 
 WF = Path(__file__).resolve().parent.parent / ".github" / "workflows"
 NOTIFIED = ("fetch_jp_filings", "edinet_gov_backfill", "price_universe", "us_company_facts", "manual_task",
-            "edinetdb_web_backfill")
+            "edinetdb_web_backfill", "sec_filings")
 
 
 def test_step_record_keeps_highlights_only():

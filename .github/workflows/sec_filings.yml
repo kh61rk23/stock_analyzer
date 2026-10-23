@@ -1,0 +1,96 @@
+name: SEC EDGAR の提出一覧・8-K 項目・13D/13G
+
+# sec_filings.py で、SEC の日次の提出一覧（全書類）・8-K の項目番号・SCHEDULE 13D/13G を us データセットに溜める。
+# 毎晩 02:17 JST（cron UTC 17:17）。直近5日を取り直し（その日の一覧は米国の夜まで増える）、残りの時間で 2016年まで遡る。
+# BigQuery の保存量が上限（BQ_STORAGE_STOP_GB・SEC_FILINGS_MAX_GB）に達したら書かない。
+on:
+  schedule:
+    - cron: "17 17 * * *"
+  workflow_dispatch:
+    inputs:
+      budget_min:
+        description: "使う時間（分）"
+        default: "200"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sec-filings
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: 🇺🇸 取得
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      TZ: Asia/Tokyo
+      STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
+      # 状態の置き場（config BLOCK 64）。git / dual / bq。Actions の変数 STATE_STORE_MODE で切り替える（未設定は bq）
+      STATE_STORE_MODE: ${{ vars.STATE_STORE_MODE || 'bq' }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup Python
+        id: setup-python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      # daily_run と同じキーで、インストール済みの Python ごと戻す（当たった日は pip を飛ばす）
+      - name: Cache key month
+        id: ym
+        run: echo "ym=$(date -u +%Y%m)" >> "$GITHUB_OUTPUT"
+      - name: Restore installed packages
+        id: deps-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.pythonLocation }}
+          key: pydeps-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('requirements.txt') }}-${{ steps.ym.outputs.ym }}
+      - name: Install dependencies
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: pip install -r requirements.txt
+      # dual: checkout 直後の sha を基準として記録 ／ bq: BigQuery から状態を書き戻す（失敗したら止める）
+      - name: Prepare state
+        env:
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+        run: python state_store.py prepare || [ "$STATE_STORE_MODE" = "dual" ]
+      - name: SEC filings
+        env:
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+        run: python actions_log.py --workflow sec_filings --step sec_filings -- python -u sec_filings.py --budget-min ${{ inputs.budget_min || '200' }}
+      # 取り込んだ内容（ステップの成否・要点・表の行数の増減・保存量）を Gmail で知らせる（workflow_notify.py）
+      - name: Notify
+        if: always()
+        continue-on-error: true
+        env:
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+          ALERT_GMAIL_FROM: ${{ secrets.ALERT_GMAIL_FROM }}
+          ALERT_GMAIL_PASSWORD: ${{ secrets.ALERT_GMAIL_PASSWORD }}
+          ALERT_GMAIL_TO: ${{ secrets.ALERT_GMAIL_TO }}
+        run: python workflow_notify.py --workflow sec_filings --title "SEC EDGAR の提出一覧・8-K 項目・13D/13G" --tables us.sec_filings,us.sec_13dg,us.sec_filers
+      # 変わったファイルだけを load job で BigQuery（private.state_files）へ
+      - name: Save state to BigQuery
+        if: always() && env.STATE_STORE_MODE != 'git'
+        env:
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+        run: |
+          python state_store.py save --source sec_filings || {
+            echo "::warning::状態を BigQuery に保存できなかった"
+            [ "$STATE_STORE_MODE" = "dual" ]
+          }
+      - name: Commit state
+        if: always()
+        run: |
+          if [ "$STATE_STORE_MODE" = "bq" ]; then echo "⏩ STATE_STORE_MODE=bq: git には commit しない"; exit 0; fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add stock_data/data/ stock_data/logs/ 2>/dev/null || true
+          git diff --cached --quiet && exit 0
+          git commit -q -m "auto: sec filings $(date '+%Y-%m-%d %H:%M')"
+          for i in 1 2 3; do git pull -q --rebase --autostash -X theirs origin main && git push -q && exit 0; git rebase --abort 2>/dev/null || true; sleep 15; done
+          echo "::error::状態ファイルを push できなかった（この回の結果は保存されていない）"; exit 1
