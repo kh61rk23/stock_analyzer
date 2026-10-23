@@ -525,6 +525,11 @@ def build_packet(cfg, ticker: str) -> str:
     lines += collect_alt_policy(cfg, ticker, sector_code)
     lines += collect_ontology_events(cfg, ticker)      # R3-1 v2: ⑪イベント時系列
     lines += collect_valuation(cfg, ticker)            # R3-1 E8: ⑫バリュエーション
+    try:                                               # ⑬技術ノード（技術マップ）
+        import tech_profile
+        lines += tech_profile.packet_lines(cfg, ticker)
+    except Exception as e:
+        lines += ["", "## ⑬ 技術ノード（技術マップ）", f"- ⚠️ 読めない（{type(e).__name__}）: **データなし**"]
     lines += collect_freshness(cfg)
     lines += collect_holdings(cfg, ticker)
     lines += collect_existing_notes(cfg, ticker)

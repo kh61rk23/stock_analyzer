@@ -1579,6 +1579,7 @@ DAILY_MODULES = [
     "anomaly",         # 統計的異常値検出（価格・出来高・スコア）
     "imf",           # IMF グローバルマクロパイプライン
     "etf_tracker",   # テーマETFトラッキング（Step C'）
+    "tech_map",      # 技術マップのまとめ（tech_profile.run_digest・スクリーナー通過銘柄×技術ノード×熱度 → メール）
     "news",          # ニュースRSSパイプライン（Step B）
     "screener",      # スキャナーの追加
     "excel_export",  # Excel ダッシュボード CSV エクスポート（Step D）
@@ -5395,3 +5396,12 @@ SEC_FILINGS_TIME_BUDGET_MIN: float = 20.0
 EDINET_GOV_TEXT_TIME_BUDGET_MIN: float = 60.0
 EDINET_GOV_TEXT_SECTION_MAX_CHARS: int = 20000   # 1節の上限（超えた分は切る）
 EDINET_GOV_TEXT_MAX_GB: float = 0.4              # この表の上限（1年で約 0.1GB の見込み）
+
+# ==============================================================
+# BLOCK 70: 技術マップのまとめ（tech_profile.py）
+# ==============================================================
+# スクリーナー通過銘柄に付いた技術ノードを熱度の高い順に並べ、メールの「🧭 技術ノードの熱度」節と審議パケット⑬に出す。
+# 点数（スクリーナーの theme 観点・業種スコア）への重みは変えない（材料を届けるだけ）。
+ENABLE_TECH_MAP_DIGEST: bool = True
+TECH_MAP_DIGEST_NODES: int = 5       # メールに出すノード数
+TECH_MAP_DIGEST_PER_NODE: int = 5    # 1ノードに出す候補銘柄の数

@@ -70,6 +70,7 @@ SCHEMA: dict[str, list[str]] = {
     "emergency_override": ["stock_analyzer_main"],
     "emerging_tech": ["emerging_technology_detector"],
     "etf_tracker": ["stock_analyzer_main"],
+    "tech_map": ["stock_analyzer_main"],
     "event_horizon": ["stock_analyzer_main"],
     "options_advisor": ["stock_analyzer_main"],
     "evaluations": ["stock_analyzer_main"],

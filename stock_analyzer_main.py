@@ -4233,6 +4233,18 @@ def run_all_tasks(mode: str = "all") -> dict:
         if not getattr(cfg, "ENABLE_US_SCREENER", False):
             print("  ⏩ 米国株スクリーニング: スキップ（ENABLE_US_SCREENER=False）")
 
+    # ── 技術マップのまとめ（スクリーナー通過銘柄 × 技術ノード × 熱度）。メールの「🧭 技術ノードの熱度」節が読む ──
+    if getattr(cfg, "ENABLE_TECH_MAP_DIGEST", True) and _in_mode("tech_map"):
+        try:
+            import tech_profile as _tp
+            results["tech_map"] = _tp.run_digest(cfg, results)
+            _tm = results["tech_map"]
+            logger.add("tech_map", "success",
+                       f"候補{_tm.get('candidates', 0)}社のうち技術ノード付き{_tm.get('covered', 0)}社・"
+                       f"ノード{len(_tm.get('nodes') or [])}件")
+        except Exception as exc:
+            logger.add("tech_map", "error", str(exc)[:100])
+
         # ── アラート通知（米国株スクリーナーの後。メールの米国株サマリーがその結果を読む）────────────────
     if getattr(cfg, "ENABLE_ALERT", False):
         try:

@@ -329,6 +329,25 @@ def extract_alerts(cfg, results: dict) -> list:
                 "severity": "high" if hot_themes else "info",
             })
             
+    # ── ⑥ 技術ノードの熱度（技術マップ × スクリーナー通過銘柄・tech_profile.run_digest）───────
+    tm = results.get("tech_map") or {}
+    if tm.get("nodes"):
+        lines = [f"  スクリーナー通過 {tm.get('candidates', 0)}社のうち、技術ノードが付いた会社 {tm.get('covered', 0)}社"]
+        for n in tm["nodes"]:
+            heat = "熱度なし" if n.get("hotness") is None else f"熱度{n['hotness']:.0f}"
+            lead = "・先行だけ点灯（まだニュース化していない）" if n.get("leading_only") else ""
+            cands = "、".join(f"{c.get('name') or c.get('ticker')}（{c.get('ticker')}・関与{c.get('relevance', 0):.2f}）"
+                             for c in n.get("candidates") or [])
+            lines.append(f"  🧭 {n.get('name')}: {heat}{lead}")
+            if cands:
+                lines.append(f"      {cands}")
+        alerts.append({
+            "trigger":  "tech_map",
+            "title":    f"🧭 技術ノードの熱度 TOP{len(tm['nodes'])}",
+            "body":     "\n".join(lines),
+            "severity": "info",
+        })
+
     # ── ⑥ 注目業種トップ3（根拠・代表銘柄・EdinetDB情報付き） ────
     sector_results = results.get("sectors", results.get("sector_results", {}))
     if sector_results:
