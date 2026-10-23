@@ -29,7 +29,7 @@ def test_deltas_and_mail():
     subj, body = wn.build_mail("日本企業の開示データ取得", "fetch_jp_filings", steps, now, d,
                                {"total_gb": 3.5, "measured_at": "2026-10-23T05:30"}, "https://example/run/1",
                                datetime(2026, 10, 23, 5, 40))
-    assert subj.startswith("📥 ❌ 日本企業の開示データ取得 10/23 05:40")   # 失敗が1つでもあれば ❌
+    assert subj.startswith("【取得】❌ 日本企業の開示データ取得 10/23 05:40")   # 失敗が1つでもあれば ❌
     assert "+209" in body and "読めない" in body and "3.5GB" in body and "実行ページ" in body
     assert "記録 5件" in body
 

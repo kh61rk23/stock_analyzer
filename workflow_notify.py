@@ -186,7 +186,8 @@ def build_mail(title: str, workflow: str, steps: list[dict], counts: dict, delta
     """(件名, HTML 本文)（純関数）。"""
     failed = [s for s in steps if s.get("rc")]
     mark = "❌" if failed else ("⚠️" if any(s.get("err") for s in steps) else "✅")
-    subject = f"📥 {mark} {title} {now:%m/%d %H:%M}"
+    # 件名の頭の【取得】で Gmail のフィルタが振り分ける（日次メールは【投資AIエージェント】）
+    subject = f"【取得】{mark} {title} {now:%m/%d %H:%M}"
     parts = [f"<h3>{html.escape(title)}（{html.escape(workflow)}）{mark}</h3>"]
     if not steps:
         parts.append("<div>ステップの記録が無い（取り込みの前に止まった可能性。実行ページを見る）</div>")
