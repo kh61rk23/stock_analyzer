@@ -6,7 +6,7 @@ import csv
 import hashlib
 import json
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -441,8 +441,13 @@ def select_ingest_targets(
     fail_backoff_max_days: int = 30,
     today: date | None = None,
     web_annual: bool = False,
+    new_filings: dict | None = None,
 ) -> list[str]:
-    """P1→P4順、重複排除、鮮度除外、予算上限で対象を返す純関数。"""
+    """P0→P4順、重複排除、鮮度除外、予算上限で対象を返す純関数。
+
+    new_filings（{EDINETコード: 有報の提出日}）は政府 EDINET の書類一覧で新しい有報が出たと分かった会社。
+    提出日の翌日より後に取っていなければ鮮度に関係なく先頭（P0）で取る（EdinetDB の反映は提出の翌日以降）。
+    """
     today = today or date.today()
     limit = max(0, int(budget)) // max(1, int(calls_per_company))
     if limit <= 0:
@@ -454,8 +459,17 @@ def select_ingest_targets(
             return str(item.get("edinet_code") or item.get("code") or "").strip()
         return str(item or "").strip()
 
+    new_filings = new_filings or {}
+
     def fresh(code: str) -> bool:
         info = meta.get(code) or {}
+        if code in new_filings:
+            last = str(info.get("last_fetched") or "")[:10]
+            try:
+                if date.fromisoformat(last) <= date.fromisoformat(str(new_filings[code])[:10]) + timedelta(days=1):
+                    return False
+            except ValueError:
+                return False
         # 年次財務を会社ページから取る運用では、API は「本文・セグメント」用。
         # 手元の最新年度（held_fy＝Webで更新）より API で本文を取った年度（api_fy）が古ければ取り直す
         if web_annual and info.get("held_fy") is not None:
@@ -498,7 +512,8 @@ def select_ingest_targets(
     # 新年度の有報が出ているはずの会社は、代表銘柄・未取得より先に取り直す
     due_group = [] if web_annual else [item for item in remaining or []
                                        if report_due(meta.get(code_of(item)) or {}, today)]
-    for group in (holdings, screener, due_group, representatives, remaining_fifo):
+    p0 = sorted(new_filings, key=lambda c: str(new_filings[c]))   # 提出の古い順（反映済みの可能性が高い方から）
+    for group in (p0, holdings, screener, due_group, representatives, remaining_fifo):
         for item in group or []:
             code = code_of(item)
             if not code or code in seen:
@@ -854,7 +869,40 @@ def _plan_targets(companies: list[dict], cfg, meta: dict, budget: int) -> list[s
         meta, budget, calls_per_company=3,
         refresh_days=int(getattr(cfg, "EDINETDB_REFRESH_DAYS", 180)),
         web_annual=bool(getattr(cfg, "EDINETDB_ANNUAL_FROM_WEB", False)),
+        new_filings=recent_annual_filings(cfg),
     )
+
+
+NEW_FILINGS_SQL = """
+SELECT edinet_code, MAX(submit_date) d FROM `{p}.edinet.gov_documents`
+WHERE doc_type_code IN ('120', '130') AND ordinance_code = '010' AND fund_code IS NULL
+  AND withdrawal_status = '0' AND submit_date >= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL @days DAY)
+  AND submit_date < CURRENT_DATE('Asia/Tokyo')
+GROUP BY edinet_code
+"""
+
+
+def recent_annual_filings(cfg) -> dict:
+    """政府 EDINET の書類一覧（edinet.gov_documents）で、直近 EDINETDB_NEW_FILING_DAYS 日に有報（訂正を含む）を出した会社
+    {EDINETコード: 提出日}。1クエリ（日分割の表なので読む量は小さい）。読めなければ {}（従来の推測 report_due だけで選ぶ）。"""
+    days = int(getattr(cfg, "EDINETDB_NEW_FILING_DAYS", 30))
+    if days <= 0:
+        return {}
+    _memo = getattr(recent_annual_filings, "_memo", None)
+    if _memo is not None:
+        return _memo
+    try:
+        from google.cloud import bigquery
+        import state_store
+        client = state_store.make_client(cfg)
+        jc = bigquery.QueryJobConfig(query_parameters=[bigquery.ScalarQueryParameter("days", "INT64", days)])
+        out = {r.edinet_code: r.d.isoformat() for r in
+               client.query(NEW_FILINGS_SQL.format(p=client.project), job_config=jc, location="asia-northeast1").result()}
+    except Exception as e:
+        print(f"  ⚠️ 新しい有報の一覧（gov_documents）を読めない: {type(e).__name__}")
+        out = {}
+    recent_annual_filings._memo = out
+    return out
 
 
 def _w3_company_budget(cfg, daily_budget: int) -> int:

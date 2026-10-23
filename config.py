@@ -1309,6 +1309,8 @@ EDINETDB_QUARTERLY_REFRESH_DAYS: int = 30
 EDINETDB_WEB_DAILY_LIMIT: int = 100      # 日次のWeb更新（新年度の有報が出た会社＋未取得）の社数上限
 EDINETDB_ITEMS_MERGE_CHUNK: int = 4000
 EDINETDB_REFRESH_DAYS: int = 180
+# 政府 EDINET の書類一覧で直近この日数に有報を出した会社を、取り込みの先頭（P0）で取る（鮮度に関係なく・提出の翌日以降に1回）
+EDINETDB_NEW_FILING_DAYS: int = 30
 EDINETDB_TEXTBLOCK_EVERY_N: int = 2
 EDINETDB_ROTATION_META: str = "edinetdb_rotation_meta.json"
 EDINETDB_DOC_INDEX_LIMIT: int = 10
