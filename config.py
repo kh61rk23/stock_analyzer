@@ -5416,3 +5416,11 @@ TECH_MAP_DIGEST_PER_NODE: int = 5    # 1ノードに出す候補銘柄の数
 # 20回だと、本体の年次財務の一巡は約190日（0回なら約150日）。
 EDINETDB_EXTRAS_DAILY_CALLS: int = 20
 EDINETDB_EXTRAS_MAX_GB: float = 0.3
+
+# ==============================================================
+# BLOCK 72: 技術マップのセグメント経由の付け方（taxonomy_company_mapper.run_segment_path）
+# ==============================================================
+# セグメント名→業種の当て方の類似度がこれ未満なら使わない（業種の配下のノードを全部付けるので、弱い当て方は誤りが多い）
+TAXONOMY_SEGMENT_MIN_SIM: float = 0.75
+# セグメントがこの社数以上取れた回だけ、今回出なかった古いセグメント経由の行を失効させる
+TAXONOMY_SEGMENT_RETIRE_MIN_COMPANIES: int = 200

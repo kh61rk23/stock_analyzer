@@ -51,6 +51,7 @@ def build_company_node_rows(
     map_segment_fn,
     sector_to_nodes_fn,
     as_of: str = None,
+    min_sim: float = 0.0,
 ) -> list[dict]:
     """
     企業×セグメント → 企業×taxonomy_node の行を構築する。
@@ -60,6 +61,8 @@ def build_company_node_rows(
                              share は売上比率（欠損時は等分）
         map_segment_fn:      segment_name -> {"sector_code": str, "similarity_score": float} | None
         sector_to_nodes_fn:  sector_code -> [node_id, ...]
+        min_sim:             これ未満の類似度の当て方は使わない。業種の配下のノードを全部付けるので、
+                             当て方が弱いと無関係なノードがまとめて付く（FPD製造装置 sim=0.57 → イメージセンサー等）
     Returns:
         taxonomy.company_taxonomy_map 実スキーマの行リスト
     """
@@ -86,6 +89,8 @@ def build_company_node_rows(
             if not mapped or not mapped.get("sector_code"):
                 continue
             sim = float(mapped.get("similarity_score", 0.5) or 0.5)
+            if sim < min_sim:
+                continue
             for node_id in (sector_to_nodes_fn(mapped["sector_code"]) or []):
                 node_score[node_id] = node_score.get(node_id, 0.0) + share * sim
                 node_share[node_id] = node_share.get(node_id, 0.0) + share
@@ -517,6 +522,7 @@ def run_segment_path(segments: dict, cfg, dry: bool) -> int:
         segments,
         lambda name: mapper.map(name),
         get_taxonomy_nodes_for_sector,
+        min_sim=float(getattr(cfg, "TAXONOMY_SEGMENT_MIN_SIM", 0.75)),
     )
     print(f"📊 生成行: {len(rows)}行（confidence_type=edinet）")
     if dry:
@@ -526,7 +532,11 @@ def run_segment_path(segments: dict, cfg, dry: bool) -> int:
         if len(rows) > 5:
             print(f"   ... 他{len(rows) - 5}行")
         return 0
-    ok, n = upsert_to_bq(rows, cfg)
+    # 今回出なかった古い行（基準を上げて外れた行を含む）は失効させる。セグメントの取得が欠けた回に全行を
+    # 失効させないよう、十分な社数が取れたときだけ
+    min_cos = int(getattr(cfg, "TAXONOMY_SEGMENT_RETIRE_MIN_COMPANIES", 200))
+    retire = (date.today() - timedelta(days=1)).isoformat() if len(segments) >= min_cos else None
+    ok, n = upsert_to_bq(rows, cfg, retire_before=retire)
     print(f"{'✅ MERGE完了' if ok else '⚠️ 書込失敗（exit 0）'}: {n}行")
     return n
 

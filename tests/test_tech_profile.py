@@ -40,3 +40,14 @@ def test_packet_has_tech_section_even_without_data(monkeypatch):
     monkeypatch.setattr(tp, "packet_lines", lambda cfg, t: ["", "## ⑬ 技術ノード（技術マップ）", "- データなし"])
     text = ape.build_packet_text("8035.T")
     assert "## ⑬ 技術ノード（技術マップ）" in text
+
+
+def test_segment_path_drops_weak_matches():
+    import taxonomy_company_mapper as m
+    segs = {"8035": [{"segment_name": "半導体製造装置", "share": 0.9}, {"segment_name": "ＦＰＤ製造装置", "share": 0.1}]}
+    sims = {"半導体製造装置": 0.91, "ＦＰＤ製造装置": 0.57}
+    rows = m.build_company_node_rows(segs, lambda n: {"sector_code": "3650" if n.startswith("半") else "3650x",
+                                                     "similarity_score": sims[n]},
+                                     lambda sec: ["semi_cap"] if sec == "3650" else ["image_sensor", "mmwave_radar"],
+                                     min_sim=0.75)
+    assert {r["node_id"] for r in rows} == {"semi_cap"}       # 弱い当て方（0.57）の配下ノードは付けない
