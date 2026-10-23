@@ -310,7 +310,9 @@ def run(cfg, budget_min: float | None = None, only_dates: list[date] | None = No
     else:
         recent, back = dates_to_run(state, today, int(getattr(cfg, "EDINET_GOV_RECENT_DAYS", 7)), floor)
     stat = {"days": 0, "docs": 0, "fact_docs": 0, "facts": 0, "errors": 0, "storage_gb": round(total_gb, 2),
-            "facts_gb": round(facts_gb, 3), "facts_paused": not facts_ok, "oldest": None, "budget_out": False}
+            "facts_gb": round(facts_gb, 3), "facts_paused": not facts_ok, "oldest": None, "budget_out": False,
+            "range": None}
+    done_now: list[str] = []
     for day in recent + back:
         if time.monotonic() - t0 > budget:
             stat["budget_out"] = True
@@ -365,10 +367,12 @@ def run(cfg, budget_min: float | None = None, only_dates: list[date] | None = No
                 entry["facts_hash"] = h
             entry["fact_docs"] = len(targets) - failed
         state["dates"][day.isoformat()] = entry
+        done_now.append(day.isoformat())
         stat["days"] += 1
         stat["docs"] += len(results)
     done = sorted(state["dates"])
     stat["oldest"] = done[0] if done else None
+    stat["range"] = [min(done_now), max(done_now)] if done_now else None   # この回に入れた日（通知が中身を引く範囲）
     state["labels"] = sorted(known_labels)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state, ensure_ascii=False, indent=0, sort_keys=True), encoding="utf-8")

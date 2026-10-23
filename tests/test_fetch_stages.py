@@ -49,3 +49,14 @@ def test_main_uses_fetch_stages_for_jp_filings():
     src = (Path(fs.__file__).parent / "stock_analyzer_main.py").read_text(encoding="utf-8")
     assert '_fs.apply_external(cfg, "jp_filings", results, logger)' in src
     assert "run_edinetdb_ingest" not in src            # 取得の本体は fetch_stages の1か所だけ
+
+
+def test_policy_db_is_fetched_before_analysis_with_large_budget():
+    from pathlib import Path
+    import config as cfg
+    assert "seisakudb" in fs.GROUPS["jp_filings"] and "edinetdb_extras" in fs.GROUPS["jp_filings"]
+    assert 500 <= cfg.SEISAKUDB_DAILY_BUDGET < 1000          # API の上限は1日1000回
+    src = (Path(fs.__file__).parent / "stock_analyzer_main.py").read_text(encoding="utf-8")
+    assert 'and "seisakudb" not in results:' in src            # 取得 workflow が取った日は日次本体で取り直さない
+    wf = (Path(fs.__file__).parent / ".github/workflows/fetch_jp_filings.yml").read_text(encoding="utf-8")
+    assert "SEISAKUDB_API_KEY" in wf

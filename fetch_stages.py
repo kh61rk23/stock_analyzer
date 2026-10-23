@@ -9,7 +9,7 @@
 #   取得をせずに中身を results と台帳へ写す（apply_external）。ファイルが無ければ今までどおり自分で取る。
 # 【グループ】
 #   jp_filings … 賃貸等不動産（EdinetDB）・政府 EDINET の公正価値・EdinetDB の財務と有報・書類索引・不動産DB・
-#                EdinetDB の追加の窓口（edinetdb_extras・本体の後で残しておいた枠を使う）
+#                EdinetDB の追加の窓口（edinetdb_extras・本体の後で残しておいた枠を使う）・政策DB（seisakudb）
 # 【なぜ分けるか】
 #   どれも BigQuery に書くだけで、後ろの分析はメモリ上の結果ではなく BQ を読む。
 #   results に残すのはメールの要約と実行台帳に使う小さな dict だけなので、ファイルで受け渡せる。
@@ -23,7 +23,7 @@ from datetime import date
 from pathlib import Path
 
 GROUPS = {"jp_filings": ("rental_property_fv", "edinet_gov_fv", "edinetdb_ingest", "edinet_doc_index", "fudosan_ingest",
-                        "edinetdb_extras")}
+                        "edinetdb_extras", "seisakudb")}
 EXTERNAL_ENV = "STOCK_ANALYZER_FETCH_EXTERNAL"
 
 
@@ -127,6 +127,23 @@ def run_jp_filings(cfg, results: dict, logger, in_mode=lambda key: True) -> None
                        f" | 進み具合 {value.get('progress', {})}" if not value.get("skipped") else value.get("reason", ""))
         except Exception as exc:
             logger.add("edinetdb_extras", "error", str(exc)[:100])
+
+    # 政策DB（公的支出・経済安保）。保有 → 前日までのスクリーナー候補 → 上場全社の順に、1日の予算（SEISAKUDB_DAILY_BUDGET）まで
+    if getattr(cfg, "ENABLE_SEISAKUDB", True) and in_mode("seisakudb"):
+        try:
+            import edinetdb_ingestor as _ing
+            import seisakudb_ingestor as _sk
+            hold, screener, _reps = _ing._priority_tickers(cfg)
+            res = results["seisakudb"] = _sk.run(cfg, list(dict.fromkeys(list(hold) + list(screener))))
+            if res.get("skipped"):
+                logger.add("seisakudb", "skipped", f"スキップ（{res.get('reason', '')}）")
+            else:
+                st = res.get("stopped") or ""
+                logger.add("seisakudb", "warn" if (res.get("errors") or (st and st != "budget")) else "success",
+                           f"直近{res.get('recent', 0)}件 / 個社{res.get('companies_ok', 0)}社 / "
+                           f"経済安保{res.get('certs', 0)}件 / API {res.get('calls', 0)}回" + (f" / 停止: {st}" if st else ""))
+        except Exception as exc:
+            logger.add("seisakudb", "error", f"{type(exc).__name__}: {str(exc)[:80]}")
 
 RUNNERS = {"jp_filings": run_jp_filings}
 

@@ -54,3 +54,18 @@ def test_notify_step_runs_always_before_saving_state(name):
 
 def test_daily_run_is_not_notified_twice():
     assert "workflow_notify.py" not in (WF / "daily_run.yml").read_text(encoding="utf-8")
+
+
+def test_step_json_and_run_start():
+    steps = [{"step": "sec_filings", "seconds": 100, "at": "2026-10-24 02:30:00",
+              "highlights": ['✅ sec_filings: {"range": ["2026-10-20", "2026-10-23"], "days": 4}']}]
+    assert wn.step_json(steps, "sec_filings")["range"] == ["2026-10-20", "2026-10-23"]
+    assert wn.step_json(steps, "edinet_gov_docs") == {}
+    st = wn.run_started(steps)
+    assert (st.hour, st.minute, st.second) == (2, 28, 20)
+
+
+def test_digest_section_rendered():
+    subj, body = wn.build_mail("t", "w", [], {}, {}, None, "", datetime(2026, 10, 24),
+                               [("13D（経営に関わる目的もありうる5%超の保有）", ["Acme: Fund X（IA）12.0%"])])
+    assert "今回取ったもの" in body and "Acme: Fund X" in body

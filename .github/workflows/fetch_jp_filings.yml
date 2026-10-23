@@ -82,6 +82,7 @@ jobs:
           EDINETDB_API_KEY: ${{ secrets.EDINETDB_API_KEY }}
           EDINET_GOV_API_KEY: ${{ secrets.EDINET_GOV_API_KEY }}
           FUDOSAN_API_KEY: ${{ secrets.FUDOSAN_API_KEY }}
+          SEISAKUDB_API_KEY: ${{ secrets.SEISAKUDB_API_KEY }}
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
         run: python actions_log.py --workflow fetch_jp_filings --step jp_filings -- python -u fetch_runner.py jp_filings
       # 政府 EDINET の書類一覧と中身（大量保有・臨時報告書）。直近の日を取り直し、残りの時間で過去へ遡る。

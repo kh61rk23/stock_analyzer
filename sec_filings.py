@@ -23,7 +23,7 @@ import os
 import re
 import sys
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 DATASET, LOCATION = "us", "US"
@@ -226,7 +226,8 @@ def run(cfg, budget_min: float | None = None, only_dates: list[date] | None = No
     else:
         recent, back = dates_to_run(state, date.today(), int(getattr(cfg, "SEC_FILINGS_RECENT_DAYS", 5)), floor)
     stat = {"days": 0, "filings": 0, "items": 0, "dg_rows": 0, "errors": 0, "budget_out": False, "oldest": None,
-            "storage_gb": m["total_gb"], "this_gb": round(mine, 3)}
+            "storage_gb": m["total_gb"], "this_gb": round(mine, 3), "range": None}
+    done_now: list[str] = []
     for day in recent + back:
         if time.monotonic() - t0 > budget:
             stat["budget_out"] = True
@@ -238,6 +239,7 @@ def run(cfg, budget_min: float | None = None, only_dates: list[date] | None = No
         if r.status_code != 200:   # 土日・祝日は一覧が無い（403/404）
             _load(client, T_FILINGS, FILING_SCHEMA, [], day)
             state["dates"][day.isoformat()] = {"filings": 0}
+            done_now.append(day.isoformat())
             stat["days"] += 1
             continue
         rows, names = parse_master(r.text, day)
@@ -267,11 +269,13 @@ def run(cfg, budget_min: float | None = None, only_dates: list[date] | None = No
         known.update(x["cik"] for x in new)
         state["dates"][day.isoformat()] = {"filings": len(rows), "dg": len(dg_rows),
                                            "at": datetime.now(timezone.utc).isoformat()[:19]}
+        done_now.append(day.isoformat())
         stat["days"] += 1
         stat["filings"] += len(rows)
         stat["dg_rows"] += len(dg_rows)
     done = sorted(state["dates"])
     stat["oldest"] = done[0] if done else None
+    stat["range"] = [min(done_now), max(done_now)] if done_now else None   # この回に入れた日（通知が中身を引く範囲）
     state["ciks"] = sorted(known)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state, ensure_ascii=False, separators=(",", ":"), sort_keys=True), encoding="utf-8")

@@ -3858,7 +3858,8 @@ def run_all_tasks(mode: str = "all") -> dict:
 
     # ── 政策DB（公的支出・経済安保）の取り込み ─────────────
     # 保有銘柄を先頭に、スクリーナー候補、上場全社の順で個社の公的支出を1日の予算が尽きるまで取る。
-    if getattr(cfg, "ENABLE_SEISAKUDB", True) and _in_mode("seisakudb"):
+    # 朝の取得 workflow（fetch_stages.jp_filings）が取っていれば、その結果（apply_external で写したもの）を使う。
+    if getattr(cfg, "ENABLE_SEISAKUDB", True) and _in_mode("seisakudb") and "seisakudb" not in results:
         try:
             import seisakudb_ingestor as _sk
             _sk_hold = []
