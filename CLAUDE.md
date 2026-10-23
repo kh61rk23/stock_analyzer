@@ -95,12 +95,14 @@ python3 maintenance_packet.py   # 全監査+台帳+直近変更を MAINTENANCE_P
 
 ## このシステムの構造（30秒）
 
-- エントリ: GitHub Actions（cron "17 0 * * 1-6" = 月〜土 09:17 JST / 月曜のみ自動でweeklyモード）
-  → run_headless.py → stock_analyzer_main.run_all_tasks()
+- エントリ: GitHub Actions。取得（fetch_jp_filings.yml・08:17 JST・EdinetDB の 08:00 更新の後）が終わると daily_run.yml が
+  連鎖して起動する（workflow_run）。定時 cron "17 0 * * 1-6"（09:17 JST）と予備（12:17・15:17）は保険
+  → run_headless.py → stock_analyzer_main.run_all_tasks()（月曜は自動で weekly モード）
   ※ 日曜は市場が動かないため停止。public リポジトリなので Actions の分数に上限は無い。
-    予備の起動（UTC 03:17・06:17）は、その日に成功・実行中の回が無い時だけ本処理へ進む（gate ジョブ）。
-    UTC 00:00 ちょうどはジョブが集中し実測で3〜4時間の遅延が出るため :17 へずらしてある。
-    **前倒し（UTC 23:40 等）は不可** — JST月曜の回が UTC では日曜になり weekly 判定が壊れる。
+    gate ジョブ（tools/run_gate.py）が「今日（JST）分析ジョブが実行中・成功の回がある／取得が実行中／日曜」なら見送る。
+    gate が見送った回も workflow は success で終わるので、数えるのは本処理ジョブの結論。
+    月曜の weekly 判定・「今日」は日本時間（連鎖で起動すると UTC では前日のことがあるため）。
+    GitHub の定時実行は実測で1〜4時間遅れたり捨てられたりする（:17 にずらしても起きる）。
 - 設定SSOT: config.py（BLOCK 0〜63・他moduleをimportしない）
 - パイプライン宣言: pipeline_registry.json（108ステージ・AST自動生成・手動編集禁止）
 - データ契約: results_schema.py（150キー）
