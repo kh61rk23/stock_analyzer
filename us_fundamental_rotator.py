@@ -402,32 +402,44 @@ def _bq_rows_to_fundamentals(rows: list[dict]) -> Optional[dict]:
     return result
 
 
-def _lookup_us_fundamentals_bq(ticker: str, table_name: str = "fundamentals") -> Optional[dict]:
-    """ローカルJSONが無いrunnerでBQ永続行を復元する（障害時はNone）。"""
-    ticker = str(ticker or "").upper().strip()
-    if not ticker or not table_name.replace("_", "").isalnum():
-        return None
-    try:
-        from google.cloud import bigquery
-        from edinet_bq_client import EDINETBQClient
+_BQ_ALL_ROWS: dict = {}   # {表名: {ticker: [行]}}。1回の実行で1本だけ読む
 
+
+def _load_all_fundamentals_bq(table_name: str) -> dict:
+    """us.<table_name> を1本のクエリで全部読み、ticker ごとに分ける（約1.6万行・数MB）。
+
+    スクリーナーは約1,000銘柄をこの関数経由で引く。銘柄ごとに1本ずつ引くと BigQuery は1本あたり最低10MBを数えるので
+    1日約10GB（クエリの無料枠 1TB/月 の約4分の1）になる。読めなかった時は {} を覚えて、同じ回で繰り返し引かない。
+    """
+    if table_name in _BQ_ALL_ROWS:
+        return _BQ_ALL_ROWS[table_name]
+    out: dict = {}
+    try:
+        from edinet_bq_client import EDINETBQClient
         bq = EDINETBQClient()
         sql = f"""
         SELECT ticker, cik, period_end, revenue, operating_income, net_income,
                eps_diluted, fcf, buyback, updated_at
         FROM `{bq.project}.us.{table_name}`
-        WHERE ticker = @ticker AND period_end IS NOT NULL
-        ORDER BY period_end DESC
+        WHERE ticker IS NOT NULL AND period_end IS NOT NULL
         """
-        config = bigquery.QueryJobConfig(query_parameters=[
-            bigquery.ScalarQueryParameter("ticker", "STRING", ticker)
-        ])
-        rows = [dict(row.items()) for row in bq.client.query(
-            sql, job_config=config
-        ).result()]
-        return _bq_rows_to_fundamentals(rows)
+        for row in bq.client.query(sql).result():
+            out.setdefault(str(row["ticker"]).upper(), []).append(dict(row.items()))
+        for rows in out.values():
+            rows.sort(key=lambda r: r["period_end"], reverse=True)
     except Exception:
+        out = {}
+    _BQ_ALL_ROWS[table_name] = out
+    return out
+
+
+def _lookup_us_fundamentals_bq(ticker: str, table_name: str = "fundamentals") -> Optional[dict]:
+    """ローカルJSONが無いrunnerでBQ永続行を復元する（障害時はNone）。表は1回だけ読んで手元で引く。"""
+    ticker = str(ticker or "").upper().strip()
+    if not ticker or not table_name.replace("_", "").isalnum():
         return None
+    rows = _load_all_fundamentals_bq(table_name).get(ticker)
+    return _bq_rows_to_fundamentals(rows) if rows else None
 
 
 def lookup_us_fundamentals(cfg, ticker: str) -> Optional[dict]:
