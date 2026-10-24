@@ -274,15 +274,15 @@ WHERE m.accounting_standard = 'IFRS' AND NOT IFNULL(m.is_delisted, FALSE)
 """
 
 
-def fetch_zip(requests, key: str, doc_id: str) -> tuple[bytes | None, str]:
-    """有報 ZIP を取る。本体は ZIP だが Content-Type は octet-stream で返るので、先頭の PK で見分ける。"""
+def fetch_zip(requests, key: str, doc_id: str) -> tuple[bytes | None, str, str]:
+    """有報 ZIP を取る。(本体, 失敗の理由, 状態コード)。失敗も HTTP 200 で返るので本文まで見る（edinet_gov_api）。"""
+    import edinet_gov_api as ega
     try:
         r = requests.get(f"{API}/documents/{doc_id}", params={"type": 1, "Subscription-Key": key}, timeout=120)
     except Exception as e:  # 例外の本文には要求 URL（キー入り）が入るので型名だけ
-        return None, type(e).__name__
-    if r.status_code != 200 or not r.content.startswith(b"PK"):
-        return None, f"HTTP {r.status_code}"
-    return r.content, ""
+        return None, type(e).__name__, ""
+    ok, code, why = ega.check_zip(r)
+    return (r.content, "", code) if ok else (None, why, code)
 
 
 def ingest(cfg, limit: int | None = None) -> dict:
@@ -308,20 +308,24 @@ def ingest(cfg, limit: int | None = None) -> dict:
     today = date.today().isoformat()
     rows, stat = [], {"ok": 0, "no_property": 0, "no_fv": 0, "no_period": 0, "error": 0}
     last = 0.0
+    import edinet_gov_api as ega
+    streak = ega.Streak()
     for code in targets:
         r = latest_rows[code]
         wait = gap - (time.monotonic() - last)
         if wait > 0:
             time.sleep(wait)
-        blob, err = fetch_zip(requests, key, r.doc_id)
+        blob, err, status_code = fetch_zip(requests, key, r.doc_id)
         last = time.monotonic()
         if blob is None:
             stat["error"] += 1
             state[code] = {"status": "error", "doc_id": r.doc_id, "fetched": today, "error": err}
             print(f"    ❌ {code} {r.doc_id}: {err}")
-            if err == "HTTP 429":
+            if streak.fail(status_code, err):
+                print(f"    ⏹️ 政府 EDINET の公正価値: {streak.stopped}")
                 break
             continue
+        streak.ok()
         try:
             facts, _fmt = facts_from_zip(blob)
             status, row = build_row(code, r.doc_id, r.fiscal_year_end, facts)
@@ -352,6 +356,7 @@ def ingest(cfg, limit: int | None = None) -> dict:
     info = {"candidates": len(latest_rows), "targets": len(targets), "with_fair_value": stat["ok"],
             "not_applicable": stat["no_property"], "no_fair_value": stat["no_fv"], "failed": stat["error"],
             "rows": len(rows), "written": written}
+    streak.put(info)
     print(f"  🏢 政府 EDINET の公正価値: {info}")
     if rows and not written:
         info["error"] = "取れたのに BQ に書けなかった"

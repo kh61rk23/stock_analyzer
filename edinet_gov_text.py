@@ -135,6 +135,8 @@ def run(cfg, budget_min: float | None = None, limit: int | None = None) -> dict:
             "table_gb": round(mine, 3), "storage_gb": m["total_gb"]}
     buf: list[dict] = []
     now = datetime.now(timezone.utc).isoformat()
+    import edinet_gov_api as ega
+    streak = ega.Streak()
     for r in targets:
         if time.monotonic() - t0 > budget:
             stat["budget_out"] = True
@@ -150,11 +152,14 @@ def run(cfg, budget_min: float | None = None, limit: int | None = None) -> dict:
             last = time.monotonic()
             continue
         last = time.monotonic()
-        if z.status_code != 200 or not z.content.startswith(b"PK"):
+        ok, code, why = ega.check_zip(z)
+        if not ok:
             stat["errors"] += 1
-            if z.status_code == 429:
+            if streak.fail(code, why):
+                print(f"    ⏹️ {streak.stopped}")
                 break
             continue
+        streak.ok()
         try:
             blocks = blocks_from_zip(z.content, max_chars)
         except Exception as e:
@@ -183,6 +188,7 @@ def run(cfg, budget_min: float | None = None, limit: int | None = None) -> dict:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state, separators=(",", ":")), encoding="utf-8")
     stat["remaining"] = max(0, stat["targets"] - stat["docs"])
+    streak.put(stat)
     return stat
 
 
@@ -198,8 +204,10 @@ def main(argv=None) -> int:
     except Exception:
         pass
     st = run(cfg, a.budget_min, a.limit)
-    print(f"{'⏩' if st.get('skipped') else '✅'} edinet_gov_text: {json.dumps(st, ensure_ascii=False)}")
-    return 1 if st.get("errors") and not st.get("docs") else 0
+    import edinet_gov_api as ega
+    mark, rc = ega.outcome(st, "docs")
+    print(f"{mark} edinet_gov_text: {json.dumps(st, ensure_ascii=False)}")
+    return rc
 
 
 if __name__ == "__main__":

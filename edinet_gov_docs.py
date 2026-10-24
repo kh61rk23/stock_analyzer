@@ -313,22 +313,28 @@ def run(cfg, budget_min: float | None = None, only_dates: list[date] | None = No
             "facts_gb": round(facts_gb, 3), "facts_paused": not facts_ok, "oldest": None, "budget_out": False,
             "range": None}
     done_now: list[str] = []
+    import edinet_gov_api as ega
+    streak = ega.Streak()
     for day in recent + back:
         if time.monotonic() - t0 > budget:
             stat["budget_out"] = True
             break
         r, err = _get(f"{API}/documents.json", date=day.isoformat(), type=2)
-        if r is None or r.status_code != 200:
+        if r is None:
             stat["errors"] += 1
-            print(f"    ❌ 一覧 {day}: {err or r.status_code}")
-            if r is not None and r.status_code == 429:
+            print(f"    ❌ 一覧 {day}: {err}")
+            if streak.fail("", err):
                 break
             continue
-        try:
-            results = r.json().get("results") or []
-        except ValueError:
+        # 失敗も HTTP 200 で返る。その日の書類0件と取り違えて空の区画を書かないよう、metadata.status まで見る
+        results, code, why = ega.check_list(r)
+        if results is None:
             stat["errors"] += 1
+            print(f"    ❌ 一覧 {day}: {why}")
+            if streak.fail(code, why):
+                break
             continue
+        streak.ok()
         now = datetime.now(timezone.utc).isoformat()
         load_partition(client, T_DOCS, DOC_SCHEMA, doc_rows(results, day, now), day)
         entry = dict(state["dates"].get(day.isoformat()) or {})
@@ -341,9 +347,13 @@ def run(cfg, budget_min: float | None = None, only_dates: list[date] | None = No
                 if time.monotonic() - t0 > budget:
                     break
                 z, zerr = _get(f"{API}/documents/{t['docID']}", type=5)
-                if z is None or z.status_code != 200 or not z.content.startswith(b"PK"):
+                ok, code, why = ega.check_zip(z) if z is not None else (False, "", zerr)
+                if not ok:
                     failed += 1
+                    if streak.fail(code, why):
+                        break
                     continue
+                streak.ok()
                 try:
                     frows, labels = facts_from_csv_zip(z.content, t, day, text_max)
                 except Exception as e:
@@ -360,6 +370,9 @@ def run(cfg, budget_min: float | None = None, only_dates: list[date] | None = No
             if time.monotonic() - t0 > budget:
                 stat["budget_out"] = True
                 break   # その日は途中なので記録しない（次の回にやり直す）
+            if streak.stopped:
+                stat["errors"] += failed
+                break   # API が止まっている。その日は途中なので記録しない
             load_partition(client, T_FACTS, FACT_SCHEMA, rows, day)
             stat["facts"] += len(rows)
             stat["errors"] += failed
@@ -370,6 +383,9 @@ def run(cfg, budget_min: float | None = None, only_dates: list[date] | None = No
         done_now.append(day.isoformat())
         stat["days"] += 1
         stat["docs"] += len(results)
+    streak.put(stat)
+    if streak.stopped:
+        print(f"    ⏹️ {streak.stopped}")
     done = sorted(state["dates"])
     stat["oldest"] = done[0] if done else None
     stat["range"] = [min(done_now), max(done_now)] if done_now else None   # この回に入れた日（通知が中身を引く範囲）
@@ -391,8 +407,10 @@ def main(argv=None) -> int:
     except Exception:
         pass
     st = run(cfg, a.budget_min, [date.fromisoformat(d) for d in a.dates] if a.dates else None)
-    print(f"{'⏩' if st.get('skipped') else '✅'} edinet_gov_docs: {json.dumps(st, ensure_ascii=False)}")
-    return 1 if st.get("errors") and not st.get("days") else 0
+    import edinet_gov_api as ega
+    mark, rc = ega.outcome(st, "days")
+    print(f"{mark} edinet_gov_docs: {json.dumps(st, ensure_ascii=False)}")
+    return rc
 
 
 if __name__ == "__main__":

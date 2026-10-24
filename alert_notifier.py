@@ -2390,6 +2390,8 @@ def build_edinetdb_ingest_alert(ing: dict, web: dict | None = None, ledger: dict
             f"失敗: {gov['error']}" if gov.get("error") and "targets" not in gov else
             f"対象 {gov.get('targets', 0)}社 / 取得 {gov.get('with_fair_value', 0)}件 / 対象外 {gov.get('not_applicable', 0)}社"
             f" / 公正価値なし {gov.get('no_fair_value', 0)}社 / 失敗 {gov.get('failed', 0)}社"))
+        if gov.get("api_stopped"):
+            lines.append(f"    ⏹️ {gov['api_stopped']}")
     n = len(done) + int(web.get("ok", 0) or 0)
     return {
         "trigger":  "edinetdb_ingest",
