@@ -5440,3 +5440,11 @@ POSITIONING_RECENT_PERIODS: int = 2                  # 直近この回数（月�
 POSITIONING_MIN_INTERVAL_SEC: float = 1.0
 POSITIONING_TIME_BUDGET_MIN: float = 30.0
 POSITIONING_MAX_GB: float = 0.3
+
+# ==============================================================
+# BLOCK 75: 米国スクリーナーの XBRL 補完を us.company_facts から作る（us_facts_quarterly.py）
+# ==============================================================
+# 四半期の希薄化 EPS（Q4 は通期－Q1〜Q3）と直近12か月の FCF を全社分作り、EPS の加速と FCF の補完に使う。
+# 1回の実行で1本だけ読む（約0.7GB・クエリの無料枠 1TB/月 の約2%）。無効なら us.fundamentals（約800社）だけ。
+US_FACTS_COMPLEMENT_ENABLED: bool = True
+US_FACTS_COMPLEMENT_YEARS: int = 4      # 何年分の期間を読むか（EPS の加速は8四半期を使う）

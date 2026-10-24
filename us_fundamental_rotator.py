@@ -471,9 +471,19 @@ def lookup_us_fundamentals_by_path(data_dir, ticker: str) -> Optional[dict]:
     cfg 非依存でディレクトリを直接指定する lookup_us_fundamentals の別形。
 
     us_stock_screener.py が本関数名で呼び、XBRL補完（eps_accel_score_xbrl /
-    latest_fcf）に使う。_ticker_path と同じレイアウト
-    （<data_dir>/us_fundamentals_db/<ticker>.json）を参照する。
+    latest_fcf）に使う。先に us.company_facts から作った全社分の補完（us_facts_quarterly：
+    四半期 EPS・直近12か月 FCF）を引き、無い銘柄だけ _ticker_path と同じレイアウト
+    （<data_dir>/us_fundamentals_db/<ticker>.json）→ us.fundamentals を見る。
+    ローカル JSON と us.fundamentals の EPS・FCF は期首からの累計なので、取れる銘柄は company_facts 側にそろえる。
     """
+    try:
+        import config as _cfg
+        import us_facts_quarterly
+        hit = us_facts_quarterly.lookup(_cfg, ticker)
+        if hit:
+            return hit
+    except Exception:
+        pass
     try:
         safe = ticker.replace("/", "_").replace(".", "_")
         p = Path(data_dir) / DB_DIR_NAME / f"{safe}.json"
