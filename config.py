@@ -5424,3 +5424,9 @@ EDINETDB_EXTRAS_MAX_GB: float = 0.3
 TAXONOMY_SEGMENT_MIN_SIM: float = 0.75
 # セグメントがこの社数以上取れた回だけ、今回出なかった古いセグメント経由の行を失効させる
 TAXONOMY_SEGMENT_RETIRE_MIN_COMPANIES: int = 200
+
+# ==============================================================
+# BLOCK 73: 日本の大量保有の監視（insider_monitor._extract_jp_large_holdings）
+# ==============================================================
+# 政府 EDINET の大量保有報告書（edinet.large_holdings）のうち、直近この日数に出た報告を見る
+INSIDER_JP_LOOKBACK_DAYS: int = 90

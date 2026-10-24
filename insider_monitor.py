@@ -20,9 +20,8 @@
 #      sec_client.py 経由。insider_form4_cache.json・TTL1日を
 #      us_stock_screener.py の calc_insider_bonus 呼び出し箇所 の直接呼び出しと共有する）
 #
-#   日本株: EDINET 大量保有報告書
-#     edinet_client.py の get_analysis() 経由で取得済みのデータを参照
-#     → 大量保有報告（5%超の株式取得）を検出
+#   日本株: 政府 EDINET の大量保有報告書（edinet.large_holdings・edinet_gov_docs.py が溜める）
+#     → 直近 INSIDER_JP_LOOKBACK_DAYS 日に出た報告の保有者（5%超）を全銘柄1クエリで読む
 #
 # 【screener ボーナス計算】
 #   JP側（大量保有報告、5%以上取得）: _calc_bonus() が +4pt を算出
@@ -55,8 +54,7 @@ from __future__ import annotations
 
 import json
 import re
-import time
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -67,7 +65,7 @@ import us_insider_form4_scraper
 CONSECUTIVE_THRESH = 2      # 連続買いと見なす最低件数
 CACHE_HOURS        = 24 * 7 # 週次データ = 7日キャッシュ
 CACHE_FILENAME     = "insider_monitor_cache.json"
-FETCH_DELAY        = 0.12   # yfinance 呼び出し間隔（JP大量保有取得用）
+FETCH_DELAY        = 0.12   # 使っていない（日本の大量保有は BQ を1クエリで読む）。config の対応表に残っているため置く
 
 # screener ボーナス（JP側 _calc_bonus() が使用。US側は
 # us_insider_form4_scraper 側で独自に -5.0〜+5.0pt を算出する）
@@ -96,50 +94,50 @@ _CFG_CONST_MAP = {
 # BLOCK 1: EDINET 大量保有報告書（日本株）
 # ==============================================================
 
+LARGE_HOLDINGS_SQL = """
+SELECT issuer_sec_code, holder_name, holder_kind, holding_ratio, prior_ratio, submit_date, LEFT(purpose, 80) purpose
+FROM `{p}.edinet.large_holdings`
+WHERE submit_date >= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL @days DAY)
+  AND issuer_sec_code IN UNNEST(@codes) AND holding_ratio IS NOT NULL
+QUALIFY ROW_NUMBER() OVER (PARTITION BY issuer_sec_code, holder_name ORDER BY submit_date DESC) = 1
+"""
+
+
 def _extract_jp_large_holdings(cfg, tickers: list) -> dict:
     """
-    edinet_rotation_manager の蓄積 DB から
-    大量保有報告に関連する情報を抽出する。
-
-    EDINET の analysis には risk_factors が含まれており、
-    大量保有者の情報が記載されている場合がある（完全自動化は困難）。
-    yfinance の majorHolders / institutionalHolders から代替取得する。
+    政府 EDINET の大量保有報告書（edinet.large_holdings・edinet_gov_docs.py が溜める）から、
+    直近 INSIDER_JP_LOOKBACK_DAYS 日に出た報告の保有者を銘柄ごとに返す（全銘柄を1クエリで）。
 
     Returns:
-        {ticker: [{"holder_name", "ownership_pct", "report_date"}]}
+        {ticker: [{"holder_name", "ownership_pct", "prior_pct", "report_date", "purpose", "holder_kind", "source"}]}
+        読めない時は {}（ボーナスは付かない）
     """
-    holdings = {}
-
+    codes = sorted({str(t).split(".")[0][:4] for t in tickers if str(t).endswith(".T")})
+    if not codes:
+        return {}
     try:
-        import yf_cache as yf
-        for ticker in tickers:
-            if not ticker.endswith(".T"):
-                continue
-            try:
-                t   = yf.Ticker(ticker)
-                # 主要株主情報
-                mh  = t.major_holders
-                if mh is not None and not mh.empty:
-                    # 1行目: % of Shares Held by All Insider
-                    insider_pct = None
-                    try:
-                        insider_pct = float(mh.iloc[0, 0]) * 100
-                    except Exception:
-                        pass
-
-                    if insider_pct and insider_pct >= 5.0:
-                        holdings.setdefault(ticker, []).append({
-                            "holder_name":  "インサイダー合計",
-                            "ownership_pct": round(insider_pct, 2),
-                            "report_date":   datetime.now().strftime("%Y-%m-%d"),
-                            "source":        "yfinance_major_holders",
-                        })
-                time.sleep(FETCH_DELAY)
-            except Exception:
-                continue
-    except Exception:
-        pass
-
+        from google.cloud import bigquery
+        import state_store
+        client = state_store.make_client(cfg)
+        jc = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ArrayQueryParameter("codes", "STRING", codes),
+            bigquery.ScalarQueryParameter("days", "INT64", int(getattr(cfg, "INSIDER_JP_LOOKBACK_DAYS", 90)))])
+        rows = client.query(LARGE_HOLDINGS_SQL.format(p=client.project), job_config=jc,
+                            location="asia-northeast1").result()
+    except Exception as e:
+        print(f"    ⚠️  大量保有報告（edinet.large_holdings）を読めない: {type(e).__name__}")
+        return {}
+    holdings: dict = {}
+    for r in rows:
+        holdings.setdefault(f"{r.issuer_sec_code}.T", []).append({
+            "holder_name": r.holder_name or "",
+            "ownership_pct": round(float(r.holding_ratio) * 100, 2),
+            "prior_pct": None if r.prior_ratio is None else round(float(r.prior_ratio) * 100, 2),
+            "report_date": r.submit_date.isoformat() if r.submit_date else "",
+            "purpose": r.purpose or "",
+            "holder_kind": r.holder_kind or "",
+            "source": "edinet_gov_large_holdings",
+        })
     return holdings
 
 
@@ -306,7 +304,7 @@ def run_insider_monitor(cfg, tickers: Optional[list] = None) -> dict:
 
     # ── 日本株: yfinance major_holders ───────────────────────
     print(f"    日本株大量保有取得中 ({len(jp_tickers)}銘柄)...")
-    jp_holdings = _extract_jp_large_holdings(cfg, jp_tickers[:30])
+    jp_holdings = _extract_jp_large_holdings(cfg, jp_tickers)
 
     # ── ボーナス計算 ─────────────────────────────────────────
     # JP: _calc_bonus() のロジックは変更せず、us_filings=[] を渡すことで

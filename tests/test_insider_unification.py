@@ -115,26 +115,15 @@ def _fake_get_insider_summary_factory(canned: dict):
 
 def _install_fake_yfinance_major_holders(monkeypatch, pct_by_ticker: dict):
     """
-    _extract_jp_large_holdings が呼ぶ `import yfinance as yf` を
-    sys.modules 経由でフェイクに差し替える。
+    日本の大量保有（_extract_jp_large_holdings・政府 EDINET の edinet.large_holdings を読む）をフェイクに差し替える。
 
     pct_by_ticker: {"7203.T": 0.06, ...}  # 0.06 = 6%
     """
-    import sys
-
-    class _FakeTicker:
-        def __init__(self, ticker):
-            self._ticker = ticker
-
-        @property
-        def major_holders(self):
-            pct = pct_by_ticker.get(self._ticker)
-            if pct is None:
-                return pd.DataFrame()
-            return pd.DataFrame([[pct]])
-
-    fake_yf = SimpleNamespace(Ticker=lambda ticker: _FakeTicker(ticker))
-    monkeypatch.setitem(sys.modules, "yfinance", fake_yf)
+    def _fake(cfg, tickers):
+        return {t: [{"holder_name": "test", "ownership_pct": round(p * 100, 2), "report_date": "2026-10-20",
+                     "source": "edinet_gov_large_holdings"}]
+                for t, p in pct_by_ticker.items() if t in tickers}
+    monkeypatch.setattr(im, "_extract_jp_large_holdings", _fake)
 
 
 # ==============================================================
@@ -297,3 +286,10 @@ def test_get_insider_bonus_unaffected_by_us_filings_shape():
     cache = {"bonuses": {"AAPL": 3.5}, "us_filings": {"AAPL": {"insider_bonus": 3.0}}}
     assert im.get_insider_bonus("AAPL", cache) == 3.5
     assert im.get_insider_bonus("MSFT", cache) == 0.0
+
+
+def test_jp_large_holdings_read_from_gov_edinet_in_one_query():
+    import inspect
+    src = inspect.getsource(im._extract_jp_large_holdings)
+    assert "edinet.large_holdings" in im.LARGE_HOLDINGS_SQL and "UNNEST(@codes)" in im.LARGE_HOLDINGS_SQL
+    assert "yf" not in src                                  # yfinance の「内部者の保有率」で代用しない
