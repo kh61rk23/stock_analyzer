@@ -69,3 +69,21 @@ def test_digest_section_rendered():
     subj, body = wn.build_mail("t", "w", [], {}, {}, None, "", datetime(2026, 10, 24),
                                [("13D（経営に関わる目的もありうる5%超の保有）", ["Acme: Fund X（IA）12.0%"])])
     assert "今回取ったもの" in body and "Acme: Fund X" in body
+
+
+def test_us_facts_digest_formats_rows():
+    from datetime import date
+    from types import SimpleNamespace as R
+    rows = [R(ticker="AYI", name="ACUITY", k=date(2026, 10, 23), q=date(2026, 6, 25), n=14, nk=1, nq=1),
+            R(ticker="ALV", name="AUTOLIV", k=date(2026, 2, 19), q=date(2026, 10, 23), n=14, nk=1, nq=1)]
+    client = R(project="p")
+    orig = wn._q
+    wn._q = lambda *a, **k: rows
+    try:
+        out = wn.digest_us_facts(client, [{"at": "2026-10-24 23:36:06", "seconds": 68}])
+    finally:
+        wn._q = orig
+    title, lines = out[0]
+    assert "14社" in title and lines[0] == "AYI ACUITY: 10-K 2026-10-23" and lines[1] == "ALV AUTOLIV: 10-Q 2026-10-23"
+    assert lines[-1] == "ほか 12社"
+    assert "us_company_facts" in wn.DIGESTS

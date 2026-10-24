@@ -196,8 +196,35 @@ def digest_positioning(client, steps: list[dict]) -> list[tuple[str, list[str]]]
     return out
 
 
+US_FACTS_SQL = """SELECT ticker, name, latest_10k_filed k, latest_10q_filed q,
+  COUNT(*) OVER () n,
+  COUNTIF(latest_10k_filed >= DATE_SUB(DATE(@s), INTERVAL 7 DAY)) OVER () nk,
+  COUNTIF(latest_10q_filed >= DATE_SUB(DATE(@s), INTERVAL 7 DAY)) OVER () nq
+FROM `{p}.us.company_profile` WHERE facts_loaded_at >= @s
+ORDER BY GREATEST(IFNULL(latest_10k_filed, DATE '1900-01-01'), IFNULL(latest_10q_filed, DATE '1900-01-01')) DESC, ticker
+LIMIT 12"""
+
+
+def digest_us_facts(client, steps: list[dict]) -> list[tuple[str, list[str]]]:
+    """us.company_facts を取り直した会社（この回に facts_loaded_at が付いた会社）と、そのうち直近7日の 10-K/10-Q。"""
+    from google.cloud import bigquery
+    since = run_started(steps).astimezone(timezone.utc)
+    rows = _q(client, US_FACTS_SQL.format(p=client.project), [bigquery.ScalarQueryParameter("s", "TIMESTAMP", since)], "US")
+    if not rows:
+        return []
+    r0 = rows[0]
+    cut = (since - timedelta(days=7)).date()
+
+    def _form(r):
+        kinds = [f"10-K {r.k}" if r.k and r.k >= cut else "", f"10-Q {r.q}" if r.q and r.q >= cut else ""]
+        return "・".join(k for k in kinds if k) or "提出日は7日より前"
+
+    return [(f"財務を取り直した会社 {r0.n:,}社（直近7日の 10-K {r0.nk}社・10-Q {r0.nq}社）",
+             [f"{r.ticker} {r.name or ''}: {_form(r)}" for r in rows] + ([f"ほか {r0.n - len(rows)}社"] if r0.n > len(rows) else []))]
+
+
 DIGESTS = {"fetch_jp_filings": digest_jp, "edinet_gov_backfill": digest_jp, "sec_filings": digest_sec,
-           "price_universe": digest_price, "market_positioning": digest_positioning}
+           "price_universe": digest_price, "market_positioning": digest_positioning, "us_company_facts": digest_us_facts}
 
 
 def build_mail(title: str, workflow: str, steps: list[dict], counts: dict, delta: dict,
