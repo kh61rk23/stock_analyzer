@@ -177,8 +177,27 @@ def digest_price(client, steps: list[dict]) -> list[tuple[str, list[str]]]:
     return [("取り込んだ終値", [f"{r.t:,}銘柄・{r.n:,}行（{r.a}〜{r.b}）"])]
 
 
+def digest_positioning(client, steps: list[dict]) -> list[tuple[str, list[str]]]:
+    """FINRA の空売り残・CFTC の建玉明細で、この回に入れた範囲のもの。"""
+    from google.cloud import bigquery
+    st, p, out = step_json(steps, "market_positioning"), client.project, []
+    rng = st.get("short_range")
+    if rng:
+        rp = [bigquery.ScalarQueryParameter("d", "DATE", rng[1])]
+        rows = _q(client, f"""SELECT symbol, issue_name, change_pct, days_to_cover, short_qty FROM `{p}.analytics.short_interest`
+                  WHERE settlement_date = @d AND short_qty >= 1e6 AND change_pct IS NOT NULL
+                  ORDER BY change_pct DESC LIMIT 8""", rp)
+        out.append((f"空売り残（基準日 {rng[0]}〜{rng[1]}・{st.get('short_rows', 0):,}行）", [
+            f"{r.symbol} {r.issue_name or ''}: 前回比 {r.change_pct:+.0f}%・{r.days_to_cover or 0:.1f}日分" for r in rows]
+            or ["（100万株以上で増えた銘柄なし）"]))
+    rng = st.get("cot_range")
+    if rng:
+        out.append((f"建玉明細 COT（{rng[0]}〜{rng[1]}）", [f"{st.get('cot_rows', 0):,}行（{st.get('cot_weeks', 0)}週×報告）"]))
+    return out
+
+
 DIGESTS = {"fetch_jp_filings": digest_jp, "edinet_gov_backfill": digest_jp, "sec_filings": digest_sec,
-           "price_universe": digest_price}
+           "price_universe": digest_price, "market_positioning": digest_positioning}
 
 
 def build_mail(title: str, workflow: str, steps: list[dict], counts: dict, delta: dict,

@@ -5430,3 +5430,13 @@ TAXONOMY_SEGMENT_RETIRE_MIN_COMPANIES: int = 200
 # ==============================================================
 # 政府 EDINET の大量保有報告書（edinet.large_holdings）のうち、直近この日数に出た報告を見る
 INSIDER_JP_LOOKBACK_DAYS: int = 90
+
+# ==============================================================
+# BLOCK 74: 需給のデータ（market_positioning.py：FINRA の空売り残・CFTC の建玉明細）
+# ==============================================================
+SHORT_INTEREST_BACKFILL_FLOOR: str = "2022-01-01"   # 取引所の上場株だけで1年 約30MB
+COT_BACKFILL_FLOOR: str = "2015-01-01"
+POSITIONING_RECENT_PERIODS: int = 2                  # 直近この回数（月・週）は毎回取り直す（訂正・遅れて出る分）
+POSITIONING_MIN_INTERVAL_SEC: float = 1.0
+POSITIONING_TIME_BUDGET_MIN: float = 30.0
+POSITIONING_MAX_GB: float = 0.3

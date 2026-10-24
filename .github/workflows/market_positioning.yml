@@ -1,0 +1,95 @@
+name: 需給のデータ（FINRA の空売り残・CFTC の建玉明細）
+
+# market_positioning.py で、FINRA の空売り残（月2回の基準日・取引所の上場株）と CFTC の建玉明細（週次・商品と金融先物）を
+# analytics.short_interest / analytics.cot_positions へ。毎週土曜 10:17 JST（cron UTC 01:17）。CFTC は金曜の米国午後に公表。
+# 直近2回（月・週）は取り直し、残りの時間で遡る（空売り残は2022年・建玉は2015年まで）。
+on:
+  schedule:
+    - cron: "17 1 * * 6"
+  workflow_dispatch:
+    inputs:
+      budget_min:
+        description: "使う時間（分）"
+        default: "60"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: market-positioning
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: 📊 取得
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      TZ: Asia/Tokyo
+      STOCK_ANALYZER_BASE: ${{ github.workspace }}/stock_data
+      # 状態の置き場（config BLOCK 64）。git / dual / bq。Actions の変数 STATE_STORE_MODE で切り替える（未設定は bq）
+      STATE_STORE_MODE: ${{ vars.STATE_STORE_MODE || 'bq' }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup Python
+        id: setup-python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      # daily_run と同じキーで、インストール済みの Python ごと戻す（当たった日は pip を飛ばす）
+      - name: Cache key month
+        id: ym
+        run: echo "ym=$(date -u +%Y%m)" >> "$GITHUB_OUTPUT"
+      - name: Restore installed packages
+        id: deps-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.pythonLocation }}
+          key: pydeps-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('requirements.txt') }}-${{ steps.ym.outputs.ym }}
+      - name: Install dependencies
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: pip install -r requirements.txt
+      # dual: checkout 直後の sha を基準として記録 ／ bq: BigQuery から状態を書き戻す（失敗したら止める）
+      - name: Prepare state
+        env:
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+        run: python state_store.py prepare || [ "$STATE_STORE_MODE" = "dual" ]
+      - name: Market positioning
+        env:
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+        run: python actions_log.py --workflow market_positioning --step market_positioning -- python -u market_positioning.py --budget-min ${{ inputs.budget_min || '60' }}
+      # 取り込んだ内容（ステップの成否・要点・表の行数の増減・保存量）を Gmail で知らせる（workflow_notify.py）
+      - name: Notify
+        if: always()
+        continue-on-error: true
+        env:
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+          ALERT_GMAIL_FROM: ${{ secrets.ALERT_GMAIL_FROM }}
+          ALERT_GMAIL_PASSWORD: ${{ secrets.ALERT_GMAIL_PASSWORD }}
+          ALERT_GMAIL_TO: ${{ secrets.ALERT_GMAIL_TO }}
+        run: python workflow_notify.py --workflow market_positioning --title "需給のデータ（空売り残・建玉明細）" --tables analytics.short_interest,analytics.cot_positions
+      # 変わったファイルだけを load job で BigQuery（private.state_files）へ
+      - name: Save state to BigQuery
+        if: always() && env.STATE_STORE_MODE != 'git'
+        env:
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+        run: |
+          python state_store.py save --source market_positioning || {
+            echo "::warning::状態を BigQuery に保存できなかった"
+            [ "$STATE_STORE_MODE" = "dual" ]
+          }
+      - name: Commit state
+        if: always()
+        run: |
+          if [ "$STATE_STORE_MODE" = "bq" ]; then echo "⏩ STATE_STORE_MODE=bq: git には commit しない"; exit 0; fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add stock_data/data/ stock_data/logs/ 2>/dev/null || true
+          git diff --cached --quiet && exit 0
+          git commit -q -m "auto: market positioning $(date '+%Y-%m-%d %H:%M')"
+          for i in 1 2 3; do git pull -q --rebase --autostash -X theirs origin main && git push -q && exit 0; git rebase --abort 2>/dev/null || true; sleep 15; done
+          echo "::error::状態ファイルを push できなかった（この回の結果は保存されていない）"; exit 1
