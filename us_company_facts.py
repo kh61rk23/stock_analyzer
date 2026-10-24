@@ -24,7 +24,10 @@
 #
 # 【全タグの縦持ち表 us.company_facts】
 #   companyfacts の全 namespace（us-gaap・dei・ifrs-full・srt・ecd 等）× 全タグ × 全期間の値を
-#   1行1値で保存する（cik・taxonomy・tag・unit・period_start/end・val・accn・fy・fp・form・filed・frame）。
+#   1行1値で保存する（cik・tag_id・unit・period_start/end・val・accn・fy・fp・form・filed・frame）。
+#   実体は us.company_facts_v2。分類と項目名（平均約50字）は us.fact_tags（tag_id → taxonomy・tag）に1回だけ持ち、
+#   行は番号で持つ（保存量を約3割減らすため）。us.company_facts は v2 と fact_tags をつないだ view で、従来の列のまま読める。
+#   新しい項目が出たら fact_tags に番号を足してから値を追記する（view が引けない行を作らない）。
 #   同じ値が複数の提出に重複して載る（翌年の 10-K の比較列など）ので、(taxonomy, tag, unit, start, end, val) が
 #   同じものは最初に提出した1行だけにする。値が訂正されたもの（val が違う）は別の行として残る。
 #   期末が KEEP_FACTS_YEARS 年（5年）より古い値は保存しない（BigQuery 無料枠 10GB に収めるため）。
@@ -65,7 +68,9 @@ DAILY_INDEX_URL = "https://www.sec.gov/Archives/edgar/daily-index/{y}/QTR{q}/mas
 BQ_LOCATION = "US"  # us データセットの location（asia の表とは JOIN できない）
 PROFILE_TABLE = "company_profile"
 ANNUAL_TABLE = "financials_annual"
-FACTS_TABLE = "company_facts"
+FACTS_TABLE = "company_facts_v2"   # 実体（項目は tag_id）。us.company_facts は同じ列で読める view
+FACTS_VIEW = "company_facts"
+TAGS_TABLE = "fact_tags"           # tag_id → taxonomy・tag
 KEEP_FACTS_YEARS = 5
 FACTS_MAX_BYTES = 6 * 1024 ** 3   # 全データセット合計の無料枠 10GB に対し、この表だけで 6GiB を超えたら追記を止めて警告
 FACTS_LOAD_RETRIES = 2
@@ -486,6 +491,37 @@ def build_fact_rows(cik: int, facts: dict | None, today: date, filed_after: str 
     return rows, max_filed
 
 
+class TagIds:
+    """(taxonomy, tag) → tag_id。us.fact_tags を最初に1回読み（list_rows・無料）、新しい項目は続きの番号を振って溜める。"""
+
+    def __init__(self, client=None):
+        self.ids: dict = {}
+        self.pending: list = []
+        if client is not None:
+            from google.api_core.exceptions import NotFound
+            try:
+                for r in client.list_rows(f"{client.project}.us.{TAGS_TABLE}"):
+                    self.ids[(r["taxonomy"], r["tag"])] = int(r["tag_id"])
+            except NotFound:
+                pass
+        self.next = max(self.ids.values(), default=0) + 1
+
+    def get(self, taxonomy, tag) -> int:
+        key = (taxonomy, tag)
+        if key not in self.ids:
+            self.ids[key] = self.next
+            self.pending.append({"tag_id": self.next, "taxonomy": taxonomy, "tag": tag})
+            self.next += 1
+        return self.ids[key]
+
+
+def compact_row(row: dict, tags: TagIds) -> dict:
+    """build_fact_rows の行 → v2 の行（taxonomy・tag を tag_id にする）（純関数に近い：tags に新しい項目が溜まる）。"""
+    out = {k: v for k, v in row.items() if k not in ("taxonomy", "tag")}
+    out["tag_id"] = tags.get(row.get("taxonomy"), row["tag"])
+    return out
+
+
 def facts_job_id(cik_marks: list) -> str:
     """load job の ID。取り込む (cik, 前回の提出日, 今回の提出日) の並びから決める（同じ内容の再実行は同じ ID）。"""
     import hashlib
@@ -732,7 +768,7 @@ def facts_schema():
     from google.cloud import bigquery as bq
     F = bq.SchemaField
     return [
-        F("cik", "INT64", "REQUIRED"), F("taxonomy", "STRING"), F("tag", "STRING", "REQUIRED"), F("unit", "STRING"),
+        F("cik", "INT64", "REQUIRED"), F("tag_id", "INT64", "REQUIRED"), F("unit", "STRING"),
         F("period_start", "DATE"), F("period_end", "DATE", "REQUIRED"), F("val", "FLOAT64"),
         F("accn", "STRING"), F("fy", "INT64"), F("fp", "STRING"), F("form", "STRING"),
         F("filed", "DATE"), F("frame", "STRING"),
@@ -822,7 +858,7 @@ def write_table(client, table: str, schema: list, rows: list, previous_count: in
 
 
 def ensure_facts_table(client):
-    """us.company_facts を無ければ作る（period_end の年でパーティション・cik と tag でクラスタ）。"""
+    """us.company_facts_v2 を無ければ作る（period_end の年でパーティション・cik と tag_id でクラスタ）。"""
     from google.api_core.exceptions import NotFound
     from google.cloud import bigquery
     ref = f"{client.project}.us.{FACTS_TABLE}"
@@ -831,8 +867,22 @@ def ensure_facts_table(client):
     except NotFound:
         t = bigquery.Table(ref, schema=facts_schema())
         t.time_partitioning = bigquery.TimePartitioning(type_=bigquery.TimePartitioningType.YEAR, field="period_end")
-        t.clustering_fields = ["cik", "tag"]
+        t.clustering_fields = ["cik", "tag_id"]
         return client.create_table(t)
+
+
+def append_tags(client, tags: TagIds) -> None:
+    """新しく番号を振った項目を us.fact_tags に足す（load job・無料）。値の追記より先に呼ぶ。"""
+    from google.cloud import bigquery
+    if not tags.pending:
+        return
+    cfg = bigquery.LoadJobConfig(source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
+                                 write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+                                 schema=[bigquery.SchemaField("tag_id", "INT64"), bigquery.SchemaField("taxonomy", "STRING"),
+                                         bigquery.SchemaField("tag", "STRING")])
+    client.load_table_from_json(tags.pending, f"{client.project}.us.{TAGS_TABLE}", job_config=cfg,
+                                location=BQ_LOCATION).result()
+    tags.pending = []
 
 
 def append_facts_file(client, path: Path, job_id: str, rows_n: int) -> None:
@@ -921,6 +971,7 @@ def run(mode: str, cfg, client, budget_minutes: float, limit: int = 0, dry_run: 
     fact_n = {"pending": 0, "loaded": 0}
     if client and not dry_run:
         ensure_facts_table(client)
+    tags = TagIds(client if (client and not dry_run) else None)
     stats = {"ok": 0, "no_facts": 0, "error": 0, "attempted": 0}
     consecutive_fail = 0
     aborted = ""
@@ -934,6 +985,7 @@ def run(mode: str, cfg, client, budget_minutes: float, limit: int = 0, dry_run: 
             size = client.get_table(f"{client.project}.us.{FACTS_TABLE}").num_bytes or 0
             if size > FACTS_MAX_BYTES:
                 raise RuntimeError(f"us.{FACTS_TABLE} が {size / 1024 ** 3:.2f}GiB で上限 {FACTS_MAX_BYTES / 1024 ** 3:g}GiB を超えた（無料枠 10GB を守るため追記を止めた）")
+            append_tags(client, tags)
             append_facts_file(client, facts_tmp, facts_job_id(fact_marks), fact_n["pending"])
             fact_n["loaded"] += fact_n["pending"]
         facts_fh.seek(0)
@@ -973,7 +1025,7 @@ def run(mode: str, cfg, client, budget_minutes: float, limit: int = 0, dry_run: 
         prev_wm = max((profiles.get(t, {}).get("facts_max_filed") or "" for t in item["tickers"]), default="") or None
         frows, new_wm = build_fact_rows(cik, facts, today, filed_after=prev_wm)
         for fr in frows:
-            facts_fh.write(json.dumps(fr, ensure_ascii=False, separators=(",", ":")) + "\n")
+            facts_fh.write(json.dumps(compact_row(fr, tags), ensure_ascii=False, separators=(",", ":")) + "\n")
         fact_n["pending"] += len(frows)
         if frows:
             fact_marks.append((cik, prev_wm, new_wm))
