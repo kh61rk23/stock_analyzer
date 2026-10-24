@@ -309,3 +309,31 @@ def test_main_git_mode_does_nothing(monkeypatch, capsys):
     assert ss.main(["prepare"]) == 0
     out = capsys.readouterr().out
     assert "STATE_STORE_MODE=git" in out
+
+
+class _RowsClient:
+    """list_rows(start_index, max_results) だけを持つ偽の BQ クライアント。返す順をばらつかせる。"""
+
+    def __init__(self, n):
+        self.rows = [{"path": f"p{i}", "part": 0} for i in range(n)]
+
+    def list_rows(self, table, selected_fields=None, start_index=0, max_results=None, page_size=None):
+        import random
+        import time as _t
+        _t.sleep(random.random() / 200)
+        return [_Row(r) for r in self.rows[start_index:start_index + max_results]]
+
+
+class _Row(dict):
+    pass
+
+
+def test_bq_iter_full_parallel_keeps_table_order(monkeypatch):
+    monkeypatch.setattr(ss, "FULL_FETCH_SPAN", 7)
+    monkeypatch.setattr(ss, "FULL_FETCH_WORKERS", 4)
+    b = object.__new__(ss.BQBackend)
+    b.client, b.table_ref, b._schema = _RowsClient(53), "t", []
+    b.table_info = lambda: {"num_rows": 53}
+    got = list(b.iter_full())
+    assert [i for i, _ in got] == list(range(53))
+    assert [r["path"] for _, r in got] == [f"p{i}" for i in range(53)]

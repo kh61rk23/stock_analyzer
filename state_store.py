@@ -43,6 +43,9 @@ BASELINE_NAME = ".state_store_baseline.json"
 MODES = ("git", "dual", "bq")
 # 変わったパスがこれ以下なら、行番号を指定して1行ずつ取り出す（表全体を読まずに済む）
 INDEXED_FETCH_MAX = 200
+# 全件読みの区間の行数と並列数（tabledata.list は無料。ページの往復待ちを重ねて隠す）
+FULL_FETCH_SPAN = 250
+FULL_FETCH_WORKERS = 8
 
 SCHEMA = [
     ("path", "STRING", "REQUIRED"),
@@ -327,9 +330,23 @@ class BQBackend:
             yield i, dict(r.items())
 
     def iter_full(self):
-        rows = self.client.list_rows(self.table_ref, selected_fields=self._schema, page_size=50)
-        for i, r in enumerate(rows):
-            yield i, dict(r.items())
+        """全行を (行番号, 行) で返す。1ページ50行を順に読むとページごとの往復待ちが積み重なる
+        （7,000行で約3〜7分）ので、行番号の区間に分けて並列に読み、表の並び順で返す。"""
+        from concurrent.futures import ThreadPoolExecutor
+        total = int(self.table_info().get("num_rows") or 0)
+        span = int(FULL_FETCH_SPAN)
+
+        def _read(start):
+            rows = self.client.list_rows(self.table_ref, selected_fields=self._schema, start_index=start,
+                                         max_results=span, page_size=50)
+            return [dict(r.items()) for r in rows]
+
+        # 行数は読み始めの時点。restore が欲しい版はその前に読んだメタに載っているので、後から足された行は要らない。
+        # 掃除で並びが変わった場合は assemble の sha256 照合で欠けが分かる
+        with ThreadPoolExecutor(max_workers=int(FULL_FETCH_WORKERS)) as ex:
+            for n, chunk in enumerate(ex.map(_read, range(0, total, span))):
+                for k, r in enumerate(chunk):
+                    yield n * span + k, r
 
     def fetch_row(self, index: int):
         rows = list(self.client.list_rows(self.table_ref, selected_fields=self._schema,
