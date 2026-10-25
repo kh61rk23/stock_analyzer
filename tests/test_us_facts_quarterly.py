@@ -103,3 +103,16 @@ def test_lookup_reads_once_and_maps_ticker(monkeypatch):
         US_FACTS_COMPLEMENT_ENABLED = False
 
     assert q.lookup(Off, "BRK-B") is None
+
+
+def test_merge_complement_takes_eps_from_fallback_only_when_needed():
+    import us_fundamental_rotator as ufr
+    hit = {"eps_history": [], "latest_eps": None, "eps_accel_score_xbrl": None, "latest_fcf": 100.0,
+           "data_source": "sec_company_facts_bq"}
+    fb = {"eps_history": [{"period": "2026-06-30", "val": 1.0}], "latest_eps": 1.0, "eps_accel_score_xbrl": 2.5,
+          "latest_fcf": 90.0, "data_source": "sec_edgar_bq"}
+    out = ufr.merge_complement(hit, fb)
+    assert out["eps_accel_score_xbrl"] == 2.5 and out["latest_fcf"] == 100.0 and out["eps_source"] == "sec_edgar_bq"
+    assert ufr.merge_complement(None, fb) is fb
+    assert ufr.merge_complement(hit, None) is hit
+    assert ufr.merge_complement(hit, dict(fb, eps_accel_score_xbrl=None)) is hit

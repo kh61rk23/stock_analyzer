@@ -475,23 +475,46 @@ def lookup_us_fundamentals_by_path(data_dir, ticker: str) -> Optional[dict]:
     四半期 EPS・直近12か月 FCF）を引き、無い銘柄だけ _ticker_path と同じレイアウト
     （<data_dir>/us_fundamentals_db/<ticker>.json）→ us.fundamentals を見る。
     ローカル JSON と us.fundamentals の EPS・FCF は期首からの累計なので、取れる銘柄は company_facts 側にそろえる。
+    company_facts に四半期の EPS が8期そろわない会社（通期しか入っていない会社がある）は、
+    EPS と加速だけ従来の経路の値を使い、FCF は company_facts の値を残す（merge_complement）。
     """
+    hit = None
     try:
         import config as _cfg
         import us_facts_quarterly
         hit = us_facts_quarterly.lookup(_cfg, ticker)
-        if hit:
+        if hit and len(hit.get("eps_history") or []) >= 8:
             return hit
     except Exception:
         pass
+    fallback = None
     try:
         safe = ticker.replace("/", "_").replace(".", "_")
         p = Path(data_dir) / DB_DIR_NAME / f"{safe}.json"
         if p.exists():
-            return json.loads(p.read_text(encoding="utf-8"))
+            fallback = json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         pass
-    return _lookup_us_fundamentals_bq(ticker)
+    if fallback is None:
+        fallback = _lookup_us_fundamentals_bq(ticker)
+    return merge_complement(hit, fallback)
+
+
+EPS_KEYS = ("eps_history", "latest_eps", "eps_accel_score_xbrl")
+
+
+def merge_complement(hit: Optional[dict], fallback: Optional[dict]) -> Optional[dict]:
+    """company_facts の補完（EPS が8期そろわない）と従来の経路の値を合わせる。
+    従来の経路に加速スコアがあれば EPS の3項目をそちらから取り、FCF は company_facts を優先する。"""
+    if not hit:
+        return fallback
+    if not fallback or fallback.get("eps_accel_score_xbrl") is None:
+        return hit
+    out = dict(hit)
+    for k in EPS_KEYS:
+        out[k] = fallback.get(k)
+    out["eps_source"] = fallback.get("data_source") or "us_fundamentals"
+    return out
 
 
 # ==============================================================
