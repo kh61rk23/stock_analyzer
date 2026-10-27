@@ -1846,6 +1846,7 @@ ENABLE_DAILY_CHANGES: bool = True
 DAILY_CHANGES_MOVE_PT: float = 5.0   # 点がこれ以上動いた銘柄を出す
 DAILY_CHANGES_TOP: int = 5           # 新規・脱落・動きの各何社まで出すか
 PICK_OUTCOMES_REFRESH_DAYS: int = 130
+PICK_OUTCOMES_DELIB_DAYS: int = 90      # 日次メールの「審議の結果とその後」に出す審議の期間（日）
 PICK_OUTCOMES_UNIVERSE_TOP: int = 100   # 全上場の一次採点（screener_universe_daily）の上位何社を記録するか
 
 # yf_cache が実行中に集めた日足を BQ analytics.price_daily へ書き出す（事後検証用・追加取得はしない）。
@@ -4262,11 +4263,14 @@ ENABLE_INVESTMENT_DEPT: bool = True
 # deliberation_scheduler.py が参照。launchd は毎週日曜20:00に起動するが、
 # 実際に走らせるかはこの間隔で判定する（launchd に隔週指定が無いため）。
 # 前回実行日は stock_data/data/deliberation_state.json に残る。
-DELIBERATION_INTERVAL_DAYS: int = 14
+# 週1回の定時実行（日曜 20:00）は毎回数分ずれて始まり、7日ちょうどだと「前回から6日」で見送るので6日にする。
+# クラウドの審議（tools/invest_queue.py due／claim）もこの間隔と DELIBERATION_CLAIM_LIMIT を既定にする。
+DELIBERATION_INTERVAL_DAYS: int = 6
+DELIBERATION_CLAIM_LIMIT: int = 5          # 1回の審議で取る銘柄数
 
 # ── 審議キュー ────────────────────────────────
 # 日次・週次メールに「次に審議へ上げる候補」を何件出すか。
-# 先頭1件が隔週ジョブ（deliberation_scheduler）で実際に選定される銘柄。
+# 先頭 DELIBERATION_CLAIM_LIMIT 件が週1回の審議で実際に選ばれる銘柄。
 DELIBERATION_QUEUE_TOP_N: int = 5
 ALERT_ON_DELIBERATION_QUEUE: bool = True
 # 実働の正本はローカル側 Vault2_ClaudeCode_Local（iCloud側 Vault2_ClaudeCode は凍結・書込禁止）。

@@ -500,13 +500,16 @@ def extract_alerts(cfg, results: dict) -> list:
         _po_alert = _po.monthly_report(cfg)
         if _po_alert:
             alerts.append(_po_alert)
+        _po_delib = _po.deliberation_alert(cfg)
+        if _po_delib:
+            alerts.append(_po_delib)
     except Exception as _po_err:
         print(f"  ⚠️  [alert] 推奨のその後の成績表を作れない: {str(_po_err)[:80]}")
 
         # ── ⑥-3 審議キュー候補 ──────────────────
-        # 隔週のB部門審議（E3）へ次に上げる銘柄を、毎日メールで見えるようにする。
+        # 週1回のB部門審議（E3）へ次に上げる銘柄を、毎日メールで見えるようにする。
         # 並び順は deliberation_scheduler.build_deliberation_queue と同一なので、
-        # ここに出る先頭銘柄が隔週ジョブで実際に選定される銘柄になる。
+        # ここに出る先頭の銘柄が週1回の審議で実際に選定される銘柄になる。
     if getattr(cfg, "ALERT_ON_DELIBERATION_QUEUE", True):
         try:
             from deliberation_queue import get_queue_for_report
@@ -584,7 +587,7 @@ def extract_alerts(cfg, results: dict) -> list:
                     _ql.append(f"  ＝ 前回（{_chg['prev_date']}）から入れ替わりなし")
                 _ql.append("")
                 _ql.append(f"  ▶ = 次回の審議で選定される銘柄"
-                           f"（隔週 / {_dq.get('interval_days', 14)}日間隔）")
+                           f"（{_dq.get('interval_days', 6)}日間隔・1回 {getattr(cfg, 'DELIBERATION_CLAIM_LIMIT', 5)}銘柄）")
                 _ql.append(f"  審議済み除外: {_dq.get('already_count', 0)}銘柄"
                            f"（出所: {_dq.get('source', '不明')}）")
                 if _dq.get("partial"):

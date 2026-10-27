@@ -286,6 +286,75 @@ def monthly_report(cfg, today: date | None = None, force: bool = False) -> dict 
             "body": "\n".join(lines), "severity": "info"}
 
 
+DELIB_SQL = """
+WITH dl AS (
+  SELECT ticker, ANY_VALUE(company_name) AS name, DATE(deliberated_at, 'Asia/Tokyo') AS d,
+         ANY_VALUE(verdict) AS verdict, MAX(conviction) AS conviction, ANY_VALUE(approval_status) AS approval,
+         IF(ENDS_WITH(ticker, '.T'), '1306.T', 'SPY') AS bench
+  FROM `{p}.invest.deliberations`
+  WHERE DATE(deliberated_at, 'Asia/Tokyo') >= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL @days DAY)
+  GROUP BY ticker, d
+),
+px AS (
+  SELECT ticker, trade_date, close FROM `{p}.analytics.price_daily_latest`
+  WHERE trade_date >= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL @days + 10 DAY) AND close > 0
+    AND ticker IN (SELECT ticker FROM dl UNION DISTINCT SELECT bench FROM dl)
+),
+e AS (   -- 審議した日以降の最初の終値
+  SELECT dl.ticker, dl.d, px.close AS c0 FROM dl JOIN px ON px.ticker = dl.ticker AND px.trade_date >= dl.d
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY dl.ticker, dl.d ORDER BY px.trade_date) = 1
+),
+l AS (   -- 直近の終値
+  SELECT ticker, trade_date AS d1, close AS c1 FROM px
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY trade_date DESC) = 1
+),
+be AS (
+  SELECT k.bench, k.d, px.close AS b0 FROM (SELECT DISTINCT bench, d FROM dl) k
+  JOIN px ON px.ticker = k.bench AND px.trade_date >= k.d
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY k.bench, k.d ORDER BY px.trade_date) = 1
+),
+bl AS (
+  SELECT x.ticker, x.d1, px.close AS b1 FROM (SELECT DISTINCT dl.ticker, dl.bench, l.d1 FROM dl JOIN l USING (ticker)) x
+  JOIN px ON px.ticker = x.bench AND px.trade_date <= x.d1
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY x.ticker ORDER BY px.trade_date DESC) = 1
+)
+SELECT dl.*, e.c0, l.c1, l.d1, be.b0, bl.b1
+FROM dl LEFT JOIN e USING (ticker, d) LEFT JOIN l USING (ticker)
+LEFT JOIN be USING (bench, d) LEFT JOIN bl USING (ticker)
+ORDER BY dl.d DESC, dl.conviction DESC
+"""
+
+
+def deliberation_lines(rows: list[dict]) -> list[str]:
+    """審議の結果とその後（審議した日以降の最初の終値から直近の終値まで・指数の ETF との差）。"""
+    out = []
+    for r in rows:
+        ret = (r["c1"] / r["c0"] - 1) if r.get("c0") and r.get("c1") else None
+        bret = (r["b1"] / r["b0"] - 1) if r.get("b0") and r.get("b1") else None
+        tail = "株価なし" if ret is None else (f"その後 {_pct(ret)}" + (f"（超過 {_pct(ret - bret)}）" if bret is not None else ""))
+        name = (r.get("name") or "").strip()
+        out.append(f"    {r['d']} {name[:14]}（{r['ticker']}）: {r.get('verdict') or '-'}・確信度 {r.get('conviction') or '-'}"
+                   f"・{r.get('approval') or '-'} → {tail}")
+    return out
+
+
+def deliberation_alert(cfg) -> dict | None:
+    """日次メールの「審議の結果とその後」（直近 PICK_OUTCOMES_DELIB_DAYS 日の審議）。審議が無ければ None。"""
+    if not getattr(cfg, "ENABLE_PICK_OUTCOMES", True):
+        return None
+    from google.cloud import bigquery
+    client = _client(cfg)
+    jc = bigquery.QueryJobConfig(query_parameters=[
+        bigquery.ScalarQueryParameter("days", "INT64", int(getattr(cfg, "PICK_OUTCOMES_DELIB_DAYS", 90)))])
+    rows = [dict(r.items()) for r in client.query(DELIB_SQL.format(p=client.project), job_config=jc,
+                                                   location=LOCATION).result()]
+    if not rows:
+        return None
+    return {"trigger": "deliberation_followup", "title": f"🗳 審議の結果とその後（直近{getattr(cfg, 'PICK_OUTCOMES_DELIB_DAYS', 90)}日・{len(rows)}件）",
+            "body": "\n".join(["  審議した日以降の最初の終値から直近の終値まで。超過は同じ期間の指数の ETF（1306.T・SPY）との差。"]
+                              + deliberation_lines(rows)), "severity": "info"}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--since", help="この日以降の選ばれた日を計算し直す（YYYY-MM-DD）。既定は直近 PICK_OUTCOMES_REFRESH_DAYS 日")

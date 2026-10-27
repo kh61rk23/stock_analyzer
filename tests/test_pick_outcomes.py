@@ -101,3 +101,27 @@ def test_monthly_report_off():
 def test_price_universe_always_fetches_benchmarks():
     import price_universe as pu
     assert "1306.T" in pu.BENCHMARKS["jp"] and "SPY" in pu.BENCHMARKS["us"]
+
+
+def test_deliberation_lines():
+    rows = [{"d": "2026-09-27", "name": "SUMCO", "ticker": "3436.T", "verdict": "Avoid", "conviction": 3,
+             "approval": "承認", "c0": 100.0, "c1": 80.0, "b0": 50.0, "b1": 51.0},
+            {"d": "2026-08-04", "name": "", "ticker": "SOXL", "verdict": "Avoid", "conviction": 3,
+             "approval": "承認待ち", "c0": None, "c1": None, "b0": None, "b1": None}]
+    lines = po.deliberation_lines(rows)
+    assert lines[0] == "    2026-09-27 SUMCO（3436.T）: Avoid・確信度 3・承認 → その後 -20.0%（超過 -22.0%）"
+    assert lines[1].endswith("株価なし")
+
+
+def test_deliberation_sql_has_no_correlated_subquery():
+    sql = po.DELIB_SQL.format(p="p")
+    assert "(SELECT close FROM px WHERE" not in sql and "QUALIFY" in sql
+
+
+def test_invest_queue_defaults_follow_config():
+    import config
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
+    import invest_queue as iq
+    assert config.DELIBERATION_INTERVAL_DAYS == 6 and config.DELIBERATION_CLAIM_LIMIT == 5
+    assert iq._cfg_int("DELIBERATION_INTERVAL_DAYS", 14) == 6
+    assert iq._cfg_int("NO_SUCH_SETTING", 9) == 9

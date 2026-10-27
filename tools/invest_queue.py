@@ -6,7 +6,7 @@
                                invest.deliberations に登録し、キューを done に、実行記録を更新する
   release [--case ID] [--older-than-hours H] [--error 理由]
                                claimed を pending に戻す（失敗時の後始末。--error で実行記録に失敗を残す）
-  due     [--interval-days N]  前回の成功した実行から N 日（既定14）以上か判定する
+  due     [--interval-days N]  前回の成功した実行から N 日（既定 config.DELIBERATION_INTERVAL_DAYS）以上か判定する
   ledger  [--limit N]          直近の審議一覧（判断台帳の代わり。デビル・ベアが過去の判断を読む用）
 
 認証: edinet_bq_client と同じ。BQ_CREDENTIALS（JSON文字列）または BQ_CREDENTIALS_PATH。
@@ -206,6 +206,15 @@ def read_work_dir(d: Path) -> tuple:
 
 # ── BQ I/O ────────────────────────────────────────────────────
 
+def _cfg_int(name: str, default: int) -> int:
+    """config.py の値（無ければ既定）。CLI の既定値を config にそろえるため。"""
+    try:
+        import config
+        return int(getattr(config, name, default))
+    except Exception:
+        return default
+
+
 def _client():
     from edinet_bq_client import EDINETBQClient
     return EDINETBQClient().client
@@ -401,7 +410,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("claim")
-    c.add_argument("--limit", type=int, default=3)
+    c.add_argument("--limit", type=int, default=_cfg_int("DELIBERATION_CLAIM_LIMIT", 5))
     c.add_argument("--run-env", default="cloud_routine")
     k = sub.add_parser("complete")
     k.add_argument("--case", required=True)
@@ -415,7 +424,7 @@ def main(argv=None) -> int:
     r.add_argument("--error")
     r.add_argument("--run-id")
     d = sub.add_parser("due")
-    d.add_argument("--interval-days", type=int, default=14)
+    d.add_argument("--interval-days", type=int, default=_cfg_int("DELIBERATION_INTERVAL_DAYS", 6))
     lg = sub.add_parser("ledger")
     lg.add_argument("--limit", type=int, default=30)
     args = ap.parse_args(argv)
