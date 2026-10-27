@@ -367,10 +367,22 @@ def coverage_summary(rows: list[dict]) -> dict:
             "nodes": len({r["node_id"] for r in rows})}
 
 
+def company_key(value) -> str:
+    """会社のキー（証券コード4桁。数字3桁＋数字か英字）。空・NaN・形の違う値は ""（その行は使わない）。"""
+    if value is None or (isinstance(value, float) and value != value):
+        return ""
+    v = str(value).strip().upper()
+    return v if re.fullmatch(r"[0-9]{3}[0-9A-Z]", v) else ""
+
+
 # ── I/O層（BQ・segment_mapper） ──────────────────────────────
 
 def fetch_segments_from_bq(cfg) -> dict:
-    """edinet.segments × segment_finance(revenue_ratio) を企業別に取得。空なら {}。"""
+    """edinet.segments × segment_finance(revenue_ratio) を企業別に取得。空なら {}。
+
+    company_code が空の行（英数字の証券コードに対応する前に書かれた行など）は、segment_id の先頭の
+    EDINET コードから edinet.company の証券コードを引き直す。引けない行は使わない
+    （空のまま str() すると "nan" という1社に複数の会社がまとまってしまう）。"""
     try:
         from edinet_bq_client import EDINETBQClient
         bq = EDINETBQClient()
@@ -379,19 +391,29 @@ def fetch_segments_from_bq(cfg) -> dict:
             or bq.project
         )
         sql = f"""
+        WITH s AS (
+          SELECT COALESCE(s.company_code, LEFT(c.sec_code, 4)) AS company_code, s.segment_id, s.segment_name
+          FROM `{project}.edinet.segments` s
+          LEFT JOIN `{project}.edinet.company` c
+            ON s.company_code IS NULL AND c.edinet_code = REGEXP_EXTRACT(s.segment_id, r'^(E[0-9]{{5}})')
+          WHERE s.segment_name IS NOT NULL AND s.segment_name != ''
+        )
         SELECT s.company_code, s.segment_name,
                MAX(f.revenue_ratio) AS revenue_ratio
-        FROM `{project}.edinet.segments` s
+        FROM s
         LEFT JOIN `{project}.edinet.segment_finance` f
           ON f.segment_id = s.segment_id
-        WHERE s.segment_name IS NOT NULL AND s.segment_name != ''
+        WHERE REGEXP_CONTAINS(IFNULL(s.company_code, ''), r'^[0-9A-Z]{{4}}$')
         GROUP BY s.company_code, s.segment_name
         """
         df = bq.query_to_df(sql)
         out: dict = {}
         for _, r in df.iterrows():
+            code = company_key(r.get("company_code"))
+            if not code:
+                continue
             share = r.get("revenue_ratio")
-            out.setdefault(str(r["company_code"]), []).append({
+            out.setdefault(code, []).append({
                 "segment_name": str(r["segment_name"]),
                 "share": float(share) if share is not None and share == share else None,
             })
@@ -440,8 +462,9 @@ def fetch_texts_from_bq(cfg, sections: list[str]) -> dict:
         df = bq.query_to_df(sql)
         out: dict = {}
         for _, r in df.iterrows():
-            out.setdefault(str(r["company_code"]), {})[str(r["section_type"])] = \
-                str(r["raw_text"] or "")
+            code = company_key(r.get("company_code"))
+            if code:
+                out.setdefault(code, {})[str(r["section_type"])] = str(r["raw_text"] or "")
         return out
     except Exception as e:
         print(f"  ⚠️ 本文取得失敗: {str(e)[:80]}")

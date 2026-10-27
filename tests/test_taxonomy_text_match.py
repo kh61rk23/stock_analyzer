@@ -219,3 +219,10 @@ class TestReaders:
     def test_weekly_step_runs_mapper(self):
         wf = (REPO / ".github" / "workflows" / "daily_run.yml").read_text(encoding="utf-8")
         assert "python -u taxonomy_company_mapper.py" in wf
+
+
+def test_company_key_rejects_nan_and_bad_codes():
+    import taxonomy_company_mapper as m
+    assert m.company_key("7203") == "7203" and m.company_key("409a") == "409A"
+    for bad in (None, float("nan"), "nan", "None", "", "40950", "E05633"):
+        assert m.company_key(bad) == ""
