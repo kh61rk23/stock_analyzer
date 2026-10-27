@@ -226,3 +226,41 @@ def test_company_key_rejects_nan_and_bad_codes():
     assert m.company_key("7203") == "7203" and m.company_key("409a") == "409A"
     for bad in (None, float("nan"), "nan", "None", "", "40950", "E05633"):
         assert m.company_key(bad) == ""
+
+
+def test_fallback_rows_relaxed_then_industry():
+    import taxonomy_company_mapper as m
+    listed = {"1111": "小売業", "2222": "小売業", "3333": None, "4444": "銀行業", "5555": "小売業"}
+    tagged = {"4444"}
+    relaxed = {"1111": {"ec_platform": {"text_hits": 2, "text_terms": {"事業の内容": {"EC": 2}},
+                                        "seg_share": 0.0, "seg_hits": []},
+                        "drugstore": {"text_hits": 1, "text_terms": {"事業の内容": {"ドラッグ": 1}},
+                                      "seg_share": 0.0, "seg_hits": []}},
+               "5555": {"not_a_node": {"text_hits": 5, "text_terms": {}, "seg_share": 0.0, "seg_hits": []}}}
+    known = {"ec_platform", "drugstore", "specialty_retail", "banking"}
+    rows = m.build_fallback_rows(listed, tagged, relaxed, {"小売業": "specialty_retail", "銀行業": "banking"},
+                                 known, as_of="2026-10-27", max_nodes=3)
+    by = {}
+    for r in rows:
+        by.setdefault(r["company_id"], []).append(r)
+    assert [r["node_id"] for r in by["1111"]] == ["ec_platform", "drugstore"]
+    assert abs(sum(r["relevance_score"] for r in by["1111"]) - 1.0) < 1e-3
+    assert by["1111"][0]["evidence_source"] == "fallback:relaxed"
+    # 照合の当たりが無い・知らないノードだけの会社は業種から1つ
+    assert [(r["node_id"], r["relevance_score"], r["evidence_source"]) for r in by["2222"]] == \
+        [("specialty_retail", 1.0, "fallback:industry")]
+    assert by["5555"][0]["node_id"] == "specialty_retail"
+    assert "3333" not in by and "4444" not in by          # 業種が無い・すでにタグがある
+    assert all(r["confidence_type"] == "fallback" and r["confidence"] == 0.3 for r in rows)
+
+
+def test_industry_fallback_map_points_to_approved_nodes():
+    import json
+    import taxonomy_company_mapper as m
+    from taxonomy_loader import load_seed_batches, select_approved_nodes
+    nodes, _ = select_approved_nodes(load_seed_batches())
+    ids = {n["node_id"] for n in nodes}
+    fb = json.loads(m.FALLBACK_RULES_PATH.read_text(encoding="utf-8"))
+    bad = {k: v for k, v in fb["industry_to_node"].items() if v not in ids}
+    assert not bad, bad
+    assert len(fb["industry_to_node"]) == 33

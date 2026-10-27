@@ -22,6 +22,13 @@
 #     verified → edinet → その他 の順で1行を選ぶので、セグメント経路の行を上書きしない
 #   - 今回の照合で出なかった過去の text_match 行は valid_to を前日にして失効させる
 #     （除外語を足したときに誤爆行が残り続けないようにするため）
+#
+# 【補いの経路（confidence_type="fallback"）】
+#   上の2経路で1つもタグが付かない上場会社に、最低1つ付ける。日本株の一次採点のテーマ観点にも使う。
+#   1段目: 語の照合の基準をゆるめ（1語が relaxed_min_hits 回以上。1回では誤りが多い）、当たりの多い順に
+#          relaxed_max_nodes 個まで。2段目: それでも無ければ東証33業種から既定のノードを1つ。
+#   対応表・しきい値は data/taxonomy_industry_fallback.json。confidence=0.3・verified_flag=False。
+#   上の経路で付くようになった会社の fallback 行は、次の回に出ないので失効する。
 # 使い方: python3 taxonomy_company_mapper.py --dry-run / （本実行）
 # ==============================================================
 
@@ -39,6 +46,9 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 KEYWORD_RULES_PATH = REPO / "data" / "taxonomy_keyword_rules.json"
+FALLBACK_RULES_PATH = REPO / "data" / "taxonomy_industry_fallback.json"
+FALLBACK_TYPE = "fallback"
+FALLBACK_CONFIDENCE = 0.3
 TEXT_MATCH_TYPE = "text_match"
 TEXT_MATCH_CONFIDENCE = 0.5
 TEXT_MATCH_SOURCE = "edinet_text_analysis+segments:keyword"
@@ -360,6 +370,60 @@ def build_text_match_rows(matches: dict, as_of: str = None,
     return rows
 
 
+def build_fallback_rows(listed: dict, tagged: set, relaxed: dict, industry_to_node: dict,
+                        known_nodes: set, as_of: str = None, max_nodes: int = 3,
+                        text_hit_cap: int = 10) -> list[dict]:
+    """
+    タグの無い上場会社の補いの行（confidence_type=fallback）。
+
+    Args:
+        listed:  {company_code: 東証33業種 or None}
+        tagged:  他の経路で有効なタグがある company_code
+        relaxed: 基準をゆるめた match_company_nodes の結果
+        industry_to_node: {業種: node_id}。known_nodes に無い node_id は使わない
+    1段目は relaxed の当たりの多い順に max_nodes 個（関与度は text_match と同じ式で会社内で合計1）、
+    2段目は業種のノードを1つ（関与度 1.0）。
+    """
+    as_of = as_of or date.today().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
+    cap = max(1, int(text_hit_cap))
+    rows = []
+    for company in sorted(listed):
+        if company in tagged:
+            continue
+        nodes = {nid: ev for nid, ev in (relaxed.get(company) or {}).items() if nid in known_nodes}
+        if nodes:
+            raw = {nid: ev["seg_share"] + 0.5 * min(ev["text_hits"], cap) / cap for nid, ev in nodes.items()}
+            top = sorted(raw, key=lambda n: (-raw[n], n))[:max(1, int(max_nodes))]
+            total = sum(raw[n] for n in top) or 1.0
+            picks = [(nid, round(raw[nid] / total, 4), "relaxed:" + _rationale(nodes[nid]),
+                      nodes[nid]["seg_share"] if nodes[nid]["seg_hits"] else None) for nid in top]
+        else:
+            ind = listed.get(company)
+            nid = industry_to_node.get(ind or "")
+            if not nid or nid not in known_nodes:
+                continue
+            picks = [(nid, 1.0, f"industry:{ind}", None)]
+        for nid, rel, why, share in picks:
+            rows.append({
+                "map_id":            f"{company}:{nid}:{FALLBACK_TYPE}",
+                "company_id":        company,
+                "node_id":           nid,
+                "relevance_score":   rel,
+                "confidence":        FALLBACK_CONFIDENCE,
+                "revenue_share_est": share,
+                "confidence_type":   FALLBACK_TYPE,
+                "evidence_source":   "fallback:" + why.split(":", 1)[0],
+                "rationale":         why[:500],
+                "valid_from":        as_of,
+                "valid_to":          None,
+                "auto_derived":      True,
+                "verified_flag":     False,
+                "updated_at":        now,
+            })
+    return rows
+
+
 def coverage_summary(rows: list[dict]) -> dict:
     """行の被覆（社数・ノード数・行数）。ログと見積もり用。"""
     return {"rows": len(rows),
@@ -471,6 +535,36 @@ def fetch_texts_from_bq(cfg, sections: list[str]) -> dict:
         return {}
 
 
+def fetch_listed_and_tagged(cfg) -> tuple[dict, set]:
+    """上場会社 {証券コード4桁: 東証33業種} と、fallback 以外の有効なタグがある会社の集合。失敗なら ({}, set())。"""
+    try:
+        from edinet_bq_client import EDINETBQClient
+        bq = EDINETBQClient()
+        project = str(getattr(cfg, "BQ_PROJECT_ID", "") or "").strip() or bq.project
+        listed = {}
+        for _, r in bq.query_to_df(f"""
+            SELECT LEFT(sec_code, 4) AS code, ANY_VALUE(industry) AS industry
+            FROM `{project}.edinet.company`
+            WHERE NOT IFNULL(is_delisted, FALSE) AND sec_code IS NOT NULL
+            GROUP BY code""").iterrows():
+            code = company_key(r.get("code"))
+            if code:
+                ind = r.get("industry")
+                listed[code] = None if ind is None or ind != ind else str(ind)
+        tagged = set()
+        for _, r in bq.query_to_df(f"""
+            SELECT DISTINCT company_id FROM `{project}.taxonomy.company_taxonomy_map`
+            WHERE confidence_type != '{FALLBACK_TYPE}' AND (valid_to IS NULL OR valid_to >= CURRENT_DATE('Asia/Tokyo'))
+            """).iterrows():
+            code = company_key(r.get("company_id"))
+            if code:
+                tagged.add(code)
+        return listed, tagged
+    except Exception as e:
+        print(f"  ⚠️ 上場会社・付いているタグの取得失敗: {str(e)[:80]}")
+        return {}, set()
+
+
 def build_merge_sql(project: str, staging: str, confidence_type: str,
                     retire_before: str = None) -> str:
     """
@@ -564,8 +658,9 @@ def run_segment_path(segments: dict, cfg, dry: bool) -> int:
     return n
 
 
-def run_text_match_path(segments: dict, cfg, dry: bool) -> int:
-    """語の照合の経路（confidence_type=text_match）。書いた行数を返す。"""
+def run_text_match_path(segments: dict, cfg, dry: bool, ctx: dict | None = None) -> int:
+    """語の照合の経路（confidence_type=text_match）。書いた行数を返す。
+    ctx を渡すと、補いの経路が使う本文・語・今回の行を入れて返す（本文を2回読まないため）。"""
     from taxonomy_loader import load_seed_batches, select_approved_nodes
     rules = load_keyword_rules()
     nodes, _ = select_approved_nodes(load_seed_batches())
@@ -585,6 +680,8 @@ def run_text_match_path(segments: dict, cfg, dry: bool) -> int:
     as_of = date.today().isoformat()
     rows = build_text_match_rows(matches, as_of=as_of,
                                  text_hit_cap=int(rules.get("text_hit_cap", 10)))
+    if ctx is not None:
+        ctx.update(texts=texts, node_terms=node_terms, rules=rules, rows=rows)
     cov = coverage_summary(rows)
     print(f"📊 生成行: {cov['rows']}行 / {cov['companies']}社 / {cov['nodes']}ノード"
           f"（confidence_type={TEXT_MATCH_TYPE}）")
@@ -602,6 +699,48 @@ def run_text_match_path(segments: dict, cfg, dry: bool) -> int:
     ok, n = upsert_to_bq(rows, cfg, confidence_type=TEXT_MATCH_TYPE,
                          retire_before=retire)
     print(f"{'✅ MERGE完了' if ok else '⚠️ 書込失敗（exit 0）'}: {n}行（text_match）")
+    return n
+
+
+def run_fallback_path(segments: dict, cfg, dry: bool, ctx: dict) -> int:
+    """補いの経路（confidence_type=fallback）。他の経路の後に呼ぶ。書いた行数を返す。"""
+    try:
+        fb = json.loads(FALLBACK_RULES_PATH.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"  ⚠️ 補いの規則を読めない（{type(e).__name__}）→ スキップ")
+        return 0
+    listed, tagged = fetch_listed_and_tagged(cfg)
+    if not listed:
+        print("  ⏩ 上場会社を引けない → 補いはスキップ")
+        return 0
+    tagged |= {r["company_id"] for r in ctx.get("rows") or []}   # dry-run でも今回の照合の分を数える
+    rules = ctx.get("rules") or load_keyword_rules()
+    node_terms = ctx.get("node_terms") or {}
+    hits = int(fb.get("relaxed_min_hits", 1))
+    untagged = {c for c in listed if c not in tagged}
+    relaxed = match_company_nodes(
+        {c: t for c, t in (ctx.get("texts") or {}).items() if c in untagged},
+        {c: s for c, s in segments.items() if c in untagged}, node_terms,
+        min_text_hits=hits, min_single_term_hits=hits,
+        ignore_phrases=rules.get("ignore_phrases") or ())
+    rows = build_fallback_rows(listed, tagged, relaxed, fb.get("industry_to_node") or {}, set(node_terms),
+                               max_nodes=int(fb.get("relaxed_max_nodes", 3)),
+                               text_hit_cap=int(rules.get("text_hit_cap", 10)))
+    by = {}
+    for r in rows:
+        by.setdefault(r["company_id"], r["evidence_source"])
+    n_rel = sum(1 for v in by.values() if v == "fallback:relaxed")
+    left = len(untagged) - len(by)
+    print(f"🧩 補い: タグの無い上場会社 {len(untagged)}社 → 語の照合をゆるめて {n_rel}社・業種から "
+          f"{len(by) - n_rel}社（{len(rows)}行）・付けられない {left}社（業種も本文も無い）")
+    if dry:
+        for r in rows[:5]:
+            print(f"   {r['company_id']} → {r['node_id']} score={r['relevance_score']} | {r['rationale'][:80]}")
+        return 0
+    retire = ((date.today() - timedelta(days=1)).isoformat()
+              if len(listed) >= int(fb.get("retire_min_listed", 1000)) else None)
+    ok, n = upsert_to_bq(rows, cfg, confidence_type=FALLBACK_TYPE, retire_before=retire)
+    print(f"{'✅ MERGE完了' if ok else '⚠️ 書込失敗（exit 0）'}: {n}行（fallback）")
     return n
 
 
@@ -628,7 +767,12 @@ def main():
     else:
         print("  ⏩ セグメントデータなし → 業種経由の経路はスキップ")
 
-    run_text_match_path(segments, cfg, dry)
+    ctx: dict = {}
+    run_text_match_path(segments, cfg, dry, ctx)
+    try:
+        run_fallback_path(segments, cfg, dry, ctx)
+    except Exception as e:
+        print(f"  ⚠️ 補いの経路で失敗: {str(e)[:100]}")
     if dry:
         print("✅ --dry-run のためBQ書込なし")
 
