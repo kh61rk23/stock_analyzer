@@ -85,6 +85,9 @@ MART_KEYS = {
     "m_price_monthly": ["ticker", "month"],
     "m_sector_perf": ["industry", "trade_date"],
     "m_market_breadth": ["market", "trade_date"],
+    "m_pick_outcomes": ["pick_date", "source", "ticker"],
+    "m_deliberations": ["case_id"],
+    "m_large_holdings": ["doc_id", "holder_name"],
 }
 # 前回の行数のこの割合を下回ったら、壊れた結果とみなして上書きしない
 MIN_ROW_RATIO = 0.5
