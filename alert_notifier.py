@@ -2068,6 +2068,15 @@ def extract_alerts(cfg, results: dict) -> list:
         except Exception as _ope:
             print(f"    ⚠️ 運用の監視の生成失敗: {str(_ope)[:80]}")
 
+    # 今日の変化（前の営業日からの通過銘柄の入れ替わり・点の動き）はメールの先頭に置く
+    try:
+        import daily_changes
+        _dc = daily_changes.build_alert(cfg, results)
+        if _dc:
+            alerts.insert(0, _dc)
+    except Exception as _dce:
+        print(f"    ⚠️ 今日の変化の生成失敗: {str(_dce)[:80]}")
+
         # コードだけで出ている所に名前を補う（日本株ティッカー・業種コード）
     try:
         from name_resolver import enrich_text

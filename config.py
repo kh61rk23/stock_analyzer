@@ -1841,6 +1841,10 @@ ENABLE_STOCK_SNAPSHOT: bool = True
 # 推奨のその後（pick_outcomes.py）：通過銘柄の 5・20・60 取引日後の騰落を analytics.pick_outcomes に溜め、
 # 月が替わって最初の日次メールに前の月の成績表を出す。直近この日数の選ばれた日を毎回計算し直す（60取引日後が埋まるまで）
 ENABLE_PICK_OUTCOMES: bool = True
+# 日次メールの先頭の「今日の変化」（daily_changes.py）：前の営業日からの通過銘柄の新規・脱落・点の大きな動き
+ENABLE_DAILY_CHANGES: bool = True
+DAILY_CHANGES_MOVE_PT: float = 5.0   # 点がこれ以上動いた銘柄を出す
+DAILY_CHANGES_TOP: int = 5           # 新規・脱落・動きの各何社まで出すか
 PICK_OUTCOMES_REFRESH_DAYS: int = 130
 PICK_OUTCOMES_UNIVERSE_TOP: int = 100   # 全上場の一次採点（screener_universe_daily）の上位何社を記録するか
 
