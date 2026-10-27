@@ -494,6 +494,15 @@ def extract_alerts(cfg, results: dict) -> list:
         except Exception as _us_err:
             print(f"  ⚠️  [alert] 米国株サマリー生成失敗: {str(_us_err)[:80]}")
 
+        # ── ⑥-2b 推奨のその後（月が替わって最初の回だけ・前の月の成績表）──
+    try:
+        import pick_outcomes as _po
+        _po_alert = _po.monthly_report(cfg)
+        if _po_alert:
+            alerts.append(_po_alert)
+    except Exception as _po_err:
+        print(f"  ⚠️  [alert] 推奨のその後の成績表を作れない: {str(_po_err)[:80]}")
+
         # ── ⑥-3 審議キュー候補 ──────────────────
         # 隔週のB部門審議（E3）へ次に上げる銘柄を、毎日メールで見えるようにする。
         # 並び順は deliberation_scheduler.build_deliberation_queue と同一なので、

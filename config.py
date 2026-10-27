@@ -1838,6 +1838,11 @@ US_INSIDER_MAX_TICKERS: int = 40
 # （RSI/MACD/MA200/VWAP/52週位置/FCFマージン/D-E比率/自己資本比率/配当利回り/
 #  sector_score/technical_score を時系列で追うため）。md生成とは独立で、本フラグはBQ書き込みのみ。
 ENABLE_STOCK_SNAPSHOT: bool = True
+# 推奨のその後（pick_outcomes.py）：通過銘柄の 5・20・60 取引日後の騰落を analytics.pick_outcomes に溜め、
+# 月が替わって最初の日次メールに前の月の成績表を出す。直近この日数の選ばれた日を毎回計算し直す（60取引日後が埋まるまで）
+ENABLE_PICK_OUTCOMES: bool = True
+PICK_OUTCOMES_REFRESH_DAYS: int = 130
+PICK_OUTCOMES_UNIVERSE_TOP: int = 100   # 全上場の一次採点（screener_universe_daily）の上位何社を記録するか
 
 # yf_cache が実行中に集めた日足を BQ analytics.price_daily へ書き出す（事後検証用・追加取得はしない）。
 ENABLE_PRICE_HISTORY_WRITER: bool = True
@@ -5043,6 +5048,7 @@ B5_PRICE_UNIVERSE_DAILY_PERIOD = "5d"             # DAILY_PERIOD
 B5_PRICE_UNIVERSE_BACKFILL_PERIOD = "1y"          # BACKFILL_PERIOD
 B5_PRICE_UNIVERSE_LOAD_BATCH_ROWS = 100000        # LOAD_BATCH_ROWS
 B5_PRICE_UNIVERSE_SEC_MIN_INTERVAL_SEC = 0.5      # SEC_MIN_INTERVAL_SEC
+B5_PRICE_UNIVERSE_BENCHMARKS = {"jp": ("1306.T",), "us": ("SPY",)}  # BENCHMARKS（比べる指数の ETF・必ず取る）
 # Google CSE の無料枠は100クエリ/日。超過分は課金されるため、
 # quota切れの403を待たずにコード側で打ち切る（0で無制限）。
 B5_PAID_MEDIA_SEARCHER_CSE_CALL_LIMIT = 90  # _CSE_CALL_LIMIT

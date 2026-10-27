@@ -155,6 +155,7 @@ def _fast(monkeypatch, tmp_path, n=50):
                     "COOLDOWN_MAX_SEC": 0, "RETRY_ROUND_WAIT_SEC": 0}.items():
         monkeypatch.setattr(pu, name, v)
     monkeypatch.setattr(pu.time, "sleep", lambda s: None)
+    monkeypatch.setattr(pu, "BENCHMARKS", {})
     return Cfg
 
 
@@ -217,3 +218,18 @@ def test_record_external_flows_into_daily_ledger(tmp_path):
     led = ml.build_daily_ledger(Cfg, [], date_str="2026-10-10")
     assert led["modules"]["price_universe_jp"]["status"] == "alert"
     assert led["stats"]["warn"] == 1
+
+
+def test_run_market_puts_benchmarks_first(monkeypatch, tmp_path):
+    """比べる指数の ETF はユニバースに無くても必ず取る（先頭・重複しない）。"""
+    Cfg = _fast(monkeypatch, tmp_path, n=4)
+    monkeypatch.setattr(pu, "BENCHMARKS", {"us": ("SPY", "T1")})
+    seen = []
+
+    class YF:
+        def download(self, chunk, **kw):
+            seen.extend(chunk)
+            return _frame(list(chunk))
+
+    info = pu.run_market("us", Cfg, None, dry_run=True, yf=YF())
+    assert seen[:2] == ["SPY", "T1"] and seen.count("T1") == 1 and info["universe"] == 5

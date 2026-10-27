@@ -68,6 +68,8 @@ LOAD_BATCH_ROWS = 100000
 EXISTING_KEY_DAYS_DAILY = 10
 EXISTING_KEY_DAYS_BACKFILL = 400
 SEC_MIN_INTERVAL_SEC = 0.5
+# 比べる指数の ETF。ユニバースの先頭に必ず入れる（推奨のその後 pick_outcomes が使う）
+BENCHMARKS = {"jp": ("1306.T",), "us": ("SPY",)}
 
 _CFG_CONST_MAP = {
     "B5_PRICE_UNIVERSE_CHUNK_SIZE": "CHUNK_SIZE",
@@ -90,6 +92,7 @@ _CFG_CONST_MAP = {
     "B5_PRICE_UNIVERSE_BACKFILL_PERIOD": "BACKFILL_PERIOD",
     "B5_PRICE_UNIVERSE_LOAD_BATCH_ROWS": "LOAD_BATCH_ROWS",
     "B5_PRICE_UNIVERSE_SEC_MIN_INTERVAL_SEC": "SEC_MIN_INTERVAL_SEC",
+    "B5_PRICE_UNIVERSE_BENCHMARKS": "BENCHMARKS",
 }
 
 _TABLE_DATASET = "analytics"
@@ -471,6 +474,7 @@ def run_market(market: str, cfg, client, backfill: bool = False, limit: int = 0,
         universe = load_jp_universe(cfg, client, today)
     else:
         universe, info["us_universe_counts"] = load_us_universe(cfg, today)
+    universe = list(dict.fromkeys(list(BENCHMARKS.get(market, ())) + list(universe)))
     info["universe"] = len(universe)
 
     dead_path = _state_dir(cfg) / f"dead_tickers_{market}.json"

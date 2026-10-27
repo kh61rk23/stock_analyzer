@@ -4306,6 +4306,23 @@ def run_all_tasks(mode: str = "all") -> dict:
             logger.add("stock_snapshot", "error", str(_sswe)[:100])
             print(f"  ⚠️  スナップショット格納エラー（スキップ）: {str(_sswe)[:60]}")
 
+        # ── 推奨のその後（通過銘柄の 5・20・60 取引日後の騰落）を stock_snapshot の後に更新 ──
+    if getattr(cfg, "ENABLE_PICK_OUTCOMES", True) and _in_mode("screener"):
+        try:
+            import pick_outcomes as _po
+            _po_res = _po.update(cfg)
+            results["pick_outcomes"] = _po_res
+            if _po_res.get("skipped"):
+                logger.add("pick_outcomes", "skipped", str(_po_res.get("reason", ""))[:80])
+            elif _po_res.get("error"):
+                logger.add("pick_outcomes", "error", str(_po_res["error"])[:100])
+            else:
+                logger.add("pick_outcomes", "success",
+                           f"{_po_res.get('since')} 以降 {_po_res.get('rows', 0)}行 / {_po_res.get('gb_billed')}GB")
+        except Exception as _poe:
+            logger.add("pick_outcomes", "error", str(_poe)[:100])
+            print(f"  ⚠️  推奨のその後の更新エラー（スキップ）: {str(_poe)[:60]}")
+
         # ── [Size Ph1] 規模分類マスター生成（両スクリーナーの直後）────
         #   results["screener"]（stock_screener）と results["us_screener"]
         #   （us_stock_screener）の両方が確定してから実行する必要がある。

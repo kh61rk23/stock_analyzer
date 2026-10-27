@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-10-24 08:14:53",
+  "generated_at": "2026-10-27 22:10:39",
   "source": "stock_analyzer_main.run_all_tasks（AST自動生成・手動編集禁止）",
-  "stage_count": 106,
+  "stage_count": 107,
   "stages": [
     {
       "order": 1400,
@@ -947,7 +947,20 @@
       ]
     },
     {
-      "order": 4312,
+      "order": 4310,
+      "modules": [],
+      "enable_flags": [
+        "ENABLE_PICK_OUTCOMES"
+      ],
+      "mode_keys": [
+        "screener"
+      ],
+      "produces": [
+        "pick_outcomes"
+      ]
+    },
+    {
+      "order": 4329,
       "modules": [
         "size_tier_classifier"
       ],
@@ -960,7 +973,7 @@
       ]
     },
     {
-      "order": 4352,
+      "order": 4369,
       "modules": [
         "us_fundamental_rotator"
       ],
@@ -975,7 +988,7 @@
       ]
     },
     {
-      "order": 4375,
+      "order": 4392,
       "modules": [
         "us_8k_monitor"
       ],
@@ -990,7 +1003,7 @@
       ]
     },
     {
-      "order": 4396,
+      "order": 4413,
       "modules": [
         "business_summary_fetcher"
       ],
@@ -1005,7 +1018,7 @@
       ]
     },
     {
-      "order": 4419,
+      "order": 4436,
       "modules": [
         "scenario_analyzer"
       ],
@@ -1020,7 +1033,7 @@
       ]
     },
     {
-      "order": 4449,
+      "order": 4466,
       "modules": [
         "credit_data"
       ],
@@ -1035,7 +1048,7 @@
       ]
     },
     {
-      "order": 4472,
+      "order": 4489,
       "modules": [
         "stress_tester"
       ],
@@ -1050,7 +1063,7 @@
       ]
     },
     {
-      "order": 4511,
+      "order": 4528,
       "modules": [
         "insider_monitor"
       ],
@@ -1065,7 +1078,7 @@
       ]
     },
     {
-      "order": 4544,
+      "order": 4561,
       "modules": [
         "dividend_calendar"
       ],
@@ -1080,7 +1093,7 @@
       ]
     },
     {
-      "order": 4565,
+      "order": 4582,
       "modules": [
         "alpha_attributer",
         "learning_audit_log",
@@ -1100,7 +1113,7 @@
       ]
     },
     {
-      "order": 4663,
+      "order": 4680,
       "modules": [
         "factor_crowding_monitor"
       ],
@@ -1115,7 +1128,7 @@
       ]
     },
     {
-      "order": 4692,
+      "order": 4709,
       "modules": [
         "backtester"
       ],
@@ -1130,7 +1143,7 @@
       ]
     },
     {
-      "order": 4717,
+      "order": 4734,
       "modules": [
         "self_evaluator"
       ],
@@ -1145,7 +1158,7 @@
       ]
     },
     {
-      "order": 4743,
+      "order": 4760,
       "modules": [
         "screener_sector_heatmap"
       ],
@@ -1160,7 +1173,7 @@
       ]
     },
     {
-      "order": 4764,
+      "order": 4781,
       "modules": [
         "portfolio_optimizer"
       ],
@@ -1175,7 +1188,7 @@
       ]
     },
     {
-      "order": 4790,
+      "order": 4807,
       "modules": [
         "correlation_heatmap"
       ],
@@ -1190,7 +1203,7 @@
       ]
     },
     {
-      "order": 4811,
+      "order": 4828,
       "modules": [
         "position_sizer"
       ],
@@ -1205,7 +1218,7 @@
       ]
     },
     {
-      "order": 4870,
+      "order": 4887,
       "modules": [
         "sector_rotation_detector"
       ],
@@ -1218,7 +1231,7 @@
       ]
     },
     {
-      "order": 4898,
+      "order": 4915,
       "modules": [
         "ignition_detector"
       ],
@@ -1231,7 +1244,7 @@
       ]
     },
     {
-      "order": 4923,
+      "order": 4940,
       "modules": [
         "technology_mapper"
       ],
@@ -1246,7 +1259,7 @@
       ]
     },
     {
-      "order": 4949,
+      "order": 4966,
       "modules": [
         "technology_cluster_engine"
       ],
@@ -1261,7 +1274,7 @@
       ]
     },
     {
-      "order": 4975,
+      "order": 4992,
       "modules": [
         "emerging_technology_detector"
       ],
@@ -1274,7 +1287,7 @@
       "produces": []
     },
     {
-      "order": 5000,
+      "order": 5017,
       "modules": [
         "cluster_graph_exporter"
       ],
@@ -1287,7 +1300,7 @@
       "produces": []
     },
     {
-      "order": 5030,
+      "order": 5047,
       "modules": [
         "jp_us_sector_correlation"
       ],
@@ -1300,7 +1313,7 @@
       ]
     },
     {
-      "order": 5057,
+      "order": 5074,
       "modules": [
         "rule_optimizer"
       ],
@@ -1315,7 +1328,7 @@
       ]
     },
     {
-      "order": 5128,
+      "order": 5145,
       "modules": [
         "academic_conf_tracker"
       ],
@@ -1330,7 +1343,7 @@
       ]
     },
     {
-      "order": 5149,
+      "order": 5166,
       "modules": [
         "industry_standard_tracker"
       ],
@@ -1345,7 +1358,7 @@
       ]
     },
     {
-      "order": 5179,
+      "order": 5196,
       "modules": [
         "taxonomy_hotness"
       ],
@@ -1358,7 +1371,7 @@
       ]
     },
     {
-      "order": 5204,
+      "order": 5221,
       "modules": [
         "alpha_attributer",
         "signal_aggregator"
@@ -1374,7 +1387,7 @@
       ]
     },
     {
-      "order": 5245,
+      "order": 5262,
       "modules": [
         "signal_aggregator"
       ],
@@ -1387,7 +1400,7 @@
       ]
     },
     {
-      "order": 5264,
+      "order": 5281,
       "modules": [
         "score_calculator"
       ],
@@ -1402,7 +1415,7 @@
       ]
     },
     {
-      "order": 5296,
+      "order": 5313,
       "modules": [],
       "enable_flags": [
         "ENABLE_DELIBERATION_QUEUE"
@@ -1415,7 +1428,7 @@
       ]
     },
     {
-      "order": 5318,
+      "order": 5335,
       "modules": [
         "dataset_builder"
       ],
@@ -1430,7 +1443,7 @@
       ]
     },
     {
-      "order": 5347,
+      "order": 5364,
       "modules": [
         "corrector_applier"
       ],
@@ -1443,7 +1456,7 @@
       ]
     },
     {
-      "order": 5369,
+      "order": 5386,
       "modules": [
         "inference_engine"
       ],
@@ -1458,7 +1471,7 @@
       ]
     },
     {
-      "order": 5391,
+      "order": 5408,
       "modules": [
         "notion_obsidian_writer"
       ],
@@ -1473,7 +1486,7 @@
       ]
     },
     {
-      "order": 5414,
+      "order": 5431,
       "modules": [
         "job_posting_monitor"
       ],
@@ -1488,7 +1501,7 @@
       ]
     },
     {
-      "order": 5447,
+      "order": 5464,
       "modules": [
         "executive_transition_tracker"
       ],
@@ -1503,7 +1516,7 @@
       ]
     },
     {
-      "order": 5482,
+      "order": 5499,
       "modules": [
         "facility_expansion_monitor"
       ],
@@ -1518,7 +1531,7 @@
       ]
     },
     {
-      "order": 5516,
+      "order": 5533,
       "modules": [
         "event_horizon_scanner"
       ],
@@ -1533,7 +1546,7 @@
       ]
     },
     {
-      "order": 5541,
+      "order": 5558,
       "modules": [
         "options_strategy_advisor"
       ],
@@ -1548,7 +1561,7 @@
       ]
     },
     {
-      "order": 5566,
+      "order": 5583,
       "modules": [
         "ontology_exporter"
       ],
@@ -1563,7 +1576,7 @@
       ]
     },
     {
-      "order": 5595,
+      "order": 5612,
       "modules": [
         "weekly_report_generator"
       ],
@@ -1578,7 +1591,7 @@
       ]
     },
     {
-      "order": 5621,
+      "order": 5638,
       "modules": [
         "price_history_writer"
       ],
@@ -1593,7 +1606,7 @@
       ]
     },
     {
-      "order": 5661,
+      "order": 5678,
       "modules": [
         "module_ledger"
       ],
