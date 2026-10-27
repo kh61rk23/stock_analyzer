@@ -18,6 +18,11 @@ sys.path.insert(0, str(REPO))
 if not os.environ.get("STOCK_ANALYZER_BASE"):
     os.environ["STOCK_ANALYZER_BASE"] = tempfile.mkdtemp(prefix="stock_analyzer_test_base_")
 
+# BigQuery の鍵も config を読む前に外す。config.BQ_CREDENTIALS_PATH は読み込み時の環境変数で決まるので、
+# 下の autouse フィクスチャで環境変数を外すだけでは、先に読まれた config に鍵のパスが残る。
+for _k in ("BQ_CREDENTIALS", "BQ_CREDENTIALS_PATH", "GOOGLE_APPLICATION_CREDENTIALS"):
+    os.environ.pop(_k, None)
+
 
 @pytest.fixture(autouse=True)
 def _no_real_bq_credentials(monkeypatch):
@@ -25,7 +30,7 @@ def _no_real_bq_credentials(monkeypatch):
 
     クラウドのセッションや Actions では BQ_CREDENTIALS が入っていて、BQ を偽物に差し替えていない
     テストが本物の表を読み、実データ次第で落ちる（課金も発生する）。鍵が要るテストは自分で setenv する。"""
-    for k in ("BQ_CREDENTIALS", "GOOGLE_APPLICATION_CREDENTIALS"):
+    for k in ("BQ_CREDENTIALS", "BQ_CREDENTIALS_PATH", "GOOGLE_APPLICATION_CREDENTIALS"):
         monkeypatch.delenv(k, raising=False)
 
 
