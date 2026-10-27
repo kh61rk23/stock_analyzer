@@ -232,11 +232,15 @@ def _axis1_performance(
         n_years  = min(int(tenure_years), len(op_income_list) - 1)
         base_val = op_income_list[-(n_years + 1)]
         end_val  = op_income_list[-1]
-        if base_val and base_val > 0 and end_val:
-            try:
-                cagr = (end_val / base_val) ** (1 / n_years) - 1
-            except Exception:
-                cagr = None
+        if base_val and base_val > 0 and end_val is not None:
+            if end_val <= 0:
+                # 黒字から赤字・ゼロに転じた。負の数の分数乗は複素数になるので計算せず、最も悪い扱い（-100%）にする
+                cagr = -1.0
+            else:
+                try:
+                    cagr = (end_val / base_val) ** (1 / n_years) - 1
+                except Exception:
+                    cagr = None
 
     # ── 営業利益CAGR スコア ──────────────────────────────
     if cagr is not None:

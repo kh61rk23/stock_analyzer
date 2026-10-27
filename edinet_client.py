@@ -314,10 +314,13 @@ def _fetch_financials(edinet_code: str, api_key: str) -> Optional[dict]:
 
         # CAGR計算（最新3年）
         def _cagr(values: list, years_n: int = 3) -> Optional[float]:
-            vals = [v for v in values if v and v > 0]
+            # 直近 years_n+1 期の始点と終点で測る（赤字の年を抜くと期間が延びてしまう）。0以下なら定義できない
+            vals = [v for v in values if v is not None]
             if len(vals) < years_n + 1:
                 return None
             start, end = vals[-(years_n + 1)], vals[-1]
+            if start <= 0 or end <= 0:
+                return None
             try:
                 return (end / start) ** (1 / years_n) - 1
             except Exception:

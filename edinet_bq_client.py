@@ -772,10 +772,14 @@ class EDINETBQClient:
             return value
 
         def cagr(values: list) -> float | None:
-            positive = [float(value) for value in values if value is not None and value > 0]
-            if len(positive) < 4:
+            # 直近4期（3年）の始点と終点で測る。赤字の年を抜いて正の値だけを数えると、間が空いて3年より長い伸びを
+            # 3年と呼んでしまうので抜かない。始点か終点が0以下なら伸び率は定義できないので None
+            vals = [float(value) for value in values if value is not None]
+            if len(vals) < 4:
                 return None
-            start, end = positive[-4], positive[-1]
+            start, end = vals[-4], vals[-1]
+            if start <= 0 or end <= 0:
+                return None
             return (end / start) ** (1 / 3) - 1
 
         ticker_by_code = dict(requested)
