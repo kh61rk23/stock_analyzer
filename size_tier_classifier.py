@@ -89,22 +89,23 @@ CACHE_FILENAME = "size_tier_master.json"
 # セクターコード → taxonomy_node_id マッピング
 # EDINET/TSE 33業種コード → 内部タクソノミノードID
 _SECTOR_TO_TAXONOMY: dict = {
-    # 電気機器（1017）: 半導体・電子部品
-    "1017": ["semiconductor_logic", "semiconductor_rf", "electronic_component"],
+    # コードは config.JAPAN_SECTORS と同じ（東証33業種・1001〜1033）。ずれると別の業種にノードが付く
+    # 電気機器（1016）: 半導体・電子部品
+    "1016": ["semiconductor_logic", "semiconductor_rf", "electronic_component"],
     # 精密機器（1018）: センサー・光学
     "1018": ["sensor_image", "sensor_radar", "photonics"],
     # 情報・通信業（1025）: ソフトウェア・SaaS
     "1025": ["ai_ml_framework", "telecom_software", "ai_software"],
     # 機械（1015）: パワー半導体・産業機械
     "1015": ["power_semiconductor", "semiconductor_package"],
-    # 輸送用機器（1017_auto）: EV・車載
-    "1017_auto": ["ev_battery", "ev_charger", "sensor_radar"],
-    # 化学（1006）: 素材・高機能材料
-    "1006": ["advanced_material", "semiconductor_package"],
-    # 卸売業（1028）: 商社（資源・技術）
-    "1028": ["resource_trading", "technology_trading"],
-    # 銀行業（1030）: フィンテック含む
-    "1030": ["fintech_platform"],
+    # 輸送用機器（1017）: EV・車載
+    "1017": ["ev_battery", "ev_charger", "sensor_radar"],
+    # 化学（1007）: 素材・高機能材料
+    "1007": ["advanced_material", "semiconductor_package"],
+    # 卸売業（1026）: 商社（資源・技術）
+    "1026": ["resource_trading", "technology_trading"],
+    # 銀行業（1028）: フィンテック含む
+    "1028": ["fintech_platform"],
     # サービス業（1033）: SaaS・プラットフォーム
     "1033": ["saas_platform", "ai_software"],
 }
@@ -243,7 +244,7 @@ def get_taxonomy_nodes_for_sector(sector_code: str) -> list:
     セクターコードから対応する taxonomy_node_id リストを返す。
 
     Args:
-        sector_code: TSE 33業種コード（例: "1017"）
+        sector_code: TSE 33業種コード（例: "1016"）
 
     Returns:
         taxonomy_node_id のリスト（例: ["semiconductor_logic", ...]）

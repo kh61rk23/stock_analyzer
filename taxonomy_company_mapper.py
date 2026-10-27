@@ -62,9 +62,14 @@ def build_company_node_rows(
     sector_to_nodes_fn,
     as_of: str = None,
     min_sim: float = 0.0,
+    company_sector: dict | None = None,
 ) -> list[dict]:
     """
     企業×セグメント → 企業×taxonomy_node の行を構築する。
+
+    company_sector（{company_code: 東証33業種コード}）を渡すと、セグメントが当たった業種が会社自身の業種と
+    違うものは使わない（業種の配下のノードを決め打ちで付けるので、別業種に当たると無関係なノードが付く。
+    自動車会社の「Transportation」が電気機器に当たり半導体が付く等）。業種の分からない会社は検査しない。
 
     Args:
         segments_by_company: {company_code: [{"segment_name": str, "share": float}]}
@@ -100,6 +105,9 @@ def build_company_node_rows(
                 continue
             sim = float(mapped.get("similarity_score", 0.5) or 0.5)
             if sim < min_sim:
+                continue
+            own = (company_sector or {}).get(company)
+            if own and str(mapped["sector_code"]) != str(own):
                 continue
             for node_id in (sector_to_nodes_fn(mapped["sector_code"]) or []):
                 node_score[node_id] = node_score.get(node_id, 0.0) + share * sim
@@ -535,6 +543,18 @@ def fetch_texts_from_bq(cfg, sections: list[str]) -> dict:
         return {}
 
 
+def industry_code(name) -> str:
+    """東証33業種の名前 → コード（config.JAPAN_SECTORS）。「、」「・」の違いは同じとみなす。無ければ ""。"""
+    if not name or name != name:
+        return ""
+    try:
+        import config as _c
+        table = {str(v.get("name_ja", "")).replace("、", "・"): k for k, v in _c.JAPAN_SECTORS.items()}
+    except Exception:
+        return ""
+    return table.get(str(name).replace("、", "・").strip(), "")
+
+
 def fetch_listed_and_tagged(cfg) -> tuple[dict, set]:
     """上場会社 {証券コード4桁: 東証33業種} と、fallback 以外の有効なタグがある会社の集合。失敗なら ({}, set())。"""
     try:
@@ -635,12 +655,16 @@ def run_segment_path(segments: dict, cfg, dry: bool) -> int:
     from segment_mapper import SegmentMapper
     from size_tier_classifier import get_taxonomy_nodes_for_sector
     mapper = SegmentMapper(cfg)
+    listed, _tagged = fetch_listed_and_tagged(cfg)
+    own = {c: industry_code(ind) for c, ind in listed.items() if industry_code(ind)}
     rows = build_company_node_rows(
         segments,
         lambda name: mapper.map(name),
         get_taxonomy_nodes_for_sector,
         min_sim=float(getattr(cfg, "TAXONOMY_SEGMENT_MIN_SIM", 0.75)),
+        company_sector=own,
     )
+    print(f"   業種の突き合わせ: 業種の分かる会社 {len(own)}社（当たった業種が会社の業種と違うセグメントは使わない）")
     print(f"📊 生成行: {len(rows)}行（confidence_type=edinet）")
     if dry:
         for r in rows[:5]:

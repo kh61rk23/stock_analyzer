@@ -264,3 +264,32 @@ def test_industry_fallback_map_points_to_approved_nodes():
     bad = {k: v for k, v in fb["industry_to_node"].items() if v not in ids}
     assert not bad, bad
     assert len(fb["industry_to_node"]) == 33
+
+
+def test_segment_rows_dropped_when_sector_differs_from_company():
+    import taxonomy_company_mapper as m
+    segs = {"7201": [{"segment_name": "Transportation", "share": 0.9}],
+            "6758": [{"segment_name": "エレクトロニクス", "share": 1.0}],
+            "9999": [{"segment_name": "エレクトロニクス", "share": 1.0}]}
+    mapping = {"Transportation": {"sector_code": "1016", "similarity_score": 0.85},
+               "エレクトロニクス": {"sector_code": "1016", "similarity_score": 0.9}}
+    rows = m.build_company_node_rows(segs, mapping.get, lambda code: ["semiconductor_logic"] if code == "1016" else [],
+                                     min_sim=0.75, company_sector={"7201": "1017", "6758": "1016"})
+    assert sorted({r["company_id"] for r in rows}) == ["6758", "9999"]     # 業種の分からない 9999 は検査しない
+
+
+def test_industry_code():
+    import taxonomy_company_mapper as m
+    assert m.industry_code("電気機器") == "1016" and m.industry_code("輸送用機器") == "1017"
+    assert m.industry_code("証券、商品先物取引業") == "1029"
+    assert m.industry_code(None) == "" and m.industry_code("不明") == ""
+
+
+def test_sector_bridge_codes_match_config_names():
+    import config
+    import size_tier_classifier as s
+    want = {"1016": "電気機器", "1018": "精密機器", "1025": "情報・通信業", "1015": "機械", "1017": "輸送用機器",
+            "1007": "化学", "1026": "卸売業", "1028": "銀行業", "1033": "サービス業"}
+    assert set(s._SECTOR_TO_TAXONOMY) == set(want)
+    for code, name in want.items():
+        assert config.JAPAN_SECTORS[code]["name_ja"] == name
