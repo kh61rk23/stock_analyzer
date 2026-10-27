@@ -16,6 +16,8 @@ API = "https://api.edinet-fsa.go.jp/api/v2"
 STREAK_LIMIT = 10
 # これが返ったら続けても無駄なので即打ち切る（キーの誤り・回数制限）
 FATAL_CODES = {"401", "403", "429"}
+# 書類そのものが取れない（ID の誤り・取り下げ・その形式が無い）。取り直しても同じなので、その書類は無しとして進める
+GONE_CODES = {"400", "404"}
 
 
 def _body_reason(r) -> tuple[str, str]:

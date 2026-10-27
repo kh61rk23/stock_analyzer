@@ -589,9 +589,11 @@ def parse_daily_index(text: str, forms=("10-K", "10-K/A", "10-KT", "10-Q", "10-Q
 
 
 def index_days_to_fetch(last_done: str | None, today: date) -> list:
-    """取りに行く日付（古い順）。last_done の翌日から昨日まで。初回は10日前から。"""
+    """取りに行く日付（古い順）。last_done の翌日から昨日まで。初回は10日前から。
+    土日は SEC が日次の索引を作らない（取りに行くと 403 が返り、User-Agent を拒否されたように見える）ので除く。"""
     start = (date.fromisoformat(last_done) + timedelta(days=1)) if last_done else today - timedelta(days=10)
-    return [start + timedelta(days=i) for i in range((today - start).days) if start + timedelta(days=i) < today]
+    days = (start + timedelta(days=i) for i in range((today - start).days))
+    return [d for d in days if d < today and d.weekday() < 5]
 
 
 def advance_pointer(results: dict, today: date) -> str | None:

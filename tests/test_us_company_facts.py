@@ -178,7 +178,9 @@ def test_parse_daily_index_only_periodic_forms():
 
 def test_index_days_and_pointer_rules():
     today = date(2026, 10, 12)  # 月曜
-    assert u.index_days_to_fetch("2026-10-08", today) == [date(2026, 10, 9), date(2026, 10, 10), date(2026, 10, 11)]
+    # 土日（10/10・10/11）は SEC が索引を作らないので取りに行かない
+    assert u.index_days_to_fetch("2026-10-08", today) == [date(2026, 10, 9)]
+    assert u.index_days_to_fetch("2026-10-09", today) == []
     # 金曜(10/9)が未公開(missing)なら、直近3日以内なので進めず翌回に再試行する
     assert u.advance_pointer({"2026-10-09": "missing", "2026-10-10": "missing", "2026-10-11": "missing"}, today) is None
     # 週末の欠落は進める。古い平日の欠落（祝日）も進める

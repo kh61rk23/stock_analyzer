@@ -153,6 +153,12 @@ def run(cfg, budget_min: float | None = None, limit: int | None = None) -> dict:
             continue
         last = time.monotonic()
         ok, code, why = ega.check_zip(z)
+        if not ok and code in ega.GONE_CODES:
+            # 書類側で取れない（毎回同じ答え）。本文なしとして済みにし、次の回から取り直さない
+            stat["no_text"] += 1
+            done.add(r.doc_id)
+            print(f"    ⏩ {r.edinet_code} {r.doc_id}: {why}（本文なしとして済みにする）")
+            continue
         if not ok:
             stat["errors"] += 1
             if streak.fail(code, why):

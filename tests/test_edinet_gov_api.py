@@ -87,3 +87,9 @@ def test_put_writes_reasons():
     st = {}
     s.put(st)
     assert st["api_stopped"] and st["api_fatal"] is False and st["error_reasons"] == "API 500 x×2"
+
+
+def test_gone_codes_are_not_fatal_and_reported():
+    body = json.dumps({"StatusCode": 400, "message": "Bad Request"}).encode()
+    ok, code, _why = ega.check_zip(Resp(body))
+    assert not ok and code in ega.GONE_CODES and code not in ega.FATAL_CODES
