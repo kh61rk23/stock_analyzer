@@ -512,6 +512,19 @@ def _check_pead_trigger_us(
 # BLOCK 6: 複合スコア計算（US株版）
 # ==============================================================
 
+def _apply_xbrl_complement(c: dict, cfg) -> None:
+    """XBRL の補完を足切り・素点の前に入れる（c を書き換える）。
+    yfinance の FCF が無い銘柄は latest_fcf_xbrl（直近12か月）で埋め、fcf_source に出どころを残す。
+    EPS の加速（-10〜+10）× US_SCREENER_EPS_ACCEL_WEIGHT を eps_accel_bonus に入れ、_calc_score が足す。"""
+    if c.get("free_cashflow") is None and c.get("latest_fcf_xbrl") is not None \
+            and getattr(cfg, "US_SCREENER_FCF_FILL_XBRL", True):
+        c["free_cashflow"] = c["latest_fcf_xbrl"]
+        c["fcf_source"] = "xbrl"
+    w = float(getattr(cfg, "US_SCREENER_EPS_ACCEL_WEIGHT", 0.0) or 0.0)
+    accel = c.get("eps_accel_score_xbrl")
+    c["eps_accel_bonus"] = round(float(accel) * w, 2) if (w and accel is not None) else 0.0
+
+
 def _calc_score(c: dict) -> float:
     """
     米国株用の複合スコア（0〜100）を計算する。
@@ -606,6 +619,9 @@ def _calc_score(c: dict) -> float:
     # S&P500構成銘柄はボーナス+3
     if c.get("in_sp500"):
         score += 3
+
+    # XBRL の EPS の加速（_apply_xbrl_complement が重みを掛けて入れる。無ければ 0）
+    score += float(c.get("eps_accel_bonus") or 0.0)
 
     return round(min(max(score, 0), 100), 1)
 
@@ -749,6 +765,12 @@ def _apply_gics_macro_correction(
 # BLOCK 7: レポート生成
 # ==============================================================
 
+def _accel_cell(c: dict) -> str:
+    """レポートの EPS加速 の欄（加点と元のスコア。XBRL が無ければ —）。"""
+    a = c.get("eps_accel_score_xbrl")
+    return "—" if a is None else f"{float(c.get('eps_accel_bonus') or 0):+.1f}点（{float(a):+.1f}）"
+
+
 def _build_report(passed: list, screened: int, cfg) -> str:
     """スクリーニング結果のMarkdownレポートを生成する"""
     today = datetime.now().strftime("%Y-%m-%d")
@@ -764,8 +786,8 @@ def _build_report(passed: list, screened: int, cfg) -> str:
         "",
         f"## 🏆 スコア上位 {len(top)}社",
         "",
-        "| 銘柄 | 社名 | カテゴリ | スコア | PER | ROE | OPM | RevGrowth | 推奨 | 目標乖離 | アクルーアル |",
-        "|-----|------|---------|-------|-----|-----|-----|-----------|-----|---------|------------|",
+        "| 銘柄 | 社名 | カテゴリ | スコア | PER | ROE | OPM | RevGrowth | 推奨 | 目標乖離 | アクルーアル | EPS加速 |",
+        "|-----|------|---------|-------|-----|-----|-----|-----------|-----|---------|------------|--------|",
     ]
 
     def _p(v, mult=100, sfx="%", digits=1):
@@ -799,7 +821,8 @@ def _build_report(passed: list, screened: int, cfg) -> str:
             f"| {_p(c.get('revenue_growth'))} "
             f"| {c.get('rec_key','N/A')} "
             f"| {_p(c.get('analyst_upside'))} "
-            f"| {acr_i}{acr_s} |"
+            f"| {acr_i}{acr_s} "
+            f"| {_accel_cell(c)} |"
         )
 
     # カテゴリ別サマリー
@@ -941,6 +964,7 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
     for c in all_candidates:
         if not c.get("fetch_ok"):
             continue
+        _apply_xbrl_complement(c, cfg)
         _tk_f = str(c.get("ticker", ""))
         _ok_f, _fails_f = _apply_filter(c)
         _filter_cache[_tk_f] = (_ok_f, _fails_f)

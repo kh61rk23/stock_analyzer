@@ -1823,6 +1823,11 @@ US_SCREENER_CATEGORIES: list = [
     "metaverse", "blockchain", "longevity", "supply_chain"
 ]
 US_SCREENER_TOP_N: int = 25
+# XBRL の補完を点数に使う（us_stock_screener._apply_xbrl_complement）。
+# EPS の加速（eps_accel_score_xbrl・-10〜+10）× この重みを素点に足す（0.3 で ±3点）。0 で止める
+US_SCREENER_EPS_ACCEL_WEIGHT: float = 0.3
+# yfinance の FCF が無い銘柄だけ、XBRL の直近12か月 FCF（latest_fcf_xbrl）で埋める（足切りの FCF>0 と素点の両方に効く）
+US_SCREENER_FCF_FILL_XBRL: bool = True
 # インサイダー(Form 4)照会は SEC EDGAR への逐次アクセスで1社あたり約2秒。
 # 通過全社に掛けるとフィルター処理だけで13分を超えるため、素点上位のみに絞る。
 # 0 で照会を完全に止める（insider_bonus は全社 0.0 = 補正なし）。

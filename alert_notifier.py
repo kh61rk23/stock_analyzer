@@ -105,6 +105,8 @@ def pick_line(c: dict) -> str:
         _pp.append(f"配当:{c['div_yield']*100:.1f}%")
     if c.get("analyst_upside") is not None:
         _pp.append(f"目標乖離:{c['analyst_upside']*100:+.0f}%")
+    if c.get("eps_accel_bonus"):
+        _pp.append(f"EPS加速:{c['eps_accel_bonus']:+.1f}点")
     _detail = f" | {' | '.join(_pp)}" if _pp else ""
     return f"    📌 {_nm}（{c.get('ticker','')}）: {c.get('composite_score', 0):.0f}点 | {c.get('sector','')}{_detail}"
 
