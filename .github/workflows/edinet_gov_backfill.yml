@@ -55,7 +55,7 @@ jobs:
         env:
           BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
           BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
-        run: python state_store.py prepare || [ "$STATE_STORE_MODE" = "dual" ]
+        run: python state_store.py prepare --profile fetch || [ "$STATE_STORE_MODE" = "dual" ]
       - name: EDINET documents backfill
         env:
           BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
@@ -89,7 +89,7 @@ jobs:
           BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
           BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
         run: |
-          python state_store.py save --source edinet_gov_backfill || {
+          python state_store.py save --source edinet_gov_backfill --profile fetch || {
             echo "::warning::状態を BigQuery に保存できなかった"
             [ "$STATE_STORE_MODE" = "dual" ]
           }

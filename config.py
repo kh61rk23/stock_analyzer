@@ -5356,6 +5356,16 @@ STATE_STORE_EXCLUDE: tuple = (
     "__pycache__/",
     ".DS_Store",
 )
+# 取得系の workflow（--profile fetch）が読み書きしないもの。分析だけが使う大きなフォルダで、除外すると準備が速くなる
+# （Actions から BQ への読み出しは毎秒 1MB 弱なので、時間はほぼ読む量で決まる）。除外したパスは save でも触らない（削除の印を付けない）。
+# 各 workflow 自身のログ（logs/actions_<workflow>_）は入れない（同じ日の2回目が上書きしてしまう）
+STATE_STORE_EXCLUDE_FETCH: tuple = (
+    "stock_data/insights/",
+    "stock_data/bi/",
+    "stock_data/data/screener_trace/",
+    "stock_data/data/news_cache/",
+    "stock_data/logs/actions_daily_run_",
+)
 # gzip 後のバイト列をこの大きさで分けて1行ずつ持つ（行の上限 100MB と、tabledata.list の1応答の大きさに余裕を持たせる）
 STATE_STORE_CHUNK_BYTES: int = 4 * 1024 ** 2
 # 1回の load job に載せる量の目安（超えたら load job を分ける）

@@ -337,3 +337,18 @@ def test_bq_iter_full_parallel_keeps_table_order(monkeypatch):
     got = list(b.iter_full())
     assert [i for i, _ in got] == list(range(53))
     assert [r["path"] for _, r in got] == [f"p{i}" for i in range(53)]
+
+
+def test_row_spans_merge_small_gaps_and_split_long():
+    assert ss.row_spans([]) == []
+    assert ss.row_spans([0, 1, 2, 10, 200], gap=8, max_len=100) == [(0, 11), (200, 1)]
+    assert ss.row_spans(list(range(0, 300)), gap=1, max_len=100) == [(0, 100), (100, 100), (200, 100)]
+
+
+def test_bq_iter_spans_returns_requested_rows(monkeypatch):
+    monkeypatch.setattr(ss, "SPAN_WORKERS", 3)
+    b = object.__new__(ss.BQBackend)
+    b.client, b.table_ref, b._schema = _RowsClient(40), "t", []
+    got = list(b.iter_spans([(3, 2), (30, 4)]))
+    assert [i for i, _ in got] == [3, 4, 30, 31, 32, 33]
+    assert [r["path"] for _, r in got] == ["p3", "p4", "p30", "p31", "p32", "p33"]

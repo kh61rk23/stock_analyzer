@@ -46,6 +46,10 @@ INDEXED_FETCH_MAX = 200
 # 全件読みの区間の行数と並列数（tabledata.list は無料。ページの往復待ちを重ねて隠す）
 FULL_FETCH_SPAN = 250
 FULL_FETCH_WORKERS = 8
+# 要る行だけを読むときの区間のまとめ方。要る行は表の中に散らばっているので、間を広くまとめると要らない行まで読む
+# （64行でまとめると表の87%を読んだ）。間2行・16本並列で、1,153行（50MB）が手元で13秒（全件読みは82秒）
+SPAN_GAP = 2
+SPAN_WORKERS = 16
 
 SCHEMA = [
     ("path", "STRING", "REQUIRED"),
@@ -79,6 +83,20 @@ def resolve_mode(cfg=None) -> str:
 
 
 # ── 純関数（走査・差分・分割・版の選択） ─────────────────────
+
+def row_spans(indices, gap: int | None = None, max_len: int | None = None) -> list[tuple[int, int]]:
+    """昇順の行番号 → 読む区間 [(開始, 行数)]。間が gap 以下なら1つの区間にまとめ（往復の回数を減らす）、
+    1区間は max_len 行まで（並列に読めるよう分ける）。"""
+    max_len = int(max_len or FULL_FETCH_SPAN)
+    gap = SPAN_GAP if gap is None else int(gap)
+    spans: list[list[int]] = []
+    for i in indices:
+        if spans and i - (spans[-1][0] + spans[-1][1] - 1) <= gap and i - spans[-1][0] < max_len:
+            spans[-1][1] = i - spans[-1][0] + 1
+        else:
+            spans.append([i, 1])
+    return [(a, n) for a, n in spans]
+
 
 def is_excluded(rel: str, excludes) -> bool:
     """rel（/ 区切りの相対パス）が除外に当たるか。'/' を含む指定は前方一致、含まない指定は名前の一致。"""
@@ -328,6 +346,21 @@ class BQBackend:
                                      page_size=20000)
         for i, r in enumerate(rows):
             yield i, dict(r.items())
+
+    def iter_spans(self, spans):
+        """[(開始の行番号, 行数)] の区間を並列に読み、(行番号, 行) を区間の順に返す。"""
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _read(span):
+            start, n = span
+            rows = self.client.list_rows(self.table_ref, selected_fields=self._schema, start_index=start,
+                                         max_results=n, page_size=50)
+            return start, [dict(r.items()) for r in rows]
+
+        with ThreadPoolExecutor(max_workers=int(SPAN_WORKERS)) as ex:
+            for start, chunk in ex.map(_read, spans):
+                for k, r in enumerate(chunk):
+                    yield start + k, r
 
     def iter_full(self):
         """全行を (行番号, 行) で返す。1ページ50行を順に読むとページごとの往復待ちが積み重なる
@@ -588,6 +621,21 @@ def restore(backend, root: Path, prefixes=None, *, strip: str = "", remove_delet
                 use_index = False   # 表の並びが変わった（掃除・追記の途中）。全件読みへ切り替える
                 break
             parts[p][part] = _content_bytes(r.get("content"))
+    if not use_index and hasattr(backend, "iter_spans"):
+        # 要る行のまとまりだけを読む（除外した大きなフォルダの行を読まずに済む）。並びが変わっていたら全件読みへ
+        res.mode = "spans"
+        parts = {p: {} for p in need}
+        want_at = {i: key for key, i in idx.items()}
+        for i, r in backend.iter_spans(row_spans(sorted(want_at))):
+            key = want_at.get(i)
+            if key is None:
+                continue
+            p, part = key
+            if r.get("path") != p or r.get("version_id") != need[p]["version_id"] or (r.get("part") or 0) != part:
+                res.mode = "full"
+                break
+            parts[p][part] = _content_bytes(r.get("content"))
+        use_index = res.mode == "spans"
     if not use_index:
         res.mode = "full"
         parts = {p: {} for p in need}
@@ -668,12 +716,15 @@ def main(argv=None) -> int:
     ap.add_argument("--keep", type=int, default=0, help="prune で残す版の数")
     ap.add_argument("--dry-run", action="store_true", help="prune の見積もりだけ")
     ap.add_argument("--force", action="store_true", help="モードが git でも実行する")
+    ap.add_argument("--profile", choices=["fetch"], help="fetch＝取得系の workflow。config.STATE_STORE_EXCLUDE_FETCH も除外する（読み書きしない）")
     a = ap.parse_args(argv)
     cfg = load_config()
     mode = resolve_mode(cfg)
     root = Path(a.root)
     paths = tuple(a.paths) if a.paths else tuple(getattr(cfg, "STATE_STORE_PATHS", ()))
     excludes = tuple(getattr(cfg, "STATE_STORE_EXCLUDE", ())) + tuple(a.exclude or ())
+    if a.profile == "fetch":
+        excludes += tuple(getattr(cfg, "STATE_STORE_EXCLUDE_FETCH", ()))
     t0 = time.time()
 
     if a.command == "baseline" or (a.command == "prepare" and mode == "dual"):

@@ -108,3 +108,24 @@ def test_daily_run_reads_jp_filings_from_fetch_workflow():
     assert '--job "📥 取得"' in gate and '--skip-if-done "daily_run.yml:📈 アナライザー実行"' in gate
     assert _main_job(f)["name"] == "📥 取得"
     assert "fetch_runner.py jp_filings" in str(_main_job(f)["steps"])
+
+
+@pytest.mark.parametrize("name", STATEFUL)
+def test_fetch_profile_is_same_for_prepare_and_save(name):
+    """prepare と save で除外がずれると、取り出さなかったファイルに削除の印を付けてしまう。"""
+    runs = [str(s.get("run", "")) for s in _main_job(_load(name))["steps"]]
+    prep = next(r for r in runs if "state_store.py prepare" in r)
+    save = next(r for r in runs if "state_store.py save" in r)
+    assert ("--profile fetch" in prep) == ("--profile fetch" in save), name
+
+
+def test_fetch_profile_does_not_exclude_own_logs():
+    import sys
+    sys.path.insert(0, str(WF.parent.parent))
+    import config
+    ex = config.STATE_STORE_EXCLUDE_FETCH
+    users = [n for n in STATEFUL if "--profile fetch" in (WF / n).read_text(encoding="utf-8")]
+    assert users and "daily_run.yml" not in users
+    for n in users:
+        own = f"stock_data/logs/actions_{n[:-4]}_2026-01-01.log"
+        assert not any(own.startswith(e) for e in ex), n
