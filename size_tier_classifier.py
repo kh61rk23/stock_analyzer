@@ -96,8 +96,8 @@ _SECTOR_TO_TAXONOMY: dict = {
     "1018": ["sensor_image", "sensor_radar", "photonics"],
     # 情報・通信業（1025）: ソフトウェア・SaaS
     "1025": ["ai_ml_framework", "telecom_software", "ai_software"],
-    # 機械（1015）: パワー半導体・産業機械
-    "1015": ["power_semiconductor", "semiconductor_package"],
+    # 機械（1015）: 産業機械・FA・産業用ロボット（半導体のノードを付けると機械の会社がまとめて半導体扱いになる）
+    "1015": ["general_machinery", "factory_automation", "industrial_robot"],
     # 輸送用機器（1017）: EV・車載
     "1017": ["ev_battery", "ev_charger", "sensor_radar"],
     # 化学（1007）: 素材・高機能材料

@@ -618,7 +618,34 @@ def build_insight_text(
                 )
             lines.append("")
 
+    lines += tech_node_lines(companies)
     return "\n".join(lines)
+
+
+# 業種エージェントの「技術ノード」節の材料（_prefetch_ticker_scoped_bq が全業種の銘柄ぶんを1クエリで先読みする）
+_TECH_PROFILES: dict = {}   # {会社コード4桁: [ノード（関与度の高い順・熱度つき）]}
+
+
+def tech_node_lines(companies: list, top: int = 3) -> list:
+    """業種レポートの「技術ノード（技術マップ）」節。会社ごとに関与度の高いノードを top 個、熱度つきで出す。
+    先読みが無い・ノードの無い会社だけなら節を出さない。"""
+    rows = []
+    for c in companies or []:
+        code = str(c.get("ticker") or "").split(".")[0]
+        nodes = _TECH_PROFILES.get(code) or []
+        if not nodes:
+            continue
+        parts = []
+        for n in nodes[:top]:
+            heat = n.get("hotness")
+            parts.append(f"{n.get('node_name_ja') or n['node_id']}（関与 {float(n.get('relevance_score') or 0):.2f}"
+                         + (f"・熱度 {heat:.0f}" if isinstance(heat, (int, float)) else "") + ("・先行" if n.get("leading_only") else "")
+                         + ("・補い" if n.get("confidence_type") == "fallback" else "") + "）")
+        rows.append(f"- **{c.get('name') or c.get('ticker')}**（{c.get('ticker')}）: " + " / ".join(parts))
+    if not rows:
+        return []
+    return ["", "### 技術ノード（技術マップ）", "", "関与＝会社がそのノードに関わる度合い（会社内で合計1）、"
+            "熱度＝ノードの準先行・先行指標の合成（0〜100）。点数への効きは一次採点のテーマ観点。", ""] + rows
 
 
 # ==============================================================
@@ -1317,6 +1344,18 @@ def _prefetch_ticker_scoped_bq(sector_tickers: dict, cfg, bq) -> None:
             print(f"    📚 業種分析バンドルを一括先読み: {n}銘柄（1クエリ）")
     except Exception as exc:
         print(f"    ⚠️  バンドルの一括先読み失敗（個別取得へ）: {str(exc)[:60]}")
+
+    if getattr(cfg, "ENABLE_TAXONOMY_SIGNAL", True):
+        try:
+            import screener_universe
+            import tech_profile
+            profiles = tech_profile.fetch_profiles(getattr(bq, "client", None), all_tickers)
+            hotness, leading = screener_universe.load_hotness(cfg)
+            _TECH_PROFILES.clear()
+            _TECH_PROFILES.update({c: tech_profile.annotate(v, hotness, leading) for c, v in profiles.items()})
+            print(f"    🧭 技術ノードを一括先読み: {len(_TECH_PROFILES)}社（1クエリ）")
+        except Exception as exc:
+            print(f"    ⚠️  技術ノードの先読み失敗（業種レポートの節は出さない）: {str(exc)[:60]}")
 
     try:
         import importlib
