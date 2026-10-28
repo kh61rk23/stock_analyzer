@@ -447,7 +447,7 @@ def _extract_exposure_from_text(
 
 def prefetch_text_sections(codes: list, cfg=None,
                            project_id: str = "stock-analyzer-edinet") -> dict | None:
-    """対象会社の本文（edinet.text_analysis の最新10行）を1クエリでまとめて取る。
+    """対象会社の本文（text_analysis と gov_text_blocks の対象の節・会社と節ごとに最新）を1クエリでまとめて取る。
 
     1社ずつ引くと、本文の表（約95MB）へのクエリが社数ぶん（既定50本）になり、
     時間と課金が社数に比例する。行が無い会社も空の dict で埋める（埋めないと個別取得に戻る）。
@@ -465,15 +465,26 @@ def prefetch_text_sections(codes: list, cfg=None,
                 _sys.path.insert(0, p)
         from google.cloud import bigquery
         raw_bq = importlib.import_module("edinet_bq_client").EDINETBQClient().client
+        # 本文は EdinetDB（text_analysis・約600社）と政府 EDINET（gov_text_blocks・全上場）の両方から、
+        # 会社・節ごとに決算期の新しい方を1つ。節は GEO_EDINET_TARGET_SECTIONS だけ（空なら全部）
+        sections = list(getattr(cfg, "GEO_EDINET_TARGET_SECTIONS", []) or []) if cfg else []
         query = f"""
-        SELECT company_code, section_type, raw_text AS text_body
-        FROM `{_pid}.edinet.text_analysis`
-        WHERE company_code IN UNNEST(@codes)
-        QUALIFY ROW_NUMBER() OVER (PARTITION BY company_code ORDER BY fiscal_year_end DESC) <= 10
-        ORDER BY company_code, fiscal_year_end DESC
+        WITH t AS (
+          SELECT company_code, section_type, raw_text AS text_body, fiscal_year_end, updated_at AS ts
+          FROM `{_pid}.edinet.text_analysis`
+          WHERE company_code IN UNNEST(@codes) AND raw_text IS NOT NULL
+          UNION ALL
+          SELECT LEFT(c.sec_code, 4), g.section_type, g.raw_text, g.fiscal_year_end, g.fetched_at
+          FROM `{_pid}.edinet.gov_text_blocks` g JOIN `{_pid}.edinet.company` c USING (edinet_code)
+          WHERE LEFT(c.sec_code, 4) IN UNNEST(@codes) AND g.raw_text IS NOT NULL
+        )
+        SELECT company_code, section_type, text_body FROM t
+        WHERE ARRAY_LENGTH(@sections) = 0 OR section_type IN UNNEST(@sections)
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY company_code, section_type ORDER BY fiscal_year_end DESC, ts DESC) = 1
         """
         job = raw_bq.query(query, job_config=bigquery.QueryJobConfig(
-            query_parameters=[bigquery.ArrayQueryParameter("codes", "STRING", codes)]))
+            query_parameters=[bigquery.ArrayQueryParameter("codes", "STRING", codes),
+                              bigquery.ArrayQueryParameter("sections", "STRING", sections)]))
         out: dict = {c: {} for c in codes}
         for row in job.result():
             if row.section_type and (row.text_body or "").strip():
@@ -566,6 +577,25 @@ def _sections_from_html(cfg, code: str, importlib) -> dict:
 # BLOCK 5: BQ から IMPORTANT_TICKERS_JP を取得
 # ==============================================================
 
+def _listed_tickers(cfg=None) -> list[str]:
+    """上場中で有報の本文（政府 EDINET か EdinetDB）がある会社の ticker。取れなければ []。"""
+    try:
+        from edinet_bq_client import EDINETBQClient
+        client = EDINETBQClient().client
+        _pid = getattr(cfg, "GEO_BQ_PROJECT_ID", client.project) if cfg else client.project
+        sql = f"""
+        SELECT DISTINCT LEFT(c.sec_code, 4) AS code FROM `{_pid}.edinet.company` c
+        WHERE NOT IFNULL(c.is_delisted, FALSE) AND c.sec_code IS NOT NULL
+          AND (c.edinet_code IN (SELECT DISTINCT edinet_code FROM `{_pid}.edinet.gov_text_blocks`)
+               OR LEFT(c.sec_code, 4) IN (SELECT DISTINCT company_code FROM `{_pid}.edinet.text_analysis`))
+        ORDER BY code
+        """
+        return [f"{r.code}.T" for r in client.query(sql).result() if r.code]
+    except Exception as e:
+        print(f"  ⚠️  上場会社の一覧を取れない: {str(e)[:60]}")
+        return []
+
+
 def _get_target_tickers(cfg=None) -> list[str]:
     """
     処理対象ティッカーリストを返す。
@@ -574,6 +604,11 @@ def _get_target_tickers(cfg=None) -> list[str]:
       2. edinet.doc_index から有報提出済みの証券コード（上位50社）
     """
     from_cfg = getattr(cfg, "IMPORTANT_TICKERS_JP", []) if cfg else []
+    if from_cfg and not getattr(cfg, "GEO_EDINET_ALL_LISTED", True):
+        return from_cfg
+    listed = _listed_tickers(cfg)
+    if listed:
+        return listed
     if from_cfg:
         return from_cfg
 

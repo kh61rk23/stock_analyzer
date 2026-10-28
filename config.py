@@ -3614,13 +3614,16 @@ GEO_EXPOSURE_REVIEW_THRESHOLD = 0.20
 # EDINET有報テキスト抽出の対象セクション
 # edinet_exposure_extractor がこのセクションリストを参照
 GEO_EDINET_TARGET_SECTIONS: list = [
-    "事業の概況",
-    "主要な事業内容",
-    "海外事業",
-    "地域別事業概況",
-    "リスク情報",
-    "重要な会計上の見積り",
+    # edinet.text_analysis・edinet.gov_text_blocks の section_type と同じ名前（違うと本文を1つも読めない）。
+    # 海外の権益・拠点・地域別売上が書かれる節
+    "事業の内容",
+    "事業等のリスク",
+    "経営者による分析",
+    "関係会社の状況",
+    "設備投資等の概要",
 ]
+# 対象の会社。True＝全上場（edinet.company の上場中・本文のある会社）、False＝IMPORTANT_TICKERS_JP だけ
+GEO_EDINET_ALL_LISTED: bool = True
 
 # SEC EDGAR 10-K の対象セクション（英語）
 # sec_geographic_extractor がこのセクションリストを参照
