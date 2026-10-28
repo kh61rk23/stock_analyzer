@@ -76,12 +76,16 @@ def test_taxonomy_loader_uses_client_project_when_config_value_is_empty(monkeypa
         def __init__(self):
             self.queries = []
 
-        def query(self, sql):
+        def query(self, sql, **_kw):
             self.queries.append(sql)
             return FakeJob()
 
-        def load_table_from_file(self, _buf, table, job_config=None):
-            assert table == "credential-project.taxonomy._staging_taxonomy_node"
+        def create_dataset(self, ds, exists_ok=False):
+            assert ds.dataset_id in ("master", "master_us") and exists_ok
+            return ds
+
+        def load_table_from_file(self, _buf, table, job_config=None, **_kw):
+            assert table == "credential-project.master._staging_tax_node"
             return FakeJob()
 
     fake_bq = type(
@@ -118,4 +122,4 @@ def test_taxonomy_loader_uses_client_project_when_config_value_is_empty(monkeypa
 
     assert ok is True
     assert count == 1
-    assert all("`.taxonomy" not in sql for sql in fake_bq.client.queries)
+    assert all("`.taxonomy" not in sql and "`.master" not in sql for sql in fake_bq.client.queries)

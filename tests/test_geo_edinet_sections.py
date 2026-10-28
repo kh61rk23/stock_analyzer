@@ -17,3 +17,12 @@ def test_target_sections_exist_in_text_blocks():
 
 def test_all_listed_by_default():
     assert config.GEO_EDINET_ALL_LISTED is True
+
+
+def test_stops_instead_of_per_ticker_queries_when_prefetch_fails(monkeypatch):
+    import edinet_exposure_extractor as x
+    calls = []
+    monkeypatch.setattr(x, "prefetch_text_sections", lambda *a, **k: None)
+    monkeypatch.setattr(x, "_get_edinet_text_sections", lambda *a, **k: calls.append(1) or {})
+    r = x.run_edinet_exposure_extractor(config, target_tickers=[f"{1000 + i}.T" for i in range(50)], dry_run=True)
+    assert r["success"] is False and "まとめて読めなかった" in r["error"] and calls == []

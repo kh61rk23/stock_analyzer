@@ -3,7 +3,8 @@
 # ==============================================================
 # 【役割】data/taxonomy_seed/batch*.json のうち **承認済み**
 #   （_meta.status が APPROVED で始まる）バッチのノードを
-#   BQ taxonomy.taxonomy_node へ冪等投入する（node_id で重複排除=MERGE）。
+#   BQ master.tax_node（ノードのマスタ・大中小の段階の列つき）へ冪等投入する（node_id で重複排除=MERGE）。
+#   元の taxonomy.taxonomy_node は master.tax_node の view（master_tables.py）。
 # 【原則】
 #   - DRAFTバッチは投入しない（人間承認=verified_flag が正本。HANDOFF_2026-06-30 §4-7）
 #   - --dry-run 必須運用: まず件数とMERGE対象を確認してから実行
@@ -88,9 +89,12 @@ def build_bq_rows(nodes: list[dict], as_of: str = None) -> list[dict]:
     """taxonomy.taxonomy_node の実スキーマ（bq_all_schemas_20260704.json）に整形。"""
     as_of = as_of or date.today().isoformat()
     now = datetime.now(timezone.utc).isoformat()
+    import master_tables
+    paths = master_tables.node_paths(nodes)
     rows = []
     for n in nodes:
         rows.append({
+            **paths.get(n["node_id"], {}),
             "node_id":             n["node_id"],
             "parent_id":           n.get("parent_id"),
             "node_name_ja":        n.get("node_name_ja"),
@@ -113,10 +117,10 @@ def build_bq_rows(nodes: list[dict], as_of: str = None) -> list[dict]:
     return rows
 
 
-def build_merge_sql(project: str, dataset: str = "taxonomy") -> str:
-    """staging → 本テーブルの MERGE 文（node_id キーで冪等）。"""
-    t = f"`{project}.{dataset}.taxonomy_node`"
-    s = f"`{project}.{dataset}._staging_taxonomy_node`"
+def build_merge_sql(project: str, dataset: str = "master") -> str:
+    """staging → master.tax_node の MERGE 文（node_id キーで冪等）。"""
+    t = f"`{project}.{dataset}.tax_node`"
+    s = f"`{project}.{dataset}._staging_tax_node`"
     return f"""
 MERGE {t} T
 USING {s} S
@@ -129,7 +133,10 @@ WHEN MATCHED THEN UPDATE SET
   supply_chain_pos = S.supply_chain_pos,
   related_commodities = S.related_commodities,
   related_countries = S.related_countries,
-  notes = S.notes, updated_at = S.updated_at
+  notes = S.notes, updated_at = S.updated_at,
+  level_name_ja = S.level_name_ja, l1_id = S.l1_id, l1_name_ja = S.l1_name_ja,
+  l2_id = S.l2_id, l2_name_ja = S.l2_name_ja, l3_id = S.l3_id, l3_name_ja = S.l3_name_ja,
+  path_name_ja = S.path_name_ja
 WHEN NOT MATCHED THEN INSERT ROW
 """
 
@@ -150,12 +157,14 @@ def load_to_bq(rows: list[dict], cfg) -> tuple[bool, int]:
             str(getattr(cfg, "BQ_PROJECT_ID", "") or "").strip()
             or bq.project
         )
-        staging = f"{project}.taxonomy._staging_taxonomy_node"
+        import master_tables
+        master_tables.ensure_datasets(bq.client, project)
+        staging = f"{project}.{master_tables.DATASET}._staging_tax_node"
 
         # staging はJSON列を含むため本テーブルの LIKE で作る（冪等）
         bq.client.query(
             f"CREATE OR REPLACE TABLE `{staging}` "
-            f"LIKE `{project}.taxonomy.taxonomy_node`").result()
+            f"LIKE `{project}.{master_tables.DATASET}.{master_tables.NODE_TABLE}`").result()
         job_config = bigquery.LoadJobConfig(
             write_disposition="WRITE_TRUNCATE",
             source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
@@ -168,6 +177,8 @@ def load_to_bq(rows: list[dict], cfg) -> tuple[bool, int]:
                                        job_config=job_config).result()
         bq.client.query(build_merge_sql(project)).result()
         bq.client.query(f"DROP TABLE IF EXISTS `{staging}`").result()
+        if hasattr(bq.client, "get_table"):
+            master_tables.rebuild_level_tables(bq.client)   # 段ごとのマスタ（大・中・小・細）も合わせる
         return True, len(rows)
     except Exception as e:
         print(f"  ⚠️ BQ投入失敗（ローカル正本は維持）: {str(e)[:100]}")
@@ -202,7 +213,7 @@ def main():
 
     rows = build_bq_rows(nodes)
     if dry:
-        print(f"✅ --dry-run: MERGE対象 {len(rows)}行（taxonomy.taxonomy_node・node_idキー）")
+        print(f"✅ --dry-run: MERGE対象 {len(rows)}行（master.tax_node・node_idキー）")
         for r in rows[:5]:
             print(f"   {r['node_id']} (L{r['node_level']} {r['node_type']}) "
                   f"active={r['is_active']}")
