@@ -45,7 +45,7 @@ class TestWeights:
     def test_normalized_to_one(self):
         w = su.normalize_weights({a: 2.0 for a in su.ASPECTS})
         assert sum(w.values()) == pytest.approx(1.0)
-        assert w["move"] == pytest.approx(0.1)
+        assert w["move"] == pytest.approx(1 / len(su.ASPECTS))
 
     def test_all_invalid_falls_back_to_equal(self):
         w = su.normalize_weights({"move": -1, "bogus": 5})
@@ -133,7 +133,7 @@ class TestScoreUniverse:
         a = next(r for r in out if r["ticker"] == "A")
         assert a["aspects"]["quality"] == 100.0
         assert a["aspects"]["growth"] == 50.0
-        assert a["coverage"] == pytest.approx(0.1)
+        assert a["coverage"] == pytest.approx(round(1 / len(su.ASPECTS), 3))
 
     def test_rank_order_and_rank_numbers(self):
         out = su.score_universe([_rec("A", {"roic": 0.1}), _rec("B", {"roic": 0.3}), _rec("C", {"roic": 0.2})], self.W)
@@ -268,3 +268,64 @@ class TestSharedWithExistingParts:
         fresh = [{"ticker": "A", "composite_score": 40.0}]
         ss._attach_universe(fresh, None, 0.5)
         assert fresh[0]["final_score"] == 40.0
+
+
+class TestIdioFeatures:
+    """銘柄独自の値動き・マッピングに応じた値動きと財務。"""
+
+    @staticmethod
+    def _days(n):
+        from datetime import date, timedelta
+        return [date(2026, 1, 1) + timedelta(days=i) for i in range(n)]
+
+    def test_pure_market_stock_has_zero_idio_and_beta(self):
+        import random
+        random.seed(1)
+        ds = self._days(130)
+        m = [100.0]
+        for _ in ds[1:]:
+            m.append(m[-1] * (1 + random.gauss(0, 0.01)))
+        market = dict(zip(ds, m))
+        twice = [100.0]
+        for a, b in zip(m, m[1:]):
+            twice.append(twice[-1] * (1 + 2 * (b / a - 1)))
+        out = su.idio_features({"X": (ds, twice)}, market, {}, {})
+        assert out["X"]["beta"] == pytest.approx(2.0, abs=1e-6)
+        assert out["X"]["idio_vol_60"] == pytest.approx(0.0, abs=1e-9)
+
+    def test_needs_enough_days_and_skips_gaps(self):
+        ds = self._days(130)
+        market = {d: 100.0 + i for i, d in enumerate(ds)}
+        short = su.idio_features({"S": (ds[-50:], [100.0 + i for i in range(50)])}, market, {}, {})
+        assert "S" not in short
+        gappy = [d for i, d in enumerate(ds) if i % 2 == 0]       # 1日おき＝前の日の値が無い
+        assert "G" not in su.idio_features({"G": (gappy, [100.0] * len(gappy))}, market, {}, {})
+
+    def test_vs_theme_and_theme_sales_growth(self):
+        import random
+        random.seed(2)
+        ds = self._days(130)
+        m = [100.0]
+        for _ in ds[1:]:
+            m.append(m[-1] * (1 + random.gauss(0, 0.01)))
+        market = dict(zip(ds, m))
+        series, themes, sg = {}, {}, {}
+        for k in range(6):
+            c = [100.0]
+            for a, b in zip(m, m[1:]):
+                c.append(c[-1] * (1 + (b / a - 1) + random.gauss(0, 0.005)))
+            series[f"T{k}"] = (ds, c)
+            themes[f"T{k}"] = [("semi", 1.0)]
+            sg[f"T{k}"] = 0.1 * k
+        out = su.idio_features(series, market, themes, sg)
+        avg = sum(out[t]["idio_mom_20"] for t in series) / 6
+        assert out["T0"]["vs_theme_idio"] == pytest.approx(out["T0"]["idio_mom_20"] - avg)
+        assert out["T3"]["theme_sales_g"] == pytest.approx(0.25)
+        few = su.idio_features({t: series[t] for t in ("T0", "T1")}, market, {t: themes[t] for t in ("T0", "T1")}, sg)
+        assert "vs_theme_idio" not in few["T0"]                    # 会社が5社未満のノードは使わない
+
+    def test_idio_aspect_prefers_calm_and_lagging(self):
+        def rec(t, vol, vs):
+            return {"ticker": t, "cols": {"idio_vol_60": vol, "vs_theme_idio": vs}, "scores": {}}
+        out = su.score_universe([rec("calm", 0.01, -0.05), rec("wild", 0.05, 0.05)], {"idio": 1.0})
+        assert out[0]["ticker"] == "calm" and out[0]["aspects"]["idio"] == 100.0

@@ -24,7 +24,7 @@ import math
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-ASPECTS = ("move", "momentum", "technical", "asset", "quality", "growth", "value", "flow", "theme", "sector")
+ASPECTS = ("move", "momentum", "technical", "asset", "quality", "growth", "value", "flow", "theme", "sector", "idio")
 
 DATASET = "analytics"
 TABLE = "screener_universe_daily"
@@ -42,9 +42,12 @@ RANK_COLUMNS = {
                  ("consec_up_years", True)],
     "value":    [("earnings_yield", True), ("fcf_yield", True), ("total_payout_yield", True), ("ev_ebitda", False)],
     "flow":     [],
-    "theme":    [("theme_value", True)],
+    "theme":    [("theme_value", True), ("theme_sales_g", True)],
     "sector":   [("sector_score", True)],
+    # 銘柄独自：TOPIX（1306.T）で説明できない残りの値動き。荒さが小さいほど・テーマ（同じタグの会社群）に出遅れたほど良い
+    "idio":     [("idio_vol_60", False), ("vs_theme_idio", False)],
 }
+MARKET_TICKER = "1306.T"
 
 _SQL = """
 WITH px_raw AS (
@@ -71,6 +74,7 @@ px AS (
   SELECT ticker, ANY_VALUE(last_date) AS last_date, ANY_VALUE(max_d) AS max_d, COUNT(*) AS price_days,
          MAX(break_date) AS break_date,
          ARRAY_AGG(IF(rn <= 260, close, NULL) IGNORE NULLS ORDER BY trade_date) AS closes,
+         ARRAY_AGG(IF(rn <= 260, trade_date, NULL) IGNORE NULLS ORDER BY trade_date) AS dates,
          MAX(IF(rn = 1, volume, NULL)) AS vol_1d,
          AVG(IF(rn <= 20, volume, NULL)) AS vol_avg20,
          IF(COUNTIF(rn <= 20) >= 15, AVG(IF(rn <= 20, close * volume, NULL)), NULL) AS turnover_20d
@@ -96,7 +100,7 @@ SELECT s.edinet_code, s.ticker, s.name, s.industry, s.market_cap_b, s.current_pr
        s.roic, s.ocf_margin, s.fcf_margin, s.f_score, s.interest_coverage, s.accrual_ratio,
        s.earnings_yield, s.fcf_yield, s.ev_ebitda, s.total_payout_yield,
        s.asset_value_ratio, s.net_cash_to_mcap, COALESCE(s.adj_pbr, s.pbr) AS adj_pbr,
-       x.last_date, x.max_d, x.price_days, x.break_date, x.closes, x.vol_1d, x.vol_avg20, x.turnover_20d,
+       x.last_date, x.max_d, x.price_days, x.break_date, x.closes, x.dates, x.vol_1d, x.vol_avg20, x.turnover_20d,
        t.themes
 FROM `{project}.bi.m_screener` AS s
 LEFT JOIN px AS x ON x.ticker = s.ticker
@@ -216,6 +220,69 @@ def theme_value(themes, hotness: dict, leading_only, leading_bonus: float = 15.0
     return best
 
 
+def idio_features(series: dict, market: dict, themes: dict, sales_growth: dict, beta_days: int = 120,
+                  vol_days: int = 60, mom_days: int = 20, min_days: int = 100, min_members: int = 5) -> dict:
+    """銘柄独自の値動きと、マッピング（技術マップのタグ）に応じた値動き・財務の動き（純粋関数）。
+
+    series: {ticker: (日付の列, 終値の列)}（古い順）、market: {日付: TOPIX ETF の終値}、
+    themes: {ticker: [(node_id, 関与度)]}、sales_growth: {ticker: 売上の前年比}
+    返り値 {ticker: {"beta", "idio_vol_60", "idio_mom_20", "vs_theme_idio", "theme_sales_g"}}（求まらない値は無い）。
+      ・日次の騰落を市場の騰落に回帰（直近 beta_days 日）し、残り（独自の値動き）の直近 vol_days 日の標準偏差が
+        idio_vol_60、直近 mom_days 日の合計が idio_mom_20。前の日に値の無い日（売買停止など）は使わない
+      ・vs_theme_idio＝自分の idio_mom_20 − 同じタグの会社群の idio_mom_20 の平均（関与度で重み・会社が min_members 社以上のノードだけ）
+      ・theme_sales_g＝同じタグの会社群の売上の前年比の平均（-50%〜+100% で切る）
+    """
+    mdates = sorted(market)
+    mret = {d: market[d] / market[p] - 1 for p, d in zip(mdates, mdates[1:]) if market[p] > 0}
+    prev_of = dict(zip(mdates[1:], mdates))
+    out: dict = {}
+    for t, (ds, cs) in series.items():
+        px = {d: _num(c) for d, c in zip(ds or [], cs or []) if _num(c)}
+        pts = [(mret[d], px[d] / px[prev_of[d]] - 1) for d in sorted(px)
+               if d in mret and prev_of.get(d) in px][-beta_days:]
+        if len(pts) < min_days:
+            continue
+        mx = sum(m for m, _ in pts) / len(pts)
+        sx = sum(r for _, r in pts) / len(pts)
+        var = sum((m - mx) ** 2 for m, _ in pts)
+        beta = sum((m - mx) * (r - sx) for m, r in pts) / var if var > 0 else 0.0
+        resid = [r - beta * m for m, r in pts]
+        last = resid[-vol_days:]
+        mu = sum(last) / len(last)
+        out[t] = {"beta": round(beta, 4),
+                  "idio_vol_60": math.sqrt(sum((x - mu) ** 2 for x in last) / (len(last) - 1)),
+                  "idio_mom_20": sum(resid[-mom_days:])}
+
+    def _node_avg(values: dict) -> dict:
+        acc: dict = {}
+        for t, nodes in themes.items():
+            v = values.get(t)
+            if v is None:
+                continue
+            for nid, rel in nodes:
+                w = max(0.01, _num(rel) or 0.0)
+                a = acc.setdefault(nid, [0.0, 0.0, 0])
+                a[0] += w * v
+                a[1] += w
+                a[2] += 1
+        node = {n: a[0] / a[1] for n, a in acc.items() if a[2] >= min_members and a[1] > 0}
+        res = {}
+        for t, nodes in themes.items():
+            ws = [(max(0.01, _num(rel) or 0.0), node[n]) for n, rel in nodes if n in node]
+            if ws:
+                res[t] = sum(w * v for w, v in ws) / sum(w for w, _ in ws)
+        return res
+
+    theme_idio = _node_avg({t: f["idio_mom_20"] for t, f in out.items()})
+    for t, v in theme_idio.items():
+        if t in out:
+            out[t]["vs_theme_idio"] = out[t]["idio_mom_20"] - v
+    sg = {t: min(1.0, max(-0.5, v)) for t, v in ((t, _num(v)) for t, v in sales_growth.items()) if v is not None}
+    for t, v in _node_avg(sg).items():
+        out.setdefault(t, {})["theme_sales_g"] = v
+    return out
+
+
 def aspect_scores(rank_pcts: dict, score_elems: list) -> tuple:
     """1銘柄の観点スコア。rank_pcts: その観点の順位要素（0〜100）のリスト、score_elems: 既存部品の点（0〜100）。
 
@@ -302,6 +369,25 @@ def load_hotness(cfg) -> tuple:
     latest = max(history)
     hotness = th.compute_node_hotness(history[latest], history, latest, cfg)
     return hotness, th.leading_only_nodes(hotness, cfg=cfg)
+
+
+MARKET_SQL = """
+SELECT trade_date, close FROM `{project}.analytics.price_daily_latest`
+WHERE ticker = @t AND trade_date >= DATE_SUB(@asof, INTERVAL @price_days DAY) AND trade_date < @asof AND close > 0
+"""
+
+
+def fetch_market(client, cfg, asof: date) -> dict:
+    """TOPIX の ETF（MARKET_TICKER）の {日付: 終値}。銘柄独自の値動きを測る基準。price_daily は ticker でまとめて
+    保存されているので読む量は小さい。"""
+    from google.cloud import bigquery
+    jc = bigquery.QueryJobConfig(query_parameters=[
+        bigquery.ScalarQueryParameter("t", "STRING", MARKET_TICKER),
+        bigquery.ScalarQueryParameter("asof", "DATE", asof),
+        bigquery.ScalarQueryParameter("price_days", "INT64", int(getattr(cfg, "SCREEN_UNIVERSE_PRICE_DAYS", 400))),
+    ])
+    return {r["trade_date"]: float(r["close"]) for r in client.query(MARKET_SQL.format(project=client.project),
+                                                                         job_config=jc).result()}
 
 
 def fetch_rows(client, cfg, asof: date) -> list:
@@ -399,6 +485,18 @@ def build_records(rows: list, cfg, ctx: dict) -> tuple:
             "turnover_20d": _num(r.get("turnover_20d")), "cols": cols,
             "scores": {a: [v for v in vs if v is not None] for a, vs in sc.items()},
         })
+    # 銘柄独自の値動き・マッピングに応じた値動きと財務（全銘柄を見て決まるので、記録をそろえてから足す）
+    by_t = {r["ticker"]: r for r in rows}
+    feats = idio_features(
+        {rec["ticker"]: (by_t[rec["ticker"]].get("dates"), by_t[rec["ticker"]].get("closes")) for rec in records},
+        ctx.get("market") or {},
+        {rec["ticker"]: [(dict(x).get("node_id"), dict(x).get("relevance")) for x in (by_t[rec["ticker"]].get("themes") or [])]
+         for rec in records},
+        {rec["ticker"]: rec["cols"].get("sales_growth_1y") for rec in records})
+    for rec in records:
+        f = feats.get(rec["ticker"]) or {}
+        for k in ("beta", "idio_vol_60", "idio_mom_20", "vs_theme_idio", "theme_sales_g"):
+            rec["cols"][k] = f.get(k)
     return records, excluded
 
 
@@ -425,6 +523,9 @@ def summarize(scored: list, excluded: dict, top_n: int, stage2_n: int, total_row
     }
 
 
+IDIO_COLS = ("beta", "idio_vol_60", "idio_mom_20", "vs_theme_idio", "theme_sales_g")   # 観点の材料も毎日残す（効きを測り直すため）
+
+
 def output_rows(scored: list, score_date: str, stage2: set) -> list:
     """BQ 書き込み用の行（analytics.screener_universe_daily）。"""
     now = datetime.now(timezone.utc).isoformat()
@@ -434,6 +535,7 @@ def output_rows(scored: list, score_date: str, stage2: set) -> list:
                "company_name": r.get("name"), "sector_code": r.get("sector_code"),
                "universe_score": r["universe_score"], "universe_rank": r["universe_rank"]}
         row.update({f"s_{a}": r["aspects"][a] for a in ASPECTS})
+        row.update({k: _num((r.get("cols") or {}).get(k)) for k in IDIO_COLS})
         row.update({"coverage": r["coverage"], "market_cap_b": r.get("market_cap_b"),
                     "stage2_selected": r["ticker"] in stage2, "created_at": now})
         rows.append(row)
@@ -446,6 +548,7 @@ def _schema():
              F("company_name", "STRING"), F("sector_code", "STRING"), F("universe_score", "FLOAT64"),
              F("universe_rank", "INT64")]
             + [F(f"s_{a}", "FLOAT64") for a in ASPECTS]
+            + [F(k, "FLOAT64") for k in IDIO_COLS]
             + [F("coverage", "FLOAT64"), F("market_cap_b", "FLOAT64"), F("stage2_selected", "BOOL"),
                F("created_at", "TIMESTAMP")])
 
@@ -472,7 +575,9 @@ def write_daily(client, rows: list, score_date: str, tmp_dir: Path) -> int:
                 fh, f"{ref}${score_date.replace('-', '')}", location=LOCATION,
                 job_config=bigquery.LoadJobConfig(
                     source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON, schema=_schema(),
-                    write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE)).result()
+                    write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+                    # 列を足したときに既存の表へ追加する（観点・材料を足しても過去の区画は残る）
+                    schema_update_options=[bigquery.SchemaUpdateOption.ALLOW_FIELD_ADDITION])).result()
     finally:
         tmp.unlink(missing_ok=True)
     return len(rows)
@@ -517,7 +622,13 @@ def run_universe(cfg, sector_results: dict, caches: dict, accruals: dict | None 
                           ("dividend", "dividend_calendar", "get_dividend_bonus")):
         if caches.get(name):
             getters[name] = getattr(importlib.import_module(mod), fn)
+    market = {}
+    try:
+        market = fetch_market(client, cfg, asof)
+    except Exception as e:
+        print(f"    ⚠️  一次採点: TOPIX ETF の株価を読めず、銘柄独自の観点は中立で続行: {str(e)[:80]}")
     ctx = {
+        "market": market,
         "re_by_ticker": stock_real_estate.load(cfg),
         "accruals": accruals or {},
         "sector_scores": {str(c): _num(v.get("composite_score")) for c, v in (sector_results or {}).items()
