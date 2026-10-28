@@ -24,5 +24,6 @@ def test_stops_instead_of_per_ticker_queries_when_prefetch_fails(monkeypatch):
     calls = []
     monkeypatch.setattr(x, "prefetch_text_sections", lambda *a, **k: None)
     monkeypatch.setattr(x, "_get_edinet_text_sections", lambda *a, **k: calls.append(1) or {})
-    r = x.run_edinet_exposure_extractor(config, target_tickers=[f"{1000 + i}.T" for i in range(50)], dry_run=True)
-    assert r["success"] is False and "まとめて読めなかった" in r["error"] and calls == []
+    for n in (50, 3):                                  # 社数が少なくても1社ずつには落とさない
+        r = x.run_edinet_exposure_extractor(config, target_tickers=[f"{1000 + i}.T" for i in range(n)], dry_run=True)
+        assert r["success"] is False and "まとめて読めなかった" in r["error"] and calls == []

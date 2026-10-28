@@ -704,9 +704,9 @@ def run_edinet_exposure_extractor(
     # 1回の実行で GEO_EDINET_HTML_FALLBACK_MAX 社まで（月次ランナーの1ステップ900秒に収める）。
     prefetched = prefetch_text_sections(tickers, cfg, _pid)
     fallback_left = int(getattr(cfg, "GEO_EDINET_HTML_FALLBACK_MAX", 5) if cfg else 5)
-    if prefetched is None and len(tickers) > int(getattr(cfg, "GEO_EDINET_PER_TICKER_MAX", 20) if cfg else 20):
-        # まとめて読めないとき1社ずつに落とすと、1社1本（本文の表で約0.1GB）のクエリが社数ぶん出て
-        # 1日のクエリの上限（約30GiB）を使い切る。少数のとき以外は止めて、次の回にやり直す
+    if prefetched is None:
+        # まとめて読めないときは止めて、次の回にやり直す。1社ずつに落とすと1社1本（本文の表で約0.1GB）の
+        # クエリが社数ぶん出て、1日のクエリの上限（約30GiB）を使い切る（社数が少なくても予備の経路は使わない）
         return {"success": False, "total": 0, "merged": 0, "tickers": tickers, "records": [],
                 "error": "本文をまとめて読めなかったので止めた（1社ずつ読むとクエリが社数ぶん出る）",
                 "timestamp": datetime.now(timezone.utc).isoformat()}

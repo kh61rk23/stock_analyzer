@@ -3624,8 +3624,6 @@ GEO_EDINET_TARGET_SECTIONS: list = [
 ]
 # 対象の会社。True＝全上場（edinet.company の上場中・本文のある会社）、False＝IMPORTANT_TICKERS_JP だけ
 GEO_EDINET_ALL_LISTED: bool = True
-# 本文をまとめて読めなかったとき、1社ずつ読んでよい社数の上限（超えたら止める。1社1本・約0.1GB のため）
-GEO_EDINET_PER_TICKER_MAX: int = 20
 
 # SEC EDGAR 10-K の対象セクション（英語）
 # sec_geographic_extractor がこのセクションリストを参照
