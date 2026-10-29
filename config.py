@@ -5439,7 +5439,7 @@ SEC_FILINGS_TIME_BUDGET_MIN: float = 20.0
 # 全上場の最新の有報から節ごとの本文を edinet.gov_text_blocks へ（技術マップの語の照合・分析の材料）。
 EDINET_GOV_TEXT_TIME_BUDGET_MIN: float = 60.0
 EDINET_GOV_TEXT_SECTION_MAX_CHARS: int = 20000   # 1節の上限（超えた分は切る）
-EDINET_GOV_TEXT_MAX_GB: float = 0.4              # この表の上限（1年で約 0.1GB の見込み）
+EDINET_GOV_TEXT_MAX_GB: float = 0.6              # この表の上限（1年で約 0.1GB・セグメント情報の注記で全上場 約 0.1GB 増える）
 
 # ==============================================================
 # BLOCK 70: 技術マップのまとめ（tech_profile.py）

@@ -30,3 +30,22 @@ def test_mapper_reads_both_text_sources_and_target_sql_excludes_funds():
     src = (Path(g.__file__).parent / "taxonomy_company_mapper.py").read_text(encoding="utf-8")
     assert "edinet.text_analysis" in src and "edinet.gov_text_blocks" in src
     assert "fund_code IS NULL" in g.TARGET_SQL and "ordinance_code = '010'" in g.TARGET_SQL
+
+
+def test_segment_text_block_prefers_consolidated():
+    rows = [["jpcrp_cor:NotesSegmentInformationEtcFinancialStatementsTextBlock", "セグメント", "x", "", "個別", "", "", "", "個別の注記"],
+            ["jpcrp_cor:NotesSegmentInformationEtcConsolidatedFinancialStatementsTextBlock", "セグメント", "x", "", "連結", "", "", "",
+             "自動車事業 金融事業"]]
+    out = g.blocks_from_zip(_zip(rows), max_chars=100)
+    assert out == [("jpcrp_cor:NotesSegmentInformationEtcConsolidatedFinancialStatementsTextBlock", "セグメント情報", "自動車事業 金融事業")]
+
+
+def test_segment_revenue_current_year_members_only():
+    E = "jpcrp_cor:RevenuesFromExternalCustomers"
+    rows = [[E, "外部顧客への売上高", "CurrentYearDuration_jpcrp030000-asr_E02144-000AutomotiveReportableSegmentMember", "当期", "連結", "期間", "JPY", "円", "40,000"],
+            [E, "外部顧客への売上高", "CurrentYearDuration_jpcrp030000-asr_E02144-000FinancialServicesReportableSegmentMember", "当期", "連結", "期間", "JPY", "円", "5000"],
+            [E, "外部顧客への売上高", "CurrentYearDuration_jpcrp_cor:ReportableSegmentsMember", "当期", "連結", "期間", "JPY", "円", "45000"],
+            [E, "外部顧客への売上高", "Prior1YearDuration_jpcrp030000-asr_E02144-000AutomotiveReportableSegmentMember", "前期", "連結", "期間", "JPY", "円", "1"],
+            ["jpigp_cor:RevenueFromExternalCustomersIFRS", "外部顧客", "CurrentYearDuration_jpcrp030000-asr_E1-000ChemicalsSegmentMember", "当期", "連結", "期間", "JPY", "円", "7"]]
+    out = g.segment_revenue_from_zip(_zip(rows))
+    assert [(g.segment_name(x["member"]), x["value"]) for x in out] == [("Automotive", 40000.0), ("Financial Services", 5000.0), ("Chemicals", 7.0)]

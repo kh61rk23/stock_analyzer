@@ -19,6 +19,7 @@ import argparse
 import io
 import json
 import os
+import re
 import sys
 import time
 import zipfile
@@ -41,6 +42,18 @@ SECTIONS = {
     "jpcrp_cor:DisclosureOfSustainabilityRelatedFinancialInformationTextBlock": "サステナビリティ",
     "jpcrp_cor:InformationAboutEmployeesTextBlock": "従業員の状況",
 }
+# セグメント情報の注記（要素名は連結・個別・会計基準で違うので、名前の形で拾う。連結を先に）
+SEGMENT_SECTION = "セグメント情報"
+_SEG_TEXT_RE = re.compile(r"SegmentInformation.*TextBlock$")
+# セグメント別の外部顧客への売上高（日本基準・IFRS・米国基準で要素名の綴りが違う）
+_SEG_REV_RE = re.compile(r"(?i)revenues?fromexternalcustomers")
+# 合計・調整の member（会社ごとのセグメントではない）
+_SEG_SKIP_RE = re.compile(r"(?i)ReportableSegmentsMember$|Reconciling|Elimination|Unallocated|CorporateAndElimination|"
+                          r"OperatingSegmentsMember$|EntityTotal|TotalOfReportable")
+SEG_TABLE = "gov_segment_revenue"
+SEG_SCHEMA = [("doc_id", "STRING"), ("edinet_code", "STRING"), ("sec_code", "STRING"), ("fiscal_year_end", "DATE"),
+              ("member", "STRING"), ("element", "STRING"), ("consolidated", "BOOL"), ("value", "FLOAT"),
+              ("fetched_at", "TIMESTAMP")]
 SCHEMA = [("doc_id", "STRING"), ("edinet_code", "STRING"), ("sec_code", "STRING"), ("fiscal_year_end", "DATE"),
           ("submit_date", "DATE"), ("section_type", "STRING"), ("element", "STRING"), ("raw_text", "STRING"),
           ("fetched_at", "TIMESTAMP")]
@@ -63,6 +76,38 @@ ORDER BY d DESC
 
 def blocks_from_zip(blob: bytes, max_chars: int) -> list[tuple[str, str, str]]:
     """有報の type=5 ZIP → [(element, section_type, 本文)]（純関数）。同じ節が複数あれば最初の1つ（提出日時点）。"""
+    out, seen, seg = [], set(), []
+    zf = zipfile.ZipFile(io.BytesIO(blob))
+    for name in zf.namelist():
+        if not (name.endswith(".csv") and "jpcrp" in name):
+            continue
+        for line in zf.read(name).decode("utf-16", errors="replace").splitlines()[1:]:
+            c = [x.strip().strip('"') for x in line.split("\t")]
+            if len(c) < 9 or not c[8] or c[8] in ("－", "-"):
+                continue
+            if c[0] in SECTIONS and c[0] not in seen:
+                seen.add(c[0])
+                out.append((c[0], SECTIONS[c[0]], c[8][:max_chars]))
+            elif _SEG_TEXT_RE.search(c[0]):
+                seg.append((0 if "Consolidated" in c[0] else 1, c[0], c[8][:max_chars]))
+    if seg:
+        seg.sort(key=lambda x: x[0])
+        out.append((seg[0][1], SEGMENT_SECTION, seg[0][2]))
+    return out
+
+
+def segment_name(member: str) -> str:
+    """コンテキストの member → 読める名前（純関数）。
+    例: jpcrp030000-asr_E02144-000AutomotiveReportableSegmentMember → Automotive"""
+    m = str(member or "")
+    hit = re.search(r"-\d{3}([A-Z].*)$", m)                  # 提出者ごとの要素は「…_E02144-000名前」
+    m = hit.group(1) if hit else m.split(":")[-1].split("_")[-1]
+    m = re.sub(r"(ReportableSegment|OperatingSegment|Segment)?Member$", "", m)
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", m).strip()
+
+
+def segment_revenue_from_zip(blob: bytes) -> list[dict]:
+    """有報の type=5 ZIP → 当期のセグメント別の外部顧客への売上高 [{member, element, consolidated, value}]（純関数）。"""
     out, seen = [], set()
     zf = zipfile.ZipFile(io.BytesIO(blob))
     for name in zf.namelist():
@@ -70,10 +115,20 @@ def blocks_from_zip(blob: bytes, max_chars: int) -> list[tuple[str, str, str]]:
             continue
         for line in zf.read(name).decode("utf-16", errors="replace").splitlines()[1:]:
             c = [x.strip().strip('"') for x in line.split("\t")]
-            if len(c) < 9 or c[0] not in SECTIONS or c[0] in seen or not c[8] or c[8] in ("－", "-"):
+            if len(c) < 9 or not _SEG_REV_RE.search(c[0]) or not c[2].startswith("CurrentYearDuration_"):
                 continue
-            seen.add(c[0])
-            out.append((c[0], SECTIONS[c[0]], c[8][:max_chars]))
+            member = c[2].split("_", 1)[1]
+            if "Member" not in member or _SEG_SKIP_RE.search(member):
+                continue
+            try:
+                value = float(c[8].replace(",", ""))
+            except ValueError:
+                continue
+            key = (member, c[0], c[4])
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"member": member, "element": c[0], "consolidated": c[4] != "個別", "value": value})
     return out
 
 
@@ -94,14 +149,26 @@ def ensure_table(client) -> None:
         client.create_table(t)
 
 
-def _append(client, rows: list[dict]) -> None:
+def ensure_seg_table(client) -> None:
+    from google.api_core.exceptions import NotFound
+    from google.cloud import bigquery
+    ref = f"{client.project}.{DATASET}.{SEG_TABLE}"
+    try:
+        client.get_table(ref)
+    except NotFound:
+        t = bigquery.Table(ref, schema=[bigquery.SchemaField(n, ty) for n, ty in SEG_SCHEMA])
+        t.clustering_fields = ["edinet_code"]
+        client.create_table(t)
+
+
+def _append(client, rows: list[dict], table: str = TABLE, schema=SCHEMA) -> None:
     from google.cloud import bigquery
     if not rows:
         return
     cfg = bigquery.LoadJobConfig(source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
                                  write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
-                                 schema=[bigquery.SchemaField(n, t) for n, t in SCHEMA])
-    client.load_table_from_json(rows, f"{client.project}.{DATASET}.{TABLE}", job_config=cfg, location=LOCATION).result()
+                                 schema=[bigquery.SchemaField(n, t) for n, t in schema])
+    client.load_table_from_json(rows, f"{client.project}.{DATASET}.{table}", job_config=cfg, location=LOCATION).result()
 
 
 def run(cfg, budget_min: float | None = None, limit: int | None = None) -> dict:
@@ -126,12 +193,18 @@ def run(cfg, budget_min: float | None = None, limit: int | None = None) -> dict:
     except Exception:
         state = {}
     done = set(state.get("doc_ids") or [])
-    targets = [r for r in client.query(TARGET_SQL.format(p=client.project), location=LOCATION).result()
-               if r.doc_id not in done]
+    seg_done = set(state.get("seg_doc_ids") or [])
+    latest = list(client.query(TARGET_SQL.format(p=client.project), location=LOCATION).result())
+    # 本文がまだの書類を先に、本文は取ったがセグメントがまだの書類（セグメントを足す前に取った分）を後に
+    targets = [r for r in latest if r.doc_id not in done] + \
+              [r for r in latest if r.doc_id in done and r.doc_id not in seg_done]
     if limit:
         targets = targets[:limit]
     t0, last = time.monotonic(), 0.0
-    stat = {"targets": len(targets), "docs": 0, "rows": 0, "no_text": 0, "errors": 0, "budget_out": False,
+    ensure_seg_table(client)
+    seg_buf: list[dict] = []
+    stat = {"targets": len(targets), "docs": 0, "rows": 0, "seg_rows": 0, "seg_docs": 0, "no_text": 0, "errors": 0,
+            "budget_out": False,
             "table_gb": round(mine, 3), "storage_gb": m["total_gb"]}
     buf: list[dict] = []
     now = datetime.now(timezone.utc).isoformat()
@@ -157,6 +230,7 @@ def run(cfg, budget_min: float | None = None, limit: int | None = None) -> dict:
             # 書類側で取れない（毎回同じ答え）。本文なしとして済みにし、次の回から取り直さない
             stat["no_text"] += 1
             done.add(r.doc_id)
+            seg_done.add(r.doc_id)
             print(f"    ⏩ {r.edinet_code} {r.doc_id}: {why}（本文なしとして済みにする）")
             continue
         if not ok:
@@ -168,12 +242,21 @@ def run(cfg, budget_min: float | None = None, limit: int | None = None) -> dict:
         streak.ok()
         try:
             blocks = blocks_from_zip(z.content, max_chars)
+            segs = segment_revenue_from_zip(z.content)
         except Exception as e:
             print(f"    ⚠️ {r.doc_id}: {type(e).__name__}")
             stat["errors"] += 1
             continue
-        if not blocks:
+        if r.doc_id in done:                                 # 本文は取り済み。セグメントの分だけ足す
+            blocks = [b for b in blocks if b[1] == SEGMENT_SECTION]
+        elif not blocks:
             stat["no_text"] += 1
+        for sg in segs:
+            seg_buf.append({"doc_id": r.doc_id, "edinet_code": r.edinet_code, "sec_code": r.sec,
+                            "fiscal_year_end": r.fye.isoformat() if r.fye else None, **sg, "fetched_at": now})
+        if segs:
+            stat["seg_docs"] += 1
+        seg_done.add(r.doc_id)
         for element, section, text in blocks:
             buf.append({"doc_id": r.doc_id, "edinet_code": r.edinet_code, "sec_code": r.sec,
                         "fiscal_year_end": r.fye.isoformat() if r.fye else None,
@@ -181,16 +264,22 @@ def run(cfg, budget_min: float | None = None, limit: int | None = None) -> dict:
                         "element": element, "raw_text": text, "fetched_at": now})
         done.add(r.doc_id)
         stat["docs"] += 1
-        if len(buf) >= 2000:
+        if len(buf) >= 2000 or len(seg_buf) >= 5000:
             _append(client, buf)
+            _append(client, seg_buf, SEG_TABLE, SEG_SCHEMA)
             stat["rows"] += len(buf)
-            buf = []
+            stat["seg_rows"] += len(seg_buf)
+            buf, seg_buf = [], []
             state["doc_ids"] = sorted(done)
+            state["seg_doc_ids"] = sorted(seg_done)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(state, separators=(",", ":")), encoding="utf-8")
     _append(client, buf)
+    _append(client, seg_buf, SEG_TABLE, SEG_SCHEMA)
     stat["rows"] += len(buf)
+    stat["seg_rows"] += len(seg_buf)
     state["doc_ids"] = sorted(done)
+    state["seg_doc_ids"] = sorted(seg_done)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state, separators=(",", ":")), encoding="utf-8")
     stat["remaining"] = max(0, stat["targets"] - stat["docs"])

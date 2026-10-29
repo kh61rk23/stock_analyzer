@@ -12,7 +12,7 @@
   "min_text_hits": 3,
   "min_single_term_hits": 2,
   "text_hit_cap": 10,
-  "sections": ["事業の内容"],
+  "sections": ["事業の内容", "セグメント情報"],
   "ignore_phrases": ["海外食", "住宅ローン", "有価証券", "通信販売", "バイオマス", "ライブラリ", "SDN. BHD.", "SDN.BHD.", "SDN BHD"],
   "exclude_terms": [
     "Open", "エネルギー", "オフィス", "ケーブル", "コンテナ", "システム",
