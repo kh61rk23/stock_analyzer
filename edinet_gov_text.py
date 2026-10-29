@@ -287,11 +287,44 @@ def run(cfg, budget_min: float | None = None, limit: int | None = None) -> dict:
     return stat
 
 
+def probe_segments(cfg, sec_codes: list[str]) -> None:
+    """調べる用：会社ごとに最新の有報の CSV から、セグメントの member が付いた売上・収益の要素を書き出す（値は出さない）。"""
+    import requests
+    key = (os.environ.get("EDINET_GOV_API_KEY") or str(getattr(cfg, "EDINET_GOV_API_KEY", "") or "")).strip()
+    client = _client(cfg)
+    want = {c[:4] for c in sec_codes}
+    for r in client.query(TARGET_SQL.format(p=client.project), location=LOCATION).result():
+        if not r.sec or r.sec[:4] not in want:
+            continue
+        z = requests.get(f"{API}/documents/{r.doc_id}", params={"type": 5, "Subscription-Key": key}, timeout=120)
+        seen, n = set(), 0
+        zf = zipfile.ZipFile(io.BytesIO(z.content))
+        for name in zf.namelist():
+            if not (name.endswith(".csv") and "jpcrp" in name):
+                continue
+            for line in zf.read(name).decode("utf-16", errors="replace").splitlines()[1:]:
+                c = [x.strip().strip('"') for x in line.split("\t")]
+                if len(c) < 9 or "Member" not in c[2] or not re.search(r"(?i)revenue|sales", c[0]):
+                    continue
+                k = (c[0], c[2].split("_", 1)[0], re.sub(r"^.*?-\d{3}", "", c[2].split("_", 1)[-1]))
+                if k not in seen and n < 40:
+                    seen.add(k)
+                    n += 1
+                    print(f"  {r.sec[:4]} {k[0]} | {k[1]} | {k[2]} | {c[4]}")
+        print(f"  {r.sec[:4]} {r.doc_id}: {n}件")
+        time.sleep(1.0)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--budget-min", type=float)
     ap.add_argument("--limit", type=int)
+    ap.add_argument("--probe-segments", nargs="*")
     a = ap.parse_args(argv)
+    if a.probe_segments:
+        import config as cfg
+        probe_segments(cfg, a.probe_segments)
+        return 0
     import config as cfg
     try:
         from run_headless import apply_env_overrides

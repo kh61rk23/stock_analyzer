@@ -31,6 +31,7 @@ on:
           - edinet_gov_probe
           - edinet_gov_fv_ingest
           - taxonomy_mapper
+          - edinet_gov_segment_probe
 
 permissions:
   contents: write
@@ -56,7 +57,7 @@ jobs:
       - name: Install dependencies
         run: |
           case "${{ inputs.task }}" in
-            price_universe_*|us_company_facts_*|stock_real_estate|alert_backfill|ontology_export|edinet_gov_probe|edinet_gov_fv_ingest) pip install -r requirements-prices.txt ;;
+            price_universe_*|us_company_facts_*|stock_real_estate|alert_backfill|ontology_export|edinet_gov_probe|edinet_gov_fv_ingest|edinet_gov_segment_probe) pip install -r requirements-prices.txt ;;
             *) pip install -r requirements.txt ;;
           esac
       # dual: checkout 直後の sha を基準として記録 ／ bq: BigQuery から状態を書き戻す（失敗したら止める）
@@ -118,6 +119,8 @@ jobs:
             edinet_gov_fv_ingest) python -u edinet_gov_xbrl.py --ingest ;;
             # 技術マップの会社への対応付け（セグメント・語の照合・補い）を週次を待たずに作り直す（埋め込みのモデルが要るので Actions で）
             taxonomy_mapper) python -u taxonomy_company_mapper.py ;;
+            # 調べる用：三菱商事・ソニー・ソフトバンクG・信越化学の有報の CSV にあるセグメント別の売上の要素名を書き出す
+            edinet_gov_segment_probe) python -u edinet_gov_text.py --probe-segments 8058 6758 9984 4063 7203 ;;
           esac
           TASK
           TASK="${{ inputs.task }}" python actions_log.py --workflow manual_task --step "${{ inputs.task }}" -- bash "$RUNNER_TEMP/task.sh"
