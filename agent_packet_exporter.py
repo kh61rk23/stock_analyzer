@@ -530,6 +530,11 @@ def build_packet(cfg, ticker: str) -> str:
         lines += tech_profile.packet_lines(cfg, ticker)
     except Exception as e:
         lines += ["", "## ⑬ 技術ノード（技術マップ）", f"- ⚠️ 読めない（{type(e).__name__}）: **データなし**"]
+    try:                                               # ⑭大株主・需給（大量保有・13D・8-K・空売り残）
+        import positioning_signals
+        lines += positioning_signals.packet_lines(ticker)
+    except Exception as e:
+        lines += ["", "## ⑭ 大株主・需給の動き", f"- ⚠️ 読めない（{type(e).__name__}）: **データなし**"]
     lines += collect_freshness(cfg)
     lines += collect_holdings(cfg, ticker)
     lines += collect_existing_notes(cfg, ticker)

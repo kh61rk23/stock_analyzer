@@ -119,7 +119,7 @@ def _mdy(v) -> str | None:
 def parse_13dg(xml: str, meta: dict) -> list[dict]:
     """SCHEDULE 13D/13G の XML → 報告者ごとの行（純関数）。"""
     base = {"filed_date": meta["filed_date"], "accession": meta["accession"], "form": meta["form"],
-            "filer_cik": meta["cik"], "issuer_cik": _int(_tag(xml, "issuerCik")),
+            "filer_cik": meta["cik"], "issuer_cik": _int(_tag(xml, "issuerCik") or _tag(xml, "issuerCIK")),   # 13G は Cik・13D は CIK
             "issuer_name": _tag(xml, "issuerName"), "issuer_cusip": _tag(xml, "issuerCusipNumber") or _tag(xml, "issuerCUSIP"),
             "security_class": _tag(xml, "securitiesClassTitle"),
             "event_date": _mdy(_tag(xml, "eventDateRequiresFilingThisStatement") or _tag(xml, "dateOfEvent")),

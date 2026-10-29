@@ -58,3 +58,11 @@ def test_parse_13dg_per_reporting_person():
     a = rows[0]
     assert a["issuer_cik"] == 1004989 and a["issuer_cusip"] == "784933103" and a["event_date"] == "2026-05-31"
     assert a["shares"] == 1000.0 and a["sole_voting"] == 100.0 and a["filer_cik"] == 2157290
+
+
+def test_13d_issuer_cik_tag_spelling():
+    import sec_filings as sf
+    xml = "<issuerInfo><issuerCIK>0000320193</issuerCIK><issuerName>Apple Inc.</issuerName></issuerInfo>"
+    rows = sf.parse_13dg(xml + "<reportingPersonInfo><reportingPersonName>X</reportingPersonName></reportingPersonInfo>",
+                         {"filed_date": "2026-10-20", "accession": "a", "form": "SCHEDULE 13D", "cik": 1})
+    assert rows and rows[0]["issuer_cik"] == 320193

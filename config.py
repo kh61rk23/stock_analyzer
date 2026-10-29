@@ -4276,6 +4276,8 @@ DELIBERATION_CLAIM_LIMIT: int = 5          # 1回の審議で取る銘柄数
 # 先頭 DELIBERATION_CLAIM_LIMIT 件が週1回の審議で実際に選ばれる銘柄。
 DELIBERATION_QUEUE_TOP_N: int = 5
 ALERT_ON_DELIBERATION_QUEUE: bool = True
+# 日次メールに「大株主・需給の動き」（大量保有の買い増し・米国の通過銘柄の 13D・重要な 8-K・空売り残）を出す（positioning_signals.py）
+ALERT_ON_POSITIONING = True
 # 実働の正本はローカル側 Vault2_ClaudeCode_Local（iCloud側 Vault2_ClaudeCode は凍結・書込禁止）。
 INVESTMENT_DEPT_VAULT_DIR: str = os.getenv(
     "INVESTMENT_DEPT_VAULT_DIR",

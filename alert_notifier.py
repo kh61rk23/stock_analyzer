@@ -506,6 +506,14 @@ def extract_alerts(cfg, results: dict) -> list:
     except Exception as _po_err:
         print(f"  ⚠️  [alert] 推奨のその後の成績表を作れない: {str(_po_err)[:80]}")
 
+    # 大株主・需給の動き（日本の大量保有の買い増し・米国の通過銘柄の 13D・重要な 8-K・空売り残）。点数には入れない
+    if getattr(cfg, "ALERT_ON_POSITIONING", True):
+        try:
+            import positioning_signals as _ps
+            alerts.extend(_ps.build_alerts(cfg, results))
+        except Exception as _pse:
+            print(f"  ⚠️  [alert] 大株主・需給の節を作れない: {str(_pse)[:80]}")
+
         # ── ⑥-3 審議キュー候補 ──────────────────
         # 週1回のB部門審議（E3）へ次に上げる銘柄を、毎日メールで見えるようにする。
         # 並び順は deliberation_scheduler.build_deliberation_queue と同一なので、

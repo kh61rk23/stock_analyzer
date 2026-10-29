@@ -314,6 +314,12 @@ def run_daily(cfg, candidates: list, today: date | None = None, client=None) -> 
     pk = {"ok": 0, "failed": {}}
     if rows:
         import agent_packet_exporter as ape
+        try:   # パケットの「大株主・需給」の節を、上位の銘柄の分だけ先にまとめて読む（銘柄ごとに BQ を引かない）
+            import positioning_signals
+            top = [r["ticker"] for r in rows[:int(_cfg(cfg, "DELIB_PACKET_TOP_N", 5))]]
+            positioning_signals.ensure([t for t in top if not str(t).endswith(".T")])
+        except Exception as _pe:
+            print(f"  ⚠️ 大株主・需給の先読みを飛ばす: {str(_pe)[:80]}")
         pk = attach_packets(rows, int(_cfg(cfg, "DELIB_PACKET_TOP_N", 5)),
                             lambda t: ape.build_packet_text(t))
     res = write_queue(client, rows, today,
