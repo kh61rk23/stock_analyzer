@@ -103,23 +103,28 @@ def digest_jp(client, steps: list[dict]) -> list[tuple[str, list[str]]]:
     from google.cloud import bigquery
     p, out = client.project, []
     since = run_started(steps).astimezone(timezone.utc)
+    sp = [bigquery.ScalarQueryParameter("s", "TIMESTAMP", since)]
     rng = step_json(steps, "edinet_gov_docs").get("range")
     if rng:
-        rp = [bigquery.ScalarQueryParameter("a", "DATE", rng[0]), bigquery.ScalarQueryParameter("b", "DATE", rng[1])]
-        rows = _q(client, f"SELECT doc_type_code t, COUNT(*) n FROM `{p}.edinet.gov_documents` "
-                          "WHERE submit_date BETWEEN @a AND @b GROUP BY t ORDER BY n DESC", rp)
-        kinds = "・".join(f"{DOC_TYPES.get(r.t, r.t)} {r.n:,}" for r in rows[:8])
-        out.append((f"政府 EDINET の書類一覧（{rng[0]}〜{rng[1]}）", [f"{sum(r.n for r in rows):,}件：{kinds}"]))
-        rows = _q(client, f"""SELECT issuer_name, issuer_sec_code, holder_name, prior_ratio, holding_ratio, LEFT(purpose, 24) purpose
-                  FROM `{p}.edinet.large_holdings` WHERE submit_date BETWEEN @a AND @b AND holding_ratio IS NOT NULL
-                  QUALIFY ROW_NUMBER() OVER (PARTITION BY issuer_name, holder_name ORDER BY submit_date DESC) = 1
-                  ORDER BY ABS(holding_ratio - IFNULL(prior_ratio, 0)) DESC LIMIT 8""", rp)
+        # この回に取った書類だけを数える（提出日の範囲で数えると、夜の遡りでは毎回ほぼ同じ全期間の集計になる）
+        rows = _q(client, f"SELECT doc_type_code t, COUNT(*) n, MIN(submit_date) a, MAX(submit_date) b "
+                          f"FROM `{p}.edinet.gov_documents` WHERE fetched_at >= @s GROUP BY t ORDER BY n DESC", sp)
         if rows:
-            out.append(("大量保有で保有割合が大きく動いたもの", [
+            kinds = "・".join(f"{DOC_TYPES.get(r.t, r.t or '種別なし')} {r.n:,}" for r in rows[:8])
+            a, b = min(r.a for r in rows), max(r.b for r in rows)
+            out.append((f"政府 EDINET の書類一覧（この回に取った分・提出日 {a}〜{b}）",
+                        [f"{sum(r.n for r in rows):,}件：{kinds}"]))
+        rows = _q(client, f"""SELECT issuer_name, issuer_sec_code, holder_name, prior_ratio, holding_ratio, LEFT(purpose, 24) purpose
+                  FROM `{p}.edinet.large_holdings`
+                  WHERE doc_id IN (SELECT doc_id FROM `{p}.edinet.gov_documents` WHERE fetched_at >= @s)
+                    AND holding_ratio IS NOT NULL
+                  QUALIFY ROW_NUMBER() OVER (PARTITION BY issuer_name, holder_name ORDER BY submit_date DESC) = 1
+                  ORDER BY ABS(holding_ratio - IFNULL(prior_ratio, 0)) DESC LIMIT 8""", sp)
+        if rows:
+            out.append(("大量保有で保有割合が大きく動いたもの（この回に取った書類）", [
                 f"{r.issuer_name}（{r.issuer_sec_code or '-'}）: {r.holder_name} "
                 f"{'新規' if r.prior_ratio is None else f'{r.prior_ratio * 100:.2f}%'} → {r.holding_ratio * 100:.2f}%"
                 f"（{r.purpose or ''}）" for r in rows]))
-    sp = [bigquery.ScalarQueryParameter("s", "TIMESTAMP", since)]
     rows = _q(client, f"""SELECT COUNT(DISTINCT g.edinet_code) n, ARRAY_AGG(DISTINCT c.name IGNORE NULLS LIMIT 10) names
               FROM `{p}.edinet.gov_text_blocks` g LEFT JOIN `{p}.edinet.company` c USING (edinet_code)
               WHERE g.fetched_at >= @s""", sp)

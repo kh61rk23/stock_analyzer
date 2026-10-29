@@ -2,15 +2,15 @@ name: 全上場株価の日次取得
 
 # 日本株・米国株の全上場企業の終値を BigQuery analytics.price_daily へ追記する（load job・無料）。
 # 本体の daily_run とは別ジョブ・別時刻にして、並んで動けるようにする（public リポジトリなので Actions の分数に上限は無い）。
-#   日本株: 月〜金 16:47 JST（東証の引け後）          cron UTC 07:47 月〜金
-#   米国株: 火〜土 07:47 JST（米国の月〜金の引け後）    cron UTC 22:47 月〜金
-#     1回の取得は直近5営業日（DAILY_PERIOD=5d）を取り、BQ に無い (ticker, trade_date) だけを足すので、
-#     1回失敗したり GitHub に捨てられたりしても、次の回の5日分で取り戻せる。
-# 日曜 JST は日米とも新しい終値が無いので動かさない。UTC 毎正時のジョブ集中を避けて :47 にずらす。
+# 1日1回、米国の引け後に日米をまとめて取る：火〜土 06:47 JST（cron UTC 21:47 月〜金）
+#   日本株は前日の引け、米国株は直前の引け。どちらも朝の分析（daily_run）より前にそろう。
+#   米国の引けは UTC 20:00（夏時間）／21:00（冬時間）なので、冬時間でも後になる 21:47 に置く。
+#   1回の取得は直近5営業日（DAILY_PERIOD=5d）を取り、BQ に無い (ticker, trade_date) だけを足すので、
+#   1回失敗したり GitHub に捨てられたり遅れたりしても、次の回の5日分で取り戻せる。
+# 月曜 JST は日米とも新しい終値が無いので動かさない。UTC 毎正時のジョブ集中を避けて :47 にずらす。
 on:
   schedule:
-    - cron: "47 7 * * 1-5"
-    - cron: "47 22 * * 1-5"
+    - cron: "47 21 * * 1-5"
   workflow_dispatch:
     inputs:
       market:
@@ -60,10 +60,8 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             M="${{ inputs.market }}"
             if [ "${{ inputs.backfill }}" = "true" ]; then B="--backfill"; else B=""; fi
-          elif [ "${{ github.event.schedule }}" = "47 7 * * 1-5" ]; then
-            M=jp; B=""
           else
-            M=us; B=""
+            M=all; B=""
           fi
           echo "market=$M" >> "$GITHUB_OUTPUT"
           echo "backfill=$B" >> "$GITHUB_OUTPUT"

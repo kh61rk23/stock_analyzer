@@ -48,8 +48,40 @@ def _import(name: str):
         return None
 
 
-def run_jp_filings(cfg, results: dict, logger, in_mode=lambda key: True) -> None:
-    """EdinetDB・政府 EDINET・不動産DB の取り込み。results と logger に結果を入れる。"""
+# BigQuery が書けるかを先に確かめる小さな表（最小課金 10MB。0 バイトのクエリは上限を使い切っていても通るため表を読む）
+BQ_PROBE_TABLE = "master.tax_level"
+
+
+def bq_unavailable(client) -> str:
+    """BigQuery にクエリを出せないときの理由（出せるなら空文字）。上限超過・権限切れを1本の小さなクエリで見る。"""
+    try:
+        client.query(f"SELECT level FROM `{client.project}.{BQ_PROBE_TABLE}` LIMIT 1").result()
+        return ""
+    except Exception as e:
+        msg = str(e)
+        if "quota" in msg.lower():
+            return "BigQuery の1日のクエリ上限に達している"
+        return f"BigQuery に出せない（{type(e).__name__}: {msg[:60]}）"
+
+
+def _probe_client():
+    from edinet_bq_client import EDINETBQClient
+    return EDINETBQClient().client
+
+
+def run_jp_filings(cfg, results: dict, logger, in_mode=lambda key: True, probe=None) -> None:
+    """EdinetDB・政府 EDINET・不動産DB の取り込み。results と logger に結果を入れる。
+    BigQuery に書けない日は、回数制限つきの API を1回も呼ばずに見送る（取っても保存できず、その日の枠だけ減るため）。"""
+    try:
+        reason = bq_unavailable(probe() if probe else _probe_client())
+    except Exception as e:
+        reason = f"BigQuery に繋がらない（{type(e).__name__}）"
+    if reason:
+        for key in GROUPS["jp_filings"]:
+            results[key] = {"skipped": True, "reason": reason}
+        logger.add("jp_filings", "alert", f"取得を見送り（API の枠は使っていない）: {reason}")
+        print(f"  ⏭️  取得を見送り: {reason}")
+        return
     if getattr(cfg, "ENABLE_EDINETDB_INGEST", True) and in_mode("edinetdb_ingest"):
         # 賃貸等不動産（EdinetDB real-estate）を、日次取り込みの前に RENTAL_FV_DAILY_BUDGET 社まで取る
         # （無効の間は RENTAL_FV_TRIAL_LIMIT 社を1回だけ試す）。残りの枠を日次取り込みが使う

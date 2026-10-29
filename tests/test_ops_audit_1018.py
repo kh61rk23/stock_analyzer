@@ -12,14 +12,14 @@ from conftest import load_module
 REPO = Path(__file__).parent.parent
 
 
-# ── 株価の取得は日米とも平日毎日（米国は UTC 月〜金 22:47 = JST 火〜土）─────────────
+# ── 株価の取得は1日1回・日米まとめて（米国の引け後 UTC 月〜金 21:47 = JST 火〜土 06:47）─────────────
 
-def test_price_universe_runs_every_weekday():
-    wf = yaml.safe_load((REPO / ".github/workflows/price_universe.yml").read_text(encoding="utf-8"))
+def test_price_universe_runs_once_a_day_for_both_markets():
+    text = (REPO / ".github/workflows/price_universe.yml").read_text(encoding="utf-8")
+    wf = yaml.safe_load(text)
     crons = [c["cron"] for c in wf[True]["schedule"]]
-    assert "47 7 * * 1-5" in crons          # 日本株は従来どおり平日毎日
-    assert "47 22 * * 1-5" in crons         # 米国株も米国の平日毎日
-    assert len(crons) == 2
+    assert crons == ["47 21 * * 1-5"]       # 冬時間の米国の引け（UTC 21:00）より後
+    assert "M=all" in text
 
 
 def test_price_universe_daily_period_covers_the_gap():

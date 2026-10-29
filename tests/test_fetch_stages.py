@@ -60,3 +60,33 @@ def test_policy_db_is_fetched_before_analysis_with_large_budget():
     assert 'and "seisakudb" not in results:' in src            # 取得 workflow が取った日は日次本体で取り直さない
     wf = (Path(fs.__file__).parent / ".github/workflows/fetch_jp_filings.yml").read_text(encoding="utf-8")
     assert "SEISAKUDB_API_KEY" in wf
+
+
+class _Client:
+    project = "p"
+
+    def __init__(self, exc=None):
+        self.exc, self.sql = exc, []
+
+    def query(self, sql):
+        self.sql.append(sql)
+        if self.exc:
+            raise self.exc
+        return SimpleNamespace(result=lambda: [])
+
+
+def test_bq_probe_reads_a_small_table():
+    c = _Client()
+    assert fs.bq_unavailable(c) == "" and "`p.master.tax_level`" in c.sql[0]
+    assert "上限" in fs.bq_unavailable(_Client(Exception("403 Custom quota exceeded: QueryUsagePerDay")))
+
+
+def test_no_paid_api_calls_when_bigquery_is_down(monkeypatch):
+    import sys
+    called = []
+    monkeypatch.setitem(sys.modules, "rental_property_ingestor", SimpleNamespace(run=lambda cfg: called.append(1)))
+    results, log = {}, _Log()
+    fs.run_jp_filings(SimpleNamespace(), results, log, probe=lambda: _Client(Exception("Quota exceeded")))
+    assert called == []
+    assert set(results) == set(fs.GROUPS["jp_filings"]) and all(v["skipped"] for v in results.values())
+    assert log.rows[0][1] == "alert" and "API の枠は使っていない" in log.rows[0][2]
