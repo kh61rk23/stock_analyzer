@@ -49,3 +49,12 @@ def test_segment_revenue_current_year_members_only():
             ["jpigp_cor:RevenueFromExternalCustomersIFRS", "外部顧客", "CurrentYearDuration_jpcrp030000-asr_E1-000ChemicalsSegmentMember", "当期", "連結", "期間", "JPY", "円", "7"]]
     out = g.segment_revenue_from_zip(_zip(rows))
     assert [(g.segment_name(x["member"]), x["value"]) for x in out] == [("Automotive", 40000.0), ("Financial Services", 5000.0), ("Chemicals", 7.0)]
+
+
+def test_segment_revenue_ifrs_and_plural_members():
+    rows = [["jpigp_cor:SalesToExternalCustomersIFRS", "外部顧客", "CurrentYearDuration_jpcrp030000-asr_E02166-000GameAndNetworkServicesReportableSegmentMember", "当期", "その他", "期間", "JPY", "円", "100"],
+            ["jpcrp_cor:RevenuesFromExternalCustomers", "外部顧客", "CurrentYearDuration_jpcrp030000-asr_E00790-000ElectronicsMaterialsReportableSegmentsMember", "当期", "その他", "期間", "JPY", "円", "50"],
+            ["jpcrp_cor:RevenuesFromExternalCustomers", "外部顧客", "CurrentYearDuration_jpcrp_cor:ReportableSegmentsMember", "当期", "その他", "期間", "JPY", "円", "150"],
+            ["jpigp_cor:IntersegmentSalesIFRS", "内部", "CurrentYearDuration_jpcrp030000-asr_E02166-000GameAndNetworkServicesReportableSegmentMember", "当期", "その他", "期間", "JPY", "円", "9"]]
+    out = g.segment_revenue_from_zip(_zip(rows))
+    assert [(g.segment_name(x["member"]), x["value"]) for x in out] == [("Game And Network Services", 100.0), ("Electronics Materials", 50.0)]

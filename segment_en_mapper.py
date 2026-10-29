@@ -25,7 +25,8 @@ MIN_SHARE = 0.03
 RETIRE_MIN_COMPANIES = 500
 
 SQL = """
-SELECT LEFT(c.sec_code, 4) code, s.doc_id, s.fiscal_year_end, s.member, s.value
+-- 拾い方を直して取り直した書類は同じ区分が2回入るので、同じ値は1つにする
+SELECT DISTINCT LEFT(c.sec_code, 4) code, s.doc_id, s.fiscal_year_end, s.member, s.value
 FROM `{p}.edinet.gov_segment_revenue` s
 JOIN `{p}.edinet.company` c USING (edinet_code)
 WHERE c.sec_code IS NOT NULL AND s.value > 0
