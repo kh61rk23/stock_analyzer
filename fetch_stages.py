@@ -22,7 +22,7 @@ import os
 from datetime import date
 from pathlib import Path
 
-GROUPS = {"jp_filings": ("rental_property_fv", "edinet_gov_fv", "edinetdb_ingest", "edinet_doc_index", "fudosan_ingest",
+GROUPS = {"jp_filings": ("rental_property_fv", "edinet_gov_fv", "edinetdb_ingest", "edinet_doc_index", "reit_ingest", "fudosan_ingest",
                         "edinetdb_extras", "seisakudb")}
 EXTERNAL_ENV = "STOCK_ANALYZER_FETCH_EXTERNAL"
 
@@ -134,6 +134,17 @@ def run_jp_filings(cfg, results: dict, logger, in_mode=lambda key: True, probe=N
                 logger.add("edinet_doc_index", "skipped" if value.get("skipped") else "success", str(value))
         except Exception as exc:
             logger.add("edinet_doc_index", "error", str(exc)[:100])
+
+    # 不動産DB の J-REIT（週1回・保有不動産より先に。同じ1日の枠のうち REIT_CALLS_PER_RUN 回まで）
+    if getattr(cfg, "ENABLE_REIT_INGEST", True) and in_mode("fudosan_ingest"):
+        try:
+            import reit_ingestor as _reit
+            value = results["reit_ingest"] = _reit.run(cfg)
+            logger.add("reit_ingest", "skipped" if value.get("skipped") else "success",
+                       value.get("reason", "") if value.get("skipped") else
+                       f"物件{value.get('properties', 0)}件 / 指標{value.get('metrics', 0)}行 / API {value.get('calls', 0)}回")
+        except Exception as exc:
+            logger.add("reit_ingest", "error", f"{type(exc).__name__}: {str(exc)[:80]}")
 
     # 不動産DB P1 を BQ へ格納
     if getattr(cfg, "ENABLE_FUDOSAN_INGEST", True) and in_mode("fudosan_ingest"):

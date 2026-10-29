@@ -78,6 +78,7 @@ SCHEMA: dict[str, list[str]] = {
     "executive_transition": ["stock_analyzer_main"],
     "facility_expansion": ["stock_analyzer_main"],
     "fudosan_ingest": ["stock_analyzer_main"],
+    "reit_ingest": ["fetch_stages"],
     "factor_crowding": ["stock_analyzer_main"],
     "fed_calendar": ["stock_analyzer_main"],
     "freshness": ["stock_analyzer_main"],

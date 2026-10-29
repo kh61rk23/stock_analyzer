@@ -1333,6 +1333,11 @@ FUDOSAN_BASE_URL: str = os.getenv(
 FUDOSAN_DAILY_BUDGET: int = 900
 FUDOSAN_BACKFILL_CUTOFF: str = "2026-07-30"
 FUDOSAN_POST_CUTOFF_BUDGET: int = 90
+# 不動産DB の J-REIT（reit_ingestor.py）。保有不動産と同じ1日の枠を使うので、週1回・1回あたりの回数を絞る
+ENABLE_REIT_INGEST: bool = True
+REIT_INGEST_EVERY_DAYS: int = 7
+REIT_CALLS_PER_RUN: int = 16            # REIT ごとの指標4本＋物件（REIT 12本ぶん）
+REIT_PROPERTY_REITS_PER_RUN: int = 12
 FUDOSAN_PLAN_DAILY_LIMIT: int = 100       # 不動産DB の契約上の1日の上限（8/1以降）。メールの【API使用】の分母。自動取り込みは POST_CUTOFF_BUDGET まで
 FUDOSAN_REFRESH_DAYS: int = 365
 FUDOSAN_ROTATION_META: str = "fudosan_rotation_meta.json"
