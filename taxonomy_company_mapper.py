@@ -808,6 +808,12 @@ def main():
 
     ctx: dict = {}
     run_text_match_path(segments, cfg, dry, ctx)
+    # 有報のセグメント別売上（英語の区分名）から売上比率つきのタグ。補いの経路より先に書く（付いた会社は補わない）
+    try:
+        import segment_en_mapper
+        print(f"🧾 セグメント別売上: {segment_en_mapper.run(cfg, dry=dry)}")
+    except Exception as e:
+        print(f"  ⚠️ セグメント別売上の経路で失敗: {str(e)[:100]}")
     try:
         run_fallback_path(segments, cfg, dry, ctx)
     except Exception as e:

@@ -1,0 +1,826 @@
+{
+ "_meta": {
+  "purpose": "有報の XBRL のセグメント（区分）の英語名 → 技術マップのノード（segment_en_mapper.py）。上から順に見て、最初に当たった規則のノードを付ける（1区分1ノード）",
+  "how_to_edit": "pattern は大文字小文字を区別しない正規表現（区分名は edinet_gov_text.segment_name で単語に分けた形）。具体的な規則を上に、広い規則を下に置く。node は承認済み seed の node_id。skip=true は地域・合計・その他など事業ではない区分",
+  "overrides": "exact は区分名と完全に一致したときに規則より先に使う"
+ },
+ "exact": {
+  "Connective Industries": "heavy_electrical",
+  "Digital Systems And Services": "system_integrator",
+  "Green Energy And Mobility": "energy_decarbon",
+  "Defense Systems And Information And Communications": "defense_electronics",
+  "Consolidated Financial Disclosure Business": "business_services",
+  "Disclosure Related Business": "business_services",
+  "Cu Be": "nonferrous_metals",
+  "Cogwheel": "bearing_transmission",
+  "Buddhist Altar": "household_durables",
+  "Cheese": "food_manufacturer",
+  "Confirmation": null
+ },
+ "rules": [
+  {
+   "pattern": "^(africa|asia|europe|americas?|north america|south america|latin america|china|japan|oceania|emea|apac|asean.*|.*area|asia (and|pacific|oceania).*|america and europe|domestic( business| operations| subsidiaries| others| sales subsidiary)?|overseas.*|international.*|global( business)?|other.*|others?|non consolidated|consolidated.*|.*head ?quarters?|.*not included in reportable.*|reportable segments?|segment ?\\d*|business ?\\d+|.*total.*|and company|corporate)$",
+   "skip": true
+  },
+  {
+   "pattern": "^(the )?(india|indonesia|korea|mexico|vietnam|thailand|usa|us|united states|netherlands?|east asia.*|southeast.*|rest of world|north (and )?(central )?(and south )?america|the americas|mainland china.*|europe and africa|japan( business| east asia)?|oversea subsidiaries|foreign related businesses|holdings|headoffice.*|operating|otehr|new business(es)?( and others)?|growth business and other|stock segment)$",
+   "skip": true
+  },
+  {
+   "pattern": "marine products|fishery",
+   "node": "seafood_livestock"
+  },
+  {
+   "pattern": "oil and fat|edible oil|\\bfats?\\b",
+   "node": "food_manufacturer"
+  },
+  {
+   "pattern": "information technology",
+   "node": "system_integrator"
+  },
+  {
+   "pattern": "automotive disposal|car recycl",
+   "node": "waste_recycling"
+  },
+  {
+   "pattern": "retail property|commercial (building|facilit)",
+   "node": "real_estate_development"
+  },
+  {
+   "pattern": "bpo",
+   "node": "bpo_outsourcing"
+  },
+  {
+   "pattern": "^ict|ict ?(business|products|services)",
+   "node": "system_integrator"
+  },
+  {
+   "pattern": "\\bio ?t\\b|^io t",
+   "node": "saas_platform"
+  },
+  {
+   "pattern": "gpu|\\bhpc",
+   "node": "ai_inference_infra"
+  },
+  {
+   "pattern": "^hardware",
+   "node": "electronic_component"
+  },
+  {
+   "pattern": "home appliance|hygienic|personal and home|home life|quality of life products|thermos",
+   "node": "household_durables"
+  },
+  {
+   "pattern": "industrial gas",
+   "node": "commodity_chemical"
+  },
+  {
+   "pattern": "printed board|printed circuit",
+   "node": "electronic_component"
+  },
+  {
+   "pattern": "industrial tape|\\btape\\b",
+   "node": "adhesive_coating"
+  },
+  {
+   "pattern": "innerwear|outerwear|garment|kimono|wacoal|\\bwig\\b|lingerie|peach john",
+   "node": "apparel_spa"
+  },
+  {
+   "pattern": "rolling stock",
+   "node": "heavy_electrical"
+  },
+  {
+   "pattern": "power ?grid|transmission ?and ?transformation|power infra|power utility",
+   "node": "power_grid"
+  },
+  {
+   "pattern": "powertrain",
+   "node": "auto_parts_tier1"
+  },
+  {
+   "pattern": "powersports",
+   "node": "motorcycle_oem"
+  },
+  {
+   "pattern": "\\bwatch(es)?\\b|clock",
+   "node": "household_durables"
+  },
+  {
+   "pattern": "welding|kanagata|\\bmolds?\\b|\\bdies\\b",
+   "node": "general_machinery"
+  },
+  {
+   "pattern": "windows and doors|shutter|precut",
+   "node": "housing_builder"
+  },
+  {
+   "pattern": "\\bsports|skiing|sportsclub",
+   "node": "theme_park_leisure"
+  },
+  {
+   "pattern": "sweets|\\bnuts\\b|ready made meal|freshfood|gourmand|\\bmeals?\\b|yomeishu",
+   "node": "food_manufacturer"
+  },
+  {
+   "pattern": "shopping center",
+   "node": "real_estate_development"
+  },
+  {
+   "pattern": "^shopping",
+   "node": "specialty_retail"
+  },
+  {
+   "pattern": "manga|e ?book|photobook",
+   "node": "media_entertainment"
+  },
+  {
+   "pattern": "supply chain",
+   "node": "logistics"
+  },
+  {
+   "pattern": "\\breuse\\b",
+   "node": "specialty_retail"
+  },
+  {
+   "pattern": "vacation rental",
+   "node": "hotel_resort"
+  },
+  {
+   "pattern": "hospice|nurse",
+   "node": "nursing_care"
+  },
+  {
+   "pattern": "helthcare",
+   "node": "healthcare_services"
+  },
+  {
+   "pattern": "lifesci",
+   "node": "diagnostics"
+  },
+  {
+   "pattern": "thermal spray|heat treatment|micro fabrication|parts processing|^processing business",
+   "node": "metal_material"
+  },
+  {
+   "pattern": "surfactant",
+   "node": "specialty_chemical"
+  },
+  {
+   "pattern": "\\bsalt\\b",
+   "node": "commodity_chemical"
+  },
+  {
+   "pattern": "smart city",
+   "node": "system_integrator"
+  },
+  {
+   "pattern": "particle counter|reliability assessment|testing verification|x ?ray|stress analyzer",
+   "node": "inspection_metrology"
+  },
+  {
+   "pattern": "translation|interpretation",
+   "node": "bpo_outsourcing"
+  },
+  {
+   "pattern": "personnel|human capital|^hr\\b|hr business|timee",
+   "node": "staffing_temp"
+  },
+  {
+   "pattern": "disabilit|handicapped",
+   "node": "business_services"
+  },
+  {
+   "pattern": "guarantee",
+   "node": "nonbank_finance"
+  },
+  {
+   "pattern": "m ?and ?a ?(services|c)|^mand",
+   "node": "consulting"
+  },
+  {
+   "pattern": "realestate|ichigo owners|\\breins\\b",
+   "node": "real_estate_development"
+  },
+  {
+   "pattern": "optronic|imaging product",
+   "node": "photonics"
+  },
+  {
+   "pattern": "\\blamps?\\b|lighting",
+   "node": "electronic_component"
+  },
+  {
+   "pattern": "\\blcd",
+   "node": "electronic_component"
+  },
+  {
+   "pattern": "water technology|water related|purification",
+   "node": "water_utility"
+  },
+  {
+   "pattern": "refurbish|rinobeshon",
+   "node": "renovation_stock"
+  },
+  {
+   "pattern": "sumitomo pharma",
+   "node": "drug_modality"
+  },
+  {
+   "pattern": "full service carrier|\\blcc\\b",
+   "node": "airline_passenger"
+  },
+  {
+   "pattern": "maritime",
+   "node": "shipping_marine"
+  },
+  {
+   "pattern": "^mobile business",
+   "node": "telecom_carrier"
+  },
+  {
+   "pattern": "slope disaster",
+   "node": "infrastructure_maintenance"
+  },
+  {
+   "pattern": "stainless",
+   "node": "steel"
+  },
+  {
+   "pattern": "plywood|wood processing",
+   "node": "paper_pulp"
+  },
+  {
+   "pattern": "spinning",
+   "node": "textile_fiber"
+  },
+  {
+   "pattern": "seimitu buhin|precision (products|parts)|^modules$",
+   "node": "electronic_component"
+  },
+  {
+   "pattern": "microbiolog|tissue culture|immunity|translational research",
+   "node": "drug_discovery_platform"
+  },
+  {
+   "pattern": "database|\\bcrm\\b|^crm|\\bplm|^plm|\\beda\\b|^eda",
+   "node": "saas_platform"
+  },
+  {
+   "pattern": "copyright",
+   "node": "anime_ip"
+  },
+  {
+   "pattern": "clean ena?ergy|eco business",
+   "node": "renewable_generation"
+  },
+  {
+   "pattern": "interior|furnishing",
+   "node": "household_durables"
+  },
+  {
+   "pattern": "\\bsaa ?s\\b|\\bsaas",
+   "node": "saas_platform"
+  },
+  {
+   "pattern": "fin ?tech",
+   "node": "fintech_platform"
+  },
+  {
+   "pattern": "hr ?tech",
+   "node": "recruiting_platform"
+  },
+  {
+   "pattern": "\\bems\\b|^ems|entrusted manufacturing|contract processing|electronics|electromechanic|electron tube|audio",
+   "node": "electronic_component"
+  },
+  {
+   "pattern": "firearm|explosive|propulsion",
+   "node": "defense_electronics"
+  },
+  {
+   "pattern": "flow meter|\\bmeters?\\b",
+   "node": "inspection_metrology"
+  },
+  {
+   "pattern": "\\bgx\\b|^gx|green transformation|decarboni",
+   "node": "energy_decarbon"
+  },
+  {
+   "pattern": "mushroom",
+   "node": "agritech"
+  },
+  {
+   "pattern": "grocery (manufactur|product)|foodstuff",
+   "node": "food_manufacturer"
+  },
+  {
+   "pattern": "grocery",
+   "node": "discount_store"
+  },
+  {
+   "pattern": "consumer goods|consumer products",
+   "node": "household_durables"
+  },
+  {
+   "pattern": "semiconductor (manufacturing|production) equipment|wafer (process|cleaning)|semiconductor equipment",
+   "node": "semiconductor_equipment"
+  },
+  {
+   "pattern": "semiconductor material|silicon wafer|\\bwafers?\\b",
+   "node": "semiconductor_material"
+  },
+  {
+   "pattern": "power semiconductor|discrete semiconductor|power device",
+   "node": "power_semiconductor"
+  },
+  {
+   "pattern": "semiconductor|\\blsi\\b|\\bics?\\b|\\bmemory\\b",
+   "node": "semiconductor"
+  },
+  {
+   "pattern": "photoresist|display material|electronic material|electronic chemical",
+   "node": "electronic_chemical"
+  },
+  {
+   "pattern": "lithium|batter(y|ies)",
+   "node": "ev_battery"
+  },
+  {
+   "pattern": "\\bev\\b|electric vehicle|charging",
+   "node": "ev_charger"
+  },
+  {
+   "pattern": "motorcycle|bicycle|bycycle|two wheel",
+   "node": "motorcycle_oem"
+  },
+  {
+   "pattern": "\\btrucks?\\b(?! transport)|\\bbus(es)?\\b|commercial vehicle",
+   "node": "commercial_vehicle"
+  },
+  {
+   "pattern": "auto(motive)? parts|automobile parts|automotive (component|interior|products|division)|automobile (and industrial machinery )?component|automotive chemical|die casting|sintering|car equipment|auto ?backs|car life|car related|automotive parts",
+   "node": "auto_parts_tier1"
+  },
+  {
+   "pattern": "automo|automobile|\\bcars?\\b|vehicle|mobility",
+   "node": "auto_oem"
+  },
+  {
+   "pattern": "aero ?space|aircraft|aero engine|\\bspace\\b|satellite|rocket",
+   "node": "defense_space"
+  },
+  {
+   "pattern": "defen[cs]e",
+   "node": "defense_electronics"
+  },
+  {
+   "pattern": "ship ?building|shipyard|marine (engine|equipment)",
+   "node": "shipbuilding"
+  },
+  {
+   "pattern": "machine tool|machining",
+   "node": "machine_tool"
+  },
+  {
+   "pattern": "construction machine|construction equipment|mining machine",
+   "node": "construction_machinery"
+  },
+  {
+   "pattern": "robot",
+   "node": "industrial_robot"
+  },
+  {
+   "pattern": "factory automation|\\bfa\\b|control system|motion control|\\bplc\\b",
+   "node": "factory_automation"
+  },
+  {
+   "pattern": "bearing|\\bgears?\\b|power transmission",
+   "node": "bearing_transmission"
+  },
+  {
+   "pattern": "inspection|measuring|measurement|analytical (instrument|equipment)|testing equipment|metrology",
+   "node": "inspection_metrology"
+  },
+  {
+   "pattern": "laser|optic|photonic|\\blens|camera",
+   "node": "photonics"
+  },
+  {
+   "pattern": "elevator|escalator|air ?condition|hvac|cooling and heating|heating|refrigerat",
+   "node": "energy_efficiency"
+  },
+  {
+   "pattern": "heavy electric|power system|energy system|electric(al)? equipment|transformer|switchgear",
+   "node": "heavy_electrical"
+  },
+  {
+   "pattern": "nuclear",
+   "node": "nuclear"
+  },
+  {
+   "pattern": "solar|photovoltaic|\\bwind\\b|renewable|clean ene|green energy|biomass|hydro ?power|geothermal",
+   "node": "renewable_generation"
+  },
+  {
+   "pattern": "hydrogen|fuel cell",
+   "node": "hydrogen"
+  },
+  {
+   "pattern": "electric (power|utility|business)|electricity|power generation|power supply|power business",
+   "node": "electric_power_utility"
+  },
+  {
+   "pattern": "\\bgas\\b|\\blpg\\b|\\blng\\b",
+   "node": "gas_utility"
+  },
+  {
+   "pattern": "\\boil\\b|petroleum|\\bfuel",
+   "node": "oil_refining_marketing"
+  },
+  {
+   "pattern": "\\benergy\\b",
+   "node": "energy_decarbon"
+  },
+  {
+   "pattern": "water (treatment|supply|business)|water and environment|sewage",
+   "node": "water_utility"
+  },
+  {
+   "pattern": "recycl|waste|environment|disposal|circular economy",
+   "node": "waste_recycling"
+  },
+  {
+   "pattern": "\\bmining\\b|mineral|\\bresources?\\b|bentonite|clay ?science",
+   "node": "mining"
+  },
+  {
+   "pattern": "\\bsteel|\\biron\\b",
+   "node": "steel"
+  },
+  {
+   "pattern": "alumin(i)?um|copper|non ?ferrous|titanium|precious metal|rare metal|smelting",
+   "node": "nonferrous_metals"
+  },
+  {
+   "pattern": "\\bmetal|casting|forging|\\bwires?\\b|\\bsprings?\\b|fastener|screw",
+   "node": "metal_material"
+  },
+  {
+   "pattern": "carbon fiber|composite",
+   "node": "carbon_fiber"
+  },
+  {
+   "pattern": "ceramic",
+   "node": "ceramic_material"
+  },
+  {
+   "pattern": "cement|\\bglass|refractor|concrete|\\btiles?\\b",
+   "node": "cement_glass"
+  },
+  {
+   "pattern": "\\btires?\\b|rubber|elastomer",
+   "node": "rubber_tire"
+  },
+  {
+   "pattern": "\\bpaper|\\bpulp|packaging|corrugated",
+   "node": "paper_pulp"
+  },
+  {
+   "pattern": "\\bfib(er|re)|textile|\\byarn",
+   "node": "textile_fiber"
+  },
+  {
+   "pattern": "catalyst",
+   "node": "catalyst"
+  },
+  {
+   "pattern": "adhesive|coating|\\bpaints?\\b|\\binks?\\b",
+   "node": "adhesive_coating"
+  },
+  {
+   "pattern": "plastic|resin|polymer|\\bfilms?\\b(?! (production|distribution))|urethane",
+   "node": "engineering_plastic"
+  },
+  {
+   "pattern": "specialty chemical|fine chemical|functional (chemical|material)|performance (chemical|material)|life solution|cosmetics material",
+   "node": "specialty_chemical"
+  },
+  {
+   "pattern": "chemical|basic material|petrochemical",
+   "node": "commodity_chemical"
+  },
+  {
+   "pattern": "drug ?store",
+   "node": "drugstore"
+  },
+  {
+   "pattern": "dispensing|pharmacy",
+   "node": "pharmacy_dispensing"
+  },
+  {
+   "pattern": "regenerative|cell (therapy|process)|gene therapy",
+   "node": "cell_therapy"
+  },
+  {
+   "pattern": "\\bcro\\b|cdmo|contract (research|manufacturing)|clinical",
+   "node": "cdmo_cro"
+  },
+  {
+   "pattern": "diagnos|laborator|testing service|analytical service|life science",
+   "node": "diagnostics"
+  },
+  {
+   "pattern": "medical (device|equipment|product|instrument|system)|surgical|catheter|cardiac|vascular|arrhythmia|endoscop|dental|ophthalm|orthop|blood and cell|diabetes",
+   "node": "medical_device"
+  },
+  {
+   "pattern": "generic",
+   "node": "generic_drug"
+  },
+  {
+   "pattern": "pharmac|\\bdrugs?\\b|medicine|\\bbio|ethical",
+   "node": "drug_modality"
+  },
+  {
+   "pattern": "hospital|clinic|medical (service|care|corporation)",
+   "node": "hospital_clinic_operator"
+  },
+  {
+   "pattern": "nursing|care service|elderly|retirement community|care business|^care$|welfare|home care|child ?care|nursery",
+   "node": "nursing_care"
+  },
+  {
+   "pattern": "cosmetic|beauty|\\bhair|salon|\\bskin",
+   "node": "cosmetics_personal_care"
+  },
+  {
+   "pattern": "health|wellness|fitness|medical",
+   "node": "healthcare_services"
+  },
+  {
+   "pattern": "beverage|\\bdrink|liquor|alcohol|\\bbeer|\\bwine|\\bsake\\b|whisk",
+   "node": "beverage_alcohol"
+  },
+  {
+   "pattern": "restaurant|dining|\\bcafe|food service|catering|izakaya|burger|ramen|\\beating|fast ?food|sukiya|sushi|hamazushi|\\bsoba\\b|\\budon\\b|yakiniku|steak",
+   "node": "food_service"
+  },
+  {
+   "pattern": "seafood|\\bfish|livestock|\\bmeat|poultry|\\beggs?\\b",
+   "node": "seafood_livestock"
+  },
+  {
+   "pattern": "\\bagri|\\bagro|\\bfarm|\\bseeds?\\b|\\bfeed\\b|fertili",
+   "node": "agritech"
+  },
+  {
+   "pattern": "food (wholesal|distribution|sales)",
+   "node": "food_wholesale"
+  },
+  {
+   "pattern": "\\bfoods?\\b|confection|dairy|cheese|\\brice\\b|noodle|dessert|bread|bakery|\\bsugar|seasoning|frozen|nutrition",
+   "node": "food_manufacturer"
+  },
+  {
+   "pattern": "convenience store",
+   "node": "convenience_store"
+  },
+  {
+   "pattern": "department store",
+   "node": "department_store"
+  },
+  {
+   "pattern": "discount|supermarket|super market|home center|variety store",
+   "node": "discount_store"
+  },
+  {
+   "pattern": "\\be ?commerce|electronic commerce|online (shop|sales|store|retail)|\\bec\\b|\\bd2 c|mail order|^commerce$|commerce (solution|business)",
+   "node": "ec_platform"
+  },
+  {
+   "pattern": "apparel|clothing|clothes|fashion|\\bwear\\b|\\bshoes?\\b|footwear|\\bbags?\\b|jewel|accessor|brand (business|retail)",
+   "node": "apparel_spa"
+  },
+  {
+   "pattern": "furniture|interior|household|daily (commodities|necessities|goods)|home ?(goods|products)|\\bliving\\b|lifestyle|stationery|\\btoys?\\b|sporting|sports goods|altar",
+   "node": "household_durables"
+  },
+  {
+   "pattern": "\\bpets?\\b",
+   "node": "pet_economy"
+  },
+  {
+   "pattern": "retail|\\bstores?\\b|\\bshops?\\b|directly operated|franchise",
+   "node": "specialty_retail"
+  },
+  {
+   "pattern": "trading|wholesal|\\bdistribution\\b(?! service)|import|export",
+   "node": "trading_company"
+  },
+  {
+   "pattern": "trust bank",
+   "node": "trust_bank"
+  },
+  {
+   "pattern": "\\bbank",
+   "node": "banking"
+  },
+  {
+   "pattern": "life insurance",
+   "node": "life_insurance"
+  },
+  {
+   "pattern": "p ?and ?c ?insurance|non ?life|property and casualty|casualty|nissay dowa|general insurance",
+   "node": "property_casualty_insurance"
+  },
+  {
+   "pattern": "insurance|assurance",
+   "node": "insurance"
+  },
+  {
+   "pattern": "securities|brokerage|investment banking",
+   "node": "securities_brokerage"
+  },
+  {
+   "pattern": "asset management|wealth|\\bfunds?\\b|investment advis|\\breit",
+   "node": "asset_management"
+  },
+  {
+   "pattern": "crypto|digital asset|block ?chain|web ?3",
+   "node": "crypto_exchange"
+  },
+  {
+   "pattern": "credit card|credit guarantee|consumer (finance|credit)|\\bloans?\\b|lending",
+   "node": "consumer_credit"
+  },
+  {
+   "pattern": "payment|settlement|electronic money|cashless|\\batm",
+   "node": "payment_platform"
+  },
+  {
+   "pattern": "leasing|\\blease|rental (business|service)|rent ?a ?car|equipment rental",
+   "node": "leasing"
+  },
+  {
+   "pattern": "financ|credit|factoring|investment|venture|private equity|\\bm ?and ?a\\b|mergers",
+   "node": "nonbank_finance"
+  },
+  {
+   "pattern": "condominium|apartment|housing|\\bhouses?\\b|home ?build|detached|residential|residence",
+   "node": "housing_builder"
+  },
+  {
+   "pattern": "renovation|reform|remodel",
+   "node": "renovation_stock"
+  },
+  {
+   "pattern": "real estate|property|building management|facility management|parking|office building|\\bland\\b|cemetery",
+   "node": "real_estate_development"
+  },
+  {
+   "pattern": "electrical (work|construction)|equipment (construction|work)|facility (work|construction)",
+   "node": "electrical_hvac_construction"
+  },
+  {
+   "pattern": "civil engineering|infrastructure|\\broads?\\b|bridge|tunnel|maintenance",
+   "node": "infrastructure_maintenance"
+  },
+  {
+   "pattern": "construction|building|architect|contracting|contractor|\\bcivil|scaffold|constraction",
+   "node": "general_contractor"
+  },
+  {
+   "pattern": "hotel|accommodation|\\binns?\\b|ryokan|resort|lodging",
+   "node": "hotel_resort"
+  },
+  {
+   "pattern": "\\btravel|\\btours?\\b|tourism",
+   "node": "travel_platform"
+  },
+  {
+   "pattern": "amusement|leisure|theme park|\\bgolf|game center|arcade|bowling|karaoke|aquarium|\\brides?\\b|pachinko|sports club|recreation",
+   "node": "theme_park_leisure"
+  },
+  {
+   "pattern": "airline|aviation|air transport|^air$|airport",
+   "node": "airline_passenger"
+  },
+  {
+   "pattern": "railway|railroad|\\brail",
+   "node": "railway_passenger"
+  },
+  {
+   "pattern": "shipping|\\bmarine|vessel|tanker|\\bbulk",
+   "node": "shipping_marine"
+  },
+  {
+   "pattern": "\\bports?\\b|harbou?r|\\bterminals?\\b",
+   "node": "port_terminal"
+  },
+  {
+   "pattern": "trucking|truck transport|\\bcargo|freight|forwarding",
+   "node": "freight_forwarding"
+  },
+  {
+   "pattern": "warehous|storage|logistics|delivery|transport|courier|\\bmoving",
+   "node": "logistics"
+  },
+  {
+   "pattern": "anime|animation|character|\\bip\\b|licens",
+   "node": "anime_ip"
+  },
+  {
+   "pattern": "mobile game|smartphone game|app game",
+   "node": "mobile_game"
+  },
+  {
+   "pattern": "\\bgames?\\b|gaming|entertainment",
+   "node": "game_content"
+  },
+  {
+   "pattern": "music|\\blive\\b|concert|\\bevents?\\b|ticket|artist|\\bidol",
+   "node": "music_live"
+  },
+  {
+   "pattern": "video|movie|\\bfilms?\\b|cinema|theat(er|re)|visual content|streaming|distribution service",
+   "node": "video_streaming"
+  },
+  {
+   "pattern": "broadcast|television|\\btv\\b|\\bradio\\b|newspaper|publish|publication|magazine|\\bbooks?\\b|media|content",
+   "node": "media_entertainment"
+  },
+  {
+   "pattern": "advertis|\\bad\\b|marketing|promotion|\\bpr\\b|branding|signage",
+   "node": "advertising_digital"
+  },
+  {
+   "pattern": "school|education|learning|\\bcram|tutor|training|university|\\bkids",
+   "node": "edtech_education"
+  },
+  {
+   "pattern": "recruit|\\bjobs?\\b|career|hr tech",
+   "node": "recruiting_platform"
+  },
+  {
+   "pattern": "staffing|human resource|temporary|dispatch|talent",
+   "node": "staffing_temp"
+  },
+  {
+   "pattern": "\\bbpo\\b|outsourc|call center|contact center|back office|business process|clerical|crowdsourc",
+   "node": "bpo_outsourcing"
+  },
+  {
+   "pattern": "security (service|guard)|\\bguard|business security|surveillance",
+   "node": "security_guard"
+  },
+  {
+   "pattern": "cyber ?security|\\bsecurity",
+   "node": "defense_cyber"
+  },
+  {
+   "pattern": "consult",
+   "node": "consulting"
+  },
+  {
+   "pattern": "telecom|mobile (phone|communication)|broadband|internet service|\\bisp\\b|communication service|consumer communication|network service",
+   "node": "telecom_carrier"
+  },
+  {
+   "pattern": "network|communication (device|equipment)|antenna|wireless|radio equipment",
+   "node": "network_equipment"
+  },
+  {
+   "pattern": "\\bai\\b|artificial intelligence|^ai|machine learning",
+   "node": "ai_software"
+  },
+  {
+   "pattern": "data ?center|cloud|hosting|saas|subscription|platform|application|\\bapps?\\b|software|package",
+   "node": "saas_platform"
+  },
+  {
+   "pattern": "connector|capacitor|\\bcoils?\\b|crystal|sensor|acoustic|component|\\bdevices?\\b",
+   "node": "electronic_component"
+  },
+  {
+   "pattern": "\\bplants?\\b|engineering business|\\bepc\\b",
+   "node": "plant_engineering"
+  },
+  {
+   "pattern": "machinery|\\bmachines?\\b|equipment|\\bpumps?\\b|compressor|valve|conveyor|industrial products",
+   "node": "general_machinery"
+  },
+  {
+   "pattern": "material",
+   "node": "advanced_material"
+  },
+  {
+   "pattern": "\\bdx\\b|^dx|digital|\\bit\\b|^it|system|solution|computer|information|\\bict\\b|\\bsi\\b|development|engineering|\\bweb\\b|internet|\\bdata\\b",
+   "node": "system_integrator"
+  },
+  {
+   "pattern": "bridal|wedding|funeral|ceremony|\\bagency\\b|photograph|exhibition|^service$|business support|support business|public sector",
+   "node": "business_services"
+  }
+ ]
+}
