@@ -735,69 +735,71 @@ def run_sec_geographic_extractor(
 # BLOCK 8: 参照ユーティリティ（us_stock_screener.py から呼ばれる）
 # ==============================================================
 
+_US_GEO_CACHE: dict | None = None
+
+
+def _load_us_geo_exposure(_pid: str) -> dict:
+    """米国の権益を全社まとめて1本で読み、{ticker: [行]} にする（失敗したら空の dict）。"""
+    import importlib, sys as _sys
+    from pathlib import Path as _Path
+    for p in ["/content", str(_Path(__file__).parent)]:
+        if p not in _sys.path:
+            _sys.path.insert(0, p)
+    raw_bq = importlib.import_module("edinet_bq_client").EDINETBQClient().client
+    query = f"""
+    SELECT
+      e.ticker,
+      e.country_code,
+      e.exposure_type,
+      e.exposure_strength,
+      e.revenue_share_est,
+      IFNULL(r.composite_risk_score, 0.0) AS composite_risk_score
+    FROM `{_pid}.geopolitics.company_country_exposure` AS e
+    LEFT JOIN (
+      SELECT country_code, composite_risk_score
+      FROM `{_pid}.geopolitics.country_risk_daily`
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY country_code ORDER BY risk_date DESC) = 1
+    ) AS r ON e.country_code = r.country_code
+    WHERE e.market = 'US'
+      AND (e.valid_to IS NULL OR e.valid_to > CURRENT_DATE())
+    ORDER BY e.ticker, e.exposure_strength DESC
+    """
+    out: dict = {}
+    for row in raw_bq.query(query).result():
+        out.setdefault(row.ticker, []).append({
+            "country_code":         row.country_code,
+            "exposure_type":        row.exposure_type,
+            "exposure_strength":    float(row.exposure_strength or 0.0),
+            "revenue_share_est":    float(row.revenue_share_est or 0.0)
+                                    if row.revenue_share_est else None,
+            "composite_risk_score": float(row.composite_risk_score or 0.0),
+        })
+    return out
+
+
 def get_us_geo_exposure(
     ticker: str,
     cfg=None,
     project_id: str = "stock-analyzer-edinet",
 ) -> list[dict]:
     """
-    指定米国株ティッカーの地理エクスポージャーを BQ から取得する。
-    us_stock_screener.py の geo_impact_bonus 計算に使用。
+    指定米国株ティッカーの地理エクスポージャー。us_stock_screener.py の geo_impact_bonus 計算に使用。
+    最初の呼び出しで米国の全社分を1本のクエリで読み、以降はその写しから返す（候補ごとに BQ を引かない）。
 
     Returns:
         list of {country_code, exposure_type, exposure_strength,
                  revenue_share_est, composite_risk_score}
-        取得失敗時は空リスト
+        取得失敗時・権益の無い銘柄は空リスト
     """
+    global _US_GEO_CACHE
     _pid = getattr(cfg, "GEO_BQ_PROJECT_ID", project_id) if cfg else project_id
-    try:
-        import importlib, sys as _sys
-        from pathlib import Path as _Path
-        for p in ["/content", str(_Path(__file__).parent)]:
-            if p not in _sys.path:
-                _sys.path.insert(0, p)
-        _bq_mod = importlib.import_module("edinet_bq_client")
-        raw_bq  = _bq_mod.EDINETBQClient().client
-
-        query = f"""
-        SELECT
-          e.country_code,
-          e.exposure_type,
-          e.exposure_strength,
-          e.revenue_share_est,
-          IFNULL(r.composite_risk_score, 0.0) AS composite_risk_score
-        FROM `{_pid}.geopolitics.company_country_exposure` AS e
-        LEFT JOIN (
-          SELECT country_code, composite_risk_score
-          FROM (
-            SELECT country_code, composite_risk_score,
-                   ROW_NUMBER() OVER (
-                     PARTITION BY country_code ORDER BY risk_date DESC
-                   ) AS rn
-            FROM `{_pid}.geopolitics.country_risk_daily`
-          )
-          WHERE rn = 1
-        ) AS r ON e.country_code = r.country_code
-        WHERE e.ticker = '{ticker}'
-          AND e.market  = 'US'
-          AND (e.valid_to IS NULL OR e.valid_to > CURRENT_DATE())
-        ORDER BY e.exposure_strength DESC
-        """
-        rows = list(raw_bq.query(query).result())
-        return [
-            {
-                "country_code":         row.country_code,
-                "exposure_type":        row.exposure_type,
-                "exposure_strength":    float(row.exposure_strength or 0.0),
-                "revenue_share_est":    float(row.revenue_share_est or 0.0)
-                                        if row.revenue_share_est else None,
-                "composite_risk_score": float(row.composite_risk_score or 0.0),
-            }
-            for row in rows
-        ]
-    except Exception as e:
-        print(f"  ⚠️  get_us_geo_exposure [{ticker}]: {str(e)[:80]}")
-        return []
+    if _US_GEO_CACHE is None:
+        try:
+            _US_GEO_CACHE = _load_us_geo_exposure(_pid)
+        except Exception as e:
+            print(f"  ⚠️  get_us_geo_exposure（一括読み）: {str(e)[:80]}")
+            _US_GEO_CACHE = {}
+    return list(_US_GEO_CACHE.get(str(ticker or "").strip(), []))
 
 
 # ==============================================================

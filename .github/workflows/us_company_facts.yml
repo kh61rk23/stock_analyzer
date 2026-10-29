@@ -62,6 +62,16 @@ jobs:
           ALERT_GMAIL_PASSWORD: ${{ secrets.ALERT_GMAIL_PASSWORD }}
           ALERT_GMAIL_TO: ${{ secrets.ALERT_GMAIL_TO }}
         run: python actions_log.py --workflow us_company_facts --step us_segments -- python -u us_segments.py
+      # セグメントの地域別売上 → 権益（geopolitics.company_country_exposure・market=US）、SIC → 技術マップ（us.company_taxonomy_map）。
+      # どちらも BQ の表からまとめて1本読んで作り直すだけ（SEC へは取りに行かない）
+      - name: US country exposure and technology map
+        if: always()
+        env:
+          BQ_PROJECT_ID: ${{ secrets.BQ_PROJECT_ID }}
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+        run: |
+          python actions_log.py --workflow us_company_facts --step us_exposure_builder -- python -u us_exposure_builder.py
+          python actions_log.py --workflow us_company_facts --step us_taxonomy_mapper -- python -u us_taxonomy_mapper.py
       # 取り込んだ内容（ステップの成否・要点・表の行数の増減・保存量）を Gmail で知らせる（workflow_notify.py）
       - name: Notify
         if: always()
@@ -72,7 +82,7 @@ jobs:
           ALERT_GMAIL_FROM: ${{ secrets.ALERT_GMAIL_FROM }}
           ALERT_GMAIL_PASSWORD: ${{ secrets.ALERT_GMAIL_PASSWORD }}
           ALERT_GMAIL_TO: ${{ secrets.ALERT_GMAIL_TO }}
-        run: python workflow_notify.py --workflow us_company_facts --title "米国株の財務・企業情報の更新" --tables us.company_facts,us.segment_financials
+        run: python workflow_notify.py --workflow us_company_facts --title "米国株の財務・企業情報の更新" --tables us.company_facts,us.segment_financials,us.company_taxonomy_map
       # 変わったファイルだけを load job で BigQuery（private.state_files）へ
       - name: Save state to BigQuery
         if: always() && env.STATE_STORE_MODE != 'git'
