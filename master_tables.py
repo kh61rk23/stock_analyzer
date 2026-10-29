@@ -3,12 +3,12 @@ master_tables.py — マスタの表を BigQuery の master データセット�
 
 【置き場】
   master（asia-northeast1）… 日本側のマスタ。tax_node（技術ノードの全段・書き込み先）と、段ごとのマスタ
-    tax_node_l1（大分類）・tax_node_l2（中分類）・tax_node_l3（小分類）・tax_node_l4（細分類）、
+    tax_node_l1（大分類）・tax_node_l2（中分類）・tax_node_l3（小分類）、
     tax_level（段階の定義）・industry_tse33（東証33業種）
   master_us（US）… 米国側のマスタ（us データセットと同じリージョンでないと view で読めないため分ける）。順に移す
   元の場所の名前（taxonomy.taxonomy_node など）は、同じ列を返す view にして残す（読み手のコードは変えなくてよい）。
 
-【技術ノードの段階】大分類（1）→ 中分類（2）→ 小分類（3）→ 細分類（4）。tax_node は各ノードに、上の段の
+【技術ノードの段階】大分類（1）→ 中分類（2）→ 小分類（3）の3段。tax_node は各ノードに、上の段の
   ノード（l1〜l3 の ID と名前）と段階の名前を持つ。中分類までしかないノードは小分類が空。
 
 【書き手】
@@ -29,8 +29,7 @@ LOCATION_US = "US"
 LEVELS = [
     {"level": 1, "name_ja": "大分類", "name_en": "Domain", "description": "技術・産業の大きなまとまり（半導体・金融など）"},
     {"level": 2, "name_ja": "中分類", "name_en": "Category", "description": "大分類の中の分野（半導体設計・銀行など）"},
-    {"level": 3, "name_ja": "小分類", "name_en": "Subcategory", "description": "中分類の中の製品・事業（ロジック・地方銀行など）"},
-    {"level": 4, "name_ja": "細分類", "name_en": "Detail", "description": "小分類をさらに分けたもの（データセンター向け AI チップなど）"},
+    {"level": 3, "name_ja": "小分類", "name_en": "Subcategory", "description": "中分類の中の製品・事業（DRAM・地方銀行など）"},
 ]
 LEVEL_NAME = {x["level"]: x["name_ja"] for x in LEVELS}
 
@@ -83,16 +82,17 @@ def industry_rows(japan_sectors: dict) -> list[dict]:
 
 
 LEVEL_TABLES = {1: ("tax_node_l1", "大分類マスタ"), 2: ("tax_node_l2", "中分類マスタ"),
-                3: ("tax_node_l3", "小分類マスタ"), 4: ("tax_node_l4", "細分類マスタ")}
+                3: ("tax_node_l3", "小分類マスタ")}
+RETIRED_LEVEL_TABLES = ("tax_node_l4",)
 
 
 def level_table_sql(project: str, level: int) -> str:
-    """段ごとのマスタ（大分類・中分類・小分類・細分類）を tax_node から作り直す SQL。各段は上の段の ID を持つ。
+    """段ごとのマスタ（大分類・中分類・小分類）を tax_node から作り直す SQL。各段は上の段の ID を持つ。
     子の数（下の段のノード数）も持つ。"""
     table, _label = LEVEL_TABLES[level]
     uppers = ", ".join(f"l{k}_id" for k in range(level - 1, 0, -1))
     child = (f"(SELECT COUNT(*) FROM `{project}.{DATASET}.{NODE_TABLE}` c WHERE c.parent_id = n.node_id AND c.node_level = {level + 1})"
-             if level < 4 else "0")
+             if level < max(LEVEL_TABLES) else "0")
     return f"""
 CREATE OR REPLACE TABLE `{project}.{DATASET}.{table}`
 OPTIONS (description = '{LEVEL_TABLES[level][1]}（技術ノードの第{level}段・master_tables.py が tax_node から作る）') AS
@@ -105,8 +105,10 @@ WHERE n.node_level = {level}
 
 
 def rebuild_level_tables(client) -> dict:
-    """段ごとのマスタを作り直す（4本のクエリ・それぞれ最低10MB の課金）。"""
+    """段ごとのマスタを作り直す（3本のクエリ・それぞれ最低10MB の課金）。使わなくなった段の表は消す。"""
     out = {}
+    for table in RETIRED_LEVEL_TABLES:
+        client.delete_table(f"{client.project}.{DATASET}.{table}", not_found_ok=True)
     for level, (table, _label) in LEVEL_TABLES.items():
         client.query(level_table_sql(client.project, level), location=LOCATION).result()
         out[table] = client.get_table(f"{client.project}.{DATASET}.{table}").num_rows
