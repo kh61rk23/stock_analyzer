@@ -15,7 +15,12 @@
   "Cogwheel": "bearing_transmission",
   "Buddhist Altar": "household_durables",
   "Cheese": "food_manufacturer",
-  "Confirmation": null
+  "Confirmation": null,
+  "Soft Bank": "telecom_carrier",
+  "Soft Bank Vision Funds": "asset_management",
+  "Holding Company Investment": "business_investment",
+  "Infrastructure Materials": "commodity_chemical",
+  "Electronics Materials": "electronic_chemical"
  },
  "rules": [
   {
@@ -25,6 +30,18 @@
   {
    "pattern": "^(the )?(india|indonesia|korea|mexico|vietnam|thailand|usa|us|united states|netherlands?|east asia.*|southeast.*|rest of world|north (and )?(central )?(and south )?america|the americas|mainland china.*|europe and africa|japan( business| east asia)?|oversea subsidiaries|foreign related businesses|holdings|headoffice.*|operating|otehr|new business(es)?( and others)?|growth business and other|stock segment)$",
    "skip": true
+  },
+  {
+   "pattern": "imaging and sensing|image sensor",
+   "node": "sensor_image"
+  },
+  {
+   "pattern": "electronics? materials?|semiconductor materials?",
+   "node": "electronic_chemical"
+  },
+  {
+   "pattern": "(pvc|vinyl|infrastructure) materials?",
+   "node": "commodity_chemical"
   },
   {
    "pattern": "marine products|fishery",

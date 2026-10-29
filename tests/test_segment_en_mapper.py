@@ -32,3 +32,12 @@ def test_rows_share_by_revenue():
     rows, st = sm.build_rows(recs, exact, rules, as_of="2026-10-30")
     assert [(r["node_id"], r["relevance_score"]) for r in rows] == [("auto_oem", 0.9), ("nonbank_finance", 0.09)]
     assert rows[0]["confidence_type"] == "gov_segment" and st["skipped"] == 1 and st["unmapped"] == 1
+
+
+def test_total_rows_are_not_in_denominator():
+    exact, rules = sm.load_rules()
+    recs = [{"code": "9984", "member": "jpcrp030000-asr_E1-000SoftBankReportableSegmentMember", "value": 60.0},
+            {"code": "9984", "member": "jpcrp030000-asr_E1-000AIComputingReportableSegmentMember", "value": 40.0},
+            {"code": "9984", "member": "ReportableSegmentsMember", "value": 100.0}]
+    rows, _ = sm.build_rows(recs, exact, rules, as_of="2026-10-30")
+    assert [(r["node_id"], r["relevance_score"]) for r in rows] == [("telecom_carrier", 0.6), ("ai_software", 0.4)]

@@ -61,7 +61,8 @@ def build_rows(records: list[dict], exact: dict, rules: list, known: set | None 
     stat = {"segments": 0, "mapped": 0, "skipped": 0, "unmapped": 0, "unmapped_names": {}}
     for r in records:
         name = segment_name(r["member"])
-        node, skip = node_for(name, exact, rules)
+        # 名前の残らない区分は「報告セグメントの合計」など（会社ごとの区分ではない）。分母にも入れない
+        node, skip = node_for(name, exact, rules) if name else (None, True)
         stat["segments"] += 1
         if skip:
             stat["skipped"] += 1

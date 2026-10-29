@@ -52,7 +52,8 @@ SEG_REV_VERSION = 2
 # 合計・調整の member（会社ごとのセグメントではない）
 # 標準の要素（「…_cor:ReportableSegmentsMember」＝報告セグメントの合計など）は「:」の直後に来る。会社ごとの区分は
 # 「…-000電子材料ReportableSegmentsMember」のように複数形のこともあるので、末尾だけで合計と決めない
-_SEG_SKIP_RE = re.compile(r"(?i):(ReportableSegmentsMember|OperatingSegmentsMember|EntityTotalMember)$|Reconciling|Elimination|"
+_SEG_SKIP_RE = re.compile(r"(?i)(^|:|_)(ReportableSegments|OperatingSegments|EntityTotal)Member$|-\d{3}ReportableSegmentMember$|"
+                          r"Reconciling|Elimination|"
                           r"Unallocated|CorporateAndElimination|TotalOfReportable|NotIncludedInReportableSegments")
 SEG_TABLE = "gov_segment_revenue"
 SEG_SCHEMA = [("doc_id", "STRING"), ("edinet_code", "STRING"), ("sec_code", "STRING"), ("fiscal_year_end", "DATE"),
