@@ -293,3 +293,16 @@ def test_sector_bridge_codes_match_config_names():
     assert set(s._SECTOR_TO_TAXONOMY) == set(want)
     for code, name in want.items():
         assert config.JAPAN_SECTORS[code]["name_ja"] == name
+
+
+def test_segment_path_skips_when_embeddings_missing(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    written = []
+    monkeypatch.setitem(sys.modules, "segment_mapper", SimpleNamespace(
+        SegmentMapper=lambda cfg: SimpleNamespace(map=lambda n: {"mapped_by": "fallback", "sector_code": None})))
+    monkeypatch.setitem(sys.modules, "size_tier_classifier", SimpleNamespace(get_taxonomy_nodes_for_sector=lambda c: []))
+    monkeypatch.setattr(tcm, "fetch_listed_and_tagged", lambda cfg: ({}, set()))
+    monkeypatch.setattr(tcm, "upsert_to_bq", lambda *a, **k: written.append(1) or (True, 0))
+    segs = {f"{1000 + i}": [{"segment_name": f"事業{i}", "share": 1.0}] for i in range(300)}
+    assert tcm.run_segment_path(segs, SimpleNamespace(), dry=False) == 0 and written == []

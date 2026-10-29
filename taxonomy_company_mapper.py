@@ -657,9 +657,17 @@ def run_segment_path(segments: dict, cfg, dry: bool) -> int:
     mapper = SegmentMapper(cfg)
     listed, _tagged = fetch_listed_and_tagged(cfg)
     own = {c: industry_code(ind) for c, ind in listed.items() if industry_code(ind)}
+    seen = {"all": 0, "fallback": 0}
+
+    def _map(name):
+        res = mapper.map(name)
+        seen["all"] += 1
+        seen["fallback"] += int((res or {}).get("mapped_by") == "fallback")
+        return res
+
     rows = build_company_node_rows(
         segments,
-        lambda name: mapper.map(name),
+        _map,
         get_taxonomy_nodes_for_sector,
         min_sim=float(getattr(cfg, "TAXONOMY_SEGMENT_MIN_SIM", 0.75)),
         company_sector=own,
@@ -672,6 +680,13 @@ def run_segment_path(segments: dict, cfg, dry: bool) -> int:
                   f"score={r['relevance_score']} share={r['revenue_share_est']}")
         if len(rows) > 5:
             print(f"   ... 他{len(rows) - 5}行")
+        return 0
+    # 埋め込みのモデル（sentence-transformers・torch）が無い環境では大半が fallback になり、少ない行で
+    # 前の行を失効させてしまう。fallback が多い回は書かない
+    max_fb = float(getattr(cfg, "TAXONOMY_SEGMENT_MAX_FALLBACK_SHARE", 0.1))
+    if seen["all"] and seen["fallback"] / seen["all"] > max_fb:
+        print(f"  ⏹️ セグメント名の対応付けが fallback {seen['fallback']}/{seen['all']} 件"
+              f"（埋め込みのモデルが使えない環境）。書き込みと失効を見送る")
         return 0
     # 今回出なかった古い行（基準を上げて外れた行を含む）は失効させる。セグメントの取得が欠けた回に全行を
     # 失効させないよう、十分な社数が取れたときだけ
