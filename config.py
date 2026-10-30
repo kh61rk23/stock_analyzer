@@ -3745,7 +3745,7 @@ GEO_TAXONOMY_PROPAGATION: dict = {
 #   "legacy": 上の GEO_TAXONOMY_PROPAGATION と geo_signal の業種コード手書き表
 #   "seed"  : 承認済み seed（data/taxonomy_seed）の related_commodities の逆引き、
 #             関与度は BQ taxonomy.company_taxonomy_map（行の無い銘柄は手書き表）
-GEO_TAXONOMY_SOURCE = "legacy"
+GEO_TAXONOMY_SOURCE = "seed"
 
 # geo_signal の有効フラグ。True にすると base_agent.py と us_stock_screener.py が geo_impact_bonus を計算する。
 # 権益側（company_country_exposure）は geo_exposure_runner.py が供給する。

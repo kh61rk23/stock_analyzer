@@ -30,7 +30,7 @@
   "taxonomy_version": "v1.1",
   "generated_by": "claude（小分類の案・2026-10-28）",
   "generated_at": "2026-10-28",
-  "status": "DRAFT_健太の承認待ち",
+  "status": "APPROVED_承認済み",
   "review": "下に小分類が無かった中分類 110 個に小分類を足す案。承認したら status を APPROVED_… に変え、各ノードの verified_flag を true にする。taxonomy_loader が master.tax_node へ入れ、段ごとのマスタ（tax_node_l3）にも出る。説明（description）は語の照合に使うので、有報に出る具体的な語を並べてある",
   "naming_rule": "lowercase snake_case。親の中分類の配下に置く（node_level=3）"
  },

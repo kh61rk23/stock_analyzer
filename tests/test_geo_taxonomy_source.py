@@ -44,8 +44,9 @@ EXPOSURE = [{"commodity_code": "lithium", "exposure_strength": 0.5,
              "composite_risk_score": 60.0, "country_code": "CHL"}]
 
 
-def test_default_source_is_legacy():
-    assert config.GEO_TAXONOMY_SOURCE == "legacy"
+def test_default_source_is_seed():
+    # 権益 152社で legacy と比べ、保有・候補への差が0だったので seed（taxonomy の正本）に切り替えた
+    assert config.GEO_TAXONOMY_SOURCE == "seed"
 
 
 def test_legacy_propagation_unchanged(monkeypatch):
