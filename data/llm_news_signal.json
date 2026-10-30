@@ -1,42 +1,33 @@
 {
   "_comment": "S8 LLMニュース・アルファ（D-02=b・週次手動）。記入手順= 02_Configuration_Management/03_運用手順/S8_LLMニュースアルファ週次手動_手順書_20260712.md。上書き方式・signals空配列可。現状はsignal_aggregator未配線（参考情報・D-19で配線判断）。",
-  "as_of": "2026-09-05",
+  "as_of": "2026-10-30",
   "signals": [
     {
-      "ticker": "GH",
+      "ticker": "ORN",
       "market": "US",
-      "direction": "bull",
-      "strength": 3,
-      "thesis": "9/4付のFDAによるEtcamah（camizestrant）迅速承認と同時に、Guardant360 CDxがESR1変異検出のコンパニオン診断として認可された。FDAが「画像所見で進行が確認される前にctDNA上の耐性変異を検出して治療を切り替える」承認を出したのは初で、投薬判断が単発検査ではなく治療中の反復検査を前提とする構造に変わる。市場の関心は承認された薬剤（AZN）側に集中し、検査回数が経常化する診断側の売上構造変化は定量化されにくい。",
-      "source_url": "https://www.fda.gov/news-events/press-announcements/fda-grants-accelerated-approval-new-breast-cancer-treatment",
-      "expire_date": "2026-10-03"
-    },
-    {
-      "ticker": "7011.T",
-      "market": "JP",
       "direction": "bull",
       "strength": 2,
-      "thesis": "9/2付でNECと防衛分野の戦略的提携に向けた覚書を締結し、作戦計画・指揮統制システムおよび無人アセット領域で連携すると発表。株価は翌9/3に+71円（3795円）と限定的な反応にとどまったが、覚書段階で金額が未開示のため、指揮統制システム国産化という複数年にわたる防衛省調達フローが業績予想に反映されていない。",
-      "source_url": "https://jpn.nec.com/press/202609/20260902_04.html",
-      "expire_date": "2026-10-03"
+      "thesis": "10月に計2.5億ドルの新規受注・変更契約。うち1.15億ドルはコンクリート部門で過去最大で、受注残の伸びがまだ株価に十分出ていない可能性",
+      "source_url": "https://stockhouse.com/news/press-releases/2026/10/29/orion-group-holdings-announces-new-contract-awards-of-250-million",
+      "expire_date": "2026-11-27"
     },
     {
-      "ticker": "6701.T",
-      "market": "JP",
-      "direction": "bull",
-      "strength": 1,
-      "thesis": "上記9/2の三菱重工との覚書で、NEC側はAI・クラウド・指揮統制ソフトウェアの担い手として位置づけられた。同社の株式の物語はITサービス・海外事業の収益性が支配的で、防衛セグメントは規模が小さく個別に評価されにくいため、防衛AI基盤の受け皿という位置づけの変化は織り込まれにくい（7011.Tと同一事象由来である点に留意）。",
-      "source_url": "https://jpn.nec.com/press/202609/20260902_04.html",
-      "expire_date": "2026-10-03"
-    },
-    {
-      "ticker": "IONS",
+      "ticker": "AES",
       "market": "US",
       "direction": "bull",
       "strength": 1,
-      "thesis": "9/3付でFDAがZanvastro（zilganersen）をアレキサンダー病の初の治療薬として、乳児から成人までを含む広い年齢適応で承認。有病率が100万人に1人未満のため売上寄与は小さいが、髄腔内投与アンチセンス核酸がCNS疾患で承認された実績は後続CNSパイプラインの承認確度に対する前提を変える。希少小児疾患指定に伴う優先審査バウチャーの売却価値も含め、単剤の売上モデルには乗らない。",
-      "source_url": "https://www.fda.gov/news-events/press-announcements/fda-approves-first-drug-treat-alexander-disease",
-      "expire_date": "2026-10-03"
+      "thesis": "10/28 に欧州委員会が AES の合併の外国補助金審査を終了し、クロージングの条件が1つ満たされた。残る承認が進めば買収価格との差が縮む",
+      "source_url": "https://rallies.ai/news/aes-corp-european-commission-closes-preliminary-review-of-aes-merger-on-october-28-2026-f2436daa3cb39174",
+      "expire_date": "2026-11-27"
+    },
+    {
+      "ticker": "RRC",
+      "market": "US",
+      "direction": "bull",
+      "strength": 1,
+      "thesis": "EQT が Range Resources を全株式交換で買収することで合意（10/26 報道）。交換比率に対する鞘が残っていれば縮小が見込める",
+      "source_url": "https://www.stocktitan.net/news/2026-10-26/",
+      "expire_date": "2026-11-27"
     }
   ]
 }
