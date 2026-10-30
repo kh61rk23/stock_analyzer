@@ -5574,6 +5574,15 @@ def run_all_tasks(mode: str = "all") -> dict:
         except Exception as _opae:
             logger.add("options_advisor", "error", str(_opae)[:100])
             print(f"  ⚠️  オプションアドバイザーエラー（スキップ）: {str(_opae)[:60]}")
+        # S4 のオプションの仮想口座（提案を理論価格で仮想に建て、毎日評価・満期で清算。証券会社の口座は使わない）
+        if getattr(cfg, "ENABLE_PAPER_OPTIONS", True) and results.get("options_advisor"):
+            try:
+                from paper import options_book as _ob
+                results["paper_options"] = _ob.run(cfg, results)
+                logger.add("paper_options", "skipped" if results["paper_options"].get("skipped") else "success",
+                           str(results["paper_options"])[:150])
+            except Exception as _obe:
+                logger.add("paper_options", "error", str(_obe)[:100])
     else:
         print("  ⏩ オプションアドバイザー: スキップ")
 

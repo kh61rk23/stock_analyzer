@@ -4443,6 +4443,14 @@ PAPER_STRATEGIES: list = ["screener_topN", "ignition", "pead"]
 #   （ここに書かなくてよい。YAMLを置けば口座ができる）。
 PAPER_INCLUDE_PLAYBOOK_STRATEGIES: bool = True
 PAPER_LEDGER_PATH: str = "stock_data/paper"   # accounts.json / events.jsonl の置き場
+# S4 オプションの仮想口座（paper/options_book.py）。提案（コール買い・現金担保プット）を理論価格で建てる・ドル建て
+ENABLE_PAPER_OPTIONS: bool = True
+PAPER_OPTIONS_START_USD: float = 20000.0
+PAPER_OPTIONS_RATE: float = 0.04              # 理論価格の金利
+PAPER_OPTIONS_SLIPPAGE: float = 0.05          # 買いは理論価格の +5%・売りは −5% で約定したことにする
+PAPER_OPTIONS_FEE_PER_CONTRACT: float = 0.65
+PAPER_OPTIONS_MAX_OPEN: int = 10
+PAPER_OPTIONS_MAX_PREMIUM_PCT: float = 0.05   # コール買い1本の代金の上限（評価額に対する比率）
 
 # ==============================================================
 # BLOCK 48: ポジションサイジングv2設定

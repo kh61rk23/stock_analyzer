@@ -74,6 +74,7 @@ SCHEMA: dict[str, list[str]] = {
     "tech_map": ["stock_analyzer_main"],
     "event_horizon": ["stock_analyzer_main"],
     "options_advisor": ["stock_analyzer_main"],
+    "paper_options": ["stock_analyzer_main"],
     "evaluations": ["stock_analyzer_main"],
     "executive_transition": ["stock_analyzer_main"],
     "facility_expansion": ["stock_analyzer_main"],
