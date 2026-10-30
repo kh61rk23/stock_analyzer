@@ -202,6 +202,18 @@ FROM doc JOIN holder USING (doc_id) LEFT JOIN filer USING (doc_id)
 """
 
 
+TF_LVH = "large_holdings_between"
+
+
+def large_holdings_tf_sql(project: str) -> str:
+    """large_holdings と同じ列を、提出日の範囲（a〜b）の分だけ読んで返す表関数。
+    view は集計の後ろでしか日付で絞れず毎回表全体（約0.4GB）を読むので、範囲の決まった読み手（通知）はこちらを使う。"""
+    body = large_holdings_view_sql(project).split(" AS\n", 1)[1]
+    body = body.replace("WITH f AS (SELECT * FROM", "WITH f AS (SELECT * FROM", 1).replace(
+        "WHERE doc_type_code IN ('350','360','370')),", "WHERE doc_type_code IN ('350','360','370') AND submit_date BETWEEN a AND b),", 1)
+    return f"CREATE OR REPLACE TABLE FUNCTION `{project}.{DATASET}.{TF_LVH}`(a DATE, b DATE) AS\n{body}"
+
+
 def named_view_sql(project: str) -> str:
     return f"""
 CREATE OR REPLACE VIEW `{project}.{DATASET}.{V_NAMED}` AS
@@ -234,7 +246,7 @@ def ensure_tables(client) -> None:
             if name == T_FACTS:
                 t.clustering_fields = ["doc_type_code", "issuer_edinet_code", "element_id"]
             client.create_table(t)
-    for sql in (large_holdings_view_sql(client.project), named_view_sql(client.project)):
+    for sql in (large_holdings_view_sql(client.project), large_holdings_tf_sql(client.project), named_view_sql(client.project)):
         client.query(sql, location=LOCATION).result()
 
 

@@ -58,3 +58,10 @@ def test_segment_revenue_ifrs_and_plural_members():
             ["jpigp_cor:IntersegmentSalesIFRS", "内部", "CurrentYearDuration_jpcrp030000-asr_E02166-000GameAndNetworkServicesReportableSegmentMember", "当期", "その他", "期間", "JPY", "円", "9"]]
     out = g.segment_revenue_from_zip(_zip(rows))
     assert [(g.segment_name(x["member"]), x["value"]) for x in out] == [("Game And Network Services", 100.0), ("Electronics Materials", 50.0)]
+
+
+def test_large_holdings_table_function_filters_dates_before_grouping():
+    import edinet_gov_docs as gd
+    sql = gd.large_holdings_tf_sql("p")
+    assert sql.startswith("CREATE OR REPLACE TABLE FUNCTION `p.edinet.large_holdings_between`(a DATE, b DATE)")
+    assert "doc_type_code IN ('350','360','370') AND submit_date BETWEEN a AND b)" in sql

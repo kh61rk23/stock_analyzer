@@ -1155,6 +1155,9 @@ def run_edinetdb_ingest(
         print(f"    📅 [edinetdb] 四半期財務: {len(q_done)}社 / {len(q_rows)}行（候補{len(q_targets)}社）")
 
     adopted: list[str] = []
+    # 本文（text_analysis）は表が大きく、MERGE のたびに表全体を読む。会社ごとではなくこの回の最後に1回でまとめて入れる
+    text_buf: list[dict] = []
+    text_meta_prev: dict = {}
     for code in targets:
         # 枠の残りが最小の1社分（2回）を切ったら、それ以上 Web 確認も続けない
         if lazy_targets and getattr(client, "daily_budget", daily_budget) - client.calls - reserve_calls < 2:
@@ -1255,7 +1258,9 @@ def run_edinetdb_ingest(
             bq.merge_rows("financials", fin_rows, ["edinet_code", "fiscal_year"])
             bq.merge_rows("segments", seg_rows, ["segment_id"])
             bq.merge_rows("segment_finance", sf_rows, ["sf_id"])
-            bq.merge_rows("text_analysis", text_rows, ["text_id"])
+            if text_rows:
+                text_buf.extend(text_rows)
+                text_meta_prev[code] = meta.get(code)
             # 成功したら失敗カウンタを消す（バックオフを解除する）
             _prev = meta.get(code) or {}
             meta[code] = {
@@ -1291,6 +1296,22 @@ def run_edinetdb_ingest(
             reasons["bq_merge"] += 1
             failure += 1
             _note_attempt(code, company_code, missing=False)
+    if text_buf:
+        try:
+            bq.merge_rows("text_analysis", text_buf, ["text_id"])
+        except Exception as exc:
+            # 本文が入らなかった会社は「取得済み」を戻し、次の回に取り直す
+            print(f"    ⚠️  [edinetdb] 本文の MERGE失敗（{len(text_meta_prev)}社は次の回に取り直す）: "
+                  f"{type(exc).__name__}: {_brief_error(exc)}")
+            for _c, _m in text_meta_prev.items():
+                if _m is None:
+                    meta.pop(_c, None)
+                else:
+                    meta[_c] = _m
+            reasons["bq_merge"] += len(text_meta_prev)
+            failure += len(text_meta_prev)
+            success -= len(text_meta_prev)
+            ingested = [i for i in ingested if i["edinet_code"] not in text_meta_prev]
     if lazy_targets:
         targets = adopted
         print(f"    🔎 [edinetdb] Web事前確認: 採用{len(adopted)}社 / 財務なしで対象外{len(web_skipped)}社 "

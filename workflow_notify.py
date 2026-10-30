@@ -114,12 +114,14 @@ def digest_jp(client, steps: list[dict]) -> list[tuple[str, list[str]]]:
             a, b = min(r.a for r in rows), max(r.b for r in rows)
             out.append((f"政府 EDINET の書類一覧（この回に取った分・提出日 {a}〜{b}）",
                         [f"{sum(r.n for r in rows):,}件：{kinds}"]))
-        rows = _q(client, f"""SELECT issuer_name, issuer_sec_code, holder_name, prior_ratio, holding_ratio, LEFT(purpose, 24) purpose
-                  FROM `{p}.edinet.large_holdings`
+        # 表関数 large_holdings_between は提出日の範囲の分だけ読む（view は毎回表全体を読む）
+        dr = [bigquery.ScalarQueryParameter("a", "DATE", a), bigquery.ScalarQueryParameter("b", "DATE", b)] if rows else []
+        rows = [] if not rows else _q(client, f"""SELECT issuer_name, issuer_sec_code, holder_name, prior_ratio, holding_ratio, LEFT(purpose, 24) purpose
+                  FROM `{p}.edinet.large_holdings_between`(@a, @b)
                   WHERE doc_id IN (SELECT doc_id FROM `{p}.edinet.gov_documents` WHERE fetched_at >= @s)
                     AND holding_ratio IS NOT NULL
                   QUALIFY ROW_NUMBER() OVER (PARTITION BY issuer_name, holder_name ORDER BY submit_date DESC) = 1
-                  ORDER BY ABS(holding_ratio - IFNULL(prior_ratio, 0)) DESC LIMIT 8""", sp)
+                  ORDER BY ABS(holding_ratio - IFNULL(prior_ratio, 0)) DESC LIMIT 8""", sp + dr)
         if rows:
             out.append(("大量保有で保有割合が大きく動いたもの（この回に取った書類）", [
                 f"{r.issuer_name}（{r.issuer_sec_code or '-'}）: {r.holder_name} "
