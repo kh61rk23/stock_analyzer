@@ -79,6 +79,17 @@ ORDER BY d DESC
 """
 
 
+# 前期の有報（会社ごとに2番目に新しい有報）。事業等のリスクの前期との比較（risk_text_scorer）に使う。節はリスクだけ取る
+PREV_SQL = """
+SELECT edinet_code, doc_id, SAFE_CAST(period_end AS DATE) fye, submit_date d, sec_code sec
+FROM `{p}.edinet.gov_documents`
+WHERE doc_type_code = '120' AND csv_flag = '1' AND withdrawal_status = '0' AND edinet_code IS NOT NULL
+  AND ordinance_code = '010' AND fund_code IS NULL
+QUALIFY ROW_NUMBER() OVER (PARTITION BY edinet_code ORDER BY submit_date DESC, doc_id DESC) = 2
+"""
+PREV_SECTION = "事業等のリスク"
+
+
 def blocks_from_zip(blob: bytes, max_chars: int) -> list[tuple[str, str, str]]:
     """有報の type=5 ZIP → [(element, section_type, 本文)]（純関数）。同じ節が複数あれば最初の1つ（提出日時点）。"""
     out, seen, seg = [], set(), []
@@ -205,6 +216,13 @@ def run(cfg, budget_min: float | None = None, limit: int | None = None) -> dict:
     # 本文がまだの書類を先に、本文は取ったがセグメントがまだの書類を後に
     targets = [r for r in latest if r.doc_id not in done] + \
               [r for r in latest if r.doc_id in done and (r.doc_id not in seg_done or r.doc_id not in seg_text_done)]
+    # 最後に、前期の有報の「事業等のリスク」だけ（今期の分が揃ってから）
+    prev_done = set(state.get("prev_risk_doc_ids") or [])
+    have = {r.doc_id for r in latest}
+    prev = [r for r in client.query(PREV_SQL.format(p=client.project), location=LOCATION).result()
+            if r.doc_id not in prev_done and r.doc_id not in have]
+    prev_ids = {r.doc_id for r in prev}
+    targets += prev
     if limit:
         targets = targets[:limit]
     t0, last = time.monotonic(), 0.0
@@ -236,9 +254,12 @@ def run(cfg, budget_min: float | None = None, limit: int | None = None) -> dict:
         if not ok and code in ega.GONE_CODES:
             # 書類側で取れない（毎回同じ答え）。本文なしとして済みにし、次の回から取り直さない
             stat["no_text"] += 1
-            done.add(r.doc_id)
-            seg_done.add(r.doc_id)
-            seg_text_done.add(r.doc_id)
+            if r.doc_id in prev_ids:
+                prev_done.add(r.doc_id)
+            else:
+                done.add(r.doc_id)
+                seg_done.add(r.doc_id)
+                seg_text_done.add(r.doc_id)
             print(f"    ⏩ {r.edinet_code} {r.doc_id}: {why}（本文なしとして済みにする）")
             continue
         if not ok:
@@ -255,7 +276,12 @@ def run(cfg, budget_min: float | None = None, limit: int | None = None) -> dict:
             print(f"    ⚠️ {r.doc_id}: {type(e).__name__}")
             stat["errors"] += 1
             continue
-        if r.doc_id in done:                                 # 本文は取り済み。まだのセグメント情報の注記だけ足す
+        if r.doc_id in prev_ids:                             # 前期の有報：事業等のリスクだけ
+            blocks = [b for b in blocks if b[1] == PREV_SECTION]
+            segs = []
+            prev_done.add(r.doc_id)
+            stat["prev_docs"] = stat.get("prev_docs", 0) + 1
+        elif r.doc_id in done:                               # 本文は取り済み。まだのセグメント情報の注記だけ足す
             blocks = [b for b in blocks if b[1] == SEGMENT_SECTION and r.doc_id not in seg_text_done]
         if r.doc_id in seg_done:                             # 売上は取り済み（注記だけ取りに来た）
             segs = []
@@ -266,14 +292,16 @@ def run(cfg, budget_min: float | None = None, limit: int | None = None) -> dict:
                             "fiscal_year_end": r.fye.isoformat() if r.fye else None, **sg, "fetched_at": now})
         if segs:
             stat["seg_docs"] += 1
-        seg_done.add(r.doc_id)
-        seg_text_done.add(r.doc_id)
+        if r.doc_id not in prev_ids:
+            seg_done.add(r.doc_id)
+            seg_text_done.add(r.doc_id)
         for element, section, text in blocks:
             buf.append({"doc_id": r.doc_id, "edinet_code": r.edinet_code, "sec_code": r.sec,
                         "fiscal_year_end": r.fye.isoformat() if r.fye else None,
                         "submit_date": r.d.isoformat() if r.d else None, "section_type": section,
                         "element": element, "raw_text": text, "fetched_at": now})
-        done.add(r.doc_id)
+        if r.doc_id not in prev_ids:
+            done.add(r.doc_id)
         stat["docs"] += 1
         if len(buf) >= 2000 or len(seg_buf) >= 5000:
             _append(client, buf)
@@ -283,7 +311,7 @@ def run(cfg, budget_min: float | None = None, limit: int | None = None) -> dict:
             buf, seg_buf = [], []
             state["doc_ids"] = sorted(done)
             state.update(seg_text_doc_ids=sorted(seg_text_done), seg_rev_doc_ids=sorted(seg_done),
-                         seg_rev_version=SEG_REV_VERSION)
+                         seg_rev_version=SEG_REV_VERSION, prev_risk_doc_ids=sorted(prev_done))
             state.pop("seg_doc_ids", None)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(state, separators=(",", ":")), encoding="utf-8")
@@ -292,7 +320,8 @@ def run(cfg, budget_min: float | None = None, limit: int | None = None) -> dict:
     stat["rows"] += len(buf)
     stat["seg_rows"] += len(seg_buf)
     state["doc_ids"] = sorted(done)
-    state.update(seg_text_doc_ids=sorted(seg_text_done), seg_rev_doc_ids=sorted(seg_done), seg_rev_version=SEG_REV_VERSION)
+    state.update(seg_text_doc_ids=sorted(seg_text_done), seg_rev_doc_ids=sorted(seg_done), seg_rev_version=SEG_REV_VERSION,
+                 prev_risk_doc_ids=sorted(prev_done))
     state.pop("seg_doc_ids", None)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state, separators=(",", ":")), encoding="utf-8")

@@ -506,6 +506,16 @@ def extract_alerts(cfg, results: dict) -> list:
     except Exception as _po_err:
         print(f"  ⚠️  [alert] 推奨のその後の成績表を作れない: {str(_po_err)[:80]}")
 
+    # 有報「事業等のリスク」の前期からの悪化（risk_text_scorer が夜に作る表を読む）。点数には入れない
+    if getattr(cfg, "ALERT_ON_TEXT_RISK", True):
+        try:
+            import risk_text_scorer as _rts
+            _ra = _rts.build_alert(cfg, results)
+            if _ra:
+                alerts.append(_ra)
+        except Exception as _rte:
+            print(f"  ⚠️  [alert] 有報リスクの節を作れない: {str(_rte)[:80]}")
+
     # 大株主・需給の動き（日本の大量保有の買い増し・米国の通過銘柄の 13D・重要な 8-K・空売り残）。点数には入れない
     if getattr(cfg, "ALERT_ON_POSITIONING", True):
         try:
