@@ -5323,6 +5323,7 @@ SCREEN_STAGE2_TOP_N: int = 200            # 一次上位のうち二次評価に
 SCREEN_BLEND_UNIVERSE: float = 0.5        # final_score = これ×一次スコア + (1−これ)×二次の composite_score
 SCREEN_UNIVERSE_SEED_N: int = 20          # 一次上位から EDINET_SCREENER_CANDIDATES（個別キャッシュの育成）へ渡す社数
 SCREEN_UNIVERSE_TOP_REPORT_N: int = 50    # results["screener_universe"] に載せる上位件数
+SCREEN_UNIVERSE_RANK_SMOOTH_DAYS: int = 5  # 順位は直近この回数の点の平均（rank_score）で付ける。1 ならその日の点だけ（上位100の入れ替わり 42%→12% の試算）
 
 
 # ==============================================================

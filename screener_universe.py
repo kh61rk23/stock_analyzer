@@ -334,6 +334,30 @@ def distribution(records: list) -> dict:
     return res
 
 
+def smooth_rank(scored: list, history: dict, days: int) -> list:
+    """順位を「今日の点と直近 days-1 回の点の平均」（rank_score）で付け直す（純粋関数）。
+    universe_score（その日の点）は変えない。値動きの観点で日々上下する点に順位が振り回され、上位が毎日
+    約4割入れ替わるのを抑えるため。過去の点が無い銘柄は今日の点だけで平均する。"""
+    k = max(1, int(days))
+    for r in scored:
+        past = [v for v in (history.get(r["ticker"]) or [])[:k - 1] if v is not None]
+        r["rank_score"] = round((r["universe_score"] + sum(past)) / (1 + len(past)), 2)
+    scored.sort(key=lambda x: (-x["rank_score"], -x["universe_score"], x["ticker"]))
+    for i, r in enumerate(scored, 1):
+        r["universe_rank"] = i
+    return scored
+
+
+def fetch_recent_scores(client, asof, n: int) -> dict:
+    """前の回までの点を銘柄ごとに新しい順で n 個（1本のクエリ・当日より前の2週間ぶんのパーティションだけ読む）。"""
+    from google.cloud import bigquery
+    sql = f"""SELECT ticker, ARRAY_AGG(universe_score ORDER BY score_date DESC LIMIT {int(n)}) s
+              FROM `{client.project}.analytics.screener_universe_daily`
+              WHERE score_date < @d AND score_date >= DATE_SUB(@d, INTERVAL 14 DAY) GROUP BY ticker"""
+    jc = bigquery.QueryJobConfig(query_parameters=[bigquery.ScalarQueryParameter("d", "DATE", asof)])
+    return {r.ticker: list(r.s) for r in client.query(sql, job_config=jc).result()}
+
+
 def group_by_sector(records: list, top_n: int) -> dict:
     """一次上位 top_n 社を業種ごとに束ねる（{sector_code: [ticker, ...]}。業種不明は "DYNAMIC"）。"""
     plan: dict = {}
@@ -533,7 +557,8 @@ def output_rows(scored: list, score_date: str, stage2: set) -> list:
     for r in scored:
         row = {"score_date": score_date, "ticker": r["ticker"], "edinet_code": r.get("edinet_code"),
                "company_name": r.get("name"), "sector_code": r.get("sector_code"),
-               "universe_score": r["universe_score"], "universe_rank": r["universe_rank"]}
+               "universe_score": r["universe_score"], "universe_rank": r["universe_rank"],
+               "rank_score": r.get("rank_score", r["universe_score"])}
         row.update({f"s_{a}": r["aspects"][a] for a in ASPECTS})
         row.update({k: _num((r.get("cols") or {}).get(k)) for k in IDIO_COLS})
         row.update({"coverage": r["coverage"], "market_cap_b": r.get("market_cap_b"),
@@ -546,7 +571,7 @@ def _schema():
     from google.cloud.bigquery import SchemaField as F
     return ([F("score_date", "DATE", "REQUIRED"), F("ticker", "STRING", "REQUIRED"), F("edinet_code", "STRING"),
              F("company_name", "STRING"), F("sector_code", "STRING"), F("universe_score", "FLOAT64"),
-             F("universe_rank", "INT64")]
+             F("universe_rank", "INT64"), F("rank_score", "FLOAT64")]
             + [F(f"s_{a}", "FLOAT64") for a in ASPECTS]
             + [F(k, "FLOAT64") for k in IDIO_COLS]
             + [F("coverage", "FLOAT64"), F("market_cap_b", "FLOAT64"), F("stage2_selected", "BOOL"),
@@ -641,6 +666,12 @@ def run_universe(cfg, sector_results: dict, caches: dict, accruals: dict | None 
     if not records:
         raise RuntimeError("一次採点の対象が0件（全件が除外）")
     scored = score_universe(records, getattr(cfg, "SCREEN_UNIVERSE_WEIGHTS", {}))
+    smooth = int(getattr(cfg, "SCREEN_UNIVERSE_RANK_SMOOTH_DAYS", 1))
+    if smooth > 1:
+        try:
+            scored = smooth_rank(scored, fetch_recent_scores(client, asof, smooth - 1), smooth)
+        except Exception as e:
+            print(f"    ⚠️  一次採点: 前の回の点を読めず、その日の点で順位を付ける: {str(e)[:80]}")
     top_n = int(getattr(cfg, "SCREEN_STAGE2_TOP_N", 200))
     plan = group_by_sector(scored, top_n)
     stage2 = [t for ts in plan.values() for t in ts]

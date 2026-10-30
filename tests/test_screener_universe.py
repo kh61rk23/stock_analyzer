@@ -329,3 +329,11 @@ class TestIdioFeatures:
             return {"ticker": t, "cols": {"idio_vol_60": vol, "vs_theme_idio": vs}, "scores": {}}
         out = su.score_universe([rec("calm", 0.01, -0.05), rec("wild", 0.05, 0.05)], {"idio": 1.0})
         assert out[0]["ticker"] == "calm" and out[0]["aspects"]["idio"] == 100.0
+
+
+def test_smooth_rank_uses_recent_average():
+    import screener_universe as su
+    scored = [{"ticker": "A", "universe_score": 80.0}, {"ticker": "B", "universe_score": 70.0}, {"ticker": "C", "universe_score": 60.0}]
+    out = su.smooth_rank(scored, {"A": [40.0, 40.0, 40.0, 40.0, 99.0], "B": [70.0, 70.0]}, 5)
+    assert [(r["ticker"], r["rank_score"], r["universe_rank"]) for r in out] == [("B", 70.0, 1), ("C", 60.0, 2), ("A", 48.0, 3)]
+    assert out[2]["universe_score"] == 80.0                    # その日の点は変えない
