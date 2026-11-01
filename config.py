@@ -1737,7 +1737,7 @@ BIZ_SUMMARY_CACHE_DAYS: int = 90
 # 週次レポート有効化（WEEKLY_MODESで "weekly_report" が必要）
 ENABLE_WEEKLY_REPORT: bool = True
 
-# LINE/Gmail 配信は既存の ENABLE_ALERT / ALERT_* 設定を流用
+# Gmail 配信は既存の ENABLE_ALERT / ALERT_* 設定を流用
 # （週次レポートアラートは alert_notifier.py が自動追加）
 
 # ── v2.0 追加アラート設定 ────────────────────────────────────
@@ -1765,16 +1765,6 @@ ALERT_ON_BUYBACK:        bool = True   # 自己株式取得アラート [M-4]
 ALERT_ON_DIV_UP:         bool = True   # 増配・特別配当アラート [M-4]
 ALERT_ON_FOREIGN_SPIKE:  bool = True   # 外国人持株急増アラート [P-4]
 ALERT_ON_EDINETDB_INGEST: bool = True  # その日EdinetDBから取り込んだ銘柄をメールに載せる
-
-# ── LINE Messaging API ─────────────────────────────────────────
-# LINE Notify は 2025年3月終了。Messaging API を使用する。
-# 取得方法:
-#   1. https://developers.line.biz/console/ でチャネル作成（Messaging API）
-#   2. チャネル設定 > チャネルアクセストークン（長期）を発行
-#   3. ボットをLINEで友達追加 → プロフィールで「あなたのユーザーID」を確認
-# 空文字の場合は LINE 通知をスキップ（エラーなし）
-ALERT_LINE_TOKEN:   str = ""   # ← チャネルアクセストークン（長期）
-ALERT_LINE_USER_ID: str = ""   # ← 通知先ユーザーID（Uから始まる文字列）
 
 # ── Gmail ──────────────────────────────────────────────────────
 # App Password の取得: Googleアカウント > セキュリティ > 2段階認証 > アプリパスワード
@@ -1837,6 +1827,19 @@ US_SCREENER_FCF_FILL_XBRL: bool = True
 # 通過全社に掛けるとフィルター処理だけで13分を超えるため、素点上位のみに絞る。
 # 0 で照会を完全に止める（insider_bonus は全社 0.0 = 補正なし）。
 US_INSIDER_MAX_TICKERS: int = 40
+
+# 米国の一次採点（us_screener_universe.py）: BQ の米国全上場を日本と同じ11観点・同じ重み（SCREEN_UNIVERSE_WEIGHTS）で採点し、
+# 上位だけを二次評価（us_stock_screener の yfinance 評価）へ回す。時価総額では足切りしない（流動性の下限だけ）
+ENABLE_US_SCREENER_UNIVERSE: bool = True
+US_SCREEN_STAGE2_TOP_N: int = 200                # 一次上位のうち二次評価に回す社数（日本の SCREEN_STAGE2_TOP_N と同じ）
+US_SCREEN_BLEND_UNIVERSE: float = 0.5            # final_score = これ×一次スコア + (1−これ)×二次の composite_score
+US_SCREEN_UNIVERSE_MIN_TURNOVER: float = 500_000.0  # 20日平均売買代金（USD/日）の下限。時価総額では外さない
+US_SCREEN_UNIVERSE_MAX_BYTES: int = 1024 ** 3    # 一次採点の BQ 1本あたりの課金上限（dryRun の実測は2本で約0.1GiB）
+US_SCREEN_UNIVERSE_SI_DAYS: int = 45             # 空売り残（FINRA・月2回公表）を探す期間（暦日）
+US_SCREEN_UNIVERSE_13D_DAYS: int = 90            # 13D（大株主の動き）を数える期間（暦日）
+US_SCREEN_UNIVERSE_8K_DAYS: int = 90             # 8-K の悪い知らせの項目を数える期間（暦日）
+US_SCREEN_UNIVERSE_BONUS_CAPS: dict = {"eps_accel": 10.0, "13d": 10.0, "k8_red": 10.0, "accrual": 20.0}   # 加点(pt)→0〜100 の写し上限
+US_SCREEN_UNIVERSE_EVENT_PTS: dict = {"13d": 5.0, "k8_red": 5.0}   # 13D 1件・悪い 8-K 項目1種あたりの pt
 
 # ── 銘柄スナップショット ─────────────────────────────
 # スクリーナー通過銘柄の日次スナップショットを BQ analytics.stock_snapshot へ蓄積する
@@ -2449,7 +2452,7 @@ EDINET_REQUEST_TIMEOUT  = 30    # タイムアウト（秒）
 # ==============================================================
 
 ENABLE_PEARL_SCORE:           bool  = True
-PEARL_MIN_SCORE_ALERT:        float = 80.0    # LINE即時通知閾値（SS tier）
+PEARL_MIN_SCORE_ALERT:        float = 80.0    # SS tier の閾値
 PEARL_MCAP_MAX_ALERT_B:       float = 500.0   # 時価総額上限（億円）。超過は通知対象外
 PEARL_BONUS_CAP:              float = 15.0    # quality_score への最大加算ボーナス（pt）
 PEARL_CACHE_TTL_DAYS:         int   = 7       # pearl_candidates.json TTL
@@ -2601,7 +2604,7 @@ BM_DETECTION_THRESHOLDS: dict = {
 # BLOCK 26: 議員取引監視設定
 # ==============================================================
 ENABLE_POLITICIAN_MONITOR:   bool  = True
-ALERT_POLITICIAN_MIN_SCORE:  int   = 60      # この点数以上でLINE即時通知
+ALERT_POLITICIAN_MIN_SCORE:  int   = 60      # この点数以上で即時アラート
 # 高スコア議員取引アラート／JP波及補正に使う取引の鮮度（日）。
 # 「新規」は履歴に無いという意味でしかなく、初回は年初以降の全取引が新規になる。
 # STOCK Act の開示期限は取引から最大45日のため、余裕を見て60日。
@@ -2951,14 +2954,14 @@ M_SCORE_MEDIUM_MULTIPLIER  = 0.75    # 中ペナルティ乗数（D3 を0.75倍�
 # ignition_detector.py が参照する。
 # カテゴリA（資金フロー）・B（ナラティブ）・C（価格）のシグナルが
 # IGNITION_CONVERGENCE_WINDOW_DAYS 以内に同一セクター/テーマへ収束した
-# 場合に convergence_score を算出し、LINE通知トリガーを判定する。
+# 場合に convergence_score を算出し、通知トリガーを判定する。
 
 # 収束ウィンドウ（日数）
 IGNITION_CONVERGENCE_WINDOW_DAYS  = 14
 
-# LINE通知閾値
-IGNITION_MIN_SCORE_LINE            = 3.0   # convergence_score ≥ 3.0 → LINE即時通知
-IGNITION_MAX_SCORE_LINE_CRITICAL   = 3.5   # ≥ 3.5 かつ反復検出 → 最高警戒LINE
+# 通知閾値（変数名の LINE は旧名。アラートはメールには載せない）
+IGNITION_MIN_SCORE_LINE            = 3.0   # convergence_score ≥ 3.0 → high
+IGNITION_MAX_SCORE_LINE_CRITICAL   = 3.5   # ≥ 3.5 かつ反復検出 → 最高警戒
 
 # 最高警戒判定: IGNITION_CRITICAL_REPEAT_DAYS 以内に2回以上検出で発動
 IGNITION_CRITICAL_REPEAT_DAYS     = 14
@@ -2991,7 +2994,7 @@ ENABLE_CANDIDATE_KPI: bool = True
 # BLOCK 32: FE-5 PEAD監視定数
 # ==============================================================
 # pead_monitor.py が参照する。
-# PEAD_SCORE_ALERT_THRESHOLD: この値以上かつ出来高条件で LINE通知（トリガー㉒）
+# PEAD_SCORE_ALERT_THRESHOLD: この値以上かつ出来高条件でアラート（トリガー㉒）
 # PEAD_DECAY_DAILY          : 毎日スコアに乗じる減衰係数（$score \times 0.85$）
 # PEAD_VOLUME_MIN_RATIO     : トリガー発動に必要な出来高倍率（平均比）
 # PEAD_MAX_HOLDING_DAYS_JP  : JP株の PEAD 有効期間上限（日）
@@ -4451,6 +4454,11 @@ PAPER_OPTIONS_SLIPPAGE: float = 0.05          # 買いは理論価格の +5%・�
 PAPER_OPTIONS_FEE_PER_CONTRACT: float = 0.65
 PAPER_OPTIONS_MAX_OPEN: int = 10
 PAPER_OPTIONS_MAX_PREMIUM_PCT: float = 0.05   # コール買い1本の代金の上限（評価額に対する比率）
+# 株の仮想約定：約定日の始値が BQ（analytics.price_daily_latest）に入るまで注文を待たせる日数（暦日・過ぎたら失効）
+PAPER_ORDER_EXPIRE_DAYS: int = 10
+# 日次メールの「仮想トレード」節（paper/mail_section.py）。注文・約定・建玉の行は上位この件数＋残りの件数
+ALERT_ON_PAPER: bool = True
+PAPER_MAIL_TOP_N: int = 5
 
 # ==============================================================
 # BLOCK 48: ポジションサイジングv2設定
@@ -5320,6 +5328,11 @@ SCREEN_UNIVERSE_WEIGHTS: dict = {
     "sector":    0.0476,   # ⑩ 業種スコア（BOT_TIER の業種も点数としては入れる）
     "idio":      0.0477,   # ⑪ 銘柄独自（TOPIX で説明できない値動きの荒さが小さい・テーマの会社群に出遅れた）
 }
+# 11観点とは別に、全体の点へ小さな重みで足す観点（(1−合計)×11観点の加重和 ＋ Σ重み×その観点の点。材料の無い銘柄は中立50）。
+# geo＝地政学の加点（geo_signal・権益のある銘柄だけ）、holder＝積極目的の大量保有の買い増し（日本・直近 HOLDER_DAYS 日）、
+# supply＝直近20日の「上げた日の出来高÷下げた日の出来高」の順位。検証（2026-10-29）では holder は無作為と差が無く geo は±0.1点前後なので小さく置く
+SCREEN_UNIVERSE_EXTRA_WEIGHTS: dict = {"geo": 0.03, "holder": 0.02, "supply": 0.02}
+SCREEN_UNIVERSE_HOLDER_DAYS: int = 90
 SCREEN_UNIVERSE_MIN_TURNOVER: float = 10_000_000.0  # 20日平均売買代金（円/日）の下限。時価総額では外さない
 SCREEN_UNIVERSE_STALE_DAYS: int = 14                # 最新株価が全体の最新日からこの日数より古い銘柄は対象外
 SCREEN_UNIVERSE_PRICE_DAYS: int = 440               # 日足を読む期間（暦日。祝日を除いて約270営業日＝12か月−1か月の騰落に要る253営業日を超える）
@@ -5328,6 +5341,7 @@ SCREEN_UNIVERSE_LEADING_BONUS: float = 15.0         # 先行指標だけ点灯�
 SCREEN_UNIVERSE_BONUS_CAPS: dict = {
     "re": 3.0, "accrual": 20.0, "edinet": 10.0, "surprise": 10.0, "dcf": 10.0, "comps": 10.0,
     "credit": 5.0, "insider": 10.0, "dividend": 5.0, "sr": 10.0, "vp": 10.0,
+    "geo": 3.0, "holder": 5.0,   # 追加の観点（SCREEN_UNIVERSE_EXTRA_WEIGHTS）
 }
 SCREEN_STAGE2_TOP_N: int = 200            # 一次上位のうち二次評価に回す社数
 SCREEN_BLEND_UNIVERSE: float = 0.5        # final_score = これ×一次スコア + (1−これ)×二次の composite_score

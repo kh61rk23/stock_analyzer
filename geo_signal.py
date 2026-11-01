@@ -302,6 +302,22 @@ def prefetch_exposures(tickers, market: str = "JP", cfg=None,
     return len(grouped)
 
 
+def screen_pts_jp(tickers_sectors: dict, cfg=None) -> dict:
+    """一次採点用: {ticker: sector_code} → {ticker: geo_impact_bonus(pt)}（権益のある銘柄だけ）。
+
+    権益は prefetch_exposures で全銘柄を1クエリにまとめて読み、銘柄ごとの計算はキャッシュだけを使う（BQ はループ内で引かない）。
+    読めなかった（BQ 未接続など）ときは空 dict＝全銘柄中立。"""
+    if not tickers_sectors or not getattr(cfg, "ENABLE_GEO_SIGNAL", False):
+        return {}
+    prefetch_exposures(list(tickers_sectors), "JP", cfg)
+    out: dict = {}
+    for t, sector in tickers_sectors.items():
+        exp = _EXPOSURE_CACHE.get(f"{t}_JP")
+        if exp:
+            out[t] = calc_geo_impact_bonus_jp(t, sector or "", cfg, prefetched_exposures=exp)
+    return out
+
+
 def _get_exposure_list(
     ticker: str,
     market: str,

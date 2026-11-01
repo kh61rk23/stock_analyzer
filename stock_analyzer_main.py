@@ -4129,9 +4129,9 @@ def run_all_tasks(mode: str = "all") -> dict:
         print("  ⏩ DD制御: スキップ（ENABLE_DD_CONTROL=False）")
 
         # ── ペーパートレード仮想口座 ───────────────
-        # 前日注文を当日始値で仮想約定 → equity更新 → 翌日注文生成。
+        # 約定待ちの注文を約定日の始値（BQ）で仮想約定 → BQ の終値で評価 → 新しい注文を約定待ちへ。
         # 実発注は存在しない（D-01）。results["paper_summary"] を
-        # alert_notifier のブリーフ⑥に載せるため通知より前に実行。
+        # alert_notifier の「仮想トレード」節に載せるため通知より前に実行。
     if getattr(cfg, "ENABLE_PAPER_TRADING", False):
         try:
             _pb = _load_local_module(
@@ -6796,7 +6796,6 @@ def run_streamlit_ui():
                         if _an:
                             r = _an.send_test_notification(cfg)
                             ok_ch = []
-                            if r.get("line"):  ok_ch.append("LINE")
                             if r.get("gmail"): ok_ch.append("Gmail")
                             if ok_ch:
                                 st.success(f"送信完了: {', '.join(ok_ch)}")

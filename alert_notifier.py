@@ -1,10 +1,10 @@
 # ==============================================================
 # alert_notifier.py  v1.0  (5-B)
-# シグナル変化時の LINE / Gmail アラート通知
+# シグナル変化時の Gmail アラート通知
 # ==============================================================
 # 【役割】
 #   run_all_tasks() の results を受け取り、以下の条件に合致した
-#   場合に LINE Notify / Gmail で通知を送信する。
+#   場合に Gmail で通知を送信する。
 #
 # 【通知トリガー条件】（config で個別 ON/OFF 可能）
 #   ① 政策金利変化     : policy_tracker の new_events が 1件以上
@@ -13,10 +13,11 @@
 #   ④ 強いマクロ逆風   : headwind シグナルが ALERT_HEADWIND_THRESHOLD 件以上
 #
 # 【通知チャネル】
-#   LINE Notify : ALERT_LINE_TOKEN を設定（無料・簡単）
-#   Gmail       : ALERT_GMAIL_FROM / ALERT_GMAIL_PASSWORD（App Password）
-#                 / ALERT_GMAIL_TO を設定
-#   どちらか片方だけでも動作する。両方空の場合はスキップ。
+#   Gmail だけ : ALERT_GMAIL_FROM / ALERT_GMAIL_PASSWORD（App Password）
+#                / ALERT_GMAIL_TO を設定。空ならスキップ。
+#   高・最高警戒のアラート（Ignition・潜伏Pearl昇格・PEAD・Triple Catalyst・Buffett新規）は
+#   LINE 廃止後、日次メールのアラートの節に載せる（"channel": "gmail"）。
+#   "channel": "unsent" を付けたアラートはメールに載せず件数だけ出す。
 #
 # 【返り値】run_alert_notifier(cfg, results) -> dict
 #   {
@@ -476,6 +477,13 @@ def extract_alerts(cfg, results: dict) -> list:
                         f"  【スクリーニング】米国 {len(_picks)}社通過（全体 {_us_scr.get('pass_count', 0)}社通過 "
                         f"/ {_us_scr.get('screened_count', 0)}社中・米国以外は下の海外株）")
                     _us_lines += [pick_line(c) for c in _picks[:_pn]]
+                _uni = _us_scr.get("universe") or {}
+                if _uni:
+                    _us_lines.append(
+                        f"  【一次採点】米国の全上場 {_uni.get('universe_count', 0)}社を採点"
+                        f"（除外 {_uni.get('excluded_count', 0)}社）→ 上位{_uni.get('stage2_n', 0)}社を二次評価")
+                elif _us_scr.get("universe_error"):
+                    _us_lines.append(f"  【一次採点】失敗のためテーマ別リストで評価（{str(_us_scr['universe_error'])[:60]}）")
 
             if _us_lines:
                 alerts.append({
@@ -1478,7 +1486,7 @@ def extract_alerts(cfg, results: dict) -> list:
                     "title":    f"💎 光る原石 SS ティア {len(_ss_stocks)}銘柄発見"
                                 f"（Pearl≥{_pearl_min:.0f} / 時価総額≤{_pearl_mcap:.0f}億）",
                     "body":     "\n".join(lines),
-                    "severity": "high",   # LINE即時通知対象
+                    "severity": "high",
                 })
         except Exception:
             pass
@@ -1598,8 +1606,8 @@ def extract_alerts(cfg, results: dict) -> list:
 
         # ==============================================================
         # [FE-4] トリガー㉑: Ignition Detector 収束シグナル
-        # 条件A: convergence_score ≥ 3.0    → LINE 即時通知（severity: high）
-        # 条件B: ≥ 3.5 かつ is_critical True → 最高警戒LINE（severity: critical）
+        # 条件A: convergence_score ≥ 3.0    → severity: high（日次メールに載せる）
+        # 条件B: ≥ 3.5 かつ is_critical True → 最高警戒（日次メールに載せる）
         # ==============================================================
     try:
         ignition_res = results.get("ignition", {})
@@ -1652,7 +1660,7 @@ def extract_alerts(cfg, results: dict) -> list:
                             f"（{len(_normal_lines)}業種）",
                 "body":     "\n".join(_normal_lines),
                 "severity": "high",
-                "channel":  "line",   # LINE 即時通知
+                "channel":  "gmail",   # 高・最高警戒は日次メールに載せる
             })
 
         # 最高警戒アラート（critical）
@@ -1663,7 +1671,7 @@ def extract_alerts(cfg, results: dict) -> list:
                             f"（{len(_critical_lines)}業種）",
                 "body":     "\n".join(_critical_lines),
                 "severity": "high",
-                "channel":  "line",   # 最高警戒 LINE
+                "channel":  "gmail",   # 高・最高警戒は日次メールに載せる
             })
 
     except Exception:
@@ -1671,7 +1679,7 @@ def extract_alerts(cfg, results: dict) -> list:
 
 # ==============================================================
     # [Independence Ph1] トリガー⑰: Latent Pearl プロモーション
-    # 条件: promoted_score ≥ 0.7 → LINE 即時通知
+    # 条件: promoted_score ≥ 0.7（日次メールに載せる）
     # ==============================================================
     try:
         from latent_pearl_manager import get_promoted_tickers as _get_promo
@@ -1715,7 +1723,7 @@ def extract_alerts(cfg, results: dict) -> list:
                     "title":    f"⭐ [Wave7] 潜伏Pearl昇格（{len(_new_promoted)}銘柄）",
                     "body":     "\n".join(_lines),
                     "severity": "high",
-                    "channel":  "line",
+                    "channel":  "gmail",   # 高・最高警戒は日次メールに載せる
                 })
     except Exception:
         pass
@@ -1771,7 +1779,7 @@ def extract_alerts(cfg, results: dict) -> list:
 
         # ==============================================================
         # [FE-5] トリガー㉒: PEAD スコアアラート
-        # 条件: pead_score ≥ threshold かつ volume_ratio ≥ 1.5 → LINE通知
+        # 条件: pead_score ≥ threshold かつ volume_ratio ≥ 1.5 （日次メールに載せる）
         # ==============================================================
     try:
         from pead_monitor import get_alert_candidates as _get_pead_alerts
@@ -1792,7 +1800,7 @@ def extract_alerts(cfg, results: dict) -> list:
                             f"（{len(_pead_alerts)}銘柄）",
                 "body":     "\n".join(_pead_lines),
                 "severity": "high",
-                "channel":  "line",
+                "channel":  "gmail",   # 高・最高警戒は日次メールに載せる
             })
     except Exception:
         pass
@@ -1842,7 +1850,7 @@ def extract_alerts(cfg, results: dict) -> list:
 
         # ==============================================================
         # [FE-7] トリガー㉔: Triple Catalyst 最優先通知
-        # 条件: 3種以上のカタリストが14日以内に重複 → LINE最優先通知
+        # 条件: 3種以上のカタリストが14日以内に重複 （日次メールに載せる）
         # ==============================================================
     try:
         _cat = results.get("catalyst", {})
@@ -1863,16 +1871,16 @@ def extract_alerts(cfg, results: dict) -> list:
                             f"（{len(_triple_tickers)}銘柄）",
                 "body":     "\n".join(_triple_lines),
                 "severity": "high",
-                "channel":  "line",
+                "channel":  "gmail",   # 高・最高警戒は日次メールに載せる
             })
     except Exception:
         pass
 
         # ==============================================================
-        # [Policy Ph3] トリガー⑮: Buffett新規取得 → LINE即時
+        # [Policy Ph3] トリガー⑮: Buffett新規取得
         # 条件: institutional_13f の new_tier1 に Tier1（Berkshire）の
         #       new_position が含まれる
-        # チャネル: LINE 即時通知（severity: critical）
+        # severity: critical（日次メールに載せる）
         # ==============================================================
     try:
         _inst = results.get("institutional_13f", {})
@@ -1894,7 +1902,7 @@ def extract_alerts(cfg, results: dict) -> list:
                             f"({_inst.get('quarter', '')})",
                 "body":     "\n".join(_t1_lines),
                 "severity": "critical",
-                "channel":  "line",   # LINE即時通知
+                "channel":  "gmail",   # 高・最高警戒は日次メールに載せる
             })
     except Exception:
         pass
@@ -2076,6 +2084,16 @@ def extract_alerts(cfg, results: dict) -> list:
                 alerts.append(_sk)
         except Exception as _ske:
             print(f"    ⚠️ 政策DB節の生成失敗: {str(_ske)[:80]}")
+
+    # 仮想トレード（株の戦略口座とオプション S4）。paper_broker は通知より前の段で記帳済み
+    if getattr(cfg, "ALERT_ON_PAPER", True):
+        try:
+            from paper import mail_section as _pms
+            _pa = _pms.build_from_files(cfg, results.get("paper_summary"))
+            if _pa:
+                alerts.append(_pa)
+        except Exception as _pae:
+            print(f"    ⚠️ 仮想トレード節の生成失敗: {str(_pae)[:80]}")
 
     # ── 運用の監視（Actions 枠・Mac 同期・週次ループ・保有銘柄・審議 routine）──
     # どれも run_all_tasks の外で止まり、Actions は緑・台帳は成功のままになるため、ここで見る。
@@ -2449,148 +2467,103 @@ def build_edinetdb_ingest_alert(ing: dict, web: dict | None = None, ledger: dict
 # BLOCK 2: メッセージ本文生成
 # ==============================================================
 
-def build_message(alerts: list, mode: str = "line") -> str:
+def build_message(alerts: list, mode: str = "email") -> str:
     """
-    アラートリストからテキストメッセージを生成する。
+    アラートリストからメール本文（HTML）を生成する。
 
     Args:
         alerts : extract_alerts() の返り値
-        mode   : "line"（LINE向け短め）| "email"（メール向け詳細）
+        mode   : "email" だけ（呼び出し側との互換のために残す）
     """
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    if mode == "line":
-        parts = [f"【投資AIエージェント】{now_str}", ""]
-        for al in alerts:
-            parts.append(al["title"])
-            parts.append(al["body"])
-            parts.append("")
-        return "\n".join(parts).strip()
-
-    else:  # email HTML
-        severity_color = {"high": "#ef4444", "medium": "#f59e0b", "info": "#3b82f6"}
-        severity_label = {"high": "🔴 重要", "medium": "🟡 注意", "info": "ℹ️  情報"}
-        # 末尾に本日の保存ファイル一覧を付ける
-        _files, _files_html = [], ""
-        try:
-            import os as _os
-            from pathlib import Path as _P
-            import file_links as _fl
-            _base = _P(_os.environ.get("STOCK_ANALYZER_BASE") or _P(__file__).resolve().parent / "stock_data")
-            _files = _fl.todays_files(_base / "insights")
-            _files_html = _fl.files_section_html(_files)
-        except Exception as _e:
-            print(f"    ⚠️ 保存ファイルのリンク作成失敗: {_e}")
-        rows = ""
-        for al in alerts:
-            color = severity_color.get(al["severity"], "#6b7280")
-            label = severity_label.get(al["severity"], "")
-            # body の改行を <br> に変換（pre タグより視認性が高い）
-            body_html = al["body"].replace("\n", "<br>").replace("    ", "&nbsp;&nbsp;&nbsp;&nbsp;")
-            rows += f"""
+    severity_color = {"high": "#ef4444", "medium": "#f59e0b", "info": "#3b82f6"}
+    severity_label = {"high": "🔴 重要", "medium": "🟡 注意", "info": "ℹ️  情報"}
+    # 末尾に本日の保存ファイル一覧を付ける
+    _files, _files_html = [], ""
+    try:
+        import os as _os
+        from pathlib import Path as _P
+        import file_links as _fl
+        _base = _P(_os.environ.get("STOCK_ANALYZER_BASE") or _P(__file__).resolve().parent / "stock_data")
+        _files = _fl.todays_files(_base / "insights")
+        _files_html = _fl.files_section_html(_files)
+    except Exception as _e:
+        print(f"    ⚠️ 保存ファイルのリンク作成失敗: {_e}")
+    rows = ""
+    for al in alerts:
+        color = severity_color.get(al["severity"], "#6b7280")
+        label = severity_label.get(al["severity"], "")
+        # body の改行を <br> に変換（pre タグより視認性が高い）
+        body_html = al["body"].replace("\n", "<br>").replace("    ", "&nbsp;&nbsp;&nbsp;&nbsp;")
+        rows += f"""
 <tr>
   <td style="padding:12px 8px;border-bottom:1px solid #e5e7eb;vertical-align:top;">
-    <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
-      <span style="background:{color};color:white;font-size:11px;
-                   padding:2px 6px;border-radius:3px;">{label}</span>
-      <span style="color:{color};font-weight:bold;font-size:14px;">{al['title']}</span>
-    </div>
-    <div style="font-size:13px;color:#374151;line-height:1.7;
-                padding-left:8px;border-left:3px solid {color};">
-      {body_html}
-    </div>
+<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+  <span style="background:{color};color:white;font-size:11px;
+               padding:2px 6px;border-radius:3px;">{label}</span>
+  <span style="color:{color};font-weight:bold;font-size:14px;">{al['title']}</span>
+</div>
+<div style="font-size:13px;color:#374151;line-height:1.7;
+            padding-left:8px;border-left:3px solid {color};">
+  {body_html}
+</div>
   </td>
 </tr>"""
 
-        # EdinetDB API使用状況バッジ
-        edinet_info = ""
-        try:
-            from pathlib import Path
-            import json
-            # 日次キャッシュからAPI使用状況を読み込む（あれば表示）
-            # DATA_DIRは環境依存なので存在しない場合はスキップ
-            pass
-        except Exception:
-            pass
+    # EdinetDB API使用状況バッジ
+    edinet_info = ""
+    try:
+        from pathlib import Path
+        import json
+        # 日次キャッシュからAPI使用状況を読み込む（あれば表示）
+        # DATA_DIRは環境依存なので存在しない場合はスキップ
+        pass
+    except Exception:
+        pass
 
-        return f"""
+    return f"""
 <html>
 <head><meta charset="UTF-8"></head>
 <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-             background:#f9fafb;margin:0;padding:16px;">
+         background:#f9fafb;margin:0;padding:16px;">
 <div style="max-width:640px;margin:0 auto;background:white;
-            border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.1);overflow:hidden;">
+        border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.1);overflow:hidden;">
 
   <!-- ヘッダー -->
   <div style="background:linear-gradient(135deg,#1e3a5f,#2563eb);
-              padding:20px 24px;color:white;">
-    <h2 style="margin:0;font-size:18px;">📊 投資AIエージェント デイリーレポート</h2>
-    <p style="margin:6px 0 0;font-size:12px;opacity:.85;">{now_str} 自動生成</p>
+          padding:20px 24px;color:white;">
+<h2 style="margin:0;font-size:18px;">📊 投資AIエージェント デイリーレポート</h2>
+<p style="margin:6px 0 0;font-size:12px;opacity:.85;">{now_str} 自動生成</p>
   </div>
 
   <!-- アラート件数バッジ -->
   <div style="padding:12px 24px;background:#f0f7ff;border-bottom:1px solid #dbeafe;">
-    <span style="font-size:13px;color:#1d4ed8;">
-      本日のシグナル: <strong>{len(alerts)}件</strong>
-      &nbsp;|&nbsp;
-      高重要度: <strong style="color:#ef4444;">{sum(1 for a in alerts if a['severity']=='high')}件</strong>
-      &nbsp;|&nbsp;
-      注意: <strong style="color:#f59e0b;">{sum(1 for a in alerts if a['severity']=='medium')}件</strong>
-    </span>
+<span style="font-size:13px;color:#1d4ed8;">
+  本日のシグナル: <strong>{len(alerts)}件</strong>
+  &nbsp;|&nbsp;
+  高重要度: <strong style="color:#ef4444;">{sum(1 for a in alerts if a['severity']=='high')}件</strong>
+  &nbsp;|&nbsp;
+  注意: <strong style="color:#f59e0b;">{sum(1 for a in alerts if a['severity']=='medium')}件</strong>
+</span>
   </div>
 
   <!-- アラート本文 -->
   <table style="border-collapse:collapse;width:100%;padding:0 16px;">
-    {rows}
+{rows}
   </table>
 
   {_files_html}
 
   <!-- フッター -->
   <div style="padding:16px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;">
-    <p style="margin:0;font-size:11px;color:#9ca3af;">
-      stock_analyzer_main.py より自動送信 | データソース: yfinance / EdinetDB / IMF
-    </p>
+<p style="margin:0;font-size:11px;color:#9ca3af;">
+  stock_analyzer_main.py より自動送信 | データソース: yfinance / EdinetDB / IMF
+</p>
   </div>
 </div>
 </body></html>
 """
-
-
-# ==============================================================
-# BLOCK 3: LINE Notify 送信
-# ==============================================================
-
-def send_line(token: str, message: str) -> tuple:
-    """
-    LINE Notify でメッセージを送信する。
-    ネットワーク無効環境では例外をキャッチして失敗を返す。
-
-    Returns:
-        (success: bool, error_msg: str)
-    """
-    if not token:
-        return False, "LINE トークン未設定"
-
-    try:
-        data    = urllib.parse.urlencode({"message": message}).encode("utf-8")
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type":  "application/x-www-form-urlencoded",
-        }
-        req  = urllib.request.Request(
-            "https://notify-api.line.me/api/notify",
-            data=data,
-            headers=headers,
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            body = resp.read().decode("utf-8")
-            if '"status":200' in body:
-                return True, ""
-            return False, f"LINE API: {body[:100]}"
-    except Exception as e:
-        return False, f"LINE 送信エラー: {str(e)[:80]}"
 
 
 # ==============================================================
@@ -2640,25 +2613,13 @@ def send_test_notification(cfg) -> dict:
     UI のボタンから呼び出す。
 
     Returns:
-        {"line": bool, "gmail": bool, "errors": [...]}
+        {"gmail": bool, "errors": [...]}
     """
     test_msg  = (
         f"【テスト通知】{datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
         "alert_notifier.py の通知設定が正常に動作しています。"
     )
-    errors = []
-    results = {"line": False, "gmail": False, "errors": []}
-
-    # LINE
-    token = getattr(cfg, "ALERT_LINE_TOKEN", "")
-    if token:
-        ok, err = send_line(token, test_msg)
-        results["line"] = ok
-        if err:
-            results["errors"].append(f"LINE: {err}")
-            print(f"    ⚠️  LINE: {err}")
-        else:
-            print("    ✅ LINE テスト通知 送信成功")
+    results = {"gmail": False, "errors": []}
 
     # Gmail
     frm  = getattr(cfg, "ALERT_GMAIL_FROM", "")
@@ -2691,16 +2652,14 @@ def run_alert_notifier(cfg, results: dict) -> dict:
     """
     print("\n  🔔 アラートノティファイアー 開始...")
 
-    line_token = getattr(cfg, "ALERT_LINE_TOKEN",      "")
     gmail_from = getattr(cfg, "ALERT_GMAIL_FROM",      "")
     gmail_pwd  = getattr(cfg, "ALERT_GMAIL_PASSWORD",  "")
     gmail_to   = getattr(cfg, "ALERT_GMAIL_TO",        "")
 
-    has_line  = bool(line_token)
     has_gmail = bool(gmail_from and gmail_pwd and gmail_to)
 
-    if not has_line and not has_gmail:
-        print("    ⏩ 通知チャネル未設定（LINE/Gmail どちらも未設定）")
+    if not has_gmail:
+        print("    ⏩ 通知チャネル未設定（Gmail 未設定）")
         return {"alerts_sent": 0, "channels": [], "messages": [],
                 "errors": [], "skipped": True}
 
@@ -2720,31 +2679,14 @@ def run_alert_notifier(cfg, results: dict) -> dict:
     errors   = []
     sent     = 0
 
-    # ── チャネル指定アラートを分離 ────────────────────────────
-    # "channel": "line"  → LINE のみ即時送信
-    # "channel": "gmail" → Gmail のみ送信
-    # "channel" なし     → 両方に送信
-    _line_only  = [a for a in alerts if a.get("channel") == "line"]
+    # "channel": "gmail" かチャネル指定なし → メールに載せる。"unsent" は載せない（件数だけ出す）
     _gmail_only = [a for a in alerts if a.get("channel") == "gmail"]
     _both       = [a for a in alerts if not a.get("channel")]
+    _unsent     = [a for a in alerts if a.get("channel") == "unsent"]
+    if _unsent:
+        print(f"    ⏩ メールに載せないアラート {len(_unsent)}件（送り先なし）")
 
-    # LINE 送信（LINE専用 + 両方送信）
-    if has_line:
-        _line_alerts = _line_only + _both
-        if _line_alerts:
-            line_msg = build_message(_line_alerts, mode="line")
-            ok, err  = send_line(line_token, line_msg)
-            if ok:
-                channels.append("LINE")
-                messages.append(line_msg)
-                sent += 1
-                print(f"    ✅ LINE 通知 送信成功 "
-                      f"({len(_line_alerts)}件 / うち即時{len(_line_only)}件)")
-            else:
-                errors.append(f"LINE: {err}")
-                print(f"    ⚠️  LINE: {err}")
-
-    # Gmail 送信（Gmail専用 + 両方送信）
+    # Gmail 送信
     if has_gmail:
         _gmail_alerts = _gmail_only + _both
         if _gmail_alerts:
@@ -2819,7 +2761,7 @@ if __name__ == "__main__":
     if cfg:
         print("=== テスト通知送信 ===")
         r = send_test_notification(cfg)
-        print(f"LINE: {r['line']} / Gmail: {r['gmail']}")
+        print(f"Gmail: {r['gmail']}")
         if r["errors"]:
             for e in r["errors"]:
                 print(f"  エラー: {e}")

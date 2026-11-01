@@ -902,6 +902,24 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
     # ── ユニバース読み込み ─────────────────────────────────────
     print("  📂 ユニバース読み込み中...")
     universe = load_universe(cfg)
+    # 全上場の一次採点（BQ 2本）→ 上位だけを二次評価（下の yfinance 取得以降）へ回す。失敗したらテーマ別リストの全件で続行する
+    uni = None
+    uni_error = None
+    if getattr(cfg, "ENABLE_US_SCREENER_UNIVERSE", True):
+        try:
+            import us_screener_universe as _usu
+            uni = _usu.run_us_universe(cfg, results)
+            _meta = {e["ticker"]: e for e in universe}
+            # 価格の表は米国の記号だけ（'.' 付きや取引所接尾辞の銘柄は無い）ので、一次では採点できない海外株は残す
+            _keep = [t for t in _meta if not _usu.is_us_symbol(t)]
+            universe = _usu.stage2_entries(uni["stage2"], _meta, _keep)
+            _s = uni["summary"]
+            print(f"  🌐 米国の一次採点: 対象{_s['universe_count']}社 / 除外{_s['excluded_count']}社 {_s['excluded']}"
+                  f" → 二次評価{_s['stage2_n']}社＋海外株{len(_keep)}社")
+        except Exception as e:
+            uni = None
+            uni_error = f"{type(e).__name__}: {str(e)[:150]}"
+            print(f"  ⚠️  米国の一次採点に失敗（テーマ別リストの全件で続行）: {uni_error}")
     if not universe:
         print("  ⚠️  ユニバースが空です。custom_universe/ を確認してください。")
         return {"skipped": True, "candidates": [], "passed": [],
@@ -929,8 +947,11 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
     # キャッシュ済みデータをマージ
     all_candidates = fresh_results.copy()
     meta_map = {e["ticker"]: e for e in universe}
+    _fresh_set = {r["ticker"] for r in fresh_results}
     for ticker, cached_data in daily_cache.items():
-        if ticker not in {r["ticker"] for r in fresh_results}:
+        if ticker not in meta_map:   # 当日の二次評価の対象外（一次採点で外れた銘柄の取得済み結果）は混ぜない
+            continue
+        if ticker not in _fresh_set:
             # カテゴリ情報を補完
             if ticker in meta_map:
                 cached_data["category"]       = meta_map[ticker]["category"]
@@ -1419,8 +1440,12 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
         _c_def.setdefault("taxonomy_size_correction",  1.0)
         _c_def.setdefault("taxonomy_size_bonus",       0.0)
 
+    # 一次の各観点スコアと final_score（一次と二次のブレンド）を付ける。一次が無い銘柄は composite_score のまま
+    if uni is not None:
+        from stock_screener import _attach_universe
+        _attach_universe(all_candidates, uni, float(getattr(cfg, "US_SCREEN_BLEND_UNIVERSE", 0.5)))
     passed_sorted = sorted(passed,
-                           key=lambda x: x.get("composite_score", 0),
+                           key=lambda x: x.get("final_score", x.get("composite_score", 0)),
                            reverse=True)
     top_n  = getattr(cfg, "US_SCREENER_TOP_N", 10)
     top_picks = passed_sorted[:top_n]
@@ -1493,6 +1518,9 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
         "contraction_mode":          _contraction_mode_summary,
         "contraction_defensive_count": _contraction_defensive_count,
         "contraction_adjusted_count":  _contraction_adjusted_count,
+        # 全上場の一次採点の要約（失敗・無効のときは None と理由）
+        "universe":                  uni["summary"] if uni else None,
+        "universe_error":            uni_error,
     }
 
 

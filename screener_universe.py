@@ -49,6 +49,10 @@ RANK_COLUMNS = {
 }
 MARKET_TICKER = "1306.T"
 
+# 11観点とは別に、全体の点へ小さな重みで足す観点（地政学・大株主の動き・需給）。観点の点そのものは変えず、
+# universe_score = (1 − Σ重み) × 11観点の加重和 + Σ(重み × その観点の点)。材料の無い銘柄は中立50で、不利にしない。
+EXTRA_ASPECTS = ("geo", "holder", "supply")
+
 _SQL = """
 WITH px_raw AS (
   SELECT ticker, trade_date, close, volume,
@@ -75,6 +79,7 @@ px AS (
          MAX(break_date) AS break_date,
          ARRAY_AGG(IF(rn <= 260, close, NULL) IGNORE NULLS ORDER BY trade_date) AS closes,
          ARRAY_AGG(IF(rn <= 260, trade_date, NULL) IGNORE NULLS ORDER BY trade_date) AS dates,
+         ARRAY_AGG(IF(rn <= 21, IFNULL(volume, 0), NULL) IGNORE NULLS ORDER BY trade_date) AS vols,
          MAX(IF(rn = 1, volume, NULL)) AS vol_1d,
          AVG(IF(rn <= 20, volume, NULL)) AS vol_avg20,
          IF(COUNTIF(rn <= 20) >= 15, AVG(IF(rn <= 20, close * volume, NULL)), NULL) AS turnover_20d
@@ -100,7 +105,7 @@ SELECT s.edinet_code, s.ticker, s.name, s.industry, s.market_cap_b, s.current_pr
        s.roic, s.ocf_margin, s.fcf_margin, s.f_score, s.interest_coverage, s.accrual_ratio,
        s.earnings_yield, s.fcf_yield, s.ev_ebitda, s.total_payout_yield,
        s.asset_value_ratio, s.net_cash_to_mcap, COALESCE(s.adj_pbr, s.pbr) AS adj_pbr,
-       x.last_date, x.max_d, x.price_days, x.break_date, x.closes, x.dates, x.vol_1d, x.vol_avg20, x.turnover_20d,
+       x.last_date, x.max_d, x.price_days, x.break_date, x.closes, x.dates, x.vols, x.vol_1d, x.vol_avg20, x.turnover_20d,
        t.themes
 FROM `{project}.bi.m_screener` AS s
 LEFT JOIN px AS x ON x.ticker = s.ticker
@@ -181,6 +186,42 @@ def price_features(closes: list) -> dict:
     if n >= 120:
         out["near_high52"] = last / max(c[-252:])
     return out
+
+
+def updown_volume(closes: list, vols: list, n: int = 20) -> float | None:
+    """直近 n 日の「上げた日の出来高 ÷ 下げた日の出来高」（需給。大きいほど買いが厚い）。足りなければ None。
+    closes・vols は古い順で、末尾がそろっていること。上げ下げのどちらかが無ければ None。"""
+    c = [_num(x) for x in closes or []][-(n + 1):]
+    v = [_num(x) for x in vols or []][-(n + 1):]
+    m = min(len(c), len(v))
+    if m < n // 2 + 1:
+        return None
+    c, v = c[-m:], v[-m:]
+    up = dn = 0.0
+    for i in range(1, m):
+        if c[i] is None or c[i - 1] is None or v[i] is None:
+            continue
+        if c[i] > c[i - 1]:
+            up += v[i]
+        elif c[i] < c[i - 1]:
+            dn += v[i]
+    if up <= 0 or dn <= 0:
+        return None
+    return up / dn
+
+
+def extra_overlay(base_score: float, extras: dict, extra_weights: dict) -> tuple:
+    """11観点の点に、追加の観点を小さな重みで重ねる（純関数）。(重ねた後の点, 使った観点の点 {観点: 0〜100}) を返す。
+
+    extras: {観点: 0〜100 or None}。重みが0以下・未知の観点は無視。材料が無い（None）観点は中立50で重ねる。
+    重みの合計が1以上なら重ねない（11観点の点を残す）。"""
+    w = {a: max(0.0, _num((extra_weights or {}).get(a)) or 0.0) for a in EXTRA_ASPECTS}
+    total = sum(w.values())
+    if total <= 0 or total >= 1:
+        return base_score, {}
+    used = {a: (_num((extras or {}).get(a)) if _num((extras or {}).get(a)) is not None else 50.0)
+            for a in EXTRA_ASPECTS if w[a] > 0}
+    return round((1 - total) * base_score + sum(w[a] * used[a] for a in used), 2), used
 
 
 def classify(row: dict, min_turnover: float, stale_days: int = 14) -> str | None:
@@ -294,28 +335,42 @@ def aspect_scores(rank_pcts: dict, score_elems: list) -> tuple:
     return round(sum(vals) / len(vals), 2), True
 
 
-def score_universe(records: list, weights: dict) -> list:
+def score_universe(records: list, weights: dict, rank_columns: dict | None = None,
+                   extra_weights: dict | None = None) -> list:
     """records（対象銘柄だけ）を採点して universe_rank 順に返す（純粋関数）。
 
     各 record: {"ticker", "cols": {指標名: 値}, "scores": {観点: [既存部品の点 0〜100]}, ...任意の付帯情報}
-    出力は record に universe_score・universe_rank・aspects（10観点）・coverage を足したもの。
+    出力は record に universe_score・universe_rank・aspects（11観点）・coverage を足したもの。
+    rank_columns: 観点ごとの順位化する列（省略時は日本の RANK_COLUMNS。米国は us_screener_universe が渡す）。
+    extra_weights: EXTRA_ASPECTS の重み（省略・None なら重ねない）。record["extras"]（0〜100）を重ね、
+    使った点を extra_scores に残す。supply は cols["ud_vol"] の順位から作る（record["extras"] に supply が無いとき）。
     """
+    rc = RANK_COLUMNS if rank_columns is None else rank_columns
     w = normalize_weights(weights)
     ranks: dict = {a: {} for a in ASPECTS}  # 観点 -> 指標 -> {ticker: pct}
     for a in ASPECTS:
-        for col, hb in RANK_COLUMNS.get(a, []):
+        for col, hb in rc.get(a, []):
             ranks[a][col] = pct_rank({r["ticker"]: (r.get("cols") or {}).get(col) for r in records}, hb)
+    ud_rank = pct_rank({r["ticker"]: (r.get("cols") or {}).get("ud_vol") for r in records}, True) \
+        if (extra_weights or {}).get("supply") else {}
     out = []
     for r in records:
         t = r["ticker"]
         aspects, have = {}, 0
         for a in ASPECTS:
-            rp = [ranks[a][col][t] for col, _ in RANK_COLUMNS.get(a, []) if t in ranks[a][col]]
+            rp = [ranks[a][col][t] for col, _ in rc.get(a, []) if t in ranks[a][col]]
             v, ok = aspect_scores(rp, (r.get("scores") or {}).get(a, []))
             aspects[a] = v
             have += 1 if ok else 0
         score = round(sum(w[a] * aspects[a] for a in ASPECTS), 2)
-        out.append({**r, "universe_score": score, "aspects": aspects, "coverage": round(have / len(ASPECTS), 3)})
+        used: dict = {}
+        if extra_weights:
+            ex = dict(r.get("extras") or {})
+            if ex.get("supply") is None and t in ud_rank:
+                ex["supply"] = ud_rank[t]
+            score, used = extra_overlay(score, ex, extra_weights)
+        out.append({**r, "universe_score": score, "aspects": aspects, "coverage": round(have / len(ASPECTS), 3),
+                    "extra_scores": used})
     out.sort(key=lambda x: (-x["universe_score"], x["ticker"]))
     for i, r in enumerate(out, 1):
         r["universe_rank"] = i
@@ -348,11 +403,11 @@ def smooth_rank(scored: list, history: dict, days: int) -> list:
     return scored
 
 
-def fetch_recent_scores(client, asof, n: int) -> dict:
+def fetch_recent_scores(client, asof, n: int, table: str = TABLE) -> dict:
     """前の回までの点を銘柄ごとに新しい順で n 個（1本のクエリ・当日より前の2週間ぶんのパーティションだけ読む）。"""
     from google.cloud import bigquery
     sql = f"""SELECT ticker, ARRAY_AGG(universe_score ORDER BY score_date DESC LIMIT {int(n)}) s
-              FROM `{client.project}.analytics.screener_universe_daily`
+              FROM `{client.project}.{DATASET}.{table}`
               WHERE score_date < @d AND score_date >= DATE_SUB(@d, INTERVAL 14 DAY) GROUP BY ticker"""
     jc = bigquery.QueryJobConfig(query_parameters=[bigquery.ScalarQueryParameter("d", "DATE", asof)])
     return {r.ticker: list(r.s) for r in client.query(sql, job_config=jc).result()}
@@ -401,12 +456,12 @@ WHERE ticker = @t AND trade_date >= DATE_SUB(@asof, INTERVAL @price_days DAY) AN
 """
 
 
-def fetch_market(client, cfg, asof: date) -> dict:
+def fetch_market(client, cfg, asof: date, ticker: str = MARKET_TICKER) -> dict:
     """TOPIX の ETF（MARKET_TICKER）の {日付: 終値}。銘柄独自の値動きを測る基準。price_daily は ticker でまとめて
     保存されているので読む量は小さい。"""
     from google.cloud import bigquery
     jc = bigquery.QueryJobConfig(query_parameters=[
-        bigquery.ScalarQueryParameter("t", "STRING", MARKET_TICKER),
+        bigquery.ScalarQueryParameter("t", "STRING", ticker),
         bigquery.ScalarQueryParameter("asof", "DATE", asof),
         bigquery.ScalarQueryParameter("price_days", "INT64", int(getattr(cfg, "SCREEN_UNIVERSE_PRICE_DAYS", 400))),
     ])
@@ -482,6 +537,7 @@ def build_records(rows: list, cfg, ctx: dict) -> tuple:
         cols.update(pf)
         v20 = _num(r.get("vol_avg20"))
         cols["vol_ratio"] = (_num(r.get("vol_1d")) or 0) / v20 if v20 else None
+        cols["ud_vol"] = updown_volume(r["closes"], r.get("vols"))
         cols["theme_value"] = theme_value(r.get("themes"), hotness, leading, lead_bonus)
         cols["sector_score"] = sector_scores.get(code)
         sc: dict = {a: [] for a in ASPECTS}
@@ -502,8 +558,9 @@ def build_records(rows: list, cfg, ctx: dict) -> tuple:
         acr = accruals.get(t, _num(r.get("accrual_ratio")))
         if acr is not None:
             sc["quality"].append(bonus_to_score(ctx["accrual_fn"](acr, sector_mean.get(code))[1], caps.get("accrual", 20.0)))
+        extras = {a: bonus_to_score((ctx.get(f"{a}_pts") or {}).get(t), caps.get(a, 5.0)) for a in ("geo", "holder")}
         records.append({
-            "ticker": t, "edinet_code": r.get("edinet_code"), "name": r.get("name"), "market": "JP",
+            "ticker": t, "extras": extras, "edinet_code": r.get("edinet_code"), "name": r.get("name"), "market": "JP",
             "sector_code": code, "sector_name": code_name.get(code, r.get("industry")),
             "market_cap_b": _num(r.get("market_cap_b")), "current_price": _num(r.get("current_price")),
             "turnover_20d": _num(r.get("turnover_20d")), "cols": cols,
@@ -535,7 +592,8 @@ def summarize(scored: list, excluded: dict, top_n: int, stage2_n: int, total_row
     """results["screener_universe"] に載せる要約。"""
     top = [{"ticker": r["ticker"], "name": r.get("name"), "sector_code": r.get("sector_code"),
             "universe_score": r["universe_score"], "universe_rank": r["universe_rank"],
-            "market_cap_b": r.get("market_cap_b"), "coverage": r["coverage"], "aspects": r["aspects"]}
+            "market_cap_b": r.get("market_cap_b"), "coverage": r["coverage"], "aspects": r["aspects"],
+            "extra_scores": r.get("extra_scores") or {}}
            for r in scored[:top_n]]
     small = sum(1 for r in scored[:top_n] if (r.get("market_cap_b") is not None and r["market_cap_b"] < 100))
     return {
@@ -561,6 +619,7 @@ def output_rows(scored: list, score_date: str, stage2: set) -> list:
                "rank_score": r.get("rank_score", r["universe_score"])}
         row.update({f"s_{a}": r["aspects"][a] for a in ASPECTS})
         row.update({k: _num((r.get("cols") or {}).get(k)) for k in IDIO_COLS})
+        row.update({f"x_{a}": (r.get("extra_scores") or {}).get(a) for a in EXTRA_ASPECTS})
         row.update({"coverage": r["coverage"], "market_cap_b": r.get("market_cap_b"),
                     "stage2_selected": r["ticker"] in stage2, "created_at": now})
         rows.append(row)
@@ -574,32 +633,35 @@ def _schema():
              F("universe_rank", "INT64"), F("rank_score", "FLOAT64")]
             + [F(f"s_{a}", "FLOAT64") for a in ASPECTS]
             + [F(k, "FLOAT64") for k in IDIO_COLS]
+            + [F(f"x_{a}", "FLOAT64") for a in EXTRA_ASPECTS]
             + [F("coverage", "FLOAT64"), F("market_cap_b", "FLOAT64"), F("stage2_selected", "BOOL"),
                F("created_at", "TIMESTAMP")])
 
 
-def write_daily(client, rows: list, score_date: str, tmp_dir: Path) -> int:
-    """その日の行で当日パーティションを置き換える（load job・無料。再実行しても二重にならない）。"""
+def write_daily(client, rows: list, score_date: str, tmp_dir: Path, table: str = TABLE, schema=None) -> int:
+    """その日の行で当日パーティションを置き換える（load job・無料。再実行しても二重にならない）。
+    table・schema は米国の一次採点（us_screener_universe）が別表へ書くときに渡す。"""
     from google.api_core.exceptions import NotFound
     from google.cloud import bigquery
     if not rows:
         return 0
-    ref = f"{client.project}.{DATASET}.{TABLE}"
+    schema = schema or _schema()
+    ref = f"{client.project}.{DATASET}.{table}"
     try:
         client.get_table(ref)
     except NotFound:
-        t = bigquery.Table(ref, schema=_schema())
+        t = bigquery.Table(ref, schema=schema)
         t.time_partitioning = bigquery.TimePartitioning(type_=bigquery.TimePartitioningType.DAY, field="score_date")
         client.create_table(t)
     tmp_dir.mkdir(parents=True, exist_ok=True)
-    tmp = tmp_dir / f"{TABLE}.ndjson"
+    tmp = tmp_dir / f"{table}.ndjson"
     tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
     try:
         with open(tmp, "rb") as fh:
             client.load_table_from_file(
                 fh, f"{ref}${score_date.replace('-', '')}", location=LOCATION,
                 job_config=bigquery.LoadJobConfig(
-                    source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON, schema=_schema(),
+                    source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON, schema=schema,
                     write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
                     # 列を足したときに既存の表へ追加する（観点・材料を足しても過去の区画は残る）
                     schema_update_options=[bigquery.SchemaUpdateOption.ALLOW_FIELD_ADDITION])).result()
@@ -652,7 +714,28 @@ def run_universe(cfg, sector_results: dict, caches: dict, accruals: dict | None 
         market = fetch_market(client, cfg, asof)
     except Exception as e:
         print(f"    ⚠️  一次採点: TOPIX ETF の株価を読めず、銘柄独自の観点は中立で続行: {str(e)[:80]}")
+    # 追加の観点（地政学・大株主の動き）。どちらも1クエリずつで読み、読めなければ全銘柄を中立にして続行
+    extra_w = getattr(cfg, "SCREEN_UNIVERSE_EXTRA_WEIGHTS", {}) or {}
+    geo_pts, holder_pts = {}, {}
+    if (extra_w.get("geo") or 0) > 0:
+        try:
+            import geo_signal
+            names = _sector_lookup(cfg)
+            re_by = stock_real_estate.load(cfg)
+            sectors = {r["ticker"]: (names.get(str(r.get("industry") or "").replace("、", "・"))
+                                     or (re_by.get(r["ticker"]) or {}).get("sector_code")) for r in rows}
+            geo_pts = geo_signal.screen_pts_jp(sectors, cfg)
+        except Exception as e:
+            print(f"    ⚠️  一次採点: 地政学の加点を読めず中立で続行: {str(e)[:80]}")
+    if (extra_w.get("holder") or 0) > 0:
+        try:
+            import positioning_signals
+            holder_pts = positioning_signals.holder_pts_jp(positioning_signals.fetch_jp_holder_rows(
+                client, asof, int(getattr(cfg, "SCREEN_UNIVERSE_HOLDER_DAYS", 90))))
+        except Exception as e:
+            print(f"    ⚠️  一次採点: 大量保有を読めず中立で続行: {str(e)[:80]}")
     ctx = {
+        "geo_pts": geo_pts, "holder_pts": holder_pts,
         "market": market,
         "re_by_ticker": stock_real_estate.load(cfg),
         "accruals": accruals or {},
@@ -665,7 +748,7 @@ def run_universe(cfg, sector_results: dict, caches: dict, accruals: dict | None 
     records, excluded = build_records(rows, cfg, ctx)
     if not records:
         raise RuntimeError("一次採点の対象が0件（全件が除外）")
-    scored = score_universe(records, getattr(cfg, "SCREEN_UNIVERSE_WEIGHTS", {}))
+    scored = score_universe(records, getattr(cfg, "SCREEN_UNIVERSE_WEIGHTS", {}), extra_weights=extra_w)
     smooth = int(getattr(cfg, "SCREEN_UNIVERSE_RANK_SMOOTH_DAYS", 1))
     if smooth > 1:
         try:

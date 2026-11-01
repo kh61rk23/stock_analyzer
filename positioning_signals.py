@@ -9,6 +9,10 @@
 #   銘柄ごとには引かない（packet_lines は fetch の結果から引く）。
 # 【出力】build_alerts(cfg, results) → メールの節（日本の買い増し・米国の 13D と重要な 8-K・空売り残）。
 #   packet_lines(ticker) → 審議パケットの節「⑭ 大株主・需給の動き」。点数には入れない（重みは健太が決める）。
+# 【一次採点へ】holder_pts_jp / us_13d_pts / short_interest_pts は、点数に入れるときの純関数（pt を返す。
+#   screener_universe.bonus_to_score で 0〜100 に写す）。向きは検証記録（検証_大株主の材料と地政学の比べ直し）に従う:
+#   日本の積極目的の買い増しは無作為と差がなく（だから重みは小さく・不利にはしない）、米国の 13D は無作為より悪く、
+#   空売り残は向きが定まっていない。米国の2つは sign 引数で向きを決める（既定 0＝入れない）。
 # ==============================================================
 from __future__ import annotations
 
@@ -59,6 +63,15 @@ SELECT symbol, settlement_date, short_qty, change_pct, days_to_cover
 FROM `{p}.analytics.short_interest`
 WHERE settlement_date = (SELECT MAX(settlement_date) FROM `{p}.analytics.short_interest`)
   AND symbol IN UNNEST(@symbols)
+"""
+
+# 一次採点用: 日本の大量保有（提出日の範囲だけ・1保有者1行）。bi.m_large_holdings は約12MB で、日付で絞っても全列の読みは同じ
+JP_HOLDER_SQL = """
+SELECT submit_date, issuer_sec_code, holder_name, holder_kind, prior_ratio, holding_ratio, LEFT(IFNULL(purpose, ''), 60) purpose
+FROM `{p}.bi.m_large_holdings`
+WHERE submit_date >= @since AND submit_date <= @asof AND holding_ratio IS NOT NULL AND issuer_sec_code IS NOT NULL
+  AND holding_ratio - IFNULL(prior_ratio, 0) >= @min_up
+QUALIFY ROW_NUMBER() OVER (PARTITION BY issuer_sec_code, holder_name ORDER BY submit_date DESC) = 1
 """
 
 _CACHE: dict | None = None
@@ -218,3 +231,52 @@ def packet_lines(ticker: str) -> list[str]:
             body.append(f"- 空売り残: {int(si['short_qty']):,}株（前回比 {si.get('change_pct') or 0:+.0f}%・"
                         f"返済に {si.get('days_to_cover') or 0:.1f}日・{si['settlement_date']}）")
     return head + (body or ["- 動きなし（大量保有・13D・重要な 8-K の提出なし）"])
+
+
+# ── 一次採点用の純関数 ────────────────────────────────────
+
+def is_active_holder(row: dict) -> bool:
+    """経営に関わる買い手か（保有目的に重要提案などの言い回し、または法人で資産管理など安定保有の言い回しが無い）。"""
+    import re
+    purpose = row.get("purpose") or ""
+    return bool(re.search(ACTIVE_PURPOSE, purpose)
+                or (str(row.get("holder_kind") or "").startswith("法人") and not re.search(STABLE_PURPOSE, purpose)))
+
+
+def holder_pts_jp(rows: list[dict], per_event: float = 1.0, per_point: float = 0.5) -> dict:
+    """日本の大量保有の行 → {"NNNN.T": pt}（積極目的の買い増しだけ）。1件 per_event ＋ 増えた割合1ポイントごとに per_point。
+    買い増しの無い銘柄は含めない（中立扱い・売りは見ない）。"""
+    out: dict = {}
+    for r in rows:
+        code = str(r.get("issuer_sec_code") or "")[:4]
+        if not code or r.get("holding_ratio") is None:
+            continue
+        up = (float(r["holding_ratio"]) - float(r.get("prior_ratio") or 0)) * 100.0
+        if up < MIN_UP * 100.0 or not is_active_holder(r):
+            continue
+        out[f"{code}.T"] = out.get(f"{code}.T", 0.0) + per_event + per_point * up
+    return out
+
+
+def us_13d_pts(dg_rows: list[dict], per_event: float = 5.0, sign: float = 0.0) -> float:
+    """米国の 13D の件数 → pt。sign は向き（+1=買い材料・-1=売り材料・0=入れない）。"""
+    return sign * per_event * len(dg_rows or [])
+
+
+def short_interest_pts(si: dict | None, days_cap: float = 10.0, sign: float = 0.0) -> float | None:
+    """空売り残（days_to_cover）→ pt（返済日数÷days_cap を ±1 に収めて 10pt 満点）。sign の既定 0＝入れない。
+    無ければ None（中立扱い）。"""
+    if not si or si.get("days_to_cover") is None or not sign:
+        return None
+    return sign * 10.0 * max(0.0, min(1.0, float(si["days_to_cover"]) / days_cap))
+
+
+def fetch_jp_holder_rows(client, asof: date, days: int = 90) -> list[dict]:
+    """一次採点用に日本の大量保有を1本のクエリで読む。"""
+    from google.cloud import bigquery
+    jc = bigquery.QueryJobConfig(query_parameters=[
+        bigquery.ScalarQueryParameter("since", "DATE", asof - timedelta(days=days)),
+        bigquery.ScalarQueryParameter("asof", "DATE", asof),
+        bigquery.ScalarQueryParameter("min_up", "FLOAT64", MIN_UP)])
+    return [dict(r.items()) for r in client.query(JP_HOLDER_SQL.format(p=client.project), location="asia-northeast1",
+                                                   job_config=jc).result()]
