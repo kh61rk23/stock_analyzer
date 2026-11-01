@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import math
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 STRATEGY_ID = "options_s4"
@@ -38,6 +38,14 @@ def bs_price(spot: float, strike: float, t_years: float, vol: float, rate: float
     if right == "C":
         return spot * _ncdf(d1) - strike * math.exp(-rate * t_years) * _ncdf(d2)
     return strike * math.exp(-rate * t_years) * _ncdf(-d2) - spot * _ncdf(-d1)
+
+
+def _open_reason(s: dict, spot: float, vol: float) -> str:
+    """建てた理由：オプション提案（options_advisor）の根拠文に、そのときの原資産とボラを添える。"""
+    head = s.get("rationale") or ("上昇を狙うコール買い" if s.get("strategy") == "long_call" else "安く買えるなら受けるプット売り")
+    pct = s.get("hv_percentile")
+    pct_t = f"・HV{float(pct):.0f}%タイル" if pct is not None else ""
+    return f"{head}（原資産 {spot:.2f}・HV {vol * 100:.0f}%{pct_t}）"[:200]
 
 
 def strike_for(spot: float) -> float:
@@ -84,7 +92,8 @@ def step(book: dict, metrics: dict, suggestions: list, today: str, cfg=None) -> 
             book["realized"] = round(book.get("realized", 0.0) + pnl, 2)
             events.append({"type": "opt_close", "strategy": STRATEGY_ID, "date": today, "id": p["id"], "ticker": p["ticker"],
                            "kind": p["kind"], "right": p["right"], "strike": p["strike"], "expiry": p["expiry"],
-                           "spot": round(spot, 2), "value": round(cash_in, 2), "pnl": round(pnl, 2), "reason": "expiry"})
+                           "spot": round(spot, 2), "value": round(cash_in, 2), "pnl": round(pnl, 2), "reason": "expiry",
+                           "reason_text": f"満期（{p['expiry']}）：原資産 {round(spot, 2)} に対し行使 {p['strike']} で清算"})
             continue
         if spot:
             p["last_value"] = round(position_value(p, spot, vol, rate, today), 2)
@@ -129,7 +138,9 @@ def step(book: dict, metrics: dict, suggestions: list, today: str, cfg=None) -> 
         events.append({"type": "opt_open", "strategy": STRATEGY_ID, "date": today, "id": pid, "ticker": s["ticker"],
                        "kind": kind, "right": right, "side": side, "strike": k, "expiry": expiry, "spot": round(spot, 2),
                        "vol": round(vol, 4), "price": round(theo * (1 + slip if side == "long" else 1 - slip), 4),
-                       "cash_flow": round(-p["cost"] if side == "long" else p["premium_in"], 2)})
+                       "cash_flow": round(-p["cost"] if side == "long" else p["premium_in"], 2),
+                       "reason_text": _open_reason(s, spot, vol),
+                       "timing": f"{today} の提案を理論価格（ブラック・ショールズ・終値ベース）で建てた"})
     eq = equity(book, marks)
     day_pnl = round(eq - float(book.get("equity", book.get("start", eq))), 2)
     book["equity"] = eq
@@ -158,7 +169,8 @@ def run(cfg, results: dict, today: str | None = None) -> dict:
         book = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         book = new_book(float(getattr(cfg, "PAPER_OPTIONS_START_USD", 20000)))
-    today = today or datetime.now().date().isoformat()
+    # Actions は UTC で動くので、日付は日本時間で決める（朝の起動が UTC では前日になる）
+    today = today or datetime.now(timezone(timedelta(hours=9))).date().isoformat()
     if (book.get("history") or [{}])[-1].get("date") == today:
         return {"skipped": True, "reason": "今日は済み", "equity": book.get("equity")}
     missing = sorted({p["ticker"] for p in book["positions"]} - set(metrics))

@@ -171,3 +171,40 @@ class TestAdapter:
         sides = {(o["ticker"], o["side"]) for o in orders}
         assert ("B.T", "SELL") in sides       # take_profit
         assert ("A.T", "BUY") in sides        # entry
+
+
+class TestOrderReason:
+    """プレイブック戦略の注文が、発表の中身を含む理由を持つ。"""
+
+    def test_buyback_reason_has_announcement(self):
+        pb = {**PEAD_PB, "id": "tdnet_buyback", "event_source": "tdnet_monitor",
+              "entry": {"side": "BUY", "max_concurrent": 3, "size_pct_of_casino": 5,
+                        "conditions": [{"field": "category", "op": "==", "value": "BUYBACK"}]}}
+        res = {"tdnet": {"buyback": [{"code": "6758", "name": "ソニーG", "date": "2026-10-30",
+                                      "time": "15:00", "title": "自己株式取得に係る事項の決定に関するお知らせ"}]}}
+        od = evaluate_entries(pb, res, set())[0]
+        r = od["reason"]
+        assert "自社株買い" in r["text"] and "2026-10-30 15:00" in r["text"]
+        assert "自己株式取得に係る事項" in r["trigger"]
+
+    def test_earnings_reason_has_surprise_rate(self):
+        pb = {**PEAD_PB, "id": "earnings_beat_momentum", "event_source": "earnings_surprise",
+              "entry": {"side": "BUY", "max_concurrent": 3, "size_pct_of_casino": 5,
+                        "conditions": [{"field": "surprise_pct", "op": ">=", "value": 5}]}}
+        res = {"earnings_surprise": {"candidates": [{"ticker": "AAA", "surprise_pct": 12.34,
+                                                     "guidance_raised": True}]}}
+        r = evaluate_entries(pb, res, set())[0]["reason"]
+        assert "+12.3%" in r["text"] and "ガイダンス上方修正" in r["text"]
+
+    def test_pead_reason_has_score_and_missing_values_omitted(self):
+        res = {"pead": {"alert_candidates": [{"ticker": "AAA", "surprise_magnitude": 6,
+                                              "pead_score": 3.5, "direction": "positive"}]}}
+        r = evaluate_entries(PEAD_PB, res, set())[0]["reason"]
+        assert r["score"] == 3.5 and "出来高" not in r["text"]
+
+    def test_exit_reason_has_days_and_return(self):
+        pb = {**PEAD_PB, "status": "paper"}
+        acct = {"positions": {"AAA": {"qty": 10, "avg_cost": 100.0, "entry_date": "2026-09-01"}}}
+        res = {"screener": {"candidates": [{"ticker": "AAA", "price": 120.0}]}}
+        od = make_playbook_adapter(pb)(None, res, acct, "2026-09-10")[0]
+        assert "利確" in od["reason"]["text"] and "+20.0%" in od["reason"]["text"]

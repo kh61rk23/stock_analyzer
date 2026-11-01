@@ -2,7 +2,8 @@
 # paper/strategy_adapters.py — 戦略アダプタ（R1-2 / S2）
 # ==============================================================
 # 各adapterは日次 results から翌日分の注文リストを生成する。
-# 注文形式（dict）: {"ticker", "side": BUY/SELL, "qty" or "weight", "tag"}
+# 注文形式（dict）: {"ticker", "side": BUY/SELL, "qty" or "weight", "tag", "reason"}
+#   reason = {"text": 理由の1行, "score": 点数, "rank": 順位, "trigger": きっかけの材料}（メールと board に出す。無い値は省く）
 # 対象（要件定義書 §R1-2）:
 #   screener_topN : composite上位5・月次リバランス
 #   ignition      : 発火セクターの代表銘柄を小口買い・20営業日で手仕舞い
@@ -26,6 +27,17 @@ def _days_between(d1: str, d2: str) -> int:
         return 0
 
 
+def _reason(text: str, **kw) -> dict:
+    return {"text": text, **{k: v for k, v in kw.items() if v is not None}}
+
+
+def _num(v, nd=1):
+    try:
+        return round(float(v), nd)
+    except (TypeError, ValueError):
+        return None
+
+
 # ── screener_topN ────────────────────────────────────────────
 
 def screener_topn_adapter(cfg, results: dict, account: dict,
@@ -39,16 +51,20 @@ def screener_topn_adapter(cfg, results: dict, account: dict,
                      and c.get("composite_score") is not None),
                     key=lambda c: -float(c["composite_score"]))
     targets = [c["ticker"] for c in ranked[:5]]
+    info = {c["ticker"]: (i + 1, c) for i, c in enumerate(ranked[:5])}
     if not targets:
         return []
     meta["last_rebalance_month"] = today[:7]
     orders = [{"ticker": t, "side": "SELL", "qty": p["qty"],
-               "tag": "rebalance_exit"}
+               "tag": "rebalance_exit",
+               "reason": _reason("月次リバランスで総合点の上位5から外れた（シグナル消滅）")}
               for t, p in account["positions"].items()
               if t not in targets and p["qty"] > 0]
     w = 0.95 / len(targets)
-    orders += [{"ticker": t, "side": "BUY", "weight": w,
-                "tag": "rebalance_entry"}
+    orders += [{"ticker": t, "side": "BUY", "weight": w, "tag": "rebalance_entry",
+                "reason": _reason(f"月次リバランス：スクリーナー総合点 {_num(info[t][1]['composite_score'])}・{info[t][0]}位（上位5を等配分）",
+                                  score=_num(info[t][1]["composite_score"]), rank=info[t][0],
+                                  trigger=info[t][1].get("name") or None)}
                for t in targets if t not in account["positions"]]
     return orders
 
@@ -66,7 +82,8 @@ def ignition_adapter(cfg, results: dict, account: dict, today: str) -> list:
     for t, p in account["positions"].items():
         if p["qty"] > 0 and _days_between(p.get("entry_date", today), today) >= 28:
             orders.append({"ticker": t, "side": "SELL", "qty": p["qty"],
-                           "tag": "ignition_time_exit"})
+                           "tag": "ignition_time_exit",
+                           "reason": _reason("保有期限（20営業日≒28暦日）に達した")})
     exiting = {o["ticker"] for o in orders}
     held = sum(1 for t, p in account["positions"].items()
                if p["qty"] > 0 and t not in exiting)
@@ -82,8 +99,11 @@ def ignition_adapter(cfg, results: dict, account: dict, today: str) -> list:
         t = reps[0]
         if t in account["positions"] or t in exiting:
             continue
+        name = alert.get("sector_name") or f"業種コード{code}"
         orders.append({"ticker": t, "side": "BUY", "weight": 0.05,
-                       "tag": f"ignition_entry({code})"})
+                       "tag": f"ignition_entry({code})",
+                       "reason": _reason(f"点火検知：セクター {name} の初動・代表銘柄を小口買い",
+                                         trigger=f"{name} の複数指標が同時に動き出した（初動）")})
         slots -= 1
     return orders
 
@@ -114,10 +134,12 @@ def pead_adapter(cfg, results: dict, account: dict, today: str) -> list:
         ret = (px / p["avg_cost"] - 1) if (px and p["avg_cost"] > 0) else None
         if days >= 56:                                   # 40営業日≒56暦日
             orders.append({"ticker": t, "side": "SELL", "qty": p["qty"],
-                           "tag": f"pead_time_exit({days}d)"})
+                           "tag": f"pead_time_exit({days}d)",
+                           "reason": _reason(f"保有期限（40営業日≒56暦日）に達した（保有{days}日）")})
         elif ret is not None and (ret >= 0.15 or ret <= -0.07):
             orders.append({"ticker": t, "side": "SELL", "qty": p["qty"],
-                           "tag": f"pead_pnl_exit({ret:+.1%})"})
+                           "tag": f"pead_pnl_exit({ret:+.1%})",
+                           "reason": _reason(("利確（+15%以上）" if ret >= 0.15 else "損切り（-7%以下）") + f"：取得単価比 {ret:+.1%}")})
     exiting = {o["ticker"] for o in orders}
     held = sum(1 for t, p in account["positions"].items()
                if p["qty"] > 0 and t not in exiting)
@@ -129,8 +151,18 @@ def pead_adapter(cfg, results: dict, account: dict, today: str) -> list:
         if (not t or t in account["positions"] or t in exiting
                 or c.get("direction") == "negative"):
             continue
+        bits = []
+        if c.get("surprise_magnitude") is not None:
+            bits.append(f"決算サプライズ {_num(c['surprise_magnitude'], 2)}")
+        if c.get("revision_score"):
+            bits.append(f"予想修正 {_num(c['revision_score'], 2)}")
+        if c.get("volume_ratio"):
+            bits.append(f"出来高 {_num(c['volume_ratio'])}倍")
         orders.append({"ticker": t, "side": "BUY", "weight": 0.05,
-                       "tag": f"pead_entry(score={c.get('pead_score', '?')})"})
+                       "tag": f"pead_entry(score={c.get('pead_score', '?')})",
+                       "reason": _reason(f"決算後ドリフト（PEAD）点 {_num(c.get('pead_score'), 2)}：上振れ決算の後に株価が伸びやすい"
+                                         + (f"（{'・'.join(bits)}）" if bits else ""),
+                                         score=_num(c.get("pead_score"), 2), trigger="・".join(bits) or None)})
         slots -= 1
     return orders
 

@@ -34,36 +34,38 @@ class PaperCfg:
         self.DRIVE_BASE = tmp
 
 
-def fixed_price(prices: dict):
-    def get(ticker):
-        return prices.get(ticker)
-    return get
+def bars(**rows):
+    """bars(T7203=[("2026-07-07", 1010, 1015)]) → {"7203.T": [...]}（BQ の price_daily_latest の代わり）。"""
+    return {k[1:] + ".T": v for k, v in rows.items()}
 
 
 class TestGoldenTwoDays:
     def test_fill_and_pnl_match_hand_calc(self, tmp_path):
         cfg = PaperCfg(tmp_path)
-        # Day1: adapterが 7203.T を100株 買い注文（翌日約定）
+        # 7/6（月）の朝の分析（10時）で 7203.T を100株 買い注文 → 東証は寄付のあとなので 7/7 の寄付で約定
         day1_orders = [{"ticker": "7203.T", "side": "BUY", "qty": 100,
                         "tag": "golden"}]
-        adapters = {"test_strat": lambda c, r, a, t: day1_orders}
-        prices_d1 = {"7203.T": {"open": 1000.0, "close": 1005.0}}
-        s1 = run_paper_trading(cfg, {}, fixed_price(prices_d1), adapters,
-                               today="2026-07-06")
-        # Day1: 注文はキューに入るのみ。equity=初期資金
+        adapters = {"test_strat": lambda c, r, a, t: day1_orders if t == "2026-07-06" else []}
+        s1 = run_paper_trading(cfg, {}, {}, adapters, today="2026-07-06")
         assert s1["test_strat"]["equity"] == pytest.approx(1_000_000)
         assert s1["test_strat"]["new_orders"] == 1
+        assert s1["test_strat"]["new_list"][0]["eligible"] == "2026-07-07"
 
-        # Day2: 始値1010で約定（+20bps → 1012.02）、終値1015で評価
-        adapters = {"test_strat": lambda c, r, a, t: []}
-        prices_d2 = {"7203.T": {"open": 1010.0, "close": 1015.0}}
-        s2 = run_paper_trading(cfg, {}, fixed_price(prices_d2), adapters,
-                               today="2026-07-07")
+        # 7/7 の朝はまだ 7/7 の始値が無い（当日の行は使わない）→ 約定待ち
+        s2 = run_paper_trading(cfg, {}, bars(T7203=[("2026-07-06", 990, 1000), ("2026-07-07", 1010, 1015)]),
+                               adapters, today="2026-07-07")
+        assert s2["test_strat"]["fills"] == 0 and s2["test_strat"]["pending"] == 1
+
+        # 7/8 の朝：7/7 の始値1010で約定（+20bps → 1012.02）、終値1015で評価
+        s3 = run_paper_trading(cfg, {}, bars(T7203=[("2026-07-07", 1010, 1015)]),
+                               adapters, today="2026-07-08")
         # cash = 1,000,000 - 100×1012.02 = 898,798
         # equity = 898,798 + 100×1015 = 1,000,298
-        assert s2["test_strat"]["fills"] == 1
-        assert s2["test_strat"]["equity"] == pytest.approx(1_000_298.0)
-        assert s2["test_strat"]["day_pnl"] == pytest.approx(298.0)
+        assert s3["test_strat"]["fills"] == 1
+        f = s3["test_strat"]["fill_list"][0]
+        assert f["date"] == "2026-07-07" and f["open"] == 1010 and f["created"] == "2026-07-06"
+        assert s3["test_strat"]["equity"] == pytest.approx(1_000_298.0)
+        assert s3["test_strat"]["day_pnl"] == pytest.approx(298.0)
 
         acc = load_accounts(cfg)["test_strat"]
         assert acc["cash"] == pytest.approx(898_798.0)
@@ -75,10 +77,10 @@ class TestGoldenTwoDays:
         cfg = PaperCfg(tmp_path)
         adapters = {"test_strat": lambda c, r, a, t: [
             {"ticker": "7203.T", "side": "BUY", "qty": 100}]}
-        px = fixed_price({"7203.T": {"open": 1000.0, "close": 1000.0}})
+        px = bars(T7203=[("2026-07-07", 1000, 1000)])
         run_paper_trading(cfg, {}, px, adapters, today="2026-07-06")
-        run_paper_trading(cfg, {}, px, adapters, today="2026-07-07")
-        s3 = run_paper_trading(cfg, {}, px, adapters, today="2026-07-07")
+        run_paper_trading(cfg, {}, px, adapters, today="2026-07-08")
+        s3 = run_paper_trading(cfg, {}, px, adapters, today="2026-07-08")
         assert s3["test_strat"]["fills"] == 0          # 再実行は約定なし
         acc = load_accounts(cfg)["test_strat"]
         assert acc["positions"]["7203.T"]["qty"] == 100
@@ -88,22 +90,16 @@ class TestEventSourcing:
     def test_rebuild_from_events(self, tmp_path):
         """events.jsonl から口座を再構築 → accounts.json と一致（受入条件）。"""
         cfg = PaperCfg(tmp_path)
-        adapters1 = {"test_strat": lambda c, r, a, t: [
-            {"ticker": "7203.T", "side": "BUY", "qty": 100}]}
-        adapters2 = {"test_strat": lambda c, r, a, t: [
-            {"ticker": "7203.T", "side": "SELL", "qty": 40}]}
-        adapters3 = {"test_strat": lambda c, r, a, t: []}
-        run_paper_trading(cfg, {}, fixed_price(
-            {"7203.T": {"open": 1000, "close": 1000}}), adapters1,
-            today="2026-07-06")
-        run_paper_trading(cfg, {}, fixed_price(
-            {"7203.T": {"open": 1010, "close": 1020}}), adapters2,
-            today="2026-07-07")
-        run_paper_trading(cfg, {}, fixed_price(
-            {"7203.T": {"open": 1030, "close": 1040}}), adapters3,
-            today="2026-07-08")
+        orders = {"2026-07-06": [{"ticker": "7203.T", "side": "BUY", "qty": 100}],
+                  "2026-07-08": [{"ticker": "7203.T", "side": "SELL", "qty": 40}]}
+        adapters = {"test_strat": lambda c, r, a, t: orders.get(t, [])}
+        px = bars(T7203=[("2026-07-07", 1000, 1000), ("2026-07-08", 1010, 1020),
+                         ("2026-07-09", 1030, 1040)])
+        for d in ("2026-07-06", "2026-07-08", "2026-07-10"):
+            run_paper_trading(cfg, {}, px, adapters, today=d)
 
         current = load_accounts(cfg)["test_strat"]
+        assert current["positions"]["7203.T"]["qty"] == 60
         rebuilt = rebuild_accounts_from_events(load_events(cfg))["test_strat"]
         assert rebuilt["cash"] == pytest.approx(current["cash"])
         assert {t: p["qty"] for t, p in rebuilt["positions"].items()} == \
@@ -123,7 +119,7 @@ class TestPlaybookStrategyInclusion:
         cfg = PaperCfg(tmp_path)
         cfg.PAPER_STRATEGIES = ["screener_topN"]
         cfg.ENABLE_EVENT_STRATEGY = True
-        run_paper_trading(cfg, {}, fixed_price({}), today="2026-07-06")
+        run_paper_trading(cfg, {}, {}, today="2026-07-06")
         accounts = load_accounts(cfg)
         # 組込＋playbook（status=paper かつ side=BUY の3本）が口座を持つ
         assert "screener_topN" in accounts
@@ -134,7 +130,7 @@ class TestPlaybookStrategyInclusion:
         cfg = PaperCfg(tmp_path)
         cfg.PAPER_STRATEGIES = ["screener_topN"]
         cfg.ENABLE_EVENT_STRATEGY = True
-        run_paper_trading(cfg, {}, fixed_price({}), today="2026-07-06")
+        run_paper_trading(cfg, {}, {}, today="2026-07-06")
         assert "us8k_ceo_change_short_watch" not in load_accounts(cfg)
 
     def test_opt_out_flag(self, tmp_path):
@@ -142,7 +138,7 @@ class TestPlaybookStrategyInclusion:
         cfg.PAPER_STRATEGIES = ["screener_topN"]
         cfg.ENABLE_EVENT_STRATEGY = True
         cfg.PAPER_INCLUDE_PLAYBOOK_STRATEGIES = False
-        run_paper_trading(cfg, {}, fixed_price({}), today="2026-07-06")
+        run_paper_trading(cfg, {}, {}, today="2026-07-06")
         assert "pead_long_v1" not in load_accounts(cfg)
 
 
@@ -171,8 +167,9 @@ class TestAdapters:
             SECTOR_REPRESENTATIVE_TICKERS = {"1017": ["6501.T", "6758.T"]}
         results = {"ignition": {"alerts": [{"sector_code": "1017"}]}}
         orders = ignition_adapter(C(), results, self._account(), "2026-07-06")
-        assert orders == [{"ticker": "6501.T", "side": "BUY", "weight": 0.05,
-                           "tag": "ignition_entry(1017)"}]
+        assert [{k: o[k] for k in ("ticker", "side", "weight", "tag")} for o in orders] == [
+            {"ticker": "6501.T", "side": "BUY", "weight": 0.05, "tag": "ignition_entry(1017)"}]
+        assert "初動" in orders[0]["reason"]["text"]
 
     def test_pead_adapter_entry_and_time_exit(self):
         results = {"pead": {"alert_candidates": [

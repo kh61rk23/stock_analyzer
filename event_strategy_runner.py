@@ -111,6 +111,68 @@ def extract_candidates(event_source: str, results: dict) -> list[dict]:
     return []
 
 
+def _num(v, nd=1):
+    try:
+        return round(float(v), nd)
+    except (TypeError, ValueError):
+        return None
+
+
+def entry_reason(playbook: dict, cand: dict) -> dict:
+    """買い注文の理由（text・score・trigger）。発表の中身は候補にある値だけを使い、無い値は省く。"""
+    src = playbook.get("event_source")
+    name = cand.get("name") or ""
+    head = f"{name}：" if name else ""
+    score, bits = None, []
+    if src == "tdnet_monitor":
+        when = " ".join(x for x in (cand.get("date"), cand.get("time")) if x)
+        title = cand.get("title") or "自己株式取得の開示"
+        bits = [x for x in (f"{when}に発表" if when else "", f"「{title}」") if x]
+        text = f"{head}自社株買いの発表（{'・'.join(bits)}）：需給改善を狙い翌営業日の始値で買う"
+        trigger = "・".join(bits)
+    elif src == "earnings_surprise":
+        sp = _num(cand.get("surprise_pct"))
+        if sp is not None:
+            bits.append(f"決算サプライズ {sp:+.1f}%")
+        if cand.get("guidance_raised"):
+            bits.append("ガイダンス上方修正")
+        if cand.get("consecutive_pos"):
+            bits.append(f"{cand['consecutive_pos']}四半期連続の上振れ")
+        score = _num(cand.get("surprise_score"))
+        text = f"{head}決算上振れ" + (f"（{'・'.join(bits)}）" if bits else "") + "：モメンタム追随で買う"
+        trigger = "・".join(bits)
+    elif src == "pead_monitor":
+        if cand.get("surprise_magnitude") is not None:
+            bits.append(f"決算サプライズ {_num(cand['surprise_magnitude'], 2)}")
+        if cand.get("volume_ratio"):
+            bits.append(f"出来高 {_num(cand['volume_ratio'])}倍")
+        score = _num(cand.get("pead_score"), 2)
+        text = (f"{head}決算後ドリフト（PEAD）点 {score}" if score is not None else f"{head}決算後ドリフト（PEAD）") \
+            + (f"（{'・'.join(bits)}）" if bits else "") + "：上振れ決算の後に株価が伸びやすい"
+        trigger = "・".join(bits)
+    else:
+        text, trigger = f"{head}{playbook.get('id')}：イベントの買い条件に合致", ""
+    out = {"text": text}
+    if score is not None:
+        out["score"] = score
+    if trigger:
+        out["trigger"] = trigger
+    return out
+
+
+def exit_reason(playbook: dict, reason: str, entry_days: int, ret_pct: float | None) -> dict:
+    """売り注文の理由。どの出口条件に当たったかと、その時の保有日数・損益を書く。"""
+    ex = playbook.get("exit") or {}
+    held = f"保有{entry_days}日" + (f"・取得単価比 {ret_pct:+.1%}" if ret_pct is not None else "")
+    if reason.startswith("time_exit"):
+        text = f"保有期限（{ex.get('hold_days_max')}日）に達した（{held}）"
+    elif reason.startswith("take_profit"):
+        text = f"利確（+{ex.get('take_profit_pct')}%以上）に達した（{held}）"
+    else:
+        text = f"損切り（{ex.get('stop_loss_pct')}%以下）に達した（{held}）"
+    return {"text": f"{playbook.get('id')}：{text}"}
+
+
 def evaluate_entries(playbook: dict, results: dict, held: set,
                      casino_pct: float = 15.0) -> list[dict]:
     """当日のentry注文リストを生成（WATCH/retired/liveでない場合は空）。"""
@@ -130,7 +192,8 @@ def evaluate_entries(playbook: dict, results: dict, held: set,
             continue
         if eval_conditions(entry.get("conditions"), c):
             orders.append({"ticker": t, "side": "BUY", "weight": weight,
-                           "tag": f"{playbook['id']}_entry"})
+                           "tag": f"{playbook['id']}_entry",
+                           "reason": entry_reason(playbook, c)})
             held.add(t)
             slots -= 1
     return orders
@@ -198,7 +261,8 @@ def make_playbook_adapter(playbook: dict):
             reason = evaluate_exit(playbook, days, ret)
             if reason:
                 orders.append({"ticker": t, "side": "SELL", "qty": p["qty"],
-                               "tag": f"{playbook['id']}_{reason}"})
+                               "tag": f"{playbook['id']}_{reason}",
+                               "reason": exit_reason(playbook, reason, days, ret)})
                 held.discard(t)
         # entry判定
         orders += evaluate_entries(playbook, results, held, casino_pct)
