@@ -1839,7 +1839,7 @@ US_SCREEN_UNIVERSE_SI_DAYS: int = 45             # 空売り残（FINRA・月2�
 US_SCREEN_UNIVERSE_13D_DAYS: int = 90            # 13D（大株主の動き）を数える期間（暦日）
 US_SCREEN_UNIVERSE_8K_DAYS: int = 90             # 8-K の悪い知らせの項目を数える期間（暦日）
 US_SCREEN_UNIVERSE_BONUS_CAPS: dict = {"eps_accel": 10.0, "13d": 10.0, "k8_red": 10.0, "accrual": 20.0}   # 加点(pt)→0〜100 の写し上限
-US_SCREEN_UNIVERSE_EVENT_PTS: dict = {"13d": 5.0, "k8_red": 5.0}   # 13D 1件・悪い 8-K 項目1種あたりの pt
+US_SCREEN_UNIVERSE_EVENT_PTS: dict = {"13d": 0.0, "k8_red": 5.0}   # 13D 1件・悪い 8-K 項目1種あたりの pt（13D は検証で無作為より悪く向きが定まらないので 0）
 
 # ── 銘柄スナップショット ─────────────────────────────
 # スクリーナー通過銘柄の日次スナップショットを BQ analytics.stock_snapshot へ蓄積する
