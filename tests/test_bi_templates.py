@@ -34,19 +34,21 @@ STRING_COLS = {
     "report_type", "report_key", "body_head", "source_path",
     "summary_head", "priority", "lang", "pub_date", "matched_sectors", "sentiment_label", "etfs",
     "indicator_code", "indicator_name", "stat_name", "unit", "period", "country", "score_path", "reasons",
+    "thesis", "source_url",
 }
 INT_COLS = {
     "fiscal_year", "employee_count", "foreign_ministry_level", "state_dept_level", "exposure_type_count",
     "latest_foreign_ministry_level", "latest_state_dept_level", "hospital_count", "facility_count",
     "municipality_count", "population_current", "population_2050", "est_excluded_count",
     "node_level", "child_count", "company_count", "company_count_rollup",
-    "theme_order", "days_before_latest", "price_days", "cik", "signal_count", "ticker_signal_count", "ticker_count",
+    "theme_order", "days_before_latest", "price_days", "cik", "signal_count", "strength", "ticker_signal_count", "ticker_count",
     "investment_score", "score_rank", "chars", "heat_rank", "year", "re_fiscal_year", "re_rental_fv_year", "re_facility_count", "re_est_excluded_count", "f_score", "f_score_items", "consec_up_years",
     "trading_days", "n_stocks", "n_up", "n_down", "n_flat", "n_hl_base", "n_new_high", "n_new_low", "n_ma50", "n_ma200",
 }
 DATE_COLS = {"fiscal_year_end", "risk_date", "latest_risk_date", "price_date", "price_break_date", "snapshot_date", "technical_date", "fired_at",
              "month", "month_end_date", "trade_date", "ttm_period_end", "balance_date", "shares_as_of", "base_trade_date", "fetched_date", "fetched_month", "published_date", "report_date", "first_seen", "last_seen",
-             "pick_date", "entry_date", "deliberated_on", "approved_on", "review_on", "submit_date"}
+             "pick_date", "entry_date", "deliberated_on", "approved_on", "review_on", "submit_date",
+             "as_of", "expire_date", "recorded_on"}
 BOOL_COLS = {"is_delisted", "sanction_flag", "is_landlocked", "review_flag", "auto_derived", "verified_flag", "above_ma200", "has_fundamentals", "is_partial", "is_complete", "is_latest", "macd_crossup", "above_vwap", "is_idea", "investment_relevant", "passed", "is_new"}
 ALL_MARTS = ("m_company", "m_fin_annual", "m_country_profile", "m_country_risk", "m_company_country",
              "m_re_area", "m_re_holdings", "m_re_holdings_pref", "m_tax_node", "m_company_tax", "m_screener", "m_screener_us",
@@ -54,7 +56,7 @@ ALL_MARTS = ("m_company", "m_fin_annual", "m_country_profile", "m_country_risk",
              "m_us_fin_annual", "m_us_segments", "m_stock_snapshot", "m_arxiv_papers", "m_arxiv_keywords",
              "m_sector_scores", "m_macro_indicators", "m_macro_signals", "m_reports",
              "m_news", "m_etf_themes", "m_etf_daily", "m_imf_forecasts", "m_gov_stats", "m_screener_trace",
-             "m_pick_outcomes", "m_deliberations", "m_large_holdings")
+             "m_pick_outcomes", "m_deliberations", "m_llm_news", "m_large_holdings")
 
 
 def mart_columns(mart: str) -> list[str]:

@@ -7,6 +7,9 @@
 #   deliberations      : 審議結果（パーティション=deliberated_at の日付）
 #   deliberation_runs  : routine の実行記録（隔週判定・失敗理由の表示用）
 #   deliberations_latest(ビュー) : 銘柄ごとの最新1件
+#   llm_news_runs      : S8 LLMニュース・アルファの週次の実行記録（0件の週も1行残す）
+#   llm_news_signals   : S8 の週次シグナル（1行＝1シグナル。同じ as_of は置換）
+#   llm_news_signals_latest(ビュー) : 最新の as_of のシグナルだけ
 # 【約束】全て CREATE ... IF NOT EXISTS。何度流しても壊れない。
 #   承認列（approval_status / approved_by / approved_at）は人間だけが更新する。
 #   エージェントは書かない（部則5）。
@@ -27,6 +30,9 @@ QUEUE_TABLE = "deliberation_queue"
 DELIB_TABLE = "deliberations"
 RUNS_TABLE = "deliberation_runs"
 LATEST_VIEW = "deliberations_latest"
+NEWS_RUNS_TABLE = "llm_news_runs"
+NEWS_SIGNALS_TABLE = "llm_news_signals"
+NEWS_LATEST_VIEW = "llm_news_signals_latest"
 
 _DDL_TEMPLATES = {
     "dataset": """
@@ -105,9 +111,36 @@ SELECT *
 FROM `{project}.{ds}.deliberations`
 WHERE ticker IS NOT NULL
 QUALIFY ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY deliberated_at DESC, case_id DESC) = 1""",
+    NEWS_RUNS_TABLE: """
+CREATE TABLE IF NOT EXISTS `{project}.{ds}.llm_news_runs` (
+  as_of DATE NOT NULL,
+  signal_count INT64,
+  recorded_at TIMESTAMP,
+  run_env STRING,
+  note STRING
+)""",
+    NEWS_SIGNALS_TABLE: """
+CREATE TABLE IF NOT EXISTS `{project}.{ds}.llm_news_signals` (
+  as_of DATE NOT NULL,
+  ticker STRING NOT NULL,
+  market STRING,
+  direction STRING,
+  strength INT64,
+  thesis STRING,
+  source_url STRING,
+  expire_date DATE,
+  recorded_at TIMESTAMP
+)
+CLUSTER BY ticker""",
+    NEWS_LATEST_VIEW: """
+CREATE VIEW IF NOT EXISTS `{project}.{ds}.llm_news_signals_latest` AS
+SELECT *
+FROM `{project}.{ds}.llm_news_signals`
+WHERE as_of = (SELECT MAX(as_of) FROM `{project}.{ds}.llm_news_runs`)""",
 }
 
-ORDER = ["dataset", QUEUE_TABLE, DELIB_TABLE, RUNS_TABLE, LATEST_VIEW]
+ORDER = ["dataset", QUEUE_TABLE, DELIB_TABLE, RUNS_TABLE, LATEST_VIEW,
+         NEWS_RUNS_TABLE, NEWS_SIGNALS_TABLE, NEWS_LATEST_VIEW]
 
 
 def ddl(project: str, key: str, ds: str = DATASET) -> str:

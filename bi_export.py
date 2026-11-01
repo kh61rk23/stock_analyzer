@@ -87,6 +87,7 @@ MART_KEYS = {
     "m_market_breadth": ["market", "trade_date"],
     "m_pick_outcomes": ["pick_date", "source", "ticker"],
     "m_deliberations": ["case_id"],
+    "m_llm_news": ["as_of", "ticker"],
     "m_large_holdings": ["doc_id", "holder_name"],
 }
 # 前回の行数のこの割合を下回ったら、壊れた結果とみなして上書きしない
