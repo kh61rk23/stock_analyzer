@@ -124,6 +124,15 @@ def hotness_score(today_count: int, baseline_counts: list[int]) -> float:
     return round(max(0.0, min(100.0, 50.0 + (ratio - 1.0) * 25.0)), 1)
 
 
+def _lead_observed(day_counts: dict) -> bool:
+    """その日に先行（論文）を観測したか。論文の無い日は全ノードの leading が 0。"""
+    return any((v or {}).get("leading") for v in (day_counts or {}).values())
+
+
+def _lead_observed_dates(history: dict, dates: list) -> list:
+    return [d for d in dates if _lead_observed(history.get(d))]
+
+
 def compute_node_hotness(today_counts: dict, history: dict,
                          today: str, cfg=None) -> dict:
     """
@@ -133,19 +142,33 @@ def compute_node_hotness(today_counts: dict, history: dict,
     """
     # ベースライン日数は config から読む（未定義ならモジュール定数 BASELINE_DAYS）
     _base_days = int(getattr(cfg, "TAXONOMY_HOTNESS_BASELINE_DAYS", BASELINE_DAYS))
-    past_dates = sorted(d for d in history if d < today)[-_base_days:]
+    all_past = sorted(d for d in history if d < today)
+    past_dates = all_past[-_base_days:]
+    # 先行（論文）は週1回しか取らない。論文の無い日は全ノード0になるので「未観測」として基準から外し、
+    # その日は直近に観測した日の値を引き継ぐ。0 の日を基準に混ぜると、平常の基準が薄まって
+    # 論文の日だけ大量に点灯し、ほかの日は1件も点灯しない。
+    lead_dates = _lead_observed_dates(history, all_past)[-_base_days:]
+    today_observed = _lead_observed(today_counts)
     out = {}
     for nid, c in today_counts.items():
-        base_lead = [history[d].get(nid, {}).get("leading", 0) for d in past_dates]
         base_news = [history[d].get(nid, {}).get("news", 0) for d in past_dates]
         base_pol = [history[d].get(nid, {}).get("policy", 0) for d in past_dates]
-        leading = hotness_score(c.get("leading", 0), base_lead)
+        if today_observed:
+            lead_raw = c.get("leading", 0) or 0
+            leading = hotness_score(lead_raw, [history[d].get(nid, {}).get("leading", 0) or 0 for d in lead_dates])
+        elif lead_dates:
+            lead_raw = history[lead_dates[-1]].get(nid, {}).get("leading", 0) or 0
+            leading = hotness_score(lead_raw, [history[d].get(nid, {}).get("leading", 0) or 0
+                                               for d in lead_dates[:-1]])
+        else:
+            lead_raw = 0
+            leading = 50.0
         semi = round(SEMI_NEWS_WEIGHT * hotness_score(c.get("news", 0), base_news)
                      + SEMI_POLICY_WEIGHT * hotness_score(c.get("policy", 0), base_pol), 1)
         combined = round(COMBINE_SEMI * semi + COMBINE_LEADING * leading, 1)
         out[nid] = {"leading": leading, "semi_leading": semi,
                     "combined": combined,
-                    "raw": {"leading": c.get("leading", 0),
+                    "raw": {"leading": lead_raw,
                             "news": c.get("news", 0),
                             "policy": c.get("policy", 0)}}
     return out

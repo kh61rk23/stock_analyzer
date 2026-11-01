@@ -1662,6 +1662,7 @@ WEEKLY_MODULES = [
         # "facility_expansion",  ← 廃止（機能していなかった）
         # 政策支援（BQ edinet.policy_support）の書き手。読む側は base_agent.get_policy_support_bonus。
     "nedo",                  # I-2: NEDO採択情報 → policy_support
+    "universe_factor_ic",    # 一次採点の観点別の効き（順位相関 IC）→ analytics.universe_factor_ic・メールの節
 ]
 
 # ウィークリー実行の曜日（0=月曜 〜 6=日曜）
@@ -5514,3 +5515,12 @@ POSITIONING_MAX_GB: float = 0.3
 # 1回の実行で1本だけ読む（約0.7GB・クエリの無料枠 1TB/月 の約2%）。無効なら us.fundamentals（約800社）だけ。
 US_FACTS_COMPLEMENT_ENABLED: bool = True
 US_FACTS_COMPLEMENT_YEARS: int = 4      # 何年分の期間を読むか（EPS の加速は8四半期を使う）
+
+# ==============================================================
+# BLOCK 76: 一次採点の観点別の効き（universe_factor_ic.py・週次）
+# ==============================================================
+# 一次採点の各観点の点が、その後 5・20 取引日の指数超過をどれだけ当てたか（順位相関 IC）を週1回測る。
+# 市場ごとに1本のクエリ（日本で約0.05GB）。結果は analytics.universe_factor_ic に置き換えで保存する。
+ENABLE_UNIVERSE_FACTOR_IC: bool = True
+UFI_LOOKBACK_DAYS: int = 200          # 直近この日数の評価日を毎回計算し直す
+UFI_MIN_EFFECTIVE_DAYS: float = 4.0   # 実効の日数（評価日の数÷先の日数）がこれ未満なら「日数不足」で判定しない

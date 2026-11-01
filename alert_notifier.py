@@ -514,6 +514,15 @@ def extract_alerts(cfg, results: dict) -> list:
     except Exception as _po_err:
         print(f"  ⚠️  [alert] 推奨のその後の成績表を作れない: {str(_po_err)[:80]}")
 
+    # 一次採点の観点別の効き（週次の回だけ。その回に計算した要約を出す）
+    try:
+        import universe_factor_ic as _ufi
+        _ufi_alert = _ufi.build_alert(results)
+        if _ufi_alert:
+            alerts.append(_ufi_alert)
+    except Exception as _ufi_err:
+        print(f"  ⚠️  [alert] 一次採点の観点別の効きの節を作れない: {str(_ufi_err)[:80]}")
+
     # 有報「事業等のリスク」の前期からの悪化（risk_text_scorer が夜に作る表を読む）。点数には入れない
     if getattr(cfg, "ALERT_ON_TEXT_RISK", True):
         try:

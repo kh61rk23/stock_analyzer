@@ -146,6 +146,7 @@ def _fetch_returns(tickers: list, lookback_days: int = LOOKBACK_DAYS) -> dict:
     start = end - timedelta(days=int(lookback_days * 1.6))  # 営業日カバーのため多め取得
 
     returns = {}
+    fails: dict[str, int] = {}
     for t in tickers:
         try:
             hist = yf.Ticker(t).history(
@@ -164,9 +165,11 @@ def _fetch_returns(tickers: list, lookback_days: int = LOOKBACK_DAYS) -> dict:
             if len(ret) >= MIN_DATA_POINTS:
                 returns[t] = ret[-lookback_days:]
             time.sleep(FETCH_DELAY)
-        except Exception:
-            pass
+        except Exception as e:
+            fails[type(e).__name__] = fails.get(type(e).__name__, 0) + 1
 
+    if fails:
+        print("    ⚠️  リターン取得の失敗の内訳: " + " ".join(f"{k}:{v}" for k, v in sorted(fails.items())))
     return returns
 
 
@@ -451,7 +454,8 @@ def run_correlation_heatmap(cfg) -> dict:
 
     if valid_n < 2:
         print("    ⚠️  データ不足のため相関計算をスキップ")
-        return {"skipped": True, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+        return {"skipped": True, "tickers": [], "concentration": {"summary": f"リターン取得 {valid_n}/{len(all_tickers)}"},
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
     # 相関行列計算
     corr_result  = calc_correlation_matrix(returns)

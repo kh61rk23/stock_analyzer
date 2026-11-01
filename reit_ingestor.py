@@ -27,17 +27,47 @@ METRIC_ENDPOINTS = {
 DATASET = "real_estate"
 STOP_ERRORS = ("budget", "rate_limited", "auth", "no_api_key")
 PROPS_TABLE = "reit_properties"
+# /reit/properties の limit の上限（不動産DB の仕様で最大100）。上限を超える値は拒否されることがある
+PROPERTY_LIMIT = 100
 METRICS_TABLE = "reit_metrics"
 
 
 def _rows(data) -> list[dict]:
+    """応答から行の配列を取り出す。
+
+    不動産DB は窓口ごとに配列のキー名が違う（/reit/demographic-risk は "demographic_risk"、
+    /reit/properties は "properties" 等）。知っているキーが無ければ、辞書の配列の値を1つだけ持つ応答とみなして
+    それを使う。キー名の一覧だけで判定すると、知らないキーの窓口が黙って0件になり、REIT の一覧が空のまま
+    物件を1件も取らなくなる。
+    """
     if isinstance(data, list):
         return [r for r in data if isinstance(r, dict)]
     if isinstance(data, dict):
-        for k in ("items", "results", "properties", "reits", "rows"):
+        for k in ("items", "results", "properties", "reits", "rows", "data"):
             if isinstance(data.get(k), list):
                 return [r for r in data[k] if isinstance(r, dict)]
+        lists = [v for v in data.values() if isinstance(v, list) and v and isinstance(v[0], dict)]
+        if len(lists) == 1:
+            return [r for r in lists[0] if isinstance(r, dict)]
     return []
+
+
+def latest_per_property(rows: list[dict]) -> list[dict]:
+    """同じ物件の決算期ごとの行から、決算期（period_end）が最も新しい1行だけ残す（純関数）。
+
+    /reit/properties は過去の有価証券報告書の行も返す。MERGE 側は fetched_at で1行に絞るが、同じ取得の
+    行は fetched_at が同じなので、どの期が残るかが不定になる。ここで最新期に揃えておく。
+    """
+    best: dict[tuple, dict] = {}
+    for r in rows:
+        pn = property_name_of(r)
+        if not pn:
+            continue
+        key = (reit_name_of(r), pn)
+        cur = best.get(key)
+        if cur is None or str(r.get("period_end") or "") > str(cur.get("period_end") or ""):
+            best[key] = r
+    return list(best.values())
 
 
 def reit_name_of(r: dict) -> str | None:
@@ -74,18 +104,19 @@ def collect(client, meta: dict, per_run: int, as_of: str) -> tuple[list[dict], l
         for r in rows:
             metrics.append({"endpoint": key, "reit_name": reit_name_of(r), "as_of": as_of, "fetched_at": now,
                             "payload": json.dumps(r, ensure_ascii=False)})
-            if key == "demographic_risk" and reit_name_of(r):
+            # REIT の一覧はどの指標の応答からも集める（1窓口が0件・失敗でも物件の取得が止まらないように）
+            if reit_name_of(r):
                 names.append(reit_name_of(r))
     names = sorted(set(n for n in names if n))
     picked, pos = next_reits(names, int(meta.get("pos", 0)), per_run)
     props: list[dict] = []
     done = 0
     for name in picked:
-        rows = _rows(client.get("/reit/properties", {"reit_name": name, "limit": 1000}))
+        rows = _rows(client.get("/reit/properties", {"reit_name": name, "limit": PROPERTY_LIMIT}))
         if client.last_error in STOP_ERRORS:
             break
         done += 1
-        for r in rows:
+        for r in latest_per_property(rows):
             pn = property_name_of(r)
             if pn:
                 props.append({"reit_name": reit_name_of(r) or name, "property_name": pn, "as_of": as_of,
