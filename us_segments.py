@@ -207,6 +207,14 @@ def run(cfg, client, dry_run=False, only: str | None = None) -> dict:
     return out
 
 
+def summary_line(info: dict) -> str:
+    """通知メールに載せる1行。SEC の zip は四半期に1回しか出ないので、ふだんは「新しい四半期なし」で数秒で終わる。"""
+    if info.get("quarters_done"):
+        return f"us_segments: 追加 {'・'.join(info['quarters_done'])}（{int(info.get('rows') or 0):,}行）"
+    wait = "・".join(info.get("missing") or []) or "なし"
+    return f"us_segments: 新しい四半期なし（SEC の四半期 zip は取り込み済み・公開待ち {wait}）"
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
@@ -225,6 +233,8 @@ def main(argv=None) -> int:
     except Exception as e:
         info, status, note = {}, "error", f"{type(e).__name__}: {str(e)[:150]}"
     print(f"📒 us_segments: {status} {note}")
+    if status == "success":
+        print(f"✅ {summary_line(info)}")
     if not args.dry_run and not args.only:
         try:
             from module_ledger import record_external

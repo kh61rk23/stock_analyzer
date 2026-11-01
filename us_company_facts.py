@@ -1083,6 +1083,17 @@ def judge(info: dict) -> tuple:
     return "success", note
 
 
+def summary_line(info: dict) -> str:
+    """通知メールに載せる1行（取得の通知は ✅⚠️❌ で始まる行だけを拾う）。取り直す会社が0社でも、なぜ0社かを出す。"""
+    q = int(info.get("queue") or 0)
+    cov = info.get("coverage") or {}
+    tail = f"（年次の表 {int(cov.get('annual_rows') or 0):,}行・{int(cov.get('tickers_with_annual') or 0):,}銘柄）" if cov else ""
+    if q == 0:
+        return f"us_company_facts: 新しい 10-K/10-Q を出した会社なし（今日の分は取り込み済み・週末や祝日も0社）{tail}"
+    return (f"us_company_facts: 取り直し {q}社 → 成功 {int(info.get('ok') or 0)}・財務なし {int(info.get('no_facts') or 0)}・"
+            f"失敗 {int(info.get('error') or 0)}・追加 {int(info.get('fact_rows_loaded') or 0):,}行{tail}")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["backfill", "update"], default="update")
@@ -1107,6 +1118,8 @@ def main(argv=None) -> int:
     print(f"📒 {name}: {status} {note}")
     if info:
         print(json.dumps(info, ensure_ascii=False, default=str))
+        if status == "success":
+            print(f"✅ {summary_line(info)}")
     if not args.dry_run and not args.limit:
         try:
             from module_ledger import record_external

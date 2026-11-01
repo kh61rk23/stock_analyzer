@@ -39,7 +39,9 @@ def table_counts(client, tables: list[str]) -> dict:
     for t in tables:
         try:
             x = client.get_table(f"{client.project}.{t}")
-            out[t] = {"rows": int(x.num_rows or 0), "mb": round((x.num_bytes or 0) / 1e6, 2)}
+            # ビューのメタデータは行数0なので、0行と並べると取り込みが止まったように見える。行数は出さない
+            out[t] = {"view": True} if x.table_type == "VIEW" else \
+                {"rows": int(x.num_rows or 0), "mb": round((x.num_bytes or 0) / 1e6, 2)}
         except Exception as e:
             out[t] = {"error": type(e).__name__}
     return out
@@ -260,6 +262,7 @@ def build_mail(title: str, workflow: str, steps: list[dict], counts: dict, delta
             d = delta.get(t)
             dtxt = "—" if d is None else f"{d:+,}"
             body = (f"<td>{v['rows']:,}</td><td>{dtxt}</td><td>{v['mb']:,}</td>" if "rows" in v
+                    else "<td colspan=3>ビュー（行数は元の表で見る）</td>" if v.get("view")
                     else f"<td colspan=3>読めない（{html.escape(v.get('error', ''))}）</td>")
             rows += f"<tr><td>{html.escape(t)}</td>{body}</tr>"
         parts.append("<h4>取り込み先の表</h4><table border=1 cellpadding=4 style='border-collapse:collapse;font-size:12px'>"
