@@ -54,3 +54,14 @@ def test_ignition_category_a_reads_real_rotation_keys():
     assert ign._extract_category_a("1001", bundle)["score"] == 0.0
     # A が 0.7 まで届けば、B・C と合わせて閾値 3.0 を超えうる（以前は最大 2.6 で理論上発火しなかった）
     assert ign._calc_convergence_score({"score": 0.7}, {"score": 1.0}, {"score": 0.7}) >= 3.0
+
+
+def test_emerging_old_version_cache_is_ignored(tmp_path):
+    import json
+    from datetime import datetime
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"generated": datetime.now().isoformat(), "version": "1.0", "emerging_themes": []}))
+    assert etd._load_cache(p) is None                     # キーワード表が空だった版の0件は読まない
+    p.write_text(json.dumps({"generated": datetime.now().isoformat(), "version": etd._MODULE_VERSION,
+                             "emerging_themes": []}))
+    assert etd._load_cache(p) is not None

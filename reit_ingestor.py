@@ -74,6 +74,12 @@ def reit_name_of(r: dict) -> str | None:
     return r.get("reit_name") or r.get("reitName") or r.get("investment_corporation") or r.get("name")
 
 
+def strict_reit_name_of(r: dict) -> str | None:
+    """REIT の一覧に入れる名前。name は使わない（テナント集中の行はテナント名、鑑定の下落の行は物件名のことがあり、
+    混ざると存在しない REIT の物件を取りに行って1日の枠を無駄に使う）。"""
+    return r.get("reit_name") or r.get("reitName") or r.get("investment_corporation")
+
+
 def property_name_of(r: dict) -> str | None:
     return r.get("property_name") or r.get("propertyName") or r.get("name")
 
@@ -105,17 +111,21 @@ def collect(client, meta: dict, per_run: int, as_of: str) -> tuple[list[dict], l
             metrics.append({"endpoint": key, "reit_name": reit_name_of(r), "as_of": as_of, "fetched_at": now,
                             "payload": json.dumps(r, ensure_ascii=False)})
             # REIT の一覧はどの指標の応答からも集める（1窓口が0件・失敗でも物件の取得が止まらないように）
-            if reit_name_of(r):
-                names.append(reit_name_of(r))
+            if strict_reit_name_of(r):
+                names.append(strict_reit_name_of(r))
     names = sorted(set(n for n in names if n))
     picked, pos = next_reits(names, int(meta.get("pos", 0)), per_run)
     props: list[dict] = []
     done = 0
+    truncated: list[str] = []
     for name in picked:
         rows = _rows(client.get("/reit/properties", {"reit_name": name, "limit": PROPERTY_LIMIT}))
         if client.last_error in STOP_ERRORS:
             break
         done += 1
+        # 決算期ごとの行が返るので、上限ちょうどなら物件か最新期が欠けている可能性がある（続きを取る引数は未確認）
+        if len(rows) >= PROPERTY_LIMIT:
+            truncated.append(name)
         for r in latest_per_property(rows):
             pn = property_name_of(r)
             if pn:
@@ -123,7 +133,7 @@ def collect(client, meta: dict, per_run: int, as_of: str) -> tuple[list[dict], l
                               "fetched_at": now, "payload": json.dumps(r, ensure_ascii=False)})
     new_pos = (int(meta.get("pos", 0)) + done) % len(names) if names else 0
     return props, metrics, {**meta, "reits": names, "pos": new_pos, "last_run": as_of,
-                            "last_reits": picked[:done]}
+                            "last_reits": picked[:done], "last_truncated": truncated}
 
 
 def _calls_used(client) -> int:
@@ -196,4 +206,5 @@ def run(cfg, client=None, bq=None, today: date | None = None) -> dict:
     meta_path.parent.mkdir(parents=True, exist_ok=True)
     meta_path.write_text(json.dumps(new_meta, ensure_ascii=False, indent=1), encoding="utf-8")
     return {"properties": len(props), "metrics": len(metrics), "reits": new_meta.get("last_reits"),
-            "reits_total": len(new_meta.get("reits") or []), "calls": _calls_used(client) - start}
+            "reits_total": len(new_meta.get("reits") or []), "calls": _calls_used(client) - start,
+            "truncated": new_meta.get("last_truncated") or []}

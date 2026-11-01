@@ -435,6 +435,8 @@ def _parse_mofa_rss(xml_text: str) -> dict[str, int]:
 _STATE_TITLE_ALIASES: dict[str, str] = {
     "Türkiye": "TUR", "Turkiye": "TUR", "South Korea": "KOR", "Mainland China": "CHN",
     "Burma (Myanmar)": "MMR", "Viet Nam": "VNM",
+    "Congo, Democratic Republic of the": "COD", "Democratic Republic of Congo": "COD", "DRC": "COD",
+    "The Netherlands": "NLD", "Republic of Korea": "KOR", "People's Republic of China": "CHN",
 }
 
 
@@ -472,6 +474,7 @@ def _parse_state_dept_rss(xml_text: str) -> dict[str, int]:
         return result
 
     items = re.findall(r"<item>(.*?)</item>", xml_text, re.DOTALL)
+    unmatched: list[str] = []
 
     for item in items:
         title_m = re.search(r"<title>(.*?)</title>", item, re.DOTALL)
@@ -489,7 +492,12 @@ def _parse_state_dept_rss(xml_text: str) -> dict[str, int]:
         matched_code = _state_country_of(head)
         if matched_code:
             result[matched_code] = max(result.get(matched_code, 0), level)
+        else:
+            unmatched.append(head)
 
+    # 対象外の国（対象は STATE_COUNTRY_MAP の国）は捨てる。表記ゆれで対象国を取りこぼしていないか、件数と例をログに出す
+    if unmatched:
+        print(f"   ℹ️  国務省RSS: 対象外・未対応の項目 {len(unmatched)} 件（例: {', '.join(unmatched[:5])}）")
     return result
 
 

@@ -39,7 +39,7 @@ from typing import Optional
 # BLOCK 0: モジュール定数
 # ==============================================================
 
-_MODULE_VERSION  = "1.0"
+_MODULE_VERSION  = "1.1"
 from config_sync import sync_module_constants
 
 _CFG_CONST_MAP = {
@@ -67,6 +67,9 @@ def _load_cache(cache_path: Path) -> Optional[dict]:
         if not cache_path.exists():
             return None
         raw = json.loads(cache_path.read_text(encoding="utf-8"))
+        # 作り方が変わった版のキャッシュは読まない（キーワード表が空だった版の「0件」を TTL のあいだ使い続けないため）
+        if raw.get("version") != _MODULE_VERSION:
+            return None
         generated_str = raw.get("generated", "")
         if not generated_str:
             return None

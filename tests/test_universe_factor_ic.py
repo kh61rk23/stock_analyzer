@@ -54,3 +54,41 @@ def test_run_disabled_and_empty():
         assert r["skipped"] and r["markets_skipped"] == ["US: 表が無い"]
     finally:
         m.fetch = orig
+
+
+def test_average_rank_formula_matches_sql():
+    # SQL の (RANK 昇順 + 件数 + 1 − RANK 降順) / 2 が同点の平均順位になること
+    vals = [3.0, 1.0, 1.0, 2.0, 3.0, 3.0]
+
+    def rank(v, desc=False):
+        s = sorted(vals, reverse=desc)
+        return s.index(v) + 1
+    avg = [(rank(v) + len(vals) + 1 - rank(v, True)) / 2 for v in vals]
+    assert avg == [5.0, 1.5, 1.5, 3.0, 5.0, 5.0]
+    sql = u.build_sql("p", "t", "SPY")
+    assert sql.count("+ COUNT(*) OVER (PARTITION BY score_date, factor, h) + 1") == 2   # 点とリターンの両方
+    assert "DATE_DIFF(s5.trade_date, b5.trade_date, DAY)" in sql                       # 日付がずれた銘柄を外す
+
+
+def test_one_market_failure_keeps_the_other():
+    class _Job:
+        total_bytes_billed = 0
+
+        def __init__(self, rows):
+            self._rows = rows
+
+        def result(self):
+            return [type("R", (), {"items": lambda self, d=d: d.items()})() for d in self._rows]
+
+    class _C:
+        project = "p"
+
+        def get_table(self, ref):
+            return None
+
+        def query(self, sql, job_config=None, location=None):
+            if "screener_universe_us_daily" in sql:
+                raise RuntimeError("boom")
+            return _Job([{"score_date": date(2026, 10, 1), "horizon": 5, "factor": "s_value", "ic": 0.1}])
+    rows, gb, skipped = u.fetch(_C(), date(2026, 5, 1))
+    assert [r["market"] for r in rows] == ["JP"] and skipped and skipped[0].startswith("US: RuntimeError")

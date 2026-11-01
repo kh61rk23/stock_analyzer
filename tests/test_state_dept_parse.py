@@ -33,3 +33,8 @@ def test_country_head_exact_or_segment():
     assert c._state_country_of("Mainland China, Hong Kong & Macau") == "CHN"
     assert c._state_country_of("Equatorial Guinea") is None
     assert c._state_country_of("United States") is None
+
+
+def test_congo_title_order_variant():
+    xml = "<rss>" + _item("Congo, Democratic Republic of the - Level 3: Reconsider Travel") + "</rss>"
+    assert c._parse_state_dept_rss(xml) == {"COD": 3}

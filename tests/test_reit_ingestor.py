@@ -88,3 +88,20 @@ def test_latest_per_property_keeps_newest_period():
             {"reit_name": "R", "property_name": None}]
     out = {r["property_name"]: r["v"] for r in ri.latest_per_property(rows)}
     assert out == {"P": 2, "Q": 3}
+
+
+def test_names_ignore_plain_name_and_truncation_is_reported(tmp_path, monkeypatch):
+    class C(_Client):
+        def get(self, path, params=None):
+            r = super().get(path, params)
+            if path == "/reit/tenant-concentration":
+                return {"items": [{"name": "テナントX"}]}             # name だけの行は REIT の一覧に入れない
+            if path == "/reit/properties":
+                return [{"reit_name": params["reit_name"], "property_name": f"p{j}"} for j in range(ri.PROPERTY_LIMIT)]
+            return r
+    cfg = SimpleNamespace(DATA_DIR=tmp_path, REIT_CALLS_PER_RUN=6, REIT_PROPERTY_REITS_PER_RUN=12)
+    monkeypatch.setattr(ri, "write", lambda *a: None)
+    res = ri.run(cfg, client=C(), bq=_BQ(), today=date(2026, 10, 31))
+    meta = json.loads((tmp_path / "reit_rotation_meta.json").read_text())
+    assert "テナントX" not in meta["reits"]
+    assert res["truncated"] == res["reits"] == ["R0", "R1"]

@@ -30,6 +30,7 @@ DATASET = "analytics"
 TABLE = "universe_factor_ic"
 LOCATION = "asia-northeast1"
 HORIZONS = (5, 20)
+MAX_DATE_GAP = 5   # 銘柄と指数の日付のずれの許容（暦日）
 FACTORS = ("universe_score", "rank_score", "s_move", "s_momentum", "s_technical", "s_asset", "s_quality",
            "s_growth", "s_value", "s_flow", "s_theme", "s_sector", "s_idio")
 FACTOR_LABEL = {
@@ -47,12 +48,17 @@ SCHEMA = [("market", "STRING"), ("score_date", "DATE"), ("horizon", "INT64"), ("
 def build_sql(p: str, table: str, bench: str, horizons=HORIZONS) -> str:
     """評価日 @since 以降の (評価日, 先の日数, 観点) ごとの IC を返す SELECT。
 
-    同点の順位は平均順位（昇順の RANK と降順の RANK から出す。FLOAT の列では PARTITION BY 値 が使えないため）。
+    同点の順位は点・リターンとも平均順位（昇順の RANK と降順の RANK から出す。FLOAT の列では PARTITION BY 値 が使えないため）。
     5分位は値→ティッカーのハッシュの順で切る。先のリターンで同点を割ると、上位5分の1に勝った銘柄が寄って差が大きく出る。
     """
     hj = "\n".join(f"  LEFT JOIN px s{h} ON s{h}.ticker = u.ticker AND s{h}.i = se.ei + {h}\n"
                    f"  LEFT JOIN px b{h} ON b{h}.ticker = '{bench}' AND b{h}.i = be.bi + {h}" for h in horizons)
-    hc = ",\n".join(f"    SAFE_DIVIDE(s{h}.close, se.c0) - SAFE_DIVIDE(b{h}.close, be.b0) AS ex_{h}d" for h in horizons)
+    # 銘柄ごとの取引日の番号で h 日先を取るので、売買停止や欠けのある銘柄は指数と日付がずれる。
+    # 買った日・h 日先の日付が指数と MAX_DATE_GAP 日を超えてずれた銘柄はその先の日数で使わない。
+    hc = ",\n".join(f"    IF(ABS(DATE_DIFF(s{h}.trade_date, b{h}.trade_date, DAY)) <= {MAX_DATE_GAP}"
+                     f" AND ABS(DATE_DIFF(se.d0, be.d0, DAY)) <= {MAX_DATE_GAP},"
+                     f" SAFE_DIVIDE(s{h}.close, se.c0) - SAFE_DIVIDE(b{h}.close, be.b0), NULL) AS ex_{h}d"
+                     for h in horizons)
     hu = ", ".join(f"STRUCT({h} AS h, ex_{h}d AS ex)" for h in horizons)
     cols = ", ".join(FACTORS)
     return f"""
@@ -67,13 +73,13 @@ px AS (
     AND ticker IN (SELECT DISTINCT ticker FROM u UNION DISTINCT SELECT '{bench}')
 ),
 se AS (
-  SELECT u.score_date, u.ticker, s.i AS ei, s.close AS c0
+  SELECT u.score_date, u.ticker, s.i AS ei, s.close AS c0, s.trade_date AS d0
   FROM u JOIN px s ON s.ticker = u.ticker
    AND s.trade_date BETWEEN u.score_date AND DATE_ADD(u.score_date, INTERVAL 10 DAY)
   QUALIFY ROW_NUMBER() OVER (PARTITION BY u.score_date, u.ticker ORDER BY s.trade_date) = 1
 ),
 be AS (
-  SELECT d.score_date, b.i AS bi, b.close AS b0
+  SELECT d.score_date, b.i AS bi, b.close AS b0, b.trade_date AS d0
   FROM (SELECT DISTINCT score_date FROM u) d
   JOIN px b ON b.ticker = '{bench}'
    AND b.trade_date BETWEEN d.score_date AND DATE_ADD(d.score_date, INTERVAL 10 DAY)
@@ -96,7 +102,9 @@ ranked AS (
          (RANK() OVER (PARTITION BY score_date, factor, h ORDER BY val)
           + COUNT(*) OVER (PARTITION BY score_date, factor, h) + 1
           - RANK() OVER (PARTITION BY score_date, factor, h ORDER BY val DESC)) / 2 AS rv,
-         RANK() OVER (PARTITION BY score_date, factor, h ORDER BY ex) AS re,
+         (RANK() OVER (PARTITION BY score_date, factor, h ORDER BY ex)
+          + COUNT(*) OVER (PARTITION BY score_date, factor, h) + 1
+          - RANK() OVER (PARTITION BY score_date, factor, h ORDER BY ex DESC)) / 2 AS re,
          NTILE(5) OVER (PARTITION BY score_date, factor, h ORDER BY val, FARM_FINGERPRINT(ticker)) AS q
   FROM lng
 )
@@ -199,11 +207,15 @@ def fetch(client, since: date) -> tuple[list[dict], float, list[str]]:
             skipped.append(f"{mkt}: {table} が無い")
             continue
         jc = bigquery.QueryJobConfig(query_parameters=[bigquery.ScalarQueryParameter("since", "DATE", since.isoformat())])
-        job = client.query(build_sql(client.project, table, bench), job_config=jc, location=LOCATION)
-        for r in job.result():
-            d = dict(r.items())
+        try:
+            job = client.query(build_sql(client.project, table, bench), job_config=jc, location=LOCATION)
+            got = [dict(r.items()) for r in job.result()]
+        except Exception as e:   # 片方の市場が失敗しても、もう片方は書く
+            skipped.append(f"{mkt}: {type(e).__name__}: {str(e)[:80]}")
+            continue
+        for d in got:
             d["market"] = mkt
-            rows.append(d)
+        rows.extend(got)
         gb += (job.total_bytes_billed or 0) / 1024 ** 3
     return rows, round(gb, 3), skipped
 
