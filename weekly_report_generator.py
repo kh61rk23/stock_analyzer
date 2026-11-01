@@ -4,7 +4,7 @@
 # 【概要】
 #   毎週月曜に run_all_tasks() の全モジュール結果を統合し、
 #   「今週の注目セクターTOP3」「リスク要因サマリー」等を含む
-#   Markdown 週次レポートを自動生成して Gmail/LINE に配信する。
+#   Markdown 週次レポートを自動生成して Gmail に配信する。
 #
 # 【入力】results dict（run_all_tasks の返り値）
 #
@@ -2114,7 +2114,7 @@ def _section_pearl_ranking(results: dict, cfg=None) -> list:
         min_score_str = f"{getattr(cfg, 'PEARL_MIN_SCORE_ALERT', 80):.0f}" if cfg else "80"
         mcap_str      = f"{getattr(cfg, 'PEARL_MCAP_MAX_ALERT_B', 500):.0f}" if cfg else "500"
         lines.append(
-            f"### ⭐⭐ Tier SS（Pearl≥{min_score_str}pt × 時価総額≤{mcap_str}億 → LINE即時通知対象）"
+            f"### ⭐⭐ Tier SS（Pearl≥{min_score_str}pt × 時価総額≤{mcap_str}億）"
         )
         lines.append("")
         for c in ss_stocks[:5]:
@@ -3888,7 +3888,7 @@ def generate_weekly_report(cfg, results: dict) -> dict:
 
 
 # ==============================================================
-# BLOCK 11: Gmail/LINE 向けフォーマット生成
+# BLOCK 11: Gmail 向けフォーマット生成
 # ==============================================================
 
 def build_weekly_email_html(report_md: str, summary: dict) -> str:
@@ -4027,35 +4027,6 @@ def build_weekly_email_html(report_md: str, summary: dict) -> str:
 """
 
 
-def build_weekly_line_message(summary: dict) -> str:
-    """
-    LINE 向け週次サマリー（短縮版）を生成する。
-    """
-    today   = summary.get("report_date", datetime.now().strftime("%Y-%m-%d"))
-    top3    = summary.get("top3_sectors", [])
-    bot3    = summary.get("bottom3_sectors", [])
-    n_pass  = summary.get("screener_pass", 0)
-    picks   = summary.get("top_picks", [])
-
-    lines = [
-        f"【週次レポート】{today}",
-        "",
-        "📈 注目業種TOP3",
-    ]
-    for i, name in enumerate(top3[:3], 1):
-        lines.append(f"  {i}. {name}")
-
-    lines += [
-        "",
-        f"📉 警戒業種: {' / '.join(bot3[:3])}",
-        f"🔍 スクリーナー通過: {n_pass}社",
-    ]
-    if picks:
-        lines.append(f"💡 注目銘柄: {' / '.join(picks[:3])}")
-
-    return "\n".join(lines)
-
-
 # ==============================================================
 # BLOCK 12: run_all_tasks エントリポイント
 # ==============================================================
@@ -4068,8 +4039,7 @@ def run_weekly_report(cfg, results: dict) -> dict:
     処理フロー:
       1. generate_weekly_report() でMarkdown生成
       2. Gmail に HTML 版を送信（ALERT_GMAIL_* 設定を流用）
-      3. LINE に短縮版を送信（ALERT_LINE_TOKEN を流用）
-      4. results["weekly_report"] に結果を格納
+      3. results["weekly_report"] に結果を格納
          → alert_notifier.py が⑦アラートとして追加表示
     """
     if not getattr(cfg, "ENABLE_WEEKLY_REPORT", True):
@@ -4121,37 +4091,6 @@ def run_weekly_report(cfg, results: dict) -> dict:
             err = f"Gmail: {str(e)[:80]}"
             errors.append(err)
             print(f"    ⚠️  {err}")
-
-    # ── LINE 送信 ───────────────────────────────────────────────
-    line_token   = getattr(cfg, "ALERT_LINE_TOKEN",   "")
-    line_user_id = getattr(cfg, "ALERT_LINE_USER_ID", "")
-    if line_token and line_user_id:
-        try:
-            import urllib.request
-            import json as _json
-            line_msg = build_weekly_line_message(summary)
-            payload  = _json.dumps({
-                "to":       line_user_id,
-                "messages": [{"type": "text", "text": line_msg}],
-            }).encode("utf-8")
-            req = urllib.request.Request(
-                "https://api.line.me/v2/bot/message/push",
-                data=payload,
-                headers={
-                    "Authorization":  f"Bearer {line_token}",
-                    "Content-Type":   "application/json",
-                },
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                if resp.status == 200:
-                    sent_channels.append("LINE")
-                    print("    ✅ 週次レポート LINE 送信成功")
-                else:
-                    errors.append(f"LINE: status={resp.status}")
-        except Exception as e:
-            errors.append(f"LINE: {str(e)[:60]}")
-            print(f"    ⚠️  LINE送信エラー: {str(e)[:60]}")
 
     report_result["sent_channels"] = sent_channels
     report_result["errors"]        = errors

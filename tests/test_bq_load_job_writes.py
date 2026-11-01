@@ -168,6 +168,7 @@ def test_price_history_writer_uses_load(fake, monkeypatch):
     monkeypatch.setattr(yf_cache, "collected_prices", lambda: {"A": object()})
     monkeypatch.setattr(yf_cache, "stats", lambda: {"info_miss": 0, "history_miss": 0, "download_miss": 0})
     monkeypatch.setattr(w, "build_price_rows", lambda *a, **k: list(rows))
+    monkeypatch.setattr(w, "fetch_existing_keys", lambda days: set())
     out = w.run_price_history_writer(types.SimpleNamespace(), {})
     assert out["inserted"] is True
     j = _assert_loaded(fake, "analytics.price_daily")

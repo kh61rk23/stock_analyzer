@@ -15,7 +15,7 @@
 #
 # 【alert_notifier.py との連携】
 #   results["anomaly"] に本モジュールの返値を格納することで
-#   extract_alerts() から参照し、異常アラートを Gmail/LINE 送信できる。
+#   extract_alerts() から参照し、異常アラートを Gmail 送信できる。
 #   → anomaly_diff.txt の差分4を alert_notifier.py に適用すること。
 #
 # 【GitHub Actions 処理時間目安】

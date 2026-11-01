@@ -101,7 +101,6 @@ SCHEMA: dict[str, list[str]] = {
     "latent_pearl": ["stock_analyzer_main"],
     "leading_indicator_signals": ["stock_analyzer_main"],
     "learning_audit": ["stock_analyzer_main"],
-    "line": ["alert_notifier"],
     "longterm_scenario": ["stock_analyzer_main"],
     "macro": ["stock_analyzer_main"],
     "macro_delta_alerts": ["stock_analyzer_main"],

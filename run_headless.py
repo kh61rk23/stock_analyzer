@@ -30,8 +30,6 @@ def apply_env_overrides(cfg):
         "ALERT_GMAIL_FROM":           "ALERT_GMAIL_FROM",
         "ALERT_GMAIL_PASSWORD":       "ALERT_GMAIL_PASSWORD",
         "ALERT_GMAIL_TO":             "ALERT_GMAIL_TO",
-        "ALERT_LINE_TOKEN":           "ALERT_LINE_TOKEN",
-        "ALERT_LINE_USER_ID":         "ALERT_LINE_USER_ID",
         "EDINETDB_API_KEY":           "EDINETDB_API_KEY",
         "EDINET_GOV_API_KEY":         "EDINET_GOV_API_KEY",
         "FUDOSAN_API_KEY":            "FUDOSAN_API_KEY",

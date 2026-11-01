@@ -14,7 +14,7 @@
 #   buy_bonus      = 買い取引 +8pt / 売り取引 +0pt
 #   final_score    = min(100, base_score * committee_mult
 #                        + sector_bonus + buy_bonus)
-#   ★ ALERT_POLITICIAN_MIN_SCORE(デフォルト60) 以上 → LINE即時通知
+#   ★ ALERT_POLITICIAN_MIN_SCORE(デフォルト60) 以上 → 即時アラート
 #
 # 【生成ファイル】
 #   CACHE_DIR/politician_history.json  TTL: 180日, 日次更新

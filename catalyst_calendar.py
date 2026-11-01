@@ -5,7 +5,7 @@
 # 【役割】
 #   4大カタリスト（決算発表・中央銀行会合・経済指標・政策イベント）の
 #   予定日を管理し、各銘柄/セクターへの proximity_score を算出する。
-#   3カタリスト以上が14日以内に重複した場合に LINE最優先通知（トリガー㉔）。
+#   3カタリスト以上が14日以内に重複した場合に Triple Catalyst（トリガー㉔）とする。
 #
 # 【4大カタリスト定義】
 #   Type 1: earnings      - 決算発表日（yfinance calendar から取得）
@@ -24,7 +24,7 @@
 #
 # 【3点重複（Triple Catalyst）発動条件】
 #   14日以内に3種類以上のカタリストが同一ティッカー/セクターに集中
-#   → LINE最優先通知（alert_notifier.py トリガー㉔）
+#   → alert_notifier.py トリガー㉔（メールには載せない）
 #
 # 【生成キャッシュ】
 #   catalyst_calendar.json   TTL: 前日生成分まで（FOMC 元リストが変われば即破棄）

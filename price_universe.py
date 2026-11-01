@@ -13,9 +13,17 @@
 #   通常: 直近 DAILY_PERIOD（既定5日）を取り、BQに無い (ticker, trade_date) だけ追記
 #   --backfill: BACKFILL_PERIOD（既定1年）を取る（初回の過去分。重複は同じ除外で防ぐ）
 #
+# 【取り直しの意味（上書きはしない）】
+#   既に BQ にある (ticker, trade_date) は飛ばす。上書きも行の追加もしない。
+#   5日分を取り直すのは、前の回が落ちた・捨てられた・制限で取れなかった日の穴埋めのため
+#   （1回分の穴なら次の回で埋まる）。既にある日の値が後から変わっても（株式分割の調整・訂正）
+#   直さない。yfinance の日足は分割で過去分が調整し直されるので、分割の前後で値の基準がずれうる。
+#
 # 【費用・重複】
 #   書き込みは load job（無料・クエリ枠を使わない）。既存キーの照会はパーティションを
-#   絞った 1 クエリだけ。それでも混入した重複は analytics.price_daily_latest ビュー
+#   絞った 1 クエリ（日米まとめて1回・直近 EXISTING_KEY_DAYS_DAILY 日。課金は下限の10MB）。
+#   同じ表へは日次本体の price_history_writer も直近数日を既存を見ずに足すので、重複は
+#   そちらから入る。読むときは analytics.price_daily_latest ビュー
 #   （ticker, trade_date ごとに ingested_at 最新）で除く。
 #
 # 【取得の作法】
@@ -463,7 +471,8 @@ def download_chunk(yf, chunk: list[str], period: str):
 
 
 def run_market(market: str, cfg, client, backfill: bool = False, limit: int = 0,
-               dry_run: bool = False, yf=None) -> dict:
+               dry_run: bool = False, yf=None, existing: set | None = None) -> dict:
+    """1市場ぶんを取って足す。existing（既存キー）を渡せば照会を省く（日米で1回にするため）。"""
     t0 = time.time()
     now = datetime.now(timezone.utc)
     today = now.astimezone(ZoneInfo("Asia/Tokyo")).date().isoformat()
@@ -488,8 +497,10 @@ def run_market(market: str, cfg, client, backfill: bool = False, limit: int = 0,
 
     if yf is None:
         import yfinance as yf
-    existing = set() if dry_run else existing_keys(
-        client, EXISTING_KEY_DAYS_BACKFILL if backfill else EXISTING_KEY_DAYS_DAILY)
+    if dry_run:
+        existing = set()
+    elif existing is None:
+        existing = existing_keys(client, EXISTING_KEY_DAYS_BACKFILL if backfill else EXISTING_KEY_DAYS_DAILY)
     if not dry_run:
         ensure_view(client)
     cutoff = market_cutoff_date(market, now)
@@ -635,10 +646,15 @@ def main(argv=None) -> int:
         client = None  # dry-run は BQ 不要（JPユニバースはキャッシュがある時だけ使える）
     markets = ["jp", "us"] if args.market == "all" else [args.market]
     bad: list[str] = []
+    # 既存キーは日米まとめて1回だけ引く（表は日米共通。市場ごとに引くと課金の下限10MBが2回になる）
+    existing = None
+    if not args.dry_run:
+        existing = existing_keys(client, EXISTING_KEY_DAYS_BACKFILL if args.backfill else EXISTING_KEY_DAYS_DAILY)
     for m in markets:
         name = f"price_universe_{'backfill_' if args.backfill else ''}{m}"
         try:
-            info = run_market(m, cfg, client, backfill=args.backfill, limit=args.limit, dry_run=args.dry_run)
+            info = run_market(m, cfg, client, backfill=args.backfill, limit=args.limit, dry_run=args.dry_run,
+                              existing=existing)
             status, note = info["status"], _note(info)
         except Exception as e:
             info, status, note = {}, "error", f"{type(e).__name__}: {str(e)[:150]}"

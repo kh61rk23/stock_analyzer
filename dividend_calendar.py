@@ -252,7 +252,7 @@ def _fmt_days(days: int) -> str:
 
 
 def format_dividend_alert_text(result: dict) -> str:
-    """週次レポート・LINE 向けテキストを生成する。"""
+    """週次レポート向けテキストを生成する。"""
     upcoming = result.get("upcoming_30d", [])
     urgent   = result.get("urgent_7d", [])
 

@@ -32,7 +32,7 @@
 #   $M_{proxy} > -2.22$ → 利益操作リスクあり（D3 にペナルティ）
 #
 # 【Pearl ティア → quality_score ボーナス】
-#   SS (score >= 80): +15pt    ← LINE即時通知対象
+#   SS (score >= 80): +15pt
 #   S  (score >= 70): +10pt
 #   A  (score >= 60): +5pt
 #   B  (score >= 50): +2pt

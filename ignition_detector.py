@@ -13,9 +13,9 @@
 #   w_A=0.40 / w_B=0.35 / w_C=0.25（config.py BLOCK 30 で上書き可能）
 #   最大値 = 5.0
 #
-# 【LINE通知閾値】
-#   $convergence\_score \geq 3.0$ → LINE即時通知（alert_notifier.py トリガー㉑）
-#   $convergence\_score \geq 3.5$ かつ14日以内2回以上 → 最高警戒LINE
+# 【通知閾値】（変数名の LINE は旧名）
+#   $convergence\_score \geq 3.0$ → アラート（alert_notifier.py トリガー㉑）
+#   $convergence\_score \geq 3.5$ かつ14日以内2回以上 → 最高警戒
 #
 # 【カテゴリ定義】
 #   Category A（資金フロー）: signal_aggregator money_flow / 機関投資家保有率 / ローテーション
@@ -50,8 +50,8 @@ from config_sync import sync_module_constants
 # BLOCK 0: デフォルト定数（config.py BLOCK 30 で上書き可能）
 # ==============================================================
 
-_DEFAULT_MIN_SCORE_LINE      = 3.0    # LINE通知閾値
-_DEFAULT_CRITICAL_SCORE      = 3.5    # 最高警戒LINE閾値
+_DEFAULT_MIN_SCORE_LINE      = 3.0    # 通知閾値
+_DEFAULT_CRITICAL_SCORE      = 3.5    # 最高警戒閾値
 _DEFAULT_CRITICAL_REPEAT     = 14     # 最高警戒反復判定日数
 _DEFAULT_ALERT_TTL           = 14     # ignition_alerts.json TTL（日）
 _DEFAULT_HISTORY_TTL         = 180    # ignition_history.json TTL（日）
@@ -529,7 +529,7 @@ def _check_critical_repeat(
         cfg:         config モジュール（None 可）
 
     Returns:
-        bool: True → 最高警戒LINE発動条件を満たす
+        bool: True → 最高警戒の発動条件を満たす
     """
     try:
         crit_score  = float(getattr(cfg, "IGNITION_MAX_SCORE_LINE_CRITICAL",

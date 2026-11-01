@@ -6,8 +6,9 @@
 #   デイリー : 月〜土 09:17 JST (= UTC 00:17)  cron "17 0 * * 1-6"
 #   連鎖     : 取得 workflow（日本企業の開示データ取得・08:17 JST）が終わったら起動する（workflow_run）。
 #              GitHub の定時実行は数時間遅れたり捨てられたりするので、データが揃った合図で動かすのを本線にする。
-#   予備     : 同じ日の 12:17・15:17 JST（UTC 03:17・06:17）。gate ジョブ（tools/run_gate.py）が、その日（JST）に
-#              分析が済んだ・実行中の回があるか、取得が実行中（終われば連鎖する）なら何もしない
+#   予備     : 同じ日の 13:17 JST（UTC 04:17）の1回だけ。定時と合わせて時刻での起動は1日2回まで。
+#              gate ジョブ（tools/run_gate.py）が GitHub の実行履歴だけを見て、その日（JST）に分析が済んだ・実行中の回が
+#              あるか、取得が実行中（終われば連鎖する）なら、依存のインストールも BigQuery の認証もせずに抜ける
 #   ウィークリー: 毎週月曜 09:17 JST に自動切替
 #       └ デイリー cron は月〜土の UTC 00:17 に発火する。月曜 UTC 00:17 =
 #         月曜 09:17 JST であり、その回を "Set execution mode" が
@@ -26,8 +27,6 @@
 #   ALERT_GMAIL_FROM      送信元 Gmail アドレス
 #   ALERT_GMAIL_PASSWORD  Gmail App Password（16桁）
 #   ALERT_GMAIL_TO        送信先アドレス（同じアドレスでも可）
-#   ALERT_LINE_TOKEN      LINE Messaging API チャネルアクセストークン（任意）
-#   ALERT_LINE_USER_ID    通知先 LINE ユーザーID（任意）
 #   POLICY_FRED_API_KEY   FRED API キー（任意）
 #   BQ_PROJECT_ID         BigQuery プロジェクト ID
 #   BQ_CREDENTIALS        BigQuery サービスアカウント JSON（文字列）
@@ -60,8 +59,7 @@ on:
     - cron: "17 0 * * 1-6"    # UTC 00:17 = JST 09:17（月〜土）
     # 予備の起動。本番の回が捨てられた・失敗した日だけ動く（判定は下の gate ジョブ）。
     # 同じ UTC 日の中に置くので、月曜の weekly 判定は変わらない。
-    - cron: "17 3 * * 1-6"    # UTC 03:17 = JST 12:17
-    - cron: "17 6 * * 1-6"    # UTC 06:17 = JST 15:17
+    - cron: "17 4 * * 1-6"    # UTC 04:17 = JST 13:17
 
   # ── 連鎖: 取得 workflow が終わったら（取得が見送られた回でも。二重は gate が止める）──
   workflow_run:
@@ -98,10 +96,10 @@ permissions:
   actions: read     # actions_usage.py が当月の実行履歴（使用分数）を読む
 
 jobs:
-  # 定時の回だけ、その日（UTC）にもう済んでいるかを見る。手動実行は必ず走らせる。
-  # 済み＝成功した回か実行中の回がある、または失敗が2回ある（同じ失敗の繰り返しで API の日次枠を使い切らないため）。
-  # mode=single の手動実行も「成功した回」に数えるので、その日の定時の回が見送られる点に注意。
   # 定時・連鎖の回だけ、今日（JST）もう要らないかを見る（tools/run_gate.py）。手動実行は必ず走らせる。
+  # 済み＝本処理ジョブが成功・実行中の回がある、または失敗が2回ある（同じ失敗の繰り返しで API の日次枠を使い切らないため）。
+  # 読むのは GitHub の実行履歴だけ（tools だけの sparse checkout・素の python3）。BigQuery・有料 API は使わない。
+  # 取得 workflow は予備の回（gate で見送り）も完了として連鎖を起こすので、連鎖は1日2回届く。2回目はここで抜ける。
   # 日曜（JST）は動かさない。mode=single の手動実行も本処理ジョブが成功すると「済み」に数える点に注意。
   gate:
     name: 🚦 今日の実行が要るか
@@ -342,8 +340,6 @@ jobs:
           ALERT_GMAIL_FROM:     ${{ secrets.ALERT_GMAIL_FROM }}
           ALERT_GMAIL_PASSWORD: ${{ secrets.ALERT_GMAIL_PASSWORD }}
           ALERT_GMAIL_TO:       ${{ secrets.ALERT_GMAIL_TO }}
-          ALERT_LINE_TOKEN:     ${{ secrets.ALERT_LINE_TOKEN }}
-          ALERT_LINE_USER_ID:   ${{ secrets.ALERT_LINE_USER_ID }}
           POLICY_FRED_API_KEY:  ${{ secrets.POLICY_FRED_API_KEY }}
           ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
           GOOGLE_CSE_API_KEY:   ${{ secrets.GOOGLE_CSE_API_KEY }}

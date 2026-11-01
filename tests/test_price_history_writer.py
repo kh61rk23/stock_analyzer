@@ -9,6 +9,12 @@ import price_history_writer as w
 TODAY = date.today()
 
 
+@pytest.fixture(autouse=True)
+def _no_bq_lookup(monkeypatch):
+    """既存キーの照会は実BQへ行かせない（個別のテストが上書きする）。"""
+    monkeypatch.setattr(w, "fetch_existing_keys", lambda days: set())
+
+
 def _df(days=5, close_base=100.0, with_volume=True):
     idx = pd.to_datetime([TODAY - timedelta(days=i) for i in range(days)][::-1])
     data = {
@@ -105,6 +111,48 @@ class TestBuildRows:
 
 
 class TestRunner:
+    def test_existing_keys_are_skipped(self, monkeypatch):
+        sent = {}
+        import edinet_bq_client
+        import yf_cache
+        df = _df(3)
+        monkeypatch.setattr(edinet_bq_client, "insert_rows",
+                            lambda rows=None, table_ref="": sent.update(rows=rows) or True)
+        monkeypatch.setattr(yf_cache, "collected_prices", lambda: {"6501.T": df})
+        all_rows = w.build_price_rows({"6501.T": df}, date.today() - timedelta(days=7))
+        have = {("6501.T", all_rows[0]["trade_date"])}
+        monkeypatch.setattr(w, "fetch_existing_keys", lambda days: have)
+        res = w.run_price_history_writer(object(), {})
+        assert len(sent["rows"]) == len(all_rows) - 1
+        assert res["duplicates"] == 1
+
+    def test_all_existing_writes_nothing(self, monkeypatch):
+        import edinet_bq_client
+        import yf_cache
+        df = _df(2)
+        called = []
+        monkeypatch.setattr(edinet_bq_client, "insert_rows", lambda **k: called.append(1) or True)
+        monkeypatch.setattr(yf_cache, "collected_prices", lambda: {"6501.T": df})
+        have = {("6501.T", r["trade_date"])
+                for r in w.build_price_rows({"6501.T": df}, date.today() - timedelta(days=7))}
+        monkeypatch.setattr(w, "fetch_existing_keys", lambda days: have)
+        res = w.run_price_history_writer(object(), {})
+        assert res["skipped"] is True and not called
+
+    def test_lookup_failure_falls_back_to_all_rows(self, monkeypatch):
+        sent = {}
+        import edinet_bq_client
+        import yf_cache
+
+        def boom(days):
+            raise RuntimeError("BQ down")
+        monkeypatch.setattr(w, "fetch_existing_keys", boom)
+        monkeypatch.setattr(edinet_bq_client, "insert_rows",
+                            lambda rows=None, table_ref="": sent.update(rows=rows) or True)
+        monkeypatch.setattr(yf_cache, "collected_prices", lambda: {"6501.T": _df(2)})
+        res = w.run_price_history_writer(object(), {})
+        assert res["inserted"] is True and len(sent["rows"]) == 2
+
     def test_writes_what_the_cache_collected(self, monkeypatch):
         sent = {}
 

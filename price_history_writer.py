@@ -12,10 +12,10 @@
 #   本モジュールがその時系列（price_daily）を残す唯一の経路。
 #
 # 【重複の扱い】
-#   同じ (ticker, trade_date) は毎日重複しうる。全期間を毎回入れると
-#   肥大するため、直近 PRICE_WRITE_LOOKBACK_DAYS 日だけを対象にする。
-#   BQ側の重複は分析時に QUALIFY ROW_NUMBER() で最新を採る前提
-#   （ストリーミングINSERT直後の行はMERGEできないため、MERGEは使わない）。
+#   直近 LOOKBACK_DAYS 日だけを対象にし、BQ に既にある (ticker, trade_date) は
+#   飛ばす（price_universe.existing_keys と同じ。日付で絞った 1 クエリ・課金は下限の10MB）。
+#   照会に失敗したときは全行を追記する（読む側の analytics.price_daily_latest が重複を除く）。
+#   既にある日の値は上書きしない（price_universe と同じ扱い）。
 #
 # 【依存】yf_cache / edinet_bq_client / config.py
 # ==============================================================
@@ -118,6 +118,18 @@ def build_price_rows(
     return rows
 
 
+def drop_existing(rows: list[dict], existing: set) -> list[dict]:
+    """既に BQ にある (ticker, trade_date) の行を除く（純粋関数）。"""
+    return [r for r in rows if (r["ticker"], r["trade_date"]) not in existing]
+
+
+def fetch_existing_keys(days: int) -> set:
+    """直近 days 日に BQ にある (ticker, trade_date)。price_universe と同じ照会を1回だけ行う。"""
+    from edinet_bq_client import EDINETBQClient
+    from price_universe import existing_keys
+    return existing_keys(EDINETBQClient().client, days)
+
+
 def run_price_history_writer(cfg, results: dict = None) -> dict:
     """yf_cache が集めた日足を BQ へ書き出す。
 
@@ -151,7 +163,18 @@ def run_price_history_writer(cfg, results: dict = None) -> dict:
         return {"skipped": True, "rows": 0, "tickers": len(prices),
                 "inserted": False, "reason": f"直近{LOOKBACK_DAYS}日の行なし"}
 
-    print(f"    💾 株価履歴: {len(prices)}銘柄 / 直近{LOOKBACK_DAYS}日 {len(rows)}行")
+    built = len(rows)
+    try:
+        # since は date.today()（実行環境の日付）。JST との1日のずれを覆うため +1 日広く引く
+        rows = drop_existing(rows, fetch_existing_keys(int(LOOKBACK_DAYS) + 1))
+    except Exception as exc:
+        print(f"    ⚠️  株価履歴の既存キー照会に失敗（全行を追記）: {str(exc)[:80]}")
+    skipped_dup = built - len(rows)
+    if not rows:
+        return {"skipped": True, "rows": 0, "tickers": len(prices), "inserted": False,
+                "reason": f"直近{LOOKBACK_DAYS}日は全て登録済み（{built}行）", "duplicates": skipped_dup}
+
+    print(f"    💾 株価履歴: {len(prices)}銘柄 / 直近{LOOKBACK_DAYS}日 {built}行のうち新規 {len(rows)}行")
 
     try:
         from edinet_bq_client import insert_rows
@@ -164,4 +187,4 @@ def run_price_history_writer(cfg, results: dict = None) -> dict:
     if ok:
         print(f"    ✅ BQ `{_TABLE}` 格納: {len(rows)}行")
     return {"skipped": False, "rows": len(rows), "tickers": len(prices),
-            "inserted": bool(ok), "reason": ""}
+            "inserted": bool(ok), "reason": "", "duplicates": skipped_dup}
