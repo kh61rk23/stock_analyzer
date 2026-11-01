@@ -96,7 +96,7 @@ python3 maintenance_packet.py   # 全監査+台帳+直近変更を MAINTENANCE_P
 ## このシステムの構造（30秒）
 
 - エントリ: GitHub Actions。取得（fetch_jp_filings.yml・08:17 JST・EdinetDB の 08:00 更新の後）が終わると daily_run.yml が
-  連鎖して起動する（workflow_run）。定時 cron "17 0 * * 1-6"（09:17 JST）と予備（12:17・15:17）は保険
+  連鎖して起動する（workflow_run）。定時 cron "17 0 * * 1-6"（09:17 JST）と予備（13:17 の1回）は保険
   → run_headless.py → stock_analyzer_main.run_all_tasks()（月曜は自動で weekly モード）
   ※ 日曜は市場が動かないため停止。public リポジトリなので Actions の分数に上限は無い。
     gate ジョブ（tools/run_gate.py）が「今日（JST）分析ジョブが実行中・成功の回がある／取得が実行中／日曜」なら見送る。
@@ -107,6 +107,7 @@ python3 maintenance_packet.py   # 全監査+台帳+直近変更を MAINTENANCE_P
 - パイプライン宣言: pipeline_registry.json（108ステージ・AST自動生成・手動編集禁止）
 - データ契約: results_schema.py（150キー）
 - 日本株スクリーナー: 全上場の一次採点（screener_universe.py・既存の評価部品を全上場に当てる・時価総額で足切りしない）→ 上位だけ二次評価（stock_screener.py）
+- 米国株スクリーナー: 同じ形。全上場の一次採点（us_screener_universe.py・観点は日本と揃える）→ 上位200社だけ二次評価（us_stock_screener.py）
 - 投資審議: 日次で審議キューを BQ invest.deliberation_queue へ（deliberation_queue.py）→ Claude Code クラウド定時実行（隔週）が `.claude/skills/invest-dept` のクラウド審議モードで4エージェント審議し invest.deliberations へ登録。
   部則・審議スキルの正本は vault の B-investment。git には入れず、obsidian_sync rules → tools/sync_invest_rules.py が BQ `private.state_files` へ保存する。
   routine は最初に `python3 state_store.py restore --prefix investment_dept/ .claude/skills/invest- --force` で取り出して読む（取り出した写しは直接編集しない）
