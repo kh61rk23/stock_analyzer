@@ -936,9 +936,10 @@ def _generate_investment_cards(
 
         # ① スコア評価
         if comp_score >= 70:
+            _tf = _se.top_factor_text(c) if _se else ""
             reasons_buy.append(
-                f"総合スコア{comp_score:.0f}pt（上位水準）— "
-                f"{sector_name}の{phase_label}における優位性が高い"
+                f"総合スコア{comp_score:.0f}pt（上位水準）"
+                + (f"— 主な押し上げ要因: {_tf}" if _tf else "")
             )
         elif comp_score < 50:
             reasons_avoid.append(
@@ -1822,35 +1823,6 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ 経済サイクル判定: スキップ（ENABLE_ECONOMIC_CYCLE=False）")
 
-    # ── [R-5] 10年シナリオプランナー ────────────────────────────
-    if getattr(cfg, "ENABLE_LONGTERM_SCENARIO", True) and _in_mode("longterm_scenario"):
-        try:
-            _ls = _load_local_module(
-                "longterm_scenario",
-                "/content/longterm_scenario.py",
-                cfg.DRIVE_BASE / "longterm_scenario.py",
-            )
-            if _ls:
-                ls_result = _ls.run_longterm_scenario(cfg, results)
-                results["longterm_scenario"] = ls_result
-                
-                # screener 通過銘柄に長期スコアを付与
-                if results.get("screener") and not ls_result.get("skipped"):
-                    _ls.enrich_candidates_with_longterm(
-                        results["screener"].get("candidates", []), ls_result
-                    )
-                    
-                dominant = ls_result.get("dominant_scenario", "")
-                triggers = len(ls_result.get("auto_triggers", []))
-                logger.add(
-                    "longterm_scenario", "success",
-                    f"支配シナリオ={dominant} / トリガー{triggers}件",
-                )
-        except Exception as e:
-            logger.add("longterm_scenario", "error", str(e)[:100])
-            print(f"  ⚠️  シナリオプランナーエラー: {str(e)[:80]}")
-    else:
-        print("  ⏩ シナリオプランナー: スキップ")
     # ── [D-2] 長期債務サイクル指標 ───────────────────────────
     if getattr(cfg, "ENABLE_DEBT_CYCLE", True) and _in_mode("economic_cycle"):
         try:
@@ -4142,8 +4114,9 @@ def run_all_tasks(mode: str = "all") -> dict:
             if _pb:
                 pb_result = _pb.run_paper_trading(cfg, results)
                 results["paper_summary"] = pb_result
+                # 口座は equity を持つ dict。"price" など口座以外の dict を数えない
                 _pb_accounts = [v for v in pb_result.values()
-                                if isinstance(v, dict)]
+                                if isinstance(v, dict) and "equity" in v]
                 logger.add("paper_broker", "success",
                            f"戦略:{len(_pb_accounts)}口座 "
                            f"約定:{sum(v.get('fills', 0) for v in _pb_accounts)}件 "
@@ -4246,6 +4219,17 @@ def run_all_tasks(mode: str = "all") -> dict:
         except Exception as exc:
             logger.add("tech_map", "error", str(exc)[:100])
 
+        # 日次メールの審議キュー節は BQ の当日分書き込み（後段の run_daily）より前に組まれるため、
+        # 書き込まずに組んだ今日のキューを results に載せて渡す。失敗しても BQ 読みに戻るだけ。
+    if (getattr(cfg, "ENABLE_ALERT", False) and getattr(cfg, "ENABLE_DELIBERATION_QUEUE", True)
+            and _in_mode("deliberation_queue")):
+        try:
+            import deliberation_queue as _dlq_pre
+            results["deliberation_queue"] = _dlq_pre.preview_daily(
+                cfg, (results.get("screener") or {}).get("candidates") or [])
+        except Exception as e:
+            print(f"  ⚠️  審議キューの先行作成を飛ばす（メールは BQ の前回分を読む）: {str(e)[:100]}")
+
         # ── アラート通知（米国株スクリーナーの後。メールの米国株サマリーがその結果を読む）────────────────
     if getattr(cfg, "ENABLE_ALERT", False):
         try:
@@ -4306,7 +4290,38 @@ def run_all_tasks(mode: str = "all") -> dict:
             logger.add("stock_snapshot", "error", str(_sswe)[:100])
             print(f"  ⚠️  スナップショット格納エラー（スキップ）: {str(_sswe)[:60]}")
 
-        # ── 推奨のその後（通過銘柄の 5・20・60 取引日後の騰落）を stock_snapshot の後に更新 ──
+    # ── [R-5] 10年シナリオプランナー ────────────────────────────
+    # 業種スコア（results["sectors"]）とスクリーナーの後で動かす。投資スタンスは業種の composite_score を読むので、
+    # それより前に動かすと全業種が既定の50点のまま判定され、全業種が「回避」になる。
+    if getattr(cfg, "ENABLE_LONGTERM_SCENARIO", True) and _in_mode("longterm_scenario"):
+        try:
+            _ls = _load_local_module(
+                "longterm_scenario",
+                "/content/longterm_scenario.py",
+                cfg.DRIVE_BASE / "longterm_scenario.py",
+            )
+            if _ls:
+                ls_result = _ls.run_longterm_scenario(cfg, results)
+                results["longterm_scenario"] = ls_result
+                
+                # screener 通過銘柄に長期スコアを付与
+                if results.get("screener") and not ls_result.get("skipped"):
+                    _ls.enrich_candidates_with_longterm(
+                        results["screener"].get("candidates", []), ls_result
+                    )
+                    
+                dominant = ls_result.get("dominant_scenario", "")
+                triggers = len(ls_result.get("auto_triggers", []))
+                logger.add(
+                    "longterm_scenario", "success",
+                    f"支配シナリオ={dominant} / トリガー{triggers}件",
+                )
+        except Exception as e:
+            logger.add("longterm_scenario", "error", str(e)[:100])
+            print(f"  ⚠️  シナリオプランナーエラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ シナリオプランナー: スキップ")
+    # ── 推奨のその後（通過銘柄の 5・20・60 取引日後の騰落）を stock_snapshot の後に更新 ──
     if getattr(cfg, "ENABLE_PICK_OUTCOMES", True) and _in_mode("screener"):
         try:
             import pick_outcomes as _po
@@ -5128,12 +5143,12 @@ def run_all_tasks(mode: str = "all") -> dict:
                 if _contraction.get("triggered_flags"):
                     print(f"      発動条件: {_contraction['triggered_flags']}")
 
-                # 縮退履歴を保存（Warning/Emergency 時のみ）
-                if _mode != "Normal":
-                    try:
-                        _ro_cf.save_contraction_history(cfg, _contraction)
-                    except Exception:
-                        pass
+                # 縮退履歴を毎回保存する（同じ日は置き換え）。Normal の日も残さないと、週次の「直近7週の推移」が
+                # 縮退した日だけの飛び飛びの記録になり、平常に戻ったことも発動条件の数の推移も見えない
+                try:
+                    _ro_cf.save_contraction_history(cfg, _contraction)
+                except Exception:
+                    pass
 
                 logger.add(
                     "contraction_flag",

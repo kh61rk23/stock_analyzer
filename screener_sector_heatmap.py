@@ -367,21 +367,27 @@ def format_heatmap_md(
         "",
     ]
 
-    # ヘッダー行
-    header = "| 業種 | " + " | ".join(w[-4:] for w in weeks) + " | 3ヶ月Δ |"
-    sep    = "|" + "---|" * (len(weeks) + 2)
+    # 3ヶ月Δ は score_history が溜まっていて1業種でも値があるときだけ列を出す
+    # （全行「—」の列は読み手に何も伝えない）
+    show_delta = any(isinstance(d, dict) and d.get("delta_3m") is not None
+                     for d in score_trend_3m.values())
+
+    # ヘッダー行（週ラベルは "2026-W39" → "W39"）
+    header = "| 業種 | " + " | ".join(w[-3:] for w in weeks) + (" | 3ヶ月Δ |" if show_delta else " |")
+    sep    = "|" + "---|" * (len(weeks) + 1 + (1 if show_delta else 0))
     lines += [header, sep]
 
     # データ行
     for code in all_codes:
-        name   = sector_names.get(code, code)[:8]
+        name   = "自動追加" if code == "DYNAMIC" else sector_names.get(code, code)
         counts = [str(weekly_counts.get(w, {}).get(code, 0)) for w in weeks]
         trend  = score_trend_3m.get(code, {})
         delta  = trend.get("delta_3m")
         delta_s = f"{delta:+.1f}" if delta is not None else "—"
+        delta_cell = f" {delta_s} |" if show_delta else ""
         t3w    = rotation.get("trend_3w", {}).get(code, "stable")
         t3w_icon = {"up": "↑", "down": "↓", "stable": "→"}.get(t3w, "")
-        lines.append(f"| {t3w_icon}{name} | " + " | ".join(counts) + f" | {delta_s} |")
+        lines.append(f"| {t3w_icon}{name} | " + " | ".join(counts) + " |" + delta_cell)
 
     lines.append("")
 

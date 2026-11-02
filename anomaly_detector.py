@@ -373,6 +373,11 @@ def detect_price_anomaly(ticker: str, hist: dict) -> Optional[dict]:
             severity = z_sev
         method.append(f"Zスコア={last_z:.2f}（閾値±{Z_THRESHOLD_MEDIUM:.1f}）")
 
+    # 固定±5%だけでは高ボラ銘柄の通常変動も HIGH になる。
+    # 自身の変動分布に対して外れている（|Z|>=Z_THRESHOLD_MEDIUM）ときだけ HIGH を維持する
+    if severity == "high" and abs(last_z) < Z_THRESHOLD_MEDIUM:
+        severity = "medium"
+
     # C. IQR 外れ値（終値そのもの）
     lb, ub = _iqr_bounds(close[:-1])  # 直近を除く過去データで境界計算
     if lb is not None:
@@ -412,6 +417,13 @@ def _session_incomplete(ticker: str, bar_date: str, now=None) -> bool:
     else:
         zone, close = "America/New_York", (16, 0)
     local = now.astimezone(ZoneInfo(zone))
+    if t.endswith("=F"):
+        # 先物は取引所の休場日に日付が付いた足（週末日付）が出来高の少ない断片になる
+        try:
+            if datetime.strptime(str(bar_date)[:10], "%Y-%m-%d").weekday() >= 5:
+                return True
+        except ValueError:
+            pass
     return (str(bar_date)[:10] == local.date().isoformat()
             and (local.hour, local.minute) < close)
 
@@ -446,6 +458,9 @@ def detect_volume_anomaly(ticker: str, hist: dict) -> Optional[dict]:
     # 引け前の出来高は少なく出て誤って「急減」になるため、確定前の足での「急減」は判定しない
     # （途中経過で既に平均を大きく上回る「急増」は本物なので残す）。
     if ratio < 1.0 and dates and _session_incomplete(ticker, dates[-1]):
+        return None
+    # 出来高の減少は異常として扱わない（Z の絶対値判定で拾われる「急減」は通常の日変動）
+    if ratio < 1.0:
         return None
 
     # B. Z スコア
@@ -493,6 +508,9 @@ def detect_combined_anomaly(
     複合異常は単体より重要度を1段階上げる（最大 critical）。
     """
     if price_anom is None or volume_anom is None:
+        return None
+    # 出来高が平均未満の日は「価格異常と出来高異常の同時発生」とは言えない
+    if float(volume_anom.get("volume_ratio") or 0) < 1.0:
         return None
 
     sevmap   = {"low": 0, "medium": 1, "high": 2, "critical": 3}

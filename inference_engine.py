@@ -56,6 +56,15 @@ from typing import Optional
 
 from config_sync import sync_module_constants
 
+
+def _sector_name(code) -> str:
+    """業種コード（"1028"）をメールに出す業種名（"銀行業"）にする。名前が無ければコードのまま。"""
+    try:
+        import config as _c
+        return (_c.JAPAN_SECTORS.get(str(code)) or {}).get("name_ja") or str(code)
+    except Exception:
+        return str(code)
+
 _CFG_CONST_MAP = {
     'IE_THRESHOLDS': 'THRESHOLDS',
 }
@@ -345,10 +354,10 @@ def _decide_primary_action(
         ts = top_scenario
         return {
             "action": f"中立局面だが「{ts['label']}」シグナルが最も強い。"
-                      f"{', '.join(ts['sectors'][:3])} の選別投資を優先。",
+                      f"{'・'.join(_sector_name(c) for c in ts['sectors'][:3])} の選別投資を優先。",
             "time_horizon": "2〜4週",
             "confidence": ts["confidence"] * 0.75,
-            "key_metrics": {"top_scenario": ts["scenario_id"]},
+            "key_metrics": {"最有力シナリオ": ts["label"]},
         }
 
     return {

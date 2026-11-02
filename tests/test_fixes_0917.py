@@ -115,11 +115,11 @@ class TestPartialSessionVolume:
         out = m.detect_volume_anomaly("3401.T", self._hist(2500000.0))
         assert out and "急増" in out["summary"]
 
-    def test_drop_on_closed_bar_is_reported(self, monkeypatch):
+    def test_drop_on_closed_bar_is_not_reported(self, monkeypatch):
+        # 出来高の減少は確定足でも異常として扱わない
         import anomaly_detector as m
         monkeypatch.setattr(m, "_session_incomplete", lambda tk, d, now=None: False)
-        out = m.detect_volume_anomaly("3401.T", self._hist(150000.0))
-        assert out and "急減" in out["summary"]
+        assert m.detect_volume_anomaly("3401.T", self._hist(150000.0)) is None
 
 
 # ── ニュース: 英字の部分一致による誤マッチと、投資に無関係な注目ニュース ─────

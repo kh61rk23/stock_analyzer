@@ -62,7 +62,7 @@ class TestBuildReview:
                     "④ 重み変更", "⑤ S2戦略別"):
             assert sec in md
         assert "pearl" in md and "3件" in md
-        assert "LLM不使用" in md
+        assert "数値の一次情報" in md and ".md:" not in md   # ファイル名を本文に出さない
 
     def test_all_empty_is_graceful(self):
         md = build_review({}, "202607")

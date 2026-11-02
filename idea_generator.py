@@ -344,7 +344,7 @@ def generate_ideas(
             thesis = _build_thesis(paper["title"], sec["name"], m_signals)
 
             ideas.append({
-                "title":         f"{sec['name']} × {paper['title'][:40]}",
+                "title":         f"{sec['name']} × {paper['title']}",
                 "thesis":        thesis,
                 "source_paper":  paper["title"],
                 "paper_url":     paper.get("url", ""),

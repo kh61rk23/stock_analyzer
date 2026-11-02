@@ -36,9 +36,75 @@ import json
 import smtplib
 import urllib.parse
 import urllib.request
+import textwrap
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+
+
+def build_fed_calendar_alert(fed_cal: dict) -> dict | None:
+    """FED/日銀カレンダーのアラートを組み立てる（純関数）。
+
+    会合が3日以内のときだけ「接近」を名乗る。マクロ調整値が大きいだけの日は
+    会合が遠い（例: FOMC 36日後）ので「金融政策の見通し」とする。
+    利下げ確率は FF金利先物(ZQ)の価格差から出した簡易推計なので、そう明記する。
+    """
+    fomc = fed_cal.get("fomc", {}) or {}
+    boj = fed_cal.get("boj", {}) or {}
+    fed_adj = fed_cal.get("macro_adjustment", 0) or 0
+    fed_prob = fed_cal.get("fed", {}) or {}
+    cut = fed_prob.get("cut_prob_25bp")
+    hold = fed_prob.get("hold_prob")
+    prob_s = (f"利下げ{cut:.0f}% / 据え置き{hold:.0f}%（簡易推計・ZQ先物の差から）"
+              if cut is not None and hold is not None else "")
+
+    lines = []
+    near = False
+    fomc_days = fomc.get("days_until_meeting")
+    if fomc_days is not None and fomc_days <= 3:
+        near = True
+        lines.append(f"  🏛️ FOMC {fomc_days}日後" + (f"  {prob_s}" if prob_s else ""))
+    boj_days = boj.get("days_until_meeting")
+    if boj_days is not None and boj_days <= 3:
+        near = True
+        lines.append(f"  🏦 日銀金融政策決定会合 {boj_days}日後")
+    if abs(fed_adj) >= 4:
+        reason = fed_cal.get("adjustment_rationale", "")
+        if not near:
+            if fomc_days is not None:
+                lines.append(f"  🏛️ 次回FOMCまで{fomc_days}日")
+            if prob_s:
+                lines.append(f"  📈 FED見通し: {prob_s}")
+        lines.append(f"  📊 マクロ調整: {fed_adj:+.1f}pt（{reason}）")
+    if not lines:
+        return None
+    return {
+        "trigger":  "fed_calendar",
+        "title":    "📅 中央銀行イベント接近" if near else "🏦 金融政策の見通し（簡易推計）",
+        "body":     "\n".join(lines),
+        "severity": "medium",
+    }
+
+
+def pick_edinet_entry(edinet_data: dict, ticker: str):
+    """edinet_data から ticker の項目を返す（純関数）。"xxxx" と "xxxx.T" の表記ゆれを吸収する。無ければ None。"""
+    if not isinstance(edinet_data, dict) or not ticker:
+        return None
+    want = str(ticker).split(".")[0][:4]
+    for k, v in edinet_data.items():
+        if v and str(k).split(".")[0][:4] == want:
+            return v
+    return None
+
+
+def short_title(title: str, width: int = 60) -> str:
+    """長い題名を語の途中で切らずに width 文字以内へ収める。"""
+    t = " ".join(str(title or "").split())
+    if len(t) <= width:
+        return t
+    out = textwrap.shorten(t, width, placeholder="…")
+    # 空白の無い長い題名（日本語）は shorten が全体を捨てて "…" だけになるため文字数で切る
+    return out if len(out) > 1 else t[:width - 1] + "…"
 
 
 def _tk(t) -> str:
@@ -211,7 +277,7 @@ def extract_alerts(cfg, results: dict) -> list:
         high_ideas = [i for i in ideas if i.get("idea_score", 0) >= min_score]
         if high_ideas:
             lines = [
-                f"  #{i['rank']} [{i['sector_name']}] スコア:{i['idea_score']} — {i['title'][:35]}"
+                f"  #{i['rank']} [{i['sector_name']}] スコア:{i['idea_score']} — {short_title(i['title'])}"
                 for i in high_ideas[:5]
             ]
             alerts.append({
@@ -376,7 +442,10 @@ def extract_alerts(cfg, results: dict) -> list:
             _scr = [c for c in ((results.get("screener") or {}).get("candidates") or [])
                     if c.get("pass_filters") and str(c.get("sector_code")) == str(code)]
             _scr.sort(key=lambda c: (-(c.get("composite_score") or 0), -(c.get("base_score") or 0)))
+            _first_pin = None   # (ticker, 表示名)。EdinetDB の行は📌の先頭銘柄のものだけを出す
             for c in _scr[:_top_n]:
+                if _first_pin is None:
+                    _first_pin = (c.get("ticker", ""), _jname(c)[:16])
                 _dy = c.get("dividend_yield")
                 _pp = [f"{c.get('composite_score', 0):.0f}点"]
                 if c.get("per"):
@@ -393,6 +462,8 @@ def extract_alerts(cfg, results: dict) -> list:
                 if not c.get("fetch_ok"):
                     continue
                 cname = c.get("name", c.get("ticker", ""))[:12]
+                if _first_pin is None:
+                    _first_pin = (c.get("ticker", ""), cname)
                 per_s = f"PER:{c['per']:.1f}x" if c.get("per") else ""
                 dy_s  = f"配当:{c['dividend_yield']*100:.1f}%" if c.get("dividend_yield") else ""
                 up_s  = f"目標株価乖離:{c['analyst_upside']*100:+.0f}%" if c.get("analyst_upside") is not None else ""
@@ -403,10 +474,12 @@ def extract_alerts(cfg, results: dict) -> list:
                     line += f"\n    📌 {cname}: {' | '.join(parts)}"
 
             # EdinetDB 信用スコア（v3.0対応）
-            edinet_data = r.get("edinet_data", {})
-            for ticker, tdata in list(edinet_data.items())[:1]:
-                if not tdata:
-                    continue
+            # 📌 先頭銘柄の EdinetDB だけを出す（業種の先頭エントリは📌の銘柄と別会社のことがある）。
+            # 見つからなければ別会社の数字を載せないよう省略する。
+            edinet_data = r.get("edinet_data", {}) or {}
+            tdata = pick_edinet_entry(edinet_data, _first_pin[0]) if _first_pin else None
+            for _once in ([tdata] if tdata else []):
+                line += f"\n    【{_first_pin[1]}（{str(_first_pin[0]).split('.')[0]}）】"
                 analysis = tdata.get("analysis", {})
                 if analysis:
                     cs = analysis.get("credit_score", 0)
@@ -876,38 +949,9 @@ def extract_alerts(cfg, results: dict) -> list:
     # ── [2-5新規] FEDカレンダー接近アラート ──────────────────────────
     fed_cal = results.get("fed_calendar", {})
     if fed_cal:
-        fomc = fed_cal.get("fomc", {})
-        boj  = fed_cal.get("boj", {})
-        fed_adj  = fed_cal.get("macro_adjustment", 0)
-        fed_prob = fed_cal.get("fed", {})
-
-        alert_lines = []
-
-        # FOMC 3日前アラート
-        fomc_days = fomc.get("days_until_meeting")
-        if fomc_days is not None and fomc_days <= 3:
-            cut  = fed_prob.get("cut_prob_25bp")
-            hold = fed_prob.get("hold_prob")
-            prob_s = f" (利下げ{cut:.0f}% / 据え置き{hold:.0f}%)" if cut is not None else ""
-            alert_lines.append(f"  🏛️ FOMC {fomc_days}日後{prob_s}")
-
-        # 日銀 3日前アラート
-        boj_days = boj.get("days_until_meeting")
-        if boj_days is not None and boj_days <= 3:
-            alert_lines.append(f"  🏦 日銀金融政策決定会合 {boj_days}日後")
-
-        # FED マクロ調整値が大きい場合
-        if abs(fed_adj) >= 4:
-            reason = fed_cal.get("adjustment_rationale", "")
-            alert_lines.append(f"  📊 マクロ調整: {fed_adj:+.1f}pt（{reason}）")
-
-        if alert_lines:
-            alerts.append({
-                "trigger":  "fed_calendar",
-                "title":    "📅 中央銀行イベント接近",
-                "body":     "\n".join(alert_lines),
-                "severity": "medium",
-            })
+        _fed_alert = build_fed_calendar_alert(fed_cal)
+        if _fed_alert:
+            alerts.append(_fed_alert)
     # ── ⑭ 決算サプライズアラート [A-7] ────────────────────────────
     es_result = results.get("earnings_surprise", {})
     if es_result and getattr(cfg, "ENABLE_EARNINGS_SURPRISE", True):
@@ -1189,8 +1233,9 @@ def extract_alerts(cfg, results: dict) -> list:
             out = []
             for c in rows[:_n]:
                 d = c.get("days_to_earnings")
-                when = (f"決算 {c['next_earnings']}（あと{d}日）" if c.get("next_earnings") and d is not None and d >= 0
-                        else "次回決算日未取得")
+                from earnings_surprise import next_earnings_label
+                when = next_earnings_label(c.get("next_earnings"), d,
+                                           c.get("next_earnings_est"), c.get("days_to_earnings_est"))
                 out.append(f"  {icon} {_jname(c)[:16]}（{c['ticker']}）| {when}")
                 if c.get("surprise_reason"):
                     out.append(f"      {c['surprise_reason']}")
@@ -2136,13 +2181,28 @@ def extract_alerts(cfg, results: dict) -> list:
     return alerts
 
 
+def dividend_inconsistent(dy, payout, per) -> bool:
+    """利回りが配当性向÷PERから見て高すぎるか（純関数）。
+
+    利回り = 配当性向 ÷ PER の関係があるため、実測利回りが推計の1.5倍を超えるのは
+    特別配当や取得元の値のずれを疑う状況。性向・PER が取れない／正でないときは判定しない。
+    """
+    try:
+        dy, payout, per = float(dy), float(payout), float(per)
+    except (TypeError, ValueError):
+        return False
+    if payout <= 0 or per <= 0:
+        return False
+    return dy > payout / per * 1.5
+
+
 def collect_high_dividend(cfg, results: dict, sector_results: dict | None = None) -> dict:
     """高配当銘柄を日米で集める（純関数）。利回りは比率（0.04 = 4%）。"""
     min_dy = float(getattr(cfg, "ALERT_MIN_DIVIDEND_YIELD", 0.04))
-    max_dy = float(getattr(cfg, "ALERT_MAX_DIVIDEND_YIELD", 0.15))   # 超える値はデータ異常とみなす
+    max_dy = float(getattr(cfg, "ALERT_MAX_DIVIDEND_YIELD", 0.10))   # 超える値はデータ異常とみなす
     seen: dict = {}
 
-    def _add(t, name, dy, pr, sector, market):
+    def _add(t, name, dy, pr, sector, market, per=None):
         try:
             dy = float(dy)
         except (TypeError, ValueError):
@@ -2157,22 +2217,24 @@ def collect_high_dividend(cfg, results: dict, sector_results: dict | None = None
             pr = None
         if t not in seen or dy > seen[t]["dy"]:
             seen[t] = {"ticker": t, "name": str(name or t), "dy": dy, "payout": pr,
-                       "sector": sector or "", "market": market}
+                       "sector": sector or "", "market": market,
+                       "check": dividend_inconsistent(dy, pr, per)}
 
     for c in ((results.get("screener") or {}).get("candidates") or []):
         _add(c.get("ticker"), _jname(c), c.get("dividend_yield"), c.get("payout_ratio"),
-             c.get("sector_name"), "JP")
+             c.get("sector_name"), "JP", per=c.get("per"))
     for c in ((results.get("us_screener") or {}).get("candidates") or []):
         # 米国株スクリーナーのテーマ別リストには米国以外も入る。国で分け、日本株は日本側に入れる
         _cty = country_of(c.get("ticker"))
         _add(c.get("ticker"), _jname(c), c.get("div_yield"), c.get("payout_ratio"),
-             c.get("sector"), "US" if _cty == "米国" else "JP" if _cty == "日本" else "INTL")
+             c.get("sector"), "US" if _cty == "米国" else "JP" if _cty == "日本" else "INTL",
+             per=c.get("per") or c.get("pe_ratio"))
     for code, r in (sector_results or {}).items():
         if isinstance(r, dict):
             for c in r.get("top_companies", []) or []:
                 if c.get("fetch_ok"):
                     _add(c.get("ticker"), _jname(c), c.get("dividend_yield"),
-                         c.get("payout_ratio"), r.get("sector_name_ja", code), "JP")
+                         c.get("payout_ratio"), r.get("sector_name_ja", code), "JP", per=c.get("per"))
     out = {"JP": [], "US": [], "INTL": []}
     for v in sorted(seen.values(), key=lambda x: -x["dy"]):
         out[v["market"]].append(v)
@@ -2194,6 +2256,8 @@ def build_high_dividend_alert(cfg, results: dict, sector_results: dict | None = 
         for v in rows[:top]:
             pr = f" | 配当性向{v['payout']*100:.0f}%" if v["payout"] is not None else ""
             warn = " ⚠️性向100%超" if v["payout"] is not None and v["payout"] > 1.0 else ""
+            if v.get("check"):
+                warn += " ⚠️特配・データ要確認"
             cty = f"{country_of(v['ticker'])}・" if mk == "INTL" else ""
             lines.append(f"    {v['name'][:16]}（{v['ticker']}）: {v['dy']*100:.1f}%"
                          f"{pr} | {cty}{v['sector'][:12]}{warn}")

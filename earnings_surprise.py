@@ -46,7 +46,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -452,6 +452,41 @@ def _next_earnings_date(ticker: str) -> str | None:
     return None
 
 
+def estimate_next_earnings(prev: str, today: str) -> str | None:
+    """経過済みの決算予定日から次回決算日を推定する（純関数）。
+
+    前回日付に91日（約1四半期）を足し、today 以降になるまで繰り返す。
+    取得元の予定日が更新されていないとき、過去日付をそのまま出さないために使う。
+    """
+    try:
+        d = datetime.strptime(prev[:10], "%Y-%m-%d")
+        t = datetime.strptime(today[:10], "%Y-%m-%d")
+    except (ValueError, TypeError):
+        return None
+    for _ in range(8):
+        if d >= t:
+            return d.strftime("%Y-%m-%d")
+        d += timedelta(days=91)
+    return None
+
+
+def next_earnings_label(next_earnings, days, est=None, est_days=None) -> str:
+    """次回決算日の表示文字列（純関数）。
+
+    未取得／将来日／経過済み（取得元が未更新）を区別する。経過済みで推定日が
+    あれば「推定」と明示して併記する。
+    """
+    if not next_earnings:
+        return "次回決算日未取得"
+    if days is None or days >= 0:
+        return (f"決算 {next_earnings}（あと{days}日）" if days is not None
+                else f"決算 {next_earnings}")
+    out = f"決算 {next_earnings}（経過・未更新）"
+    if est:
+        out += f" → 推定 {est}" + (f"（あと{est_days}日）" if est_days is not None else "")
+    return out
+
+
 def calc_profit_acceleration(quarterly: list, annual: list) -> dict | None:
     """利益の加速度（純関数）。
 
@@ -614,6 +649,13 @@ def apply_surprise_flags(candidates: list, cache: dict, cfg=None,
                                      - datetime.strptime(today, "%Y-%m-%d")).days if ne else None
         except ValueError:
             c["days_to_earnings"] = None
+        c["next_earnings_est"] = c["days_to_earnings_est"] = None
+        if c["days_to_earnings"] is not None and c["days_to_earnings"] < 0:
+            est = estimate_next_earnings(ne, today)
+            c["next_earnings_est"] = est
+            if est:
+                c["days_to_earnings_est"] = (datetime.strptime(est, "%Y-%m-%d")
+                                             - datetime.strptime(today, "%Y-%m-%d")).days
         c["surprise_reason"] = (
             (f"純利益 直近四半期 前年比{pa['q_yoy'] * 100:+.0f}% vs 通期{pa['annual_yoy'] * 100:+.0f}%"
              f"（加速{acc * 100:+.0f}pt）" if acc is not None else "利益の加速度 算出不可")
@@ -982,6 +1024,21 @@ def _build_summary(results: dict) -> dict:
 # BLOCK 7: アラートテキスト生成
 # ==============================================================
 
+NEG_ALERT_SCORE_MAX = 45.0
+
+
+def _neg_detail(r: dict) -> str:
+    """ネガ注意行の説明。直近Qの実績を出す（純関数）。無ければラベル。"""
+    sp = (r.get("latest_q") or {}).get("surprise_pct")
+    n = int(r.get("consecutive_neg") or 0)
+    if sp is not None:
+        txt = f"直近Q {sp:+.1f}%"
+        if n >= 1:
+            txt += f"（{n}Q連続下振れ）"
+        return txt
+    return r.get("surprise_label", "")
+
+
 def format_surprise_alert(summary: dict, top_n: int = 5) -> str:
     """
     alert_notifier.py 向けのアラートテキストを生成する。
@@ -1014,13 +1071,18 @@ def format_surprise_alert(summary: dict, top_n: int = 5) -> str:
 
     top_neg = summary.get("top_neg", [])
     if top_neg:
-        neg_notable = [r for r in top_neg if r["screener_bonus"] < 0][:3]
+        # 総合ラベルは直近4四半期の加重スコア由来。ボーナス負でもスコアが中立帯なら
+        # 「ネガ注意」に載せない（ラベルが中立のまま載ると矛盾して見える）
+        neg_notable = [
+            r for r in top_neg
+            if r["screener_bonus"] < 0 and float(r.get("surprise_score", 50)) < NEG_ALERT_SCORE_MAX
+        ][:3]
         if neg_notable:
             lines.append("  📉 ネガサプライズ注意:")
             for r in neg_notable:
                 lines.append(
                     f"    {r['ticker']} {r['name'][:14]}: "
-                    f"{r['surprise_label']}"
+                    f"{_neg_detail(r)}"
                 )
 
     return "\n".join(lines)

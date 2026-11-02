@@ -1,12 +1,13 @@
 # イベントドリブン・プレイブック（Wave R4-1 / S5）
 id: earnings_beat_momentum
 event_source: earnings_surprise
-description: 決算サプライズ＋ガイダンス上方修正のモメンタム追随。
+description: 決算サプライズ（直近四半期 +5% 以上）＋2四半期以上の連続上振れのモメンタム追随。
 entry:
   side: BUY
   conditions:
     - {field: surprise_pct, op: ">=", value: 5}
-    - {field: guidance_raised, op: "==", value: true}
+    # ガイダンス（会社予想）の上方修正はどのデータ源にも無いので、連続の上振れで勢いを見る
+    - {field: consecutive_pos, op: ">=", value: 2}
   timing: next_open
   max_concurrent: 3
   size_pct_of_casino: 5

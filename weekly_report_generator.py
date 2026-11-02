@@ -28,6 +28,7 @@
 # ==============================================================
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -40,6 +41,25 @@ def _pct(v, digits: int = 1) -> str:
     if v is None: return "N/A"
     try:    return f"{float(v)*100:.{digits}f}%"
     except (TypeError, ValueError): return "N/A"
+
+def _display_name(c: dict) -> str:
+    """表に出す銘柄名。日本語名があればそれ、無ければ英語名をそのまま（切り詰めない）。"""
+    tk = c.get("ticker", "")
+    try:
+        from name_resolver import name_of
+        jp = name_of(tk, default="")
+    except Exception:
+        jp = ""
+    return jp or c.get("name") or tk
+
+
+def _fmt_yen(v) -> str:
+    """補助金の上限などの円金額を 億円/万円 に整える。無ければ「—」。"""
+    if v in (None, "", 0):
+        return "—"
+    from mail_html import fmt_yen
+    return fmt_yen(v)
+
 
 def _score(v) -> str:
     if v is None: return "N/A"
@@ -799,16 +819,16 @@ def _section_screener(results: dict) -> list:
             lines.append("")
 
     # ── ここから Top candidates 表示ループ ──
-    lines.append("| 銘柄 | 業種 | スコア | ボラ調整後 | PER | PBR | ROE | 配当 | 推奨 |")
-    lines.append("|------|------|-------|-----------|-----|-----|-----|-----|-----|")
+    lines.append("| 銘柄 | 業種 | スコア | ボラ調整後 | PER | PBR | ROE | 配当 |")
+    lines.append("|------|------|-------|-----------|-----|-----|-----|-----|")
 
     # composite_score 順に上位10件を表示
     top_candidates = sorted(
         passed, key=lambda x: x.get("composite_score", 0), reverse=True
     )[:10]
     for c in top_candidates:
-        name  = (c.get("name", c.get("ticker", "")))[:12]
-        sec   = c.get("sector_name", "")[:8]
+        name  = _display_name(c)
+        sec   = c.get("sector_name", "")
         score = c.get("composite_score", 0)
         ra    = c.get("risk_adjusted_score", score)
         per_s = f"{c['per']:.1f}x"  if c.get("per")  else "N/A"
@@ -817,12 +837,11 @@ def _section_screener(results: dict) -> list:
         _roe = c.get("roe")
         roe_s = f"{float(_roe):.1f}%" if _roe is not None else "N/A"
         dy_s  = _pct(c.get("dividend_yield"))
-        rec   = c.get("rec_key", "N/A")
         # ボラ調整後スコアが元スコアより大幅に低い場合に ▼ マークを表示
         ra_mark = "▼" if (score - ra) > 5 else ""
         lines.append(
             f"| {name} | {sec} | {score:.0f} | {ra:.0f}{ra_mark}"
-            f" | {per_s} | {pbr_s} | {roe_s} | {dy_s} | {rec} |"
+            f" | {per_s} | {pbr_s} | {roe_s} | {dy_s} |"
         )
 
     lines.append("")
@@ -840,8 +859,8 @@ def _section_screener(results: dict) -> list:
             reverse=True,
         )[:10]
         for c in ra_sorted:
-            name  = (c.get("name", c.get("ticker", "")))[:12]
-            sec   = c.get("sector_name", "")[:8]
+            name  = _display_name(c)
+            sec   = c.get("sector_name", "")
             score = c.get("composite_score", 0)
             ra    = c.get("risk_adjusted_score", score)
             diff  = ra - score
@@ -946,7 +965,7 @@ def _section_earnings_watchlist(results: dict) -> list:
     for c in watchlist[:8]:
         flag = "🎯高確率" if c.get("is_high_prob_surprise") else ""
         lines.append(
-            f"| {c.get('name','')[:14]}（{c['ticker']}）"
+            f"| {_display_name(c)}（{c['ticker']}）"
             f" | {c.get('conservatism_score', 0):.0f}pt"
             f" | {c.get('acc_bonus', 0):+.0f}pt"
             f" | {flag}"
@@ -1236,7 +1255,7 @@ def _section_finbert_sentiment(results: dict) -> list:
     if not by_sector:
         return []
 
-    lines = ["## 🧠 FinBERT ニュース感情分析（月次）", ""]
+    lines = ["## 🧠 FinBERT ニュース感情分析", ""]
     lines.append(f"**分析対象**: {sentiment.get('articles_scored',0)}件 "
                  f"/ **モデル**: {sentiment.get('model_used','')[:30]}")
     lines.append("")
@@ -1823,7 +1842,7 @@ def _section_seisakudb(results: dict, cfg=None) -> list:
                   "| 締切 | 名称 | 機関 | 上限 |", "|-----|-----|-----|-----|"]
         for x in subs:
             lines.append(f"| {x.get('acceptance_end') or '—'} | {(x.get('title') or '')[:40]} "
-                         f"| {x.get('institution_name') or ''} | {x.get('subsidy_max_limit') or '—'} |")
+                         f"| {x.get('institution_name') or ''} | {_fmt_yen(x.get('subsidy_max_limit'))} |")
         lines.append("")
     if len(lines) <= 2:
         return []
@@ -1878,7 +1897,7 @@ def _section_dcf(results: dict) -> list:
         curr = d.get("inputs",{}).get("current_price",0)
         disc = d.get("discount_pct",0)
         bonus = d.get("dcf_bonus",0)
-        lines.append(f"| {d.get('name','')[:10]} "
+        lines.append(f"| {_display_name(d)} "
                      f"| {intr:,.0f}円 | {curr:,.0f}円 "
                      f"| {disc:+.1f}% | {bonus:+.0f}pt |")
     return lines
@@ -1969,7 +1988,7 @@ def _section_jp_us_correlation(results: dict) -> list:
             "mixed":        "↔ 乖離",
         }.get(p.get("signal", ""), "—")
         lines.append(
-            f"| {p.get('jp_name', p.get('jp_code', ''))[:10]} "
+            f"| {p.get('jp_name', p.get('jp_code', ''))} "
             f"| {p.get('us_etf', '')}({p.get('us_sector_ja', '')[:6]}) "
             f"| **{sign}{r:.3f}** "
             f"| {p.get('n_observations', 0)} "
@@ -2478,10 +2497,10 @@ def _section_latent_pearl_promotion(results: dict, cfg=None) -> list:
                 lines.append(
                     f"**{ticker}** {promoted} — LP={lp_score:.1f}pt"
                 )
-                lines.append(
-                    f"  検出条件: {'/'.join(conds)} | "
-                    f"cross_signal: {cross_str:.2f}（{cross_types}）"
-                )
+                cond_line = f"  検出条件: {'/'.join(conds)}"
+                if cross_types:
+                    cond_line += f" | cross_signal: {cross_str:.2f}（{cross_types}）"
+                lines.append(cond_line)
                 if cat_detail:
                     lines.append(f"  カタリスト: {cat_detail}")
                 if mt_traj:
@@ -3865,8 +3884,12 @@ def generate_weekly_report(cfg, results: dict) -> dict:
     top_picks  = sorted(passed, key=lambda x: x.get("composite_score", 0), reverse=True)[:3]
     pick_names = [c.get("name", c.get("ticker", "")) for c in top_picks]
 
+    _tss = results.get("total_signal_score", results.get("total_signal")) or {}
+    _mode = ((results.get("rule_optimizer") or {}).get("contraction_flag") or {}).get("mode")
     summary = {
         "report_date":    today,
+        "total_signal_score": _tss.get("total_signal_score") if isinstance(_tss, dict) else None,
+        "contraction_mode":   _mode,
         "top3_sectors":   top3_names,
         "bottom3_sectors":bottom3_names,
         "screener_pass":  len(passed),
@@ -3891,140 +3914,146 @@ def generate_weekly_report(cfg, results: dict) -> dict:
 # BLOCK 11: Gmail 向けフォーマット生成
 # ==============================================================
 
+# Gmail は 102KB を超える本文を途中で切るため、HTML 全体をこの値以下に収める
+_EMAIL_MAX_BYTES = 98_000
+# 全文で載せる節（見出しに含まれる語。この並びが表示順）
+_EMAIL_PRIORITY = ("投資判断サマリー", "総合投資シグナル", "注目業種", "個別銘柄スクリーニング",
+                   "審議キュー", "ポジションサイジング", "ペーパー", "リスク制約", "ポートフォリオ集中リスク", "緊急縮退")
+_EMAIL_FULL_BUDGET = 62_000   # 全文で載せる節の合計の目安。超えた節は要約表示に落とす
+_EMAIL_NOTE = ("以下の節は冒頭だけの要約表示です。全文は保存済みの週次 md と "
+               "BigQuery の analytics.report_texts（kind=weekly）にあります。")
+
+
+def _split_md_sections(report_md: str) -> list:
+    """週次 md を「## 」見出しごとの (見出し, 本文md) に分ける。「### 」以下は本文に含める。"""
+    sections, cur_title, cur = [], None, []
+    for line in report_md.split("\n"):
+        if line.startswith("## "):
+            if cur_title is not None:
+                sections.append((cur_title, "\n".join(cur)))
+            cur_title, cur = line[3:].strip(), []
+        elif cur_title is not None:
+            cur.append(line)
+    if cur_title is not None:
+        sections.append((cur_title, "\n".join(cur)))
+    return sections
+
+
+_EMAIL_LINE_MAX = 260   # 表以外の1行の上限。採用・除外リストのような長い列挙でメールが膨らむのを防ぐ
+
+
+def _clean_headings(md: str) -> str:
+    """本文中の見出し行から開発コードを落とし、表以外の長すぎる行を切り詰める。"""
+    from mail_html import strip_dev_codes
+    out = []
+    for ln in md.split("\n"):
+        if ln.startswith("#"):
+            ln = re.sub(r"^(#+\s+)(.*)$", lambda m: m.group(1) + strip_dev_codes(m.group(2)), ln)
+        elif not ln.startswith("|") and len(ln) > _EMAIL_LINE_MAX:
+            ln = ln[:_EMAIL_LINE_MAX] + "…"
+        out.append(ln)
+    return "\n".join(out)
+
+
+def _compact_body(body_md: str, max_lines: int) -> tuple:
+    """節の先頭の数行だけを残した md と、省略があったか。
+
+    見出し(###)・区切り線・表は数えず、文の行を優先する。文の行が無い節は表の先頭
+    （見出し行+区切り+2行）だけ残す（表は1行あたりの HTML が大きく、要約が膨らむため）。"""
+    text, table, rest = [], [], 0
+    for ln in body_md.split("\n"):
+        st = ln.strip()
+        if not st or st.startswith("#") or re.fullmatch(r"-{3,}", st):
+            continue
+        if st.startswith("|"):
+            table.append(ln)
+        else:
+            text.append(ln[:240])
+    if text:
+        kept = text[:max_lines]
+        rest = len(text) - len(kept) + (1 if table else 0)
+    else:
+        kept = table[:4]
+        rest = len(table) - len(kept)
+    return "\n".join(kept), rest > 0
+
+
+def _email_kpis(summary: dict, report_md: str) -> list:
+    top3 = summary.get("top3_sectors") or []
+    n_pass = summary.get("screener_pass")
+    tss = summary.get("total_signal_score")
+    mode = summary.get("contraction_mode")
+    if tss is None:
+        m = re.search(r"現在値\*\*: ([\d.]+)点", report_md)
+        tss = float(m.group(1)) if m else None
+    mode_label = {"Normal": "通常", "Warning": "警戒", "Emergency": "緊急縮退"}.get(mode or "")
+    if mode_label is None:
+        m = re.search(r"現在の縮退ステータス: \S+ (\S+?)モード", report_md)
+        mode_label = m.group(1) if m else "—"
+    mode_color = {"通常": "#059669", "警戒": "#d97706", "緊急縮退": "#dc2626"}.get(mode_label, "#6b7280")
+    return [
+        ("注目業種TOP1", top3[0] if top3 else "—", "#1d4ed8"),
+        ("通過社数", f"{n_pass}社" if n_pass is not None else "—", "#059669"),
+        ("総合シグナル", f"{float(tss):.0f}点" if tss is not None else "—", "#7c3aed"),
+        ("縮退モード", mode_label, mode_color),
+    ]
+
+
 def build_weekly_email_html(report_md: str, summary: dict) -> str:
     """
-    週次レポートをメール用 HTML に変換する。
-    alert_notifier.py の send_gmail() に渡す用。
-    Markdown の見出し・太字・リストを最小限のHTMLに変換する。
+    週次レポートをメール用 HTML に変換する（alert_notifier.send_gmail に渡す）。
+
+    「## 」見出しごとに節カードへ分け、判断に直結する節を先頭に全文で置く。残りは見出しと
+    冒頭数行の要約カードにする。Gmail は 102KB を超えると本文を切るので、HTML 全体が
+    _EMAIL_MAX_BYTES 以下になるまで要約の行数を減らす。
     """
-    today    = summary.get("report_date", datetime.now().strftime("%Y-%m-%d"))
-    top3     = summary.get("top3_sectors", [])
-    n_pass   = summary.get("screener_pass", 0)
-    picks    = summary.get("top_picks", [])
+    from mail_html import page, section_card, md_to_html, strip_dev_codes, relabel
 
-    # Markdown → HTML 最小変換
-    def md_to_html(text: str) -> str:
-        lines = text.split("\n")
-        html_lines = []
-        in_table = False
-        for line in lines:
-            # テーブル
-            if line.startswith("|"):
-                if not in_table:
-                    html_lines.append('<table style="border-collapse:collapse;width:100%;font-size:12px;margin:8px 0;">')
-                    in_table = True
-                cells = [c.strip() for c in line.split("|")[1:-1]]
-                is_sep = all(set(c) <= set("-: ") for c in cells if c)
-                if is_sep:
-                    continue
-                tag = "th" if not html_lines or "th" not in html_lines[-1] else "td"
-                row = "".join(
-                    f'<{tag} style="border:1px solid #e5e7eb;padding:4px 6px;text-align:left;">'
-                    f'{c}</{tag}>' for c in cells
-                )
-                html_lines.append(f"<tr>{row}</tr>")
+    today = summary.get("report_date", datetime.now().strftime("%Y-%m-%d"))
+    sections = [(strip_dev_codes(relabel(t)), b) for t, b in _split_md_sections(report_md)]
+
+    def _prio(title: str) -> int:
+        for k, key in enumerate(_EMAIL_PRIORITY):
+            if key in title:
+                return k
+        return -1
+
+    first = sorted((x for x in sections if _prio(x[0]) >= 0), key=lambda x: _prio(x[0]))
+    rest = [x for x in sections if _prio(x[0]) < 0]
+
+    footer = ("データソース: yfinance / EdinetDB / IMF / DeepL<br>"
+              "stock_analyzer が自動送信。最終判断はご自身でご確認ください。")
+
+    def _build(compact_lines: int) -> str:
+        cards, used = [], 0
+        compact_first = []
+        for title, body in first:
+            card = section_card(title, md_to_html(_clean_headings(body)))
+            if used + len(card.encode("utf-8")) > _EMAIL_FULL_BUDGET:
+                compact_first.append((title, body))
                 continue
-            elif in_table:
-                html_lines.append("</table>")
-                in_table = False
+            used += len(card.encode("utf-8"))
+            cards.append(card)
+        tail = compact_first + rest
+        if tail:
+            cards.append(f'<p style="margin:16px 0 4px;font-size:11px;color:#6b7280">{_EMAIL_NOTE}</p>')
+        for title, body in tail:
+            if compact_lines <= 0:
+                cards.append(f'<div style="margin:6px 0;padding-left:12px;border-left:3px solid #e5e7eb;'
+                             f'font-size:13px;color:#374151">{title}</div>')
+                continue
+            md, cut = _compact_body(body, compact_lines)
+            inner = md_to_html(md) + ('<p style="margin:2px 0;font-size:11px;color:#9ca3af">…</p>' if cut else "")
+            cards.append(section_card(title, inner))
+        return page("📊 週次投資判断レポート", f"{today} 自動生成 — stock_analyzer",
+                    _email_kpis(summary, report_md), "\n".join(cards), footer)
 
-            # 見出し
-            if line.startswith("## "):
-                html_lines.append(
-                    f'<h3 style="color:#1e3a5f;margin:20px 0 8px;'
-                    f'padding-bottom:4px;border-bottom:2px solid #dbeafe;">'
-                    f'{line[3:]}</h3>'
-                )
-            elif line.startswith("### "):
-                html_lines.append(
-                    f'<h4 style="color:#2563eb;margin:14px 0 6px;">'
-                    f'{line[4:]}</h4>'
-                )
-            elif line.startswith("# "):
-                pass  # タイトルはヘッダーで表示済みのためスキップ
-            elif line.startswith("> "):
-                html_lines.append(
-                    f'<blockquote style="border-left:3px solid #93c5fd;'
-                    f'margin:4px 0;padding:4px 10px;color:#374151;'
-                    f'background:#f0f7ff;font-size:12px;">'
-                    f'{line[2:]}</blockquote>'
-                )
-            elif line.startswith("- "):
-                html_lines.append(
-                    f'<li style="margin:3px 0;font-size:13px;">'
-                    f'{_inline_md(line[2:])}</li>'
-                )
-            elif line.startswith("---"):
-                html_lines.append('<hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0;">')
-            elif line.strip() == "":
-                html_lines.append("<br>")
-            else:
-                html_lines.append(
-                    f'<p style="margin:4px 0;font-size:13px;color:#374151;">'
-                    f'{_inline_md(line)}</p>'
-                )
-
-        if in_table:
-            html_lines.append("</table>")
-        return "\n".join(html_lines)
-
-    def _inline_md(text: str) -> str:
-        """**bold** と `code` のみインライン変換"""
-        import re
-        text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
-        text = re.sub(r'`(.+?)`', r'<code style="background:#f3f4f6;padding:1px 4px;border-radius:3px;">\1</code>', text)
-        return text
-
-    body_html = md_to_html(report_md)
-
-    picks_str = " / ".join(picks) if picks else "なし"
-
-    return f"""
-<html>
-<head><meta charset="UTF-8"></head>
-<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-             background:#f9fafb;margin:0;padding:16px;">
-<div style="max-width:680px;margin:0 auto;background:white;
-            border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.1);overflow:hidden;">
-
-  <!-- ヘッダー -->
-  <div style="background:linear-gradient(135deg,#1e3a5f,#1d4ed8);
-              padding:24px;color:white;">
-    <h1 style="margin:0;font-size:20px;">📊 週次投資判断レポート</h1>
-    <p style="margin:8px 0 0;font-size:13px;opacity:.85;">{today} 自動生成 — stock_analyzer</p>
-  </div>
-
-  <!-- KPIバッジ -->
-  <div style="display:flex;gap:0;border-bottom:1px solid #e5e7eb;">
-    <div style="flex:1;padding:12px 16px;text-align:center;border-right:1px solid #e5e7eb;">
-      <div style="font-size:11px;color:#6b7280;">注目業種TOP1</div>
-      <div style="font-size:14px;font-weight:bold;color:#1d4ed8;">{top3[0] if top3 else 'N/A'}</div>
-    </div>
-    <div style="flex:1;padding:12px 16px;text-align:center;border-right:1px solid #e5e7eb;">
-      <div style="font-size:11px;color:#6b7280;">スクリーニング通過</div>
-      <div style="font-size:14px;font-weight:bold;color:#059669;">{n_pass}社</div>
-    </div>
-    <div style="flex:1;padding:12px 16px;text-align:center;">
-      <div style="font-size:11px;color:#6b7280;">注目銘柄</div>
-      <div style="font-size:12px;font-weight:bold;color:#7c3aed;">{picks_str[:20]}</div>
-    </div>
-  </div>
-
-  <!-- レポート本文 -->
-  <div style="padding:8px 24px 24px;">
-    {body_html}
-  </div>
-
-  <!-- フッター -->
-  <div style="padding:14px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;">
-    <p style="margin:0;font-size:11px;color:#9ca3af;">
-      データソース: yfinance / EdinetDB / IMF / DeepL
-      &nbsp;|&nbsp; stock_analyzer_main.py より自動送信
-    </p>
-  </div>
-</div>
-</body></html>
-"""
+    out = ""
+    for n in (6, 4, 3, 2, 1, 0):
+        out = _build(n)
+        if len(out.encode("utf-8")) <= _EMAIL_MAX_BYTES:
+            break
+    return out
 
 
 # ==============================================================
@@ -4067,23 +4096,14 @@ def run_weekly_report(cfg, results: dict) -> dict:
     gmail_to   = getattr(cfg, "ALERT_GMAIL_TO",       "")
     if gmail_from and gmail_pwd and gmail_to:
         try:
-            import smtplib
-            from email.mime.multipart import MIMEMultipart
-            from email.mime.text      import MIMEText
+            from alert_notifier import send_gmail
 
             today   = summary.get("report_date", datetime.now().strftime("%Y-%m-%d"))
             subject = f"【週次投資判断レポート】{today}"
             html    = build_weekly_email_html(report_md, summary)
-
-            msg = MIMEMultipart("alternative")
-            msg["Subject"] = subject
-            msg["From"]    = gmail_from
-            msg["To"]      = gmail_to
-            msg.attach(MIMEText(html, "html", "utf-8"))
-
-            with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-                server.login(gmail_from, gmail_pwd)
-                server.sendmail(gmail_from, gmail_to, msg.as_string())
+            ok, err = send_gmail(gmail_from, gmail_pwd, gmail_to, subject, html)
+            if not ok:
+                raise RuntimeError(err)
 
             sent_channels.append("Gmail")
             print(f"    ✅ 週次レポート Gmail 送信成功 → {gmail_to}")
