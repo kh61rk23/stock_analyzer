@@ -91,6 +91,8 @@ FETCH_DELAY        = 0.3    # yfinance レート制限
 
 # [I-4] 確信度レベル設定
 CONVICTION_THRESHOLDS = [90, 75, 60, 45]   # L5/L4/L3/L2の下限（L1は45未満）
+UNRATED_CONVICTION_LEVEL = 3      # 確信度を算出できない銘柄の扱い（中確信）
+UNRATED_CONVICTION_SCORE = 50.0
 CONVICTION_MULTIPLIERS = {5: 1.5, 4: 1.0, 3: 0.7, 2: 0.4, 1: 0.0}
 CONVICTION_PCT_RANGE = {
     5: (0.10, 0.15),   # L5: 10〜15%
@@ -387,11 +389,18 @@ def calc_position_size(
     raw_shares = risk_amount / loss_per_share
 
     # ── [I-4] 確信度マルチプライヤーの適用 ──────────────────
-    conviction_level = 4   # デフォルト（データなし時）
-    conviction_score = 75.0
+    # 確信度を算出できていない銘柄（screener 候補に無い保有株）は、高確信(L4)扱いにせず
+    # 中確信(L3)・50点とし conviction_unrated=True で「未評価」と分かるようにする
+    conviction_unrated = not conviction_data
+    conviction_level = UNRATED_CONVICTION_LEVEL
+    conviction_score = UNRATED_CONVICTION_SCORE
+    recommended_pct  = None
     if conviction_data:
-        conviction_level = conviction_data.get("conviction_level", 4)
-        conviction_score = conviction_data.get("conviction_score", 75.0)
+        conviction_level = conviction_data.get("conviction_level", UNRATED_CONVICTION_LEVEL)
+        conviction_score = conviction_data.get("conviction_score", UNRATED_CONVICTION_SCORE)
+        recommended_pct  = conviction_data.get("recommended_pct")
+    if recommended_pct is None:
+        recommended_pct = CONVICTION_PCT_RANGE.get(conviction_level, (0.0, 0.0))[1]
     cv_multiplier = CONVICTION_MULTIPLIERS.get(conviction_level, 1.0)
 
     # レジーム補正 × 確信度補正
@@ -410,9 +419,14 @@ def calc_position_size(
     position_value = suggested_shares * price
     position_pct   = round(position_value / total_assets * 100, 1)
 
-    # 上限・下限クランプ
-    if position_pct > MAX_POSITION_PCT * 100:
-        suggested_lot    = max(1, int(total_assets * MAX_POSITION_PCT / price / lot_size))
+    # 上限・下限クランプ。上限は固定の MAX_POSITION_PCT と確信度別の推奨比率の小さい方
+    # （推奨 6% の銘柄が 15% まで膨らまないように）。ただし下限(MIN)は割らない。
+    # 株数ゼロ（Level1 見送り・危機レジーム）には下限を適用しない。
+    max_pct = max(MIN_POSITION_PCT, min(MAX_POSITION_PCT, float(recommended_pct or 0.0)))
+    if raw_shares <= 0:
+        capped = False
+    elif position_pct > max_pct * 100:
+        suggested_lot    = max(1, int(total_assets * max_pct / price / lot_size))
         suggested_shares = suggested_lot * lot_size
         position_value   = suggested_shares * price
         position_pct     = round(position_value / total_assets * 100, 1)
@@ -455,6 +469,9 @@ def calc_position_size(
         # [I-4] 確信度追加フィールド
         "conviction_level":   conviction_level,
         "conviction_score":   conviction_score,
+        "conviction_unrated": conviction_unrated,
+        "recommended_pct":    recommended_pct,
+        "max_position_pct":   round(max_pct, 4),
         "conviction_multiplier": combined_multiplier,
         "regime_multiplier":  regime_multiplier,
     }
@@ -714,6 +731,8 @@ def format_position_report(result: dict) -> str:
         cv_level = pos.get("conviction_level", "-")
         cv_pct   = pos.get("recommended_pct", 0) or 0
         cv_label_short = {5: "L5🌟", 4: "L4📈", 3: "L3➡️", 2: "L2⚠️", 1: "L1🔴"}.get(cv_level, "?")
+        if pos.get("conviction_unrated"):
+            cv_label_short += "未評価"
         try:
             from name_resolver import name_of as _nm
             _name = _nm(pos["ticker"]) or pos.get("name", "")
@@ -734,7 +753,7 @@ def format_position_report(result: dict) -> str:
     lines.append("")
     lines.append(
         f"> 逆指値 = 現在価格 - ATR×{ATR_MULTIPLIER}。推奨株数は1トレードの損失を総資産の{risk*100:.0f}%に抑える基準。"
-        "米国株は株価・ATRを円換算（括弧内はドル）。⚠️ は15%上限/2%下限でクランプ済み。"
+        "米国株は株価・ATRを円換算（括弧内はドル）。⚠️ は上限（15%と確信度別推奨比率の小さい方）/2%下限でクランプ済み。未評価は screener 候補外のため L3 仮置き。"
         "総資産は投資部の保有銘柄CSV（現金・投信を含む）の実額"
     )
 
@@ -879,10 +898,12 @@ def run_position_sizer(
             **atr_data,
             **sizing,
             # [I-4] 確信度フィールド
-            "conviction_score": conviction_map.get(ticker, {}).get("conviction_score", 75.0),
-            "conviction_level": conviction_map.get(ticker, {}).get("conviction_level", 4),
-            "conviction_label": conviction_map.get(ticker, {}).get("conviction_label", ""),
-            "recommended_pct":  conviction_map.get(ticker, {}).get("recommended_pct", 0.08),
+            "conviction_score": sizing.get("conviction_score"),
+            "conviction_level": sizing.get("conviction_level"),
+            "conviction_label": (conviction_map.get(ticker, {}).get("conviction_label")
+                                 or "未評価（screener 候補外・L3 仮置き）"),
+            "recommended_pct":  sizing.get("recommended_pct"),
+            "conviction_unrated": sizing.get("conviction_unrated", False),
             "regime_state":     regime_state,
         }
         positions.append(position)

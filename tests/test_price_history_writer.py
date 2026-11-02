@@ -13,6 +13,7 @@ TODAY = date.today()
 def _no_bq_lookup(monkeypatch):
     """既存キーの照会は実BQへ行かせない（個別のテストが上書きする）。"""
     monkeypatch.setattr(w, "fetch_existing_keys", lambda days: set())
+    monkeypatch.setattr(w, "drop_split_mismatched", lambda rows, client=None: (rows, {}))
 
 
 def _df(days=5, close_base=100.0, with_volume=True):

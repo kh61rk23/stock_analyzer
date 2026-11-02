@@ -5524,3 +5524,19 @@ US_FACTS_COMPLEMENT_YEARS: int = 4      # 何年分の期間を読むか（EPS �
 ENABLE_UNIVERSE_FACTOR_IC: bool = True
 UFI_LOOKBACK_DAYS: int = 200          # 直近この日数の評価日を毎回計算し直す
 UFI_MIN_EFFECTIVE_DAYS: float = 4.0   # 実効の日数（評価日の数÷先の日数）がこれ未満なら「日数不足」で判定しない
+
+# ==============================================================
+# BLOCK 77: 株価の分割・併合のそろえ直し（price_universe.fix_split_mismatches）
+# ==============================================================
+# 取ってきた終値と表の終値が分割比（2〜50倍）でずれている銘柄を、調整済みの長い履歴で取り直す
+PRICE_SPLIT_REFETCH_DAYS: int = 400   # 取り直す営業日数
+PRICE_SPLIT_REFETCH_MAX: int = 50     # 1回の取得で取り直す銘柄数の上限
+
+# ==============================================================
+# BLOCK 78: 評価の下限・判定の閾値（dcf_valuation・geo_signal・independence_score_calculator）
+# ==============================================================
+DCF_WACC_FLOOR: float = 0.06            # WACC の下限。低βで4%まで下がると永続価値の倍率が50倍を超え、理論株価が膨らむ
+# 方向の決まっていない権益（販売網など）を、この点数以上の国で逆風として減点する。50 は実データ（国のリスク 0〜45点）で
+# 発火しない＝減点しない。下げると多くの輸出企業が新たに減点されるので、検証してから下げる
+GEO_UNDEFINED_DIR_RISK_MIN: float = 50.0
+INDEPENDENCE_MIN_R_SQUARED: float = 0.05   # 市場との回帰の R² がこれ未満は「独立」ではなく「判定不能」

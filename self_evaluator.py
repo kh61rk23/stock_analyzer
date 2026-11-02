@@ -333,6 +333,13 @@ def _win_rate(returns: list, benchmark: float = 0) -> Optional[float]:
     return round(sum(1 for r in returns if r > benchmark) / len(returns), 3)
 
 
+def fmt_win_rate(rate: Optional[float], n: Optional[int] = None) -> str:
+    """勝率の表示。サンプル無し(None)は「—(n=0)」。"""
+    if rate is None:
+        return f"—(n={n if n is not None else 0})"
+    return f"{rate:.1%}"
+
+
 def _avg(vals: list) -> Optional[float]:
     clean = [v for v in vals if v is not None]
     return round(sum(clean)/len(clean), 3) if clean else None
@@ -372,13 +379,16 @@ def build_weekly_summary(
         "week":              week_str,
         "evaluated":         len(evaluated),
         "avg_benchmark":     round(avg_benchmark, 3),
-        "win_rate_overall":  _win_rate(rets) or 0,
-        "win_rate_score80+": _win_rate(high)  or 0,
-        "win_rate_60_80":    _win_rate(mid_hi) or 0,
-        "win_rate_40_60":    _win_rate(mid_lo) or 0,
-        "win_rate_sub40":    _win_rate(low)    or 0,
+        # サンプルが無い帯は None のまま持つ（0.0% と書くと「全敗」に読める）
+        "win_rate_overall":  _win_rate(rets),
+        "win_rate_score80+": _win_rate(high),
+        "win_rate_60_80":    _win_rate(mid_hi),
+        "win_rate_40_60":    _win_rate(mid_lo),
+        "win_rate_sub40":    _win_rate(low),
+        "band_counts":       {"80+": len(high), "60_80": len(mid_hi),
+                              "40_60": len(mid_lo), "sub40": len(low)},
         "avg_alpha":         _avg(rets) or 0,
-        "avg_alpha_high":    _avg(high) or 0,
+        "avg_alpha_high":    _avg(high),
         "miss_factors":      miss_factors[:5],
         "sector_win_rates":  sector_win_rates,
         "component_corrs":   component_corrs,
@@ -501,7 +511,8 @@ def update_log_summary(log: dict) -> dict:
         log["summary"] = {}
         return log
 
-    all_win_rates = [e.get("win_rate_overall", 0.5) for e in entries]
+    all_win_rates = [e["win_rate_overall"] for e in entries
+                     if e.get("win_rate_overall") is not None]
     all_alphas    = [e.get("avg_alpha", 0) for e in entries]
 
     # 最も外れに寄与したファクター（通算miss_rate最大）
@@ -542,7 +553,8 @@ def update_log_summary(log: dict) -> dict:
 
     log["summary"] = {
         "total_evaluated":    sum(e.get("evaluated", 0) for e in entries),
-        "lifetime_win_rate":  round(sum(all_win_rates) / len(all_win_rates), 3),
+        "lifetime_win_rate":  (round(sum(all_win_rates) / len(all_win_rates), 3)
+                              if all_win_rates else None),
         "lifetime_avg_alpha": round(sum(all_alphas) / len(all_alphas), 3),
         "best_sector":        best_sector[0],
         "best_sector_wr":     best_sector[1],
@@ -573,23 +585,24 @@ def format_self_eval_report(log: dict, latest_entry: Optional[dict]) -> str:
         "## 🔍 screener自己検証レポート（Self Evaluator）",
         "",
         f"**通算評価銘柄数**: {summary.get('total_evaluated', 0)}件  "
-        f"**生涯勝率**: {summary.get('lifetime_win_rate', 0):.1%}  "
+        f"**生涯勝率**: {fmt_win_rate(summary.get('lifetime_win_rate'))}  "
         f"**生涯αリターン**: {summary.get('lifetime_avg_alpha', 0):+.2f}%",
         f"**精度トレンド**: {trend_icon} {summary.get('trend', '—')}",
         "",
     ]
 
+    _bc = entry.get("band_counts") or {}
     if entry.get("evaluated", 0) > 0:
         lines += [
             f"### 今週のサマリー（{entry.get('week','N/A')}）",
             "",
             f"| スコア帯 | 勝率 |",
             f"|---------|-----|",
-            f"| score≥80 | {entry.get('win_rate_score80+', 0):.1%} |",
-            f"| 60〜80   | {entry.get('win_rate_60_80', 0):.1%} |",
-            f"| 40〜60   | {entry.get('win_rate_40_60', 0):.1%} |",
-            f"| <40      | {entry.get('win_rate_sub40', 0):.1%} |",
-            f"| **全体** | **{entry.get('win_rate_overall', 0):.1%}** |",
+            f"| score≥80 | {fmt_win_rate(entry.get('win_rate_score80+'), _bc.get('80+'))} |",
+            f"| 60〜80   | {fmt_win_rate(entry.get('win_rate_60_80'), _bc.get('60_80'))} |",
+            f"| 40〜60   | {fmt_win_rate(entry.get('win_rate_40_60'), _bc.get('40_60'))} |",
+            f"| <40      | {fmt_win_rate(entry.get('win_rate_sub40'), _bc.get('sub40'))} |",
+            f"| **全体** | **{fmt_win_rate(entry.get('win_rate_overall'), entry.get('evaluated'))}** |",
             "",
         ]
 
@@ -763,9 +776,9 @@ def run_self_evaluator(cfg) -> dict:
     week_str = datetime.now().strftime("%Y-W%V")
     entry    = build_weekly_summary(evaluated, week_str, avg_bm)
 
-    print(f"    勝率: {entry['win_rate_overall']:.1%}  "
+    print(f"    勝率: {fmt_win_rate(entry['win_rate_overall'], entry['evaluated'])}  "
           f"avg_α: {entry['avg_alpha']:+.2f}%  "
-          f"score80+勝率: {entry['win_rate_score80+']: .1%}")
+          f"score80+勝率: {fmt_win_rate(entry['win_rate_score80+'], entry['band_counts']['80+'])}")
 
     if entry.get("miss_factors"):
         top_miss = entry["miss_factors"][0]

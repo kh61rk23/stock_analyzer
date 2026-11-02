@@ -244,7 +244,8 @@ def get_latent_pearl_candidates(
     candidates = [
         {"ticker": ticker, **data}
         for ticker, data in scores.items()
-        if float(data.get("independence_score", 0)) >= threshold
+        if is_determined(data)
+        and float(data.get("independence_score", 0)) >= threshold
     ]
     return sorted(candidates, key=lambda x: x["independence_score"], reverse=True)
 
@@ -308,6 +309,16 @@ def _save_cache(cfg, data: dict) -> None:
 # BLOCK 2: OLS ローリング回帰計算
 # ==============================================================
 
+def _normalize_index(series):
+    """日付インデックスを tz なし・00:00 に揃え、同一日の重複は最後の値を残す。"""
+    idx = series.index
+    if getattr(idx, "tz", None) is not None:
+        idx = idx.tz_localize(None)
+    out = series.copy()
+    out.index = idx.normalize()
+    return out[~out.index.duplicated(keep="last")]
+
+
 def _fetch_price_returns(
     ticker: str,
     index_ticker: str,
@@ -335,8 +346,10 @@ def _fetch_price_returns(
             return [], [], 0
 
         # 日付インデックスで結合
-        close_tk  = hist_tk["Close"]
-        close_idx = hist_idx["Close"]
+        # 銘柄と指数でタイムゾーン・時刻部分が違うと inner join が一致せず、
+        # 共通日が欠けて R² や β が歪むため、日付（00:00・tzなし）に揃えてから結合する
+        close_tk  = _normalize_index(hist_tk["Close"])
+        close_idx = _normalize_index(hist_idx["Close"])
         aligned   = close_tk.to_frame("stock").join(
             close_idx.to_frame("index"), how="inner"
         )
@@ -411,6 +424,37 @@ def _ols_beta_alpha(
 
     except Exception:
         return 1.0, 0.0, 0.0
+
+
+# R² がこれ未満の銘柄は指数との関係がほぼ検出できず、β≈0 は「独立」ではなく
+# 「推定不能」にすぎない（ノイズだけの銘柄が高独立性に見える）ため判定しない
+MIN_R_SQUARED = 0.05
+# 年率αの絶対値上限。日次平均×252 は短い窓だと +100% 超になり表示も他の集計も歪む
+ALPHA_ANNUAL_CAP = 0.50
+TIER_UNDETERMINED = "判定不能"
+
+
+def is_determined(entry: dict) -> bool:
+    """判定可能なエントリか。新しい版は独立性判定フラグを持ち、古いキャッシュは R² で判断する。"""
+    if "independence_determined" in entry:
+        return bool(entry["independence_determined"])
+    return float(entry.get("r_squared", 1.0) or 0.0) >= MIN_R_SQUARED
+
+
+def alpha_tstat(stock_returns: list, index_returns: list,
+                beta: float, alpha_daily: float) -> Optional[float]:
+    """α の t 値（残差の標準誤差から）。観測が少ない・分散 0 なら None。"""
+    n = len(stock_returns)
+    if n < 10:
+        return None
+    mx = sum(index_returns) / n
+    ss_x = sum((x - mx) ** 2 for x in index_returns)
+    resid = [stock_returns[k] - alpha_daily - beta * index_returns[k] for k in range(n)]
+    s2 = sum(e * e for e in resid) / (n - 2)
+    if s2 <= 0 or ss_x <= 0:
+        return None
+    se_alpha = math.sqrt(s2 * (1.0 / n + mx * mx / ss_x))
+    return alpha_daily / se_alpha if se_alpha > 0 else None
 
 
 def _calc_independence_score(
@@ -575,16 +619,25 @@ def calc_independence_score_for_ticker(
     )
 
     # OLS 計算
+    t_alpha = None
     if data_days >= 20:
         beta, alpha_daily, r_squared = _ols_beta_alpha(stock_rets, index_rets)
-        alpha_annual = alpha_daily * 252  # 年率換算（252営業日）
+        alpha_annual = max(-ALPHA_ANNUAL_CAP,
+                           min(ALPHA_ANNUAL_CAP, alpha_daily * 252))  # 年率換算（252営業日）
+        t_alpha = alpha_tstat(stock_rets, index_rets, beta, alpha_daily)
     else:
         beta, alpha_daily, r_squared = 1.0, 0.0, 0.0
         alpha_annual = 0.0
 
-    # 独立性スコア
-    indep_score = _calc_independence_score(beta, alpha_annual)
-    indep_tier  = _judge_independence_tier(indep_score, cfg)
+    # 独立性スコア。R² が低いと β≈0 は推定不能なだけなので「判定不能」とし、
+    # 既存の読み手（float() で読む）が壊れないよう独立性スコアは 0.0 にして
+    # 計算値は independence_score_raw に残す
+    min_r2 = float(getattr(cfg, "INDEPENDENCE_MIN_R_SQUARED", MIN_R_SQUARED))
+    raw_score   = _calc_independence_score(beta, alpha_annual)
+    determined  = data_days >= 20 and r_squared >= min_r2
+    indep_score = raw_score if determined else 0.0
+    indep_tier  = (_judge_independence_tier(indep_score, cfg)
+                   if determined else TIER_UNDETERMINED)
 
     # EDINET カタリスト検出（JP のみ）
     catalyst_score = 0.0
@@ -603,7 +656,10 @@ def calc_independence_score_for_ticker(
         "alpha_annual":        round(alpha_annual, 6),
         "alpha_annual_pct":    round(alpha_annual * 100, 2),
         "r_squared":           round(r_squared, 4),
+        "alpha_tstat":         round(t_alpha, 2) if t_alpha is not None else None,
         "independence_score":  indep_score,
+        "independence_score_raw": raw_score,
+        "independence_determined": determined,
         "independence_tier":   indep_tier,
         "catalyst_flags":      catalyst_flags,
         "catalyst_score":      catalyst_score,
@@ -728,7 +784,8 @@ def get_high_independence_tickers(
         scores = cache.get("scores", {})
         filtered = [
             v for v in scores.values()
-            if float(v.get("independence_score", 0)) >= min_score
+            if is_determined(v)
+            and float(v.get("independence_score", 0)) >= min_score
         ]
         filtered.sort(key=lambda x: x.get("combined_score", 0), reverse=True)
         return filtered[:top_n]
@@ -840,6 +897,7 @@ def run_independence_score_calculator(
         "high_independence_count": tier_counts.get("HIGH", 0),
         "mid_independence_count":  tier_counts.get("MID", 0),
         "low_independence_count":  tier_counts.get("LOW", 0),
+        "undetermined_count":      tier_counts.get(TIER_UNDETERMINED, 0),
         "avg_beta_abs":            round(avg_beta, 4),
         "top_5_combined": [
             {"ticker": v["ticker"], "combined_score": v["combined_score"]}

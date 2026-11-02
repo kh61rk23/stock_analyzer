@@ -67,6 +67,10 @@ from typing import Optional
 # ==============================================================
 # 各シナリオは "macro_snapshot を上書きする値" として定義する。
 # 指定のないキーはベースライン実績値をそのまま使う。
+# market_shock_pct はそのシナリオでの株式市場全体の想定変動（%）。業種スコアの
+# 相対差だけだと市場全体の上げ下げが損益に入らず、ベアでもプラスに見えるため、
+# 損益は市場変動×β と業種スコア差の合算で出す。shock_markets を指定すると
+# その市場の保有にだけ市場変動を適用する（省略時は全市場）。
 
 PRESET_SCENARIOS = {
     "bear_case": {
@@ -82,12 +86,14 @@ PRESET_SCENARIOS = {
             "us_unrate": 5.0,   # 失業率上昇
             "us_hy_spread": 6.5, # 信用収縮
         },
+        "market_shock_pct": -15.0,   # 株式市場全体の想定変動（β=1 の銘柄の損益）
         "color": "🔴",
     },
     "base_case": {
         "label":       "ベースケース（現状維持）",
         "description": "現在のマクロ環境が概ね継続する想定。",
         "overrides":   {},   # 実績値をそのまま使う
+        "market_shock_pct": 0.0,
         "color":       "🟡",
     },
     "bull_case": {
@@ -103,6 +109,7 @@ PRESET_SCENARIOS = {
             "us_unrate": 3.8,   # 完全雇用
             "us_hy_spread": 2.8, # 信用良好
         },
+        "market_shock_pct": 8.0,
         "color": "🟢",
     },
     "rate_shock": {
@@ -114,6 +121,7 @@ PRESET_SCENARIOS = {
             "us_hy_spread": 7.0,
             "vix":      40.0,
         },
+        "market_shock_pct": -12.0,
         "color": "🔴",
     },
     "china_shock": {
@@ -126,6 +134,7 @@ PRESET_SCENARIOS = {
             "audjpy":  88.0,    # リスクオフ
             "vix":      30.0,
         },
+        "market_shock_pct": -10.0,
         "color": "🔴",
     },
     "weak_yen": {
@@ -137,6 +146,10 @@ PRESET_SCENARIOS = {
             "audjpy":  108.0,
             "oil_wti":  88.0,   # 円建て輸入コスト急騰
         },
+        # 円安は円建ての日本株だけに効く。米国株は円換算の為替差が別にあるが、
+        # ここでは株価の想定変動に限る
+        "market_shock_pct": 3.0,
+        "shock_markets":    ("JP",),
         "color": "🟡",
     },
 }
@@ -240,6 +253,15 @@ def _evaluate_sector_scores_under_scenario(
 # BLOCK 3: ポートフォリオ影響計算
 # ==============================================================
 
+def _parse_beta(v) -> Optional[float]:
+    """β列の値を float にする。空・0以下・数値でない値は None（未設定扱い）。"""
+    try:
+        b = float(v)
+    except (TypeError, ValueError):
+        return None
+    return b if b > 0 else None
+
+
 def load_portfolio_holdings(cfg) -> list:
     """
     portfolio_holdings.csv を読み込む。
@@ -269,6 +291,7 @@ def load_portfolio_holdings(cfg) -> list:
                             "avg_cost_jpy": float(row.get("avg_cost_jpy", 0) or 0),
                             "current_price": float(row.get("current_price", 0) or 0),
                             "market_value_jpy": float(row.get("market_value_jpy", 0) or 0),
+                            "beta":         _parse_beta(row.get("beta")),
                             "memo":         row.get("memo", ""),
                         })
                 print(f"    📂 portfolio_holdings.csv 読み込み: {len(holdings)}銘柄（{p}）")
@@ -314,6 +337,8 @@ def calc_portfolio_impact(
     米国株は USD → JPY 換算（usdjpy レートを使用）。
     業種スコアの delta を「株価へのアルファ係数（0.3）」でポジション影響に変換する。
     （composite_score 10pt上昇 ≈ 期待リターン +3%という経験則的仮定）
+    これに加えて、シナリオの market_shock_pct（株式市場全体の想定変動）× β を足す。
+    β が保有データに無い銘柄は 1.0 と仮定し、beta_assumed=True で示す。
 
     Returns:
         PortfolioImpact dict
@@ -338,25 +363,35 @@ def calc_portfolio_impact(
 
         unrealized = value_jpy - cost_jpy
         total_value += value_jpy
+        beta = _parse_beta(h.get("beta"))
+        beta_assumed = beta is None
+        if beta_assumed:
+            beta = 1.0
 
         # シナリオごとの予測影響
         scenario_impacts = {}
         for sc_name, sc_data in scenarios.items():
             sector_code = h.get("sector_code", "")
             score_info  = sc_data.get("sector_scores", {}).get(sector_code)
-            if score_info:
-                delta_score = score_info.get("delta", 0)
-                pnl_jpy     = round(value_jpy * delta_score * ALPHA_COEFF, 0)
-                pnl_pct     = round(delta_score * ALPHA_COEFF * 100, 2)
-            else:
-                pnl_jpy = 0.0
-                pnl_pct = 0.0
-            scenario_impacts[sc_name] = {"pnl_jpy": pnl_jpy, "pnl_pct": pnl_pct}
+            delta_score = (score_info or {}).get("delta", 0) or 0
+            shock       = float(sc_data.get("market_shock_pct", 0.0) or 0.0)
+            markets     = sc_data.get("shock_markets")
+            if markets and mkt not in markets:
+                shock = 0.0
+            pnl_pct = round(shock * beta + delta_score * ALPHA_COEFF * 100, 2)
+            pnl_jpy = round(value_jpy * pnl_pct / 100, 0)
+            scenario_impacts[sc_name] = {
+                "pnl_jpy": pnl_jpy, "pnl_pct": pnl_pct,
+                "market_pct": round(shock * beta, 2),
+                "sector_pct": round(delta_score * ALPHA_COEFF * 100, 2),
+            }
 
         holding_details.append({
             **h,
             "value_jpy":       round(value_jpy, 0),
             "unrealized_pnl":  round(unrealized, 0),
+            "beta_used":       beta,
+            "beta_assumed":    beta_assumed,
             "scenario_impacts": scenario_impacts,
         })
 
@@ -373,6 +408,7 @@ def calc_portfolio_impact(
         "holdings":        holding_details,
         "total_value_jpy": round(total_value, 0),
         "scenario_pnl":    portfolio_pnl,
+        "beta_assumed_count": sum(1 for h in holding_details if h["beta_assumed"]),
     }
 
 
@@ -459,9 +495,12 @@ def format_scenario_report(result: dict) -> str:
             )
         lines.append("")
         lines.append(
-            "> ⚠️ 予測は composite_score の変化から推計した参考値です。"
+            "> ⚠️ 予測は「市場全体の想定変動×β」と composite_score の変化の合算による参考値です。"
             "実際の株価変動は多くの要因に依存します。"
         )
+        n_assumed = pf.get("beta_assumed_count", 0)
+        if n_assumed:
+            lines.append(f"> β仮定: {n_assumed}銘柄は保有データに β が無いため 1.0 と仮定しています。")
         lines.append("")
 
     return "\n".join(lines)
@@ -536,6 +575,8 @@ def run_scenario_analysis(
             "sector_scores": sector_scores,
             "top_gainers":   gainers,
             "top_losers":    losers,
+            "market_shock_pct": sc_def.get("market_shock_pct", 0.0),
+            "shock_markets":    sc_def.get("shock_markets"),
         }
 
     # ポートフォリオ影響計算

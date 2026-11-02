@@ -146,6 +146,67 @@ def _load_portfolio(cfg) -> list:
 # BLOCK 2: yfinance でベータ・価格・リターン取得
 # ==============================================================
 
+BETA_MIN_OBS = 60                      # 回帰に必要な共通営業日数
+_BENCH_TICKERS = {"JP": "^N225", "US": "^GSPC"}
+_BENCH_CACHE: dict = {}
+
+
+def _closes_by_date(hist) -> dict:
+    """history() の DataFrame → {YYYY-MM-DD: 終値}（日付はタイムゾーンを外して日単位に揃える）。"""
+    out: dict = {}
+    try:
+        idx = hist.index.tz_localize(None) if getattr(hist.index, "tz", None) else hist.index
+        for d, v in zip(idx, hist["Close"]):
+            if v == v:
+                out[d.strftime("%Y-%m-%d")] = float(v)
+    except Exception:
+        return {}
+    return out
+
+
+def estimate_beta(stock_closes: dict, bench_closes: dict,
+                  min_obs: int = BETA_MIN_OBS) -> Optional[float]:
+    """同じ日付の終値から日次リターンを作り、ベンチマークに対する β を回帰で求める。
+
+    日付で突き合わせるのは、休場日が銘柄と指数でずれると日次リターンの組が
+    ずれて β が 0 に近づくため。共通日が少ない・ベンチの分散が 0 なら None。
+    """
+    dates = sorted(set(stock_closes) & set(bench_closes))
+    xs, ys = [], []
+    for a, b in zip(dates, dates[1:]):
+        s0, s1 = stock_closes[a], stock_closes[b]
+        b0, b1 = bench_closes[a], bench_closes[b]
+        if s0 > 0 and b0 > 0:
+            ys.append(s1 / s0 - 1.0)
+            xs.append(b1 / b0 - 1.0)
+    if len(xs) < min_obs:
+        return None
+    mx, my = sum(xs) / len(xs), sum(ys) / len(ys)
+    var = sum((x - mx) ** 2 for x in xs)
+    if var <= 0:
+        return None
+    cov = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    return cov / var
+
+
+def _bench_closes(market: str, start: str, end: str) -> dict:
+    key = (market, start)
+    if key not in _BENCH_CACHE:
+        try:
+            import yf_cache as yf
+            h = yf.Ticker(_BENCH_TICKERS[market]).history(
+                start=start, end=end, auto_adjust=True)
+            _BENCH_CACHE[key] = _closes_by_date(h) if h is not None and len(h) else {}
+        except Exception:
+            _BENCH_CACHE[key] = {}
+    return _BENCH_CACHE[key]
+
+
+def _clip_beta(b: float) -> float:
+    """異常値クリップ（-2〜5）。"""
+    return max(-2.0, min(5.0, float(b)))
+
+
 def _fetch_stock_data(ticker: str, usdjpy: float = 150.0) -> Optional[dict]:
     """
     1銘柄のベータ値・現在価格・過去リターン系列を取得する。
@@ -172,17 +233,16 @@ def _fetch_stock_data(ticker: str, usdjpy: float = 150.0) -> Optional[dict]:
             return None
         price = float(price)
 
-        # ベータ値（取得できない場合は市場ベータ=1.0 と仮定）
-        beta = info.get("beta")
-        if beta is None or str(beta) == "None":
-            beta = 1.0   # データなし → 市場平均と仮定
-        else:
+        # ベータ値: info の値 → 同じ価格履歴からの回帰 → 1.0 仮定、の順。
+        # 0 は有効な値として保つ（`or 1.0` で 1 に変えない）。
+        beta = None
+        beta_source = "info"
+        raw_beta = info.get("beta")
+        if raw_beta is not None and str(raw_beta) != "None":
             try:
-                beta = float(beta)
-                # 異常値クリップ（-2〜5の範囲に収める）
-                beta = max(-2.0, min(5.0, beta))
+                beta = _clip_beta(raw_beta)
             except (TypeError, ValueError):
-                beta = 1.0
+                beta = None
 
         # 過去2年の価格履歴
         end   = datetime.now()
@@ -193,10 +253,23 @@ def _fetch_stock_data(ticker: str, usdjpy: float = 150.0) -> Optional[dict]:
             end=end.strftime("%Y-%m-%d"),
             auto_adjust=True,
         )
+        if beta is None and hist is not None and len(hist) >= 20:
+            market = "JP" if ticker.endswith(".T") else "US"
+            est = estimate_beta(
+                _closes_by_date(hist),
+                _bench_closes(market, start.strftime("%Y-%m-%d"),
+                              end.strftime("%Y-%m-%d")))
+            if est is not None:
+                beta, beta_source = _clip_beta(est), "regression"
+        if beta is None:
+            beta, beta_source = 1.0, "assumed"   # 推定不能 → 市場平均と仮定
+
         if hist is None or len(hist) < 20:
             return {
                 "current_price": price,
                 "beta":          beta,
+                "beta_source":   beta_source,
+                "beta_estimated": beta_source != "info",
                 "daily_returns": [],
                 "max_drawdown":  None,
             }
@@ -222,6 +295,8 @@ def _fetch_stock_data(ticker: str, usdjpy: float = 150.0) -> Optional[dict]:
         return {
             "current_price": price,
             "beta":          round(beta, 3),
+            "beta_source":   beta_source,
+            "beta_estimated": beta_source != "info",
             "daily_returns": daily_returns[-VAR_LOOKBACK:],
             "max_drawdown":  round(max_dd * 100, 2),   # %表示
         }
@@ -338,7 +413,9 @@ def calc_stress_scenario(
                          else scenario["sp500_drawdown"])
 
         # ベータ加重（beta=2なら市場の2倍動く）
-        beta = (sd.get("beta", 1.0) if sd else 1.0) or 1.0
+        beta_val = sd.get("beta") if sd else None
+        beta_assumed = beta_val is None or (sd or {}).get("beta_source") == "assumed"
+        beta = 1.0 if beta_val is None else float(beta_val)
         stock_drawdown = base_drawdown * beta
         stock_drawdown = max(-0.99, stock_drawdown)   # -99%下限
 
@@ -349,6 +426,8 @@ def calc_stress_scenario(
             "name":           h["name"],
             "market":         mkt,
             "beta":           round(beta, 2),
+            "beta_assumed":   beta_assumed,
+            "beta_estimated": bool(sd and sd.get("beta_estimated")),
             "position_value": round(val, 0),
             "base_drawdown":  round(base_drawdown * 100, 1),
             "stock_drawdown": round(stock_drawdown * 100, 1),
@@ -819,7 +898,7 @@ def format_stress_report(result: dict) -> str:
         loss_jpy  = _fmt_yen(sc_data["total_loss_jpy"])
         loss_pct  = f"{sc_data['total_loss_pct']:.1f}%"
         worst     = " / ".join(
-            f"{p['ticker']}({p['loss_pct']:.0f}%)"
+            f"{p['ticker']}({p['loss_pct']:.0f}%{'*' if p.get('beta_assumed') else ''})"
             for p in sc_data["worst_3"][:2]
         )
         lines.append(f"| {color} {label} | {mkt_dd} | {loss_jpy} | {loss_pct} | {worst} |")
@@ -829,6 +908,9 @@ def format_stress_report(result: dict) -> str:
         "> ⚠️ 想定損失は「ベータ × 市場下落率」の線形近似。"
         "実際の下落率は相関・流動性等により異なります。"
     )
+    if any(p.get("beta_assumed") for sc in result.get("scenarios", {}).values()
+           for p in sc.get("worst_3", [])):
+        lines.append("> * はβを取得できず 1.0 と仮定した銘柄です。")
 
     return "\n".join(lines)
 
@@ -949,8 +1031,10 @@ def run_stress_test(
             "position_value_jpy": value_jpy,
         })
 
-        beta = (sd["beta"] if sd else 1.0) or 1.0
-        print(f"      {ticker}: beta={beta:.2f} value={value_jpy/1e4:.0f}万円")
+        beta = sd["beta"] if sd and sd.get("beta") is not None else 1.0
+        src = (sd or {}).get("beta_source", "assumed")
+        mark = "" if src == "info" else ("(回帰推定)" if src == "regression" else "(1.0仮定)")
+        print(f"      {ticker}: beta={beta:.2f}{mark} value={value_jpy/1e4:.0f}万円")
 
     total_value = sum(h["position_value_jpy"] for h in holdings_with_data)
     print(f"    ポートフォリオ評価額: {total_value/1e4:.0f}万円")

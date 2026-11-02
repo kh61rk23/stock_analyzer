@@ -54,7 +54,10 @@ def _date_str(v) -> str | None:
 
 
 def _row_to_feat(row: dict) -> dict:
-    """BQ の1行 → feat。売上が無い・0以下なら ratio_to_sales は None。"""
+    """BQ の1行 → feat。売上が無い・0以下、または直近1年の支出が 0 なら ratio_to_sales は None。
+
+    直近1年が 0 円の「売上比 0.0%」は「政府需要が売上の0%」という値に見えるが、
+    実際は直近の取引が無い（比率として意味がない）だけなので None（表示は「—」）にする。"""
     feat = empty_feat()
     recent = _num(row.get("recent_1y_yen"))
     feat.update({
@@ -69,7 +72,7 @@ def _row_to_feat(row: dict) -> dict:
     if row.get("rank_total_oku") is not None:
         feat["rank_total_oku"] = _num(row.get("rank_total_oku"), None)
     sales = _num(row.get("net_sales"), None)
-    if sales and sales > 0:
+    if sales and sales > 0 and recent and recent > 0:
         feat["ratio_to_sales"] = recent / sales
     return feat
 

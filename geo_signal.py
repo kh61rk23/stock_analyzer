@@ -524,6 +524,26 @@ def _get_risk_scores_for_countries(
 # BLOCK 4: 方向性係数取得
 # ==============================================================
 
+def _raw_impact(strength: float, risk: float, scale: float) -> float:
+    """権益1件の影響点数 = 関与度(0-1) × 国別リスク(0-100点) × スケール。
+
+    リスクは 0-100 点のまま掛ける（/100 すると最大でも 0.3pt にしかならず、
+    GEO_IMPACT_MAX=15 まで届かず業種スコアが全て 50 になる）。
+    """
+    return float(strength) * float(risk) * float(scale)
+
+
+# 方向性が未定義の権益（販売網など資源コードの無いもの）を逆風と扱うリスクの下限。
+# 国別リスクの実測は 0〜45 点なので、50 では一度も発火しない。
+UNDEFINED_DIRECTION_RISK_MIN = 30.0
+
+
+def _undefined_direction(risk: float, cfg=None) -> float:
+    """方向性未定義の権益の係数。リスクが閾値以上の国への権益だけ逆風(-0.5)。"""
+    th = float(getattr(cfg, "GEO_UNDEFINED_DIR_RISK_MIN", UNDEFINED_DIRECTION_RISK_MIN))
+    return -0.5 if risk >= th else 0.0
+
+
 def _get_direction_coeff(
     commodity_code: str | None,
     sector_or_gics: str,
@@ -634,7 +654,7 @@ def _calc_taxonomy_propagation(
 
         strength   = float(exp.get("exposure_strength", 0.0))
         risk_score = float(exp.get("composite_risk_score", 0.0))
-        raw_impact = strength * (risk_score / 100.0) * _scale
+        raw_impact = _raw_impact(strength, risk_score, _scale)
 
         # 各連鎖ノードへの伝播
         for node in nodes:
@@ -775,7 +795,7 @@ def calc_geo_impact_bonus_jp(
             ))
             commodity = exp.get("commodity_code")
 
-            raw_impact = strength * (risk / 100.0) * _scale
+            raw_impact = _raw_impact(strength, risk, _scale)
 
             # 方向性係数を適用
             direction = _get_direction_coeff(
@@ -783,7 +803,7 @@ def calc_geo_impact_bonus_jp(
             )
             if direction == 0.0 and raw_impact > 0:
                 # 方向性未定義の場合はリスク高国への逆風として扱う
-                direction = -0.5 if risk >= 50.0 else 0.0
+                direction = _undefined_direction(risk, cfg)
 
             geo_raw += raw_impact * direction
 
@@ -890,13 +910,13 @@ def calc_geo_impact_bonus_us(
             ))
             commodity = exp.get("commodity_code")
 
-            raw_impact = strength * (risk / 100.0) * _scale
+            raw_impact = _raw_impact(strength, risk, _scale)
 
             direction = _get_direction_coeff(
                 commodity, gics_key, "US", cfg
             )
             if direction == 0.0 and raw_impact > 0:
-                direction = -0.5 if risk >= 50.0 else 0.0
+                direction = _undefined_direction(risk, cfg)
 
             geo_raw += raw_impact * direction
 

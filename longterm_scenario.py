@@ -356,9 +356,29 @@ def calc_longterm_sector_scores(
 # ==============================================================
 
 STANCE_THRESHOLDS = {
-    "long_high":  65.0,   # longterm_score がこれ以上 = 長期有望
+    "long_high":  65.0,   # longterm_score の上限側の閾値（実際は下の相対閾値と小さい方）
     "short_high": 60.0,   # composite_score がこれ以上 = 短期有望
 }
+
+# 長期スコアは確率加重の平均なので 43〜59 に収まり、固定の65には届かない
+# （固定のままだと全業種が「回避」になる）。そのため long_high は
+# 「長期スコア上位25%の境界」を使い、STANCE_THRESHOLDS["long_high"] を上限、
+# 中立(50)に近い値になって全業種が有望扱いになるのを防ぐ下限を LONG_HIGH_FLOOR に置く。
+LONG_HIGH_FLOOR = 51.0
+
+
+def relative_long_high(longterm_scores: dict) -> float:
+    """長期スコア分布の上位25%境界（nearest-rank 75パーセンタイル）を long_high とする。
+
+    スコアが 8業種未満なら分布として使えないので固定閾値を返す。
+    """
+    static = float(STANCE_THRESHOLDS["long_high"])
+    vals = sorted(float(v) for v in (longterm_scores or {}).values()
+                  if isinstance(v, (int, float)))
+    if len(vals) < 8:
+        return static
+    q3 = vals[min(len(vals) - 1, int(0.75 * len(vals)))]
+    return round(min(static, max(LONG_HIGH_FLOOR, q3)), 1)
 
 # [P-3] 長期保有候補がいる業種で long_high を緩める幅（pt）。
 # 既定値は config.LONGTERM_HOLD_STANCE_RELAX_PT が正本。
@@ -396,6 +416,7 @@ def determine_investment_stance(
     is_longterm_hold_flag: bool = False,
     longterm_hold_count:   int  = 0,
     cfg = None,
+    long_high_base:        Optional[float] = None,
 ) -> dict:
     """
     長期スコア × 短期スコアからデュアル評価を行い投資スタンスを判定する。
@@ -418,6 +439,8 @@ def determine_investment_stance(
         is_longterm_hold_flag: その業種に P-3 候補が存在するか
         longterm_hold_count:   P-3 候補の社数（reason の根拠表示に使う）
         cfg:                   config モジュール（緩和幅の正本）
+        long_high_base:        長期側の基準閾値。省略時は固定の STANCE_THRESHOLDS。
+                               通常は relative_long_high(長期スコア分布) を渡す
 
     Returns:
         {
@@ -429,7 +452,9 @@ def determine_investment_stance(
           "longterm_hold_boost": bool,  # P-3 による緩和が効いたか
         }
     """
-    long_high = float(STANCE_THRESHOLDS["long_high"])
+    base_high = (float(long_high_base) if long_high_base is not None
+                 else float(STANCE_THRESHOLDS["long_high"]))
+    long_high = base_high
     relax = float(getattr(cfg, "LONGTERM_HOLD_STANCE_RELAX_PT",
                           LONGTERM_HOLD_STANCE_RELAX_PT))
     if is_longterm_hold_flag:
@@ -442,7 +467,7 @@ def determine_investment_stance(
     boosted = bool(
         is_longterm_hold_flag
         and lt_high
-        and longterm_score < float(STANCE_THRESHOLDS["long_high"])
+        and longterm_score < base_high
     )
     # 根拠の追記。P-3 が結論を動かした時だけ理由に出す（ノイズを避ける）
     p3_note = (f"／P-3長期保有候補{longterm_hold_count}社により長期閾値"
@@ -488,6 +513,70 @@ def determine_investment_stance(
 # ==============================================================
 # BLOCK 6: サマリーテキスト生成
 # ==============================================================
+
+def build_investment_stances(
+    longterm_scores: dict,
+    sector_codes:    list,
+    sector_results:  dict,
+    lt_counts:       dict,
+    cfg = None,
+) -> dict:
+    """業種ごとのスタンスを作る。長期閾値は長期スコア分布から相対的に決める。
+
+    業種の composite_score が無い場合（業種分析より前に呼ばれた等）は 50 で埋めるが、
+    全業種が同じ値になるため composite_missing=True を付けて区別できるようにする。
+    """
+    long_high_base = relative_long_high(longterm_scores)
+    out = {}
+    for code in sector_codes:
+        lt_score = longterm_scores.get(code, 50.0)
+        sec_data = (sector_results or {}).get(code, {})
+        raw = sec_data.get("composite_score") if isinstance(sec_data, dict) else None
+        missing = not isinstance(raw, (int, float))
+        st_score = 50.0 if missing else float(raw)
+        lt_n     = lt_counts.get(str(code), 0)
+        stance = determine_investment_stance(
+            code, lt_score, st_score, lt_n > 0,
+            longterm_hold_count=lt_n, cfg=cfg, long_high_base=long_high_base,
+        )
+        out[code] = {
+            "sector_code":      code,
+            "longterm_score":   lt_score,
+            "composite_score":  round(st_score, 1),
+            "composite_missing": missing,
+            "longterm_hold_count": lt_n,
+            **stance,
+        }
+    return out
+
+
+def recompute_stances(results: dict, latest: Optional[dict] = None, cfg=None) -> dict:
+    """業種分析・screener が済んだ後に、保存済みの長期スコアからスタンスだけ作り直す。
+
+    run_longterm_scenario が results["sectors"] より先に走ると短期スコアが全業種 50 に
+    なるため、業種分析の後にこれを呼ぶ。latest 省略時は results["longterm_scenario"]。
+    latest を直接書き換えて返し、results["longterm_scenario"] も同じ内容にそろえる。
+    """
+    latest = latest if latest is not None else (results or {}).get("longterm_scenario")
+    if not isinstance(latest, dict) or latest.get("skipped"):
+        return latest or {}
+    scores = latest.get("sector_longterm_scores") or {}
+    codes = list(scores.keys())
+    latest["investment_stances"] = build_investment_stances(
+        scores, codes, (results or {}).get("sectors", {}) or {},
+        _count_longterm_holds_by_sector(results or {}), cfg)
+    if cfg is not None:
+        try:
+            latest["summary_text"] = _format_summary(
+                latest.get("scenario_weights", {}), scores,
+                latest["investment_stances"], latest.get("auto_triggers", []), cfg)
+            save_longterm_scenario(cfg, latest)
+        except Exception as e:
+            print(f"    ⚠️  長期スタンス再計算の保存/整形失敗: {e}")
+    if isinstance(results, dict):
+        results["longterm_scenario"] = latest
+    return latest
+
 
 def _format_summary(
     weights:              dict,
@@ -624,25 +713,8 @@ def run_longterm_scenario(cfg, results: dict = None) -> dict:
     #   業種単位では「その業種に長期保有候補が何社いるか」で表現する。
     sector_results  = results.get("sectors", {})
     lt_counts = _count_longterm_holds_by_sector(results)
-    investment_stances = {}
-    for code in sector_codes:
-        lt_score = longterm_scores.get(code, 50.0)
-        sec_data = sector_results.get(code, {})
-        st_score = sec_data.get("composite_score", 50.0) if isinstance(sec_data, dict) else 50.0
-        lt_n     = lt_counts.get(str(code), 0)
-        is_lt    = lt_n > 0
-
-        stance = determine_investment_stance(
-            code, lt_score, st_score, is_lt,
-            longterm_hold_count=lt_n, cfg=cfg,
-        )
-        investment_stances[code] = {
-            "sector_code":      code,
-            "longterm_score":   lt_score,
-            "composite_score":  round(st_score, 1),
-            "longterm_hold_count": lt_n,
-            **stance,
-        }
+    investment_stances = build_investment_stances(
+        longterm_scores, sector_codes, sector_results, lt_counts, cfg)
 
     # ── Step7: サマリーテキスト ──────────────────────────────
     summary_text = _format_summary(

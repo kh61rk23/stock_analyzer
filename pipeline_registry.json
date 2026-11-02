@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-02 12:54:14",
+  "generated_at": "2026-11-02 13:01:17",
   "source": "stock_analyzer_main.run_all_tasks（AST自動生成・手動編集禁止）",
   "stage_count": 109,
   "stages": [
@@ -946,7 +946,7 @@
       ]
     },
     {
-      "order": 4297,
+      "order": 4296,
       "modules": [
         "longterm_scenario"
       ],

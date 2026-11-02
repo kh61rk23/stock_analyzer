@@ -177,6 +177,15 @@ def _slim_trail(c: dict) -> list:
         return []
 
 
+def _slim_macro_signals(c: dict, limit: int = 8) -> list:
+    """macro_signals を factor / label / signal だけに絞る（履歴が膨らまないように）。"""
+    out = []
+    for m in (c.get("macro_signals") or [])[:limit]:
+        if isinstance(m, dict):
+            out.append({k: m.get(k) for k in ("factor", "label", "signal") if m.get(k) is not None})
+    return out
+
+
 def append_screener_history(cfg, screener_result: dict) -> None:
     """
     今日のスクリーニング通過銘柄を screener_history.json に追記する。
@@ -220,6 +229,18 @@ def append_screener_history(cfg, screener_result: dict) -> None:
                 "base_score":      c.get("base_score"),
                 "score_trail":     _slim_trail(c),
                 "kpi":             c.get("kpi"),
+                # Pearl / 潜伏Pearl のバックテスト（self_evaluator）が読む欄。
+                # ここで保存しないと後から評価できず、全て既定値(0/False)として集計される
+                "technical_score":      c.get("technical_score"),
+                "is_latent_pearl":      bool(c.get("is_latent_pearl", False)),
+                "pearl_tier":           c.get("pearl_tier"),
+                "pearl_score":          c.get("pearl_score"),
+                "latent_pearl_score":   c.get("latent_pearl_score"),
+                "independence_score":   c.get("independence_score"),
+                "catalyst_flags":       list(c.get("catalyst_flags") or [])[:6],
+                "midterm_trajectory":   c.get("midterm_trajectory"),
+                "midterm_overall_score": c.get("midterm_overall_score"),
+                "macro_signals":        _slim_macro_signals(c),
             }
             for c in candidates
             if c.get("pass_filters")

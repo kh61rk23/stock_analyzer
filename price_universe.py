@@ -12,12 +12,20 @@
 # 【実行】 python3 price_universe.py --market jp|us|all [--backfill] [--dry-run] [--limit N]
 #   通常: 直近 DAILY_PERIOD（既定5日）を取り、BQに無い (ticker, trade_date) だけ追記
 #   --backfill: BACKFILL_PERIOD（既定1年）を取る（初回の過去分。重複は同じ除外で防ぐ）
+#   --repair-splits --since D [--dry-run]: ビューの日次終値に分割比近傍の跳びがある銘柄を取り直す
 #
 # 【取り直しの意味（上書きはしない）】
 #   既に BQ にある (ticker, trade_date) は飛ばす。上書きも行の追加もしない。
 #   5日分を取り直すのは、前の回が落ちた・捨てられた・制限で取れなかった日の穴埋めのため
-#   （1回分の穴なら次の回で埋まる）。既にある日の値が後から変わっても（株式分割の調整・訂正）
-#   直さない。yfinance の日足は分割で過去分が調整し直されるので、分割の前後で値の基準がずれうる。
+#   （1回分の穴なら次の回で埋まる）。既にある日の値が後から変わっても通常は直さない。
+#
+# 【株式分割・併合の取り直し】
+#   yfinance の日足(auto_adjust=False でも終値は分割で遡って調整される)。表は追記のみで、ビューは
+#   ingested_at 最新を採るので、直近だけ追記すると分割前の日が旧基準・直近が新基準で混ざり、
+#   日々のリターンに ±900% の偽の動きが出る。そこで毎回、取れた終値と表の終値を同じ日で突き合わせ
+#   （detect_split_mismatch）、分割比に近いずれがある銘柄は PRICE_SPLIT_REFETCH_DAYS 日分を取り直して
+#   追記する（ingested_at が新しいので、ビューは全日付で調整済みの行を採る）。1回の上限は
+#   PRICE_SPLIT_REFETCH_MAX 銘柄。過去分の一括修復は `--repair-splits --since YYYY-MM-DD [--dry-run]`。
 #
 # 【費用・重複】
 #   書き込みは load job（無料・クエリ枠を使わない）。既存キーの照会はパーティションを
@@ -79,6 +87,13 @@ SEC_MIN_INTERVAL_SEC = 0.5
 # 比べる指数の ETF。ユニバースの先頭に必ず入れる（推奨のその後 pick_outcomes が使う）
 BENCHMARKS = {"jp": ("1306.T",), "us": ("SPY",)}
 
+# 分割・併合の検知（stored/fetched または日々の終値比が、この分割比かその逆数に近いとき）
+SPLIT_RATIOS = (2, 3, 4, 5, 10, 20, 25, 50)
+SPLIT_TOL_SMALL = 0.06         # 比 2〜4 の許容（相対）
+SPLIT_TOL_LARGE = 0.12         # 比 5 以上の許容（相対）
+SPLIT_REFETCH_DAYS = 400       # 取り直す営業日数（カレンダー日に直して start= で取る）
+SPLIT_REFETCH_MAX = 50         # 1回に取り直す銘柄数の上限
+
 _CFG_CONST_MAP = {
     "B5_PRICE_UNIVERSE_CHUNK_SIZE": "CHUNK_SIZE",
     "B5_PRICE_UNIVERSE_CHUNK_PAUSE_SEC": "CHUNK_PAUSE_SEC",
@@ -101,6 +116,8 @@ _CFG_CONST_MAP = {
     "B5_PRICE_UNIVERSE_LOAD_BATCH_ROWS": "LOAD_BATCH_ROWS",
     "B5_PRICE_UNIVERSE_SEC_MIN_INTERVAL_SEC": "SEC_MIN_INTERVAL_SEC",
     "B5_PRICE_UNIVERSE_BENCHMARKS": "BENCHMARKS",
+    "PRICE_SPLIT_REFETCH_DAYS": "SPLIT_REFETCH_DAYS",
+    "PRICE_SPLIT_REFETCH_MAX": "SPLIT_REFETCH_MAX",
 }
 
 _TABLE_DATASET = "analytics"
@@ -275,6 +292,60 @@ def rows_from_frames(frames: dict, existing: set, cutoff: date, now_iso: str,
             rows.append({"trade_date": d.isoformat(), "ticker": ticker,
                          "source": source, "ingested_at": now_iso, **vals})
     return rows
+
+
+def _near_split(ratio: float) -> float | None:
+    """ratio が分割比 s かその逆数に近ければ s を返す（なければ None）。"""
+    if not ratio or ratio <= 0 or ratio != ratio:
+        return None
+    for r in (ratio, 1.0 / ratio):
+        for s in SPLIT_RATIOS:
+            tol = SPLIT_TOL_SMALL if s <= 4 else SPLIT_TOL_LARGE
+            if abs(r / s - 1.0) <= tol:
+                return float(s)
+    return None
+
+
+def detect_split_mismatch(fetched: dict, stored: dict) -> dict:
+    """取れた終値 {ticker: {date: close}} と表の終値を同じ日で比べ、分割比のずれがある銘柄を返す。
+
+    比 = stored / fetched を重なる日ごとに出し、その中央値が分割比（または逆数）に近い銘柄だけを
+    {ticker: 中央値} で返す。中央値を使うのは、片側に1日だけ訂正や欠けがあっても全体の判定を
+    崩さないため。重なる日が無い銘柄は判定しない。
+    """
+    out: dict = {}
+    for t, fmap in (fetched or {}).items():
+        smap = (stored or {}).get(t)
+        if not smap:
+            continue
+        ratios = sorted(
+            smap[d] / c for d, c in fmap.items()
+            if d in smap and c and smap[d] and c > 0 and smap[d] > 0)
+        if not ratios:
+            continue
+        n = len(ratios)
+        med = ratios[n // 2] if n % 2 else (ratios[n // 2 - 1] + ratios[n // 2]) / 2
+        if _near_split(med) is not None:
+            out[t] = med
+    return out
+
+
+def find_split_jumps(jumps) -> dict:
+    """ビューの日々の終値の跳び [(ticker, date, prev_close, close)] から、分割比に近いものを銘柄別に返す。
+
+    {ticker: [(date, close/prev_close)]}。基準が混ざった系列は、跳びが分割比に近い。
+    """
+    out: dict = {}
+    for t, d, prev, cur in jumps or []:
+        try:
+            if not prev or not cur or prev <= 0 or cur <= 0:
+                continue
+            ratio = cur / prev
+        except TypeError:
+            continue
+        if _near_split(ratio) is not None:
+            out.setdefault(t, []).append((str(d), ratio))
+    return out
 
 
 def select_targets(universe, dead: dict, today: str) -> tuple[list[str], int]:
@@ -470,6 +541,115 @@ def download_chunk(yf, chunk: list[str], period: str):
                        auto_adjust=False, threads=YF_THREADS, progress=False)
 
 
+def download_since(yf, chunk: list[str], start: str):
+    """download_chunk と同じ auto_adjust=False（終値は分割調整済み・配当は調整しない）で開始日から取る。"""
+    return yf.download(chunk, start=start, interval="1d", group_by="ticker",
+                       auto_adjust=False, threads=YF_THREADS, progress=False)
+
+
+def closes_by_ticker(frames: dict, cutoff: date) -> dict:
+    """{ticker: DataFrame} → {ticker: {YYYY-MM-DD: close}}（cutoff 以降は取り込む行と同じく除く）。"""
+    out: dict = {}
+    for t, df in frames.items():
+        m: dict = {}
+        for idx, rec in df.to_dict("index").items():
+            d = idx.date() if hasattr(idx, "date") else idx
+            c = _num(rec.get("Close"))
+            if isinstance(d, date) and d < cutoff and c is not None:
+                m[d.isoformat()] = c
+        if m:
+            out[t] = m
+    return out
+
+
+def fetch_stored_closes(client, tickers, since: str) -> dict:
+    """ビュー（ingested_at 最新）の {ticker: {date: close}} を 1 クエリで取る。tickers は配列で渡す。"""
+    from google.cloud import bigquery
+    sql = (f"SELECT ticker, FORMAT_DATE('%F', trade_date) AS d, close "
+           f"FROM `{client.project}.{_TABLE_DATASET}.{_VIEW}` "
+           "WHERE trade_date >= @since AND ticker IN UNNEST(@tickers) AND close IS NOT NULL")
+    cfg = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ScalarQueryParameter("since", "DATE", since),
+                          bigquery.ArrayQueryParameter("tickers", "STRING", sorted(tickers))],
+        maximum_bytes_billed=1024 ** 3)
+    out: dict = {}
+    for r in client.query(sql, job_config=cfg).result():
+        out.setdefault(r["ticker"], {})[r["d"]] = float(r["close"])
+    return out
+
+
+def split_jump_sql(client) -> str:
+    """ビューの日々の終値の跳び（比が 1/1.88 以下か 1.88 以上）を銘柄・日付つきで 1 本で取る SQL。
+
+    SPLIT_RATIOS の最小 2 に許容 6% を掛けた下限より緩くしておき、分割比への近さは find_split_jumps が判定する。"""
+    lo = 2 * (1 - SPLIT_TOL_SMALL)
+    return (
+        "SELECT ticker, FORMAT_DATE('%F', trade_date) AS d, prev_close, close FROM ("
+        "SELECT ticker, trade_date, close, "
+        "LAG(close) OVER (PARTITION BY ticker ORDER BY trade_date) AS prev_close "
+        f"FROM `{client.project}.{_TABLE_DATASET}.{_VIEW}` "
+        "WHERE trade_date >= @since AND close > 0) "
+        f"WHERE prev_close > 0 AND (close / prev_close >= {lo} OR close / prev_close <= {1 / lo})")
+
+
+def query_split_jumps(client, since: str, dry_run_only: bool = False):
+    """分割比近傍の跳びを持つ行を取る。dry_run_only なら課金バイトの見積りだけ返す。"""
+    from google.cloud import bigquery
+    params = [bigquery.ScalarQueryParameter("since", "DATE", since)]
+    sql = split_jump_sql(client)
+    if dry_run_only:
+        job = client.query(sql, job_config=bigquery.QueryJobConfig(
+            dry_run=True, use_query_cache=False, query_parameters=params))
+        return int(job.total_bytes_processed)
+    cfg = bigquery.QueryJobConfig(query_parameters=params, maximum_bytes_billed=2 * 1024 ** 3)
+    return [(r["ticker"], r["d"], float(r["prev_close"]), float(r["close"]))
+            for r in client.query(sql, job_config=cfg).result()]
+
+
+def refetch_split_tickers(client, yf, tickers, cutoff: date, dry_run: bool = False,
+                          max_tickers: int | None = None) -> dict:
+    """分割でずれた銘柄を SPLIT_REFETCH_DAYS 日分取り直して追記する（既存キーは見ずに全日付を足す）。
+
+    追記行の ingested_at は通常の取り込みより後にするので、ビューは全日付でこの調整済みの行を採る。
+    1回の上限は max_tickers（既定 SPLIT_REFETCH_MAX）銘柄で、超えた分は次の回に回す（毎回の検知が拾い直す）。"""
+    tickers = sorted(tickers)
+    cap = max(0, int(SPLIT_REFETCH_MAX if max_tickers is None else max_tickers))
+    todo, over = tickers[:cap], tickers[cap:]
+    res = {"requested": len(tickers), "fixed": [], "no_data": [], "deferred": over, "rows": 0}
+    if not todo:
+        return res
+    start = (datetime.now(timezone.utc) - timedelta(days=int(int(SPLIT_REFETCH_DAYS) * 1.5) + 7)).date().isoformat()
+    now_iso = (datetime.now(timezone.utc) + timedelta(seconds=1)).isoformat()
+    rows: list[dict] = []
+    for chunk in chunked(todo, CHUNK_SIZE):
+        frames = extract_frames(download_since(yf, chunk, start), chunk)
+        rows.extend(rows_from_frames(frames, set(), cutoff, now_iso))
+        res["fixed"].extend(t for t in chunk if t in frames)
+        res["no_data"].extend(t for t in chunk if t not in frames)
+        if len(todo) > CHUNK_SIZE:
+            time.sleep(CHUNK_PAUSE_SEC)
+    res["rows"] = len(rows)
+    if rows and not dry_run:
+        load_rows(client, rows)
+    return res
+
+
+def fix_split_mismatches(client, yf, fetched_closes: dict, cutoff: date) -> dict:
+    """取れた終値と表の終値を 1 クエリで突き合わせ、分割ずれの銘柄を取り直す。"""
+    if not fetched_closes:
+        return {"flagged": 0}
+    since = min(d for m in fetched_closes.values() for d in m)
+    stored = fetch_stored_closes(client, fetched_closes.keys(), since)
+    flagged = detect_split_mismatch(fetched_closes, stored)
+    if not flagged:
+        return {"flagged": 0}
+    res = refetch_split_tickers(client, yf, flagged, cutoff)
+    res["flagged"] = len(flagged)
+    res["ratios"] = {t: round(r, 4) for t, r in flagged.items()}
+    print(f"  ✂️ 分割ずれ{len(flagged)}銘柄を取り直した: {res['fixed']} / 取れず {res['no_data']} / 次回へ {res['deferred']}")
+    return res
+
+
 def run_market(market: str, cfg, client, backfill: bool = False, limit: int = 0,
                dry_run: bool = False, yf=None, existing: set | None = None) -> dict:
     """1市場ぶんを取って足す。existing（既存キー）を渡せば照会を省く（日米で1回にするため）。"""
@@ -513,6 +693,7 @@ def run_market(market: str, cfg, client, backfill: bool = False, limit: int = 0,
     aborted = False
     buf: list[dict] = []
     loaded = 0
+    fetched_closes: dict = {}
 
     def left() -> float:
         return TIME_BUDGET_SEC - (time.time() - t0)
@@ -553,6 +734,8 @@ def run_market(market: str, cfg, client, backfill: bool = False, limit: int = 0,
             got = set(frames)
             hit.update(got)
             buf.extend(rows_from_frames(frames, existing, cutoff, now_iso))
+            if not dry_run:
+                fetched_closes.update(closes_by_ticker(frames, cutoff))
             if len(frames) / len(chunk) < CHUNK_FAIL_RATE:
                 failed_chunks += 1
                 in_row += 1
@@ -593,6 +776,14 @@ def run_market(market: str, cfg, client, backfill: bool = False, limit: int = 0,
         loaded += load_rows(client, buf)
     rows_total = loaded + (len(buf) if dry_run else 0)
 
+    if not dry_run and fetched_closes:
+        try:
+            info["split"] = fix_split_mismatches(client, yf, fetched_closes, cutoff)
+        except Exception as e:
+            # 検知・取り直しの失敗で本体の取り込み結果は落とさない。次の回の検知が拾い直す
+            print(f"  ⚠️ 分割ずれの検知/取り直しに失敗（次の回で再検知）: {type(e).__name__}: {str(e)[:100]}")
+            info["split"] = {"error": type(e).__name__}
+
     if not dry_run:
         _write_json(dead_path, update_dead_state(dead, hit, missed, today))
     cov = coverage(len(targets), len(hit), MIN_RATE_JP if market == "jp" else MIN_RATE_US)
@@ -627,8 +818,37 @@ def _notify(cfg, subject: str, body: str) -> None:
         print(f"⚠️ アラート送信失敗: {str(e)[:80]}")
 
 
+def repair_splits(cfg, since: str, dry_run: bool, max_tickers: int = 400) -> int:
+    """ビューの日次終値に分割比近傍の跳びがある銘柄を探して取り直す（過去分の一括修復）。"""
+    client = bq_client(cfg)
+    nbytes = query_split_jumps(client, since, dry_run_only=True)
+    print(f"検知SQLの見積り: {nbytes / 1e6:.1f} MB（since={since}）")
+    if nbytes > 1024 ** 3:
+        print("❌ 見積りが1GBを超える。since を絞ること")
+        return 2
+    found = find_split_jumps(query_split_jumps(client, since))
+    tickers = sorted(found)
+    print(f"跳びのある銘柄 {len(tickers)}: {tickers}")
+    for t in tickers:
+        print(f"  {t}: " + ", ".join(f"{d} x{r:.3g}" for d, r in found[t][:6]))
+    if dry_run or not tickers:
+        return 0
+    import yfinance as yf
+    now = datetime.now(timezone.utc)
+    ensure_view(client)
+    # 日米どちらの銘柄も混ざるので、立会い中の足を入れないよう早い方の cutoff に揃える
+    cutoff = min(market_cutoff_date("jp", now), market_cutoff_date("us", now))
+    # 上限を超える分は --repair-splits をもう一度流せば（跳びが残る銘柄だけ）続きを直す
+    res = refetch_split_tickers(client, yf, tickers, cutoff, max_tickers=max_tickers)
+    print(json.dumps(res, ensure_ascii=False, default=str))
+    return 0 if not res["no_data"] else 1
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--repair-splits", action="store_true", help="分割でずれた銘柄を検知して取り直す")
+    ap.add_argument("--repair-max", type=int, default=400, help="--repair-splits で取り直す銘柄数の上限")
+    ap.add_argument("--since", default="", help="--repair-splits の検知開始日 YYYY-MM-DD")
     ap.add_argument("--market", choices=["jp", "us", "all"], default="all")
     ap.add_argument("--backfill", action="store_true")
     ap.add_argument("--dry-run", action="store_true", help="BQに書かない・状態も更新しない")
@@ -638,6 +858,10 @@ def main(argv=None) -> int:
     cfg = _load_cfg()
     from config_sync import sync_module_constants
     sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
+    if args.repair_splits:
+        if not args.since:
+            ap.error("--repair-splits には --since が要る")
+        return repair_splits(cfg, args.since, args.dry_run, args.repair_max)
     try:
         client = bq_client(cfg)
     except Exception:
