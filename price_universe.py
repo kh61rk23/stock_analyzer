@@ -623,7 +623,7 @@ def refetch_split_tickers(client, yf, tickers, cutoff: date, dry_run: bool = Fal
     rows: list[dict] = []
     for chunk in chunked(todo, CHUNK_SIZE):
         frames = extract_frames(download_since(yf, chunk, start), chunk)
-        rows.extend(rows_from_frames(frames, set(), cutoff, now_iso))
+        rows.extend(rows_from_frames(frames, set(), cutoff, now_iso, source="yfinance_split_refetch"))  # 取り直しの行と分かるように
         res["fixed"].extend(t for t in chunk if t in frames)
         res["no_data"].extend(t for t in chunk if t not in frames)
         if len(todo) > CHUNK_SIZE:
