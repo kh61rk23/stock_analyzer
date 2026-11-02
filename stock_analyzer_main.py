@@ -4323,6 +4323,24 @@ def run_all_tasks(mode: str = "all") -> dict:
             logger.add("pick_outcomes", "error", str(_poe)[:100])
             print(f"  ⚠️  推奨のその後の更新エラー（スキップ）: {str(_poe)[:60]}")
 
+    # 一次採点の観点別の効き（順位相関 IC）を週1回測る。結果はメールの節（alert_notifier）と analytics.universe_factor_ic へ
+    if getattr(cfg, "ENABLE_UNIVERSE_FACTOR_IC", True) and _in_mode("universe_factor_ic"):
+        try:
+            import universe_factor_ic as _ufi
+            _ufi_res = _ufi.run(cfg)
+            results["universe_factor_ic"] = _ufi_res
+            if _ufi_res.get("skipped"):
+                logger.add("universe_factor_ic", "skipped", str(_ufi_res.get("reason", ""))[:80])
+            elif _ufi_res.get("error"):
+                logger.add("universe_factor_ic", "error", str(_ufi_res["error"])[:100])
+            else:
+                logger.add("universe_factor_ic", "success",
+                           f"{_ufi_res.get('rows', 0)}行 / {_ufi_res.get('gb_billed')}GB / "
+                           f"逆向き {len(_ufi_res.get('reversed') or [])}")
+        except Exception as _ufie:
+            logger.add("universe_factor_ic", "error", str(_ufie)[:100])
+            print(f"  ⚠️  一次採点の観点別の効きの計算エラー（スキップ）: {str(_ufie)[:60]}")
+
         # ── [Size Ph1] 規模分類マスター生成（両スクリーナーの直後）────
         #   results["screener"]（stock_screener）と results["us_screener"]
         #   （us_stock_screener）の両方が確定してから実行する必要がある。
@@ -4815,7 +4833,8 @@ def run_all_tasks(mode: str = "all") -> dict:
                 ch_result = _ch.run_correlation_heatmap(cfg)
                 results["correlation_heatmap"] = ch_result
                 conc = ch_result.get("concentration", {})
-                logger.add("correlation_heatmap", "success",
+                # 株価が取れずに相関を出せなかった回は warn（success にすると、全滅の日が台帳で見えない）
+                logger.add("correlation_heatmap", "warn" if ch_result.get("skipped") else "success",
                            f"{len(ch_result.get('tickers', []))}銘柄 "
                            f"集中リスク:{conc.get('risk_level','N/A')} "
                            f"{conc.get('summary','')[:40]}")
@@ -5566,9 +5585,13 @@ def run_all_tasks(mode: str = "all") -> dict:
             if _opa:
                 opa_result = _opa.run_options_advisor(cfg, results)
                 results["options_advisor"] = opa_result
+                _opa_n_univ = len(opa_result.get('universe', []))
+                _opa_n_ok = len(opa_result.get('metrics', []))
+                # 対象があるのに1件も取れなかった回は warn（success にすると全滅が台帳で見えない）
                 logger.add(
-                    "options_advisor", "success",
-                    f"ユニバース{len(opa_result.get('universe',[]))} "
+                    "options_advisor",
+                    "warn" if _opa_n_univ and not _opa_n_ok else "success",
+                    f"ユニバース{_opa_n_univ} / 取得成功{_opa_n_ok} "
                     f"/ 提案{len(opa_result.get('suggestions',[]))}件",
                 )
         except Exception as _opae:

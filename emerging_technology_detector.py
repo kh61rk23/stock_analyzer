@@ -39,7 +39,7 @@ from typing import Optional
 # BLOCK 0: モジュール定数
 # ==============================================================
 
-_MODULE_VERSION  = "1.0"
+_MODULE_VERSION  = "1.1"
 from config_sync import sync_module_constants
 
 _CFG_CONST_MAP = {
@@ -67,6 +67,9 @@ def _load_cache(cache_path: Path) -> Optional[dict]:
         if not cache_path.exists():
             return None
         raw = json.loads(cache_path.read_text(encoding="utf-8"))
+        # 作り方が変わった版のキャッシュは読まない（キーワード表が空だった版の「0件」を TTL のあいだ使い続けないため）
+        if raw.get("version") != _MODULE_VERSION:
+            return None
         generated_str = raw.get("generated", "")
         if not generated_str:
             return None
@@ -161,7 +164,8 @@ def _extract_arxiv_signals(
             for paper in papers[:50]:  # 上位50件のみチェック（計算量制限）
                 title   = str(paper.get("title",   "") or "").lower()
                 summary = str(paper.get("summary", "") or "").lower()
-                paper_score = float(paper.get("score", 0) or 0)
+                # arxiv_monitor の論文の点は investment_score（score というキーは無い）
+                paper_score = float(paper.get("investment_score", paper.get("score", 0)) or 0)
                 if kw_lower in title:
                     node_score += min(1.0, paper_score / 5.0) * 0.8
                     matched    += 1
@@ -373,7 +377,10 @@ def build_emerging_cache(
           ]
         }
     """
-    tech_keyword_map  = getattr(cfg, "TECH_KEYWORD_MAP", {})
+    # キーワード表は技術マップと同じ取り方（config に TECH_KEYWORD_MAP があればそれ、無ければ承認済み seed から作る）。
+    # config だけを見ると、TECH_KEYWORD_MAP は config に無いので常に空になり、萌芽テーマが1件も出ない。
+    from technology_mapper import _get_keyword_map
+    tech_keyword_map  = _get_keyword_map(cfg)
     surge_threshold   = getattr(cfg, "EMERGING_KEYWORD_SURGE_THRESHOLD", 0.50)
     emerging_min      = getattr(cfg, "EMERGING_SCORE_MIN",              0.30)
 
@@ -383,6 +390,7 @@ def build_emerging_cache(
             "version":         _MODULE_VERSION,
             "ttl_days":        _CACHE_TTL_DAYS,
             "emerging_themes": [],
+            "keyword_map_empty": True,
         }
 
     # ── 3信号を並行抽出 ──────────────────────────────────────────
@@ -586,8 +594,9 @@ def run_emerging_detector(cfg, results: dict) -> dict:
         print("  [emerging_detector] 萌芽テーマ検知中...")
         emerging_cache = build_emerging_cache(results, cfg)
 
-        # ④ キャッシュ保存
-        _save_cache(cache_path, emerging_cache)
+        # ④ キャッシュ保存（キーワード表が空で何も調べられなかった回は保存しない。空の結果が14日固定されるため）
+        if not emerging_cache.get("keyword_map_empty"):
+            _save_cache(cache_path, emerging_cache)
 
         # ⑤ results に格納
         results["emerging_tech"] = emerging_cache

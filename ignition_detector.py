@@ -240,9 +240,9 @@ def _extract_category_a(
     Category A（資金フロー）シグナルを抽出する。
 
     【評価指標】
-    1. signal_aggregator の money_flow コンポーネント（>60pt → +0.5）
-    2. screener通過銘柄の機関投資家保有率平均（>60% → +0.3）
-    3. sector_rotation の rotation_score（>70 → +0.2）
+    1. signal_aggregator の money_flow コンポーネント（>=70pt → +0.5。発火検知より後に動くので通常は無い）
+    2. screener通過銘柄の機関投資家保有率平均（>=65% → +0.3。候補に inst_ownership がある場合だけ）
+    3. 業種ローテーション：象限 rising +0.35 / peak +0.15、業種スコアの傾き >=1.0pt/日 +0.35 / >=0.3 +0.15
 
     Returns:
         {"score": 0.0〜1.0, "signals": list[str], "detected": bool, "timestamp": str}
@@ -287,18 +287,25 @@ def _extract_category_a(
         pass
 
     try:
-        # ── 指標3: sector_rotation_score ─────────────────────
-        rotation  = bundle.get("sector_rotation", {})
-        sec_rot   = rotation.get("sectors", {}).get(str(sector_code), {})
-        rot_score = sec_rot.get("rotation_score")
-        if rot_score is not None:
-            rs = float(rot_score)
-            if rs >= 75:
-                score   += 0.20
-                signals.append(f"ローテーション強({rs:.0f}pt)")
-            elif rs >= 60:
-                score   += 0.10
-                signals.append(f"ローテーション中({rs:.0f}pt)")
+        # ── 指標3: 業種ローテーション（sector_rotation_detector の quadrants・sector_stats）──
+        # signal_aggregator は発火検知より後に動くので、指標1は通常この時点で空。資金の向きは
+        # ローテーションの象限と業種スコアの傾き（pt/日）で見る。rising＝平均より下から上向き（初動）。
+        rotation = bundle.get("sector_rotation", {}) or {}
+        quadrant = (rotation.get("quadrants") or {}).get(str(sector_code))
+        stats    = (rotation.get("sector_stats") or {}).get(str(sector_code)) or {}
+        if quadrant == "rising":
+            score += 0.35
+            signals.append("ローテーション初動（平均の下から上向き）")
+        elif quadrant == "peak":
+            score += 0.15
+        mom = stats.get("momentum")
+        if mom is not None:
+            m = float(mom)
+            if m >= 1.0:
+                score += 0.35
+                signals.append(f"業種スコア急上昇({m:+.2f}pt/日)")
+            elif m >= 0.3:
+                score += 0.15
     except Exception:
         pass
 

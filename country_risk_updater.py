@@ -60,6 +60,7 @@
 
 from __future__ import annotations
 
+import html
 import json
 import re
 import time
@@ -137,14 +138,6 @@ _MOFA_LEVEL_PATTERNS = [
     (2, r"危険情報.*?レベル\s*2|不要不急の渡航は"),
     (1, r"危険情報.*?レベル\s*1|十分注意してください"),
     (1, r"感染症危険情報"),
-]
-
-# 国務省危険レベルのテキストパターン（RSS description から抽出）
-_STATE_LEVEL_PATTERNS = [
-    (4, r"Level\s*4|Do Not Travel"),
-    (3, r"Level\s*3|Reconsider Travel"),
-    (2, r"Level\s*2|Exercise Increased Caution"),
-    (1, r"Level\s*1|Exercise Normal Precautions"),
 ]
 
 # 外務省RSS の国名→ISO 3166-1 alpha-3 マッピング（主要国）
@@ -438,10 +431,40 @@ def _parse_mofa_rss(xml_text: str) -> dict[str, int]:
 # BLOCK 4: 国務省RSS パーサー
 # ==============================================================
 
+# 国務省の項目名の表記ゆれ（STATE_COUNTRY_MAP に無い呼び方）
+_STATE_TITLE_ALIASES: dict[str, str] = {
+    "Türkiye": "TUR", "Turkiye": "TUR", "South Korea": "KOR", "Mainland China": "CHN",
+    "Burma (Myanmar)": "MMR", "Viet Nam": "VNM",
+    "Congo, Democratic Republic of the": "COD", "Democratic Republic of Congo": "COD", "DRC": "COD",
+    "The Netherlands": "NLD", "Republic of Korea": "KOR", "People's Republic of China": "CHN",
+}
+
+
+def _state_country_of(head: str) -> str | None:
+    """項目名の国の部分（"Burma (Myanmar)"・"Israel, the West Bank and Gaza" 等）から ISO コードを返す（純関数）。
+
+    国名は完全一致か、「,」「(」「&」「and」で区切った断片の完全一致だけで判定する。部分一致にすると
+    "Papua New Guinea" が Guinea に、"Guinea-Bissau" が Guinea に当たる。米国は国務省の渡航情報の対象外
+    なので返さない（本文の "United States" に当たって米国が危険度4になる事故があった）。
+    """
+    table = {k.lower(): v for k, v in {**STATE_COUNTRY_MAP, **_STATE_TITLE_ALIASES}.items()}
+    h = re.sub(r"\s+", " ", head).strip().lower()
+    code = table.get(h)
+    if code is None:
+        for seg in re.split(r",|\(|\)|&|\band\b", h):
+            code = table.get(seg.strip())
+            if code:
+                break
+    return None if code == "USA" else code
+
+
 def _parse_state_dept_rss(xml_text: str) -> dict[str, int]:
     """
-    米国国務省 旅行警告 RSS を解析し、
-    {country_code: level} の辞書を返す。
+    米国国務省 旅行警告 RSS を解析し、{country_code: level} の辞書を返す。
+
+    項目のタイトルは "Iraq - Level 4: Do Not Travel" の形。レベルも国名もタイトルだけから取る。
+    本文（description）には「国内の一部地域は Level 4」「米国市民は…（United States）」「隣国の Russia」などが
+    普通に出るので、本文まで探すと、ほぼ全項目が Level 4 になり、国名も本文で先に当たった国にすり替わる。
 
     Returns:
         {country_code: state_dept_level}
@@ -451,40 +474,30 @@ def _parse_state_dept_rss(xml_text: str) -> dict[str, int]:
         return result
 
     items = re.findall(r"<item>(.*?)</item>", xml_text, re.DOTALL)
+    unmatched: list[str] = []
 
     for item in items:
-        # <title> から国名を抽出（"Country Name Travel Advisory - Level X" 形式）
         title_m = re.search(r"<title>(.*?)</title>", item, re.DOTALL)
-        desc_m  = re.search(r"<description>(.*?)</description>", item, re.DOTALL)
-
-        text = ""
-        if title_m:
-            text += title_m.group(1)
-        if desc_m:
-            text += " " + desc_m.group(1)
-        text = re.sub(r"<!\[CDATA\[(.*?)\]\]>", r"\1", text)
-
-        # レベル判定
-        level = 0
-        for lv, pattern in _STATE_LEVEL_PATTERNS:
-            if re.search(pattern, text, re.IGNORECASE):
-                level = lv
-                break
-
-        if level == 0:
+        if not title_m:
             continue
+        title = re.sub(r"<!\[CDATA\[(.*?)\]\]>", r"\1", title_m.group(1), flags=re.DOTALL)
+        title = html.unescape(title).strip()
 
-        # 国名判定
-        matched_code = None
-        for country_en, code in STATE_COUNTRY_MAP.items():
-            if country_en.lower() in text.lower():
-                matched_code = code
-                break
+        lv_m = re.search(r"\bLevel\s*([1-4])\b", title, re.IGNORECASE)
+        if not lv_m:
+            continue
+        level = int(lv_m.group(1))
 
+        head = re.split(r"\s+[-–—]\s+|\s+Travel Advisory", title, maxsplit=1)[0]
+        matched_code = _state_country_of(head)
         if matched_code:
-            existing = result.get(matched_code, 0)
-            result[matched_code] = max(existing, level)
+            result[matched_code] = max(result.get(matched_code, 0), level)
+        else:
+            unmatched.append(head)
 
+    # 対象外の国（対象は STATE_COUNTRY_MAP の国）は捨てる。表記ゆれで対象国を取りこぼしていないか、件数と例をログに出す
+    if unmatched:
+        print(f"   ℹ️  国務省RSS: 対象外・未対応の項目 {len(unmatched)} 件（例: {', '.join(unmatched[:5])}）")
     return result
 
 

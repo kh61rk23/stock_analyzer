@@ -140,9 +140,13 @@ def run_jp_filings(cfg, results: dict, logger, in_mode=lambda key: True, probe=N
         try:
             import reit_ingestor as _reit
             value = results["reit_ingest"] = _reit.run(cfg)
-            logger.add("reit_ingest", "skipped" if value.get("skipped") else "success",
+            # 物件が0件の回は warn（REIT の一覧が空でも指標だけ取れて success に見えていた）
+            _reit_status = ("skipped" if value.get("skipped")
+                            else "warn" if not value.get("properties") else "success")
+            logger.add("reit_ingest", _reit_status,
                        value.get("reason", "") if value.get("skipped") else
-                       f"物件{value.get('properties', 0)}件 / 指標{value.get('metrics', 0)}行 / API {value.get('calls', 0)}回")
+                       f"物件{value.get('properties', 0)}件 / 指標{value.get('metrics', 0)}行 / API {value.get('calls', 0)}回"
+                       + (f" / 上限で切れた REIT {len(value['truncated'])}本" if value.get("truncated") else ""))
         except Exception as exc:
             logger.add("reit_ingest", "error", f"{type(exc).__name__}: {str(exc)[:80]}")
 
