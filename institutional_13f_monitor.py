@@ -96,13 +96,16 @@ _CHANGE_MULTIPLIER: dict = {
 # INSTITUTION_TIER_MAP の名称と対応
 _KNOWN_CIKS: dict = {
     "0001067983": {"name": "Berkshire Hathaway Inc", "tier": 1},
-    "0001336528": {"name": "Pershing Square Capital Management", "tier": 2},
+    # Pershing Square の13F提出主体は 2026年8月に Capital Management(1336528・13F-NT のみ)から Pershing Square Inc. へ移った。
+    "0002026053": {"name": "Pershing Square Inc", "tier": 2},
     # CIK は 13F 提出主体のもの。1418819＝Iridium / 1011006＝Altaba / 1113169＝T. Rowe Price Group は
     #   13F を出していない別法人なので使わない。
     "0001791786": {"name": "Elliott Investment Management", "tier": 2},
     "0001040273": {"name": "Third Point LLC", "tier": 2},
     "0002012383": {"name": "BlackRock Inc", "tier": 3},   # 1364742 は提出終了（再編）のため使わない
-    "0000102909": {"name": "Vanguard Group", "tier": 3},
+    # Vanguard の13Fは 2026年 Group(102909・2025-12期が最後)から下の2法人に分かれて提出される。
+    "0002100119": {"name": "Vanguard Capital Management", "tier": 3},
+    "0002100121": {"name": "Vanguard Portfolio Management", "tier": 3},
     "0000093751": {"name": "State Street", "tier": 3},
     "0000315066": {"name": "Fidelity", "tier": 3},
     "0000080255": {"name": "T. Rowe Price", "tier": 3},

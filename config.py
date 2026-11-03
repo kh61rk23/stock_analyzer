@@ -3095,6 +3095,7 @@ INSTITUTION_TIER_MAP: dict = {
     # Tier 2: 著名アクティビスト
     "Pershing Square Capital":       2,
     "Pershing Square Capital Management": 2,
+    "Pershing Square Inc":           2,
     "Elliott Investment Management": 2,
     "Third Point":                   2,
     "Third Point LLC":               2,
@@ -3102,6 +3103,8 @@ INSTITUTION_TIER_MAP: dict = {
     "BlackRock":                     3,
     "BlackRock Inc":                 3,
     "Vanguard Group":                3,
+    "Vanguard Capital Management":   3,
+    "Vanguard Portfolio Management": 3,
     "State Street":                  3,
     "Fidelity":                      3,
     "T. Rowe Price":                 3,
