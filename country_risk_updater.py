@@ -16,9 +16,9 @@
 #        - instability_score = max(0, -avg(goldstein)) × 10
 #          （マイナス値ほど不安定, 0〜100 に変換）
 #
-#   ② 外務省 海外安全情報 RSS
-#      URL: https://www.anzen.mofa.go.jp/rss/anzen_outer.xml
-#      用途: 危険情報レベル（0〜4）の自動抽出
+#   ② 外務省 海外安全情報オープンデータ（XML）
+#      URL: https://www.ezairyu.mofa.go.jp/opendata/country/<国コード>L.xml （国別・軽量版）
+#      用途: 危険情報レベル（0〜4）の自動抽出（先頭の riskLevel1〜4 フラグだけを読む）
 #      レベル定義:
 #        0: 危険情報なし
 #        1: 十分注意してください
@@ -75,7 +75,13 @@ from urllib.error import URLError, HTTPError
 # ==============================================================
 
 # 外務省RSSのURL
-MOFA_RSS_URL = "https://www.anzen.mofa.go.jp/rss/anzen_outer.xml"
+# 外務省 海外安全情報オープンデータ（国別・軽量版）。anzen.mofa.go.jp の RSS は廃止済みで、
+# 旧URLは「ページが見つかりません」の HTML を HTTP 200 で返す（RSS として解析すると0件になる）。
+# 国別ファイルの先頭に riskLevel4〜1（その国に当該レベルの地域があれば 1）が並び、本文の
+# メール一覧（数百KB〜）はその後ろにあるので、先頭だけ読んで打ち切る。
+MOFA_OPENDATA_COUNTRY_URL = "https://www.ezairyu.mofa.go.jp/opendata/country/{code}L.xml"
+_MOFA_HEAD_BYTES = 16384
+_MOFA_FETCH_INTERVAL = 0.3   # 秒（公的サイトへの連続アクセスの間隔）
 
 # 米国国務省RSSのURL
 # 配信先は /_res/rss/TAsTWs.xml（Travel Advisories & Travel Warnings）。
@@ -131,17 +137,23 @@ _GDELT_TOTAL_FAIL_LIMIT  = 8      # 累計失敗の閾値（成功が挟まっ�
 _GDELT_CACHE_FILENAME    = "gdelt_instability_cache.json"
 _GDELT_CACHE_DECAY_RATE  = 0.05   # 1日あたり5%減衰（下限0でクランプ）
 
-# 外務省危険レベルのテキストパターン（RSS title から抽出）
-_MOFA_LEVEL_PATTERNS = [
-    (4, r"危険情報.*?レベル\s*4|退避してください"),
-    (3, r"危険情報.*?レベル\s*3|渡航は止めてください"),
-    (2, r"危険情報.*?レベル\s*2|不要不急の渡航は"),
-    (1, r"危険情報.*?レベル\s*1|十分注意してください"),
-    (1, r"感染症危険情報"),
-]
+# 外務省オープンデータの国コード（country.xlsx の「国コード」。ISO数値とは別体系）。
+# 日本は対象外。米国は本土（1000）、中国は本土（0086）、台湾は 0886。
+MOFA_OPENDATA_CODES: dict[str, str] = {
+    "SAU": "0966", "ARE": "0971", "IRN": "0098", "IRQ": "0964", "KWT": "0965", "QAT": "0974",
+    "RUS": "9007", "NOR": "0047", "USA": "1000", "CAN": "9001", "NGA": "0234", "LBY": "0218",
+    "DZA": "0213", "AUS": "0061", "CHL": "0056", "PER": "0051", "ZAF": "0027", "COD": "0243",
+    "IDN": "0062", "PHL": "0063", "KAZ": "0007", "MNG": "0976", "GIN": "0224", "BWA": "0267",
+    "BRA": "0055", "ARG": "0054", "UKR": "0380", "THA": "0066", "VNM": "0084", "IND": "0091",
+    "CHN": "0086", "KOR": "0082", "TWN": "0886", "SGP": "0065", "MYS": "0060", "EGY": "0020",
+    "TUR": "0090", "ISR": "0972", "PAK": "0092", "DEU": "0049", "FRA": "0033", "GBR": "0044",
+    "NLD": "0031", "POL": "0048", "MEX": "0052", "ZMB": "0260", "MOZ": "0258", "PNG": "0675",
+    "UZB": "0998", "MMR": "0095", "KHM": "0855", "LAO": "0856", "BGD": "0880", "COL": "0057",
+    "VEN": "0058", "ETH": "0251", "TZA": "0255", "ZWE": "0263",
+}
 
-# 外務省RSS の国名→ISO 3166-1 alpha-3 マッピング（主要国）
-# RSSのtitleから国名を抽出するための対応表
+# 外務省の国名→ISO 3166-1 alpha-3 マッピング（主要国）
+# 日本語の国名から ISO コードを引く対応表
 MOFA_COUNTRY_MAP: dict[str, str] = {
     "サウジアラビア": "SAU",
     "アラブ首長国連邦": "ARE",
@@ -370,61 +382,66 @@ def _fetch_url(url: str, timeout: int = _FETCH_TIMEOUT) -> str | None:
 
 
 # ==============================================================
-# BLOCK 3: 外務省RSS パーサー
+# BLOCK 3: 外務省オープンデータ パーサー
 # ==============================================================
 
-def _parse_mofa_rss(xml_text: str) -> dict[str, int]:
+def _parse_mofa_country_xml(xml_head: str) -> int | None:
     """
-    外務省 海外安全情報 RSS を解析し、
-    {country_code: level} の辞書を返す。
+    外務省オープンデータ（国別）の先頭部分から、その国の危険レベル（0〜4）を返す（純関数）。
 
-    解析戦略:
-      1. <item> タグを正規表現で抽出
-      2. <title> から国名とレベルを判定
-      3. MOFA_COUNTRY_MAP で ISO コードに変換
-
-    Returns:
-        {country_code: foreign_ministry_level} （0 = 言及なし）
+    riskLevel4〜1 は「その国に当該レベルの危険情報が出ている地域がある」フラグ（0/1）。
+    一部地域だけ高い国（タイ南部のレベル3など）は、国全体では最も高いレベルを採る
+    （国務省側の扱いと揃える）。フラグが1つも読めなければ None（形式違い・エラーページ）。
+    全て 0 は「危険情報なし」= 0。
     """
-    result: dict[str, int] = {}
-    if not xml_text:
-        return result
+    if not xml_head:
+        return None
+    seen = False
+    for lv in (4, 3, 2, 1):
+        m = re.search(rf"<riskLevel{lv}>\s*([01])\s*</riskLevel{lv}>", xml_head)
+        if m:
+            seen = True
+            if m.group(1) == "1":
+                return lv
+    return 0 if seen else None
 
-    # <item>...</item> の全ブロックを抽出
-    items = re.findall(r"<item>(.*?)</item>", xml_text, re.DOTALL)
 
-    for item in items:
-        # <title> を抽出
-        title_m = re.search(r"<title>(.*?)</title>", item, re.DOTALL)
-        if not title_m:
+def _fetch_url_head(url: str, nbytes: int = _MOFA_HEAD_BYTES, timeout: int = _FETCH_TIMEOUT) -> tuple[str | None, str]:
+    """URL の先頭 nbytes だけを UTF-8 で返す。(本文, 失敗理由)。成功時の理由は空文字。"""
+    try:
+        req = Request(url, headers=_REQUEST_HEADERS)
+        with urlopen(req, timeout=timeout) as resp:
+            raw = resp.read(nbytes)
+        return raw.decode("utf-8", errors="ignore"), ""
+    except HTTPError as e:
+        return None, f"HTTP {e.code}"
+    except URLError as e:
+        return None, f"URLError {e.reason}"
+    except Exception as e:
+        return None, f"{type(e).__name__} {str(e)[:60]}"
+
+
+def _fetch_mofa_levels(codes: list[str] | None = None) -> tuple[dict[str, int], dict[str, str]]:
+    """
+    対象国ごとに外務省オープンデータの先頭を取得し、({iso3: level}, {iso3: 失敗理由}) を返す。
+    危険情報なし（0）の国も level 0 として結果に含める（取得できた印）。
+    """
+    targets = [c for c in (codes or list(MOFA_OPENDATA_CODES)) if c in MOFA_OPENDATA_CODES]
+    levels: dict[str, int] = {}
+    errors: dict[str, str] = {}
+    for i, iso in enumerate(targets):
+        if i:
+            time.sleep(_MOFA_FETCH_INTERVAL)
+        head, why = _fetch_url_head(MOFA_OPENDATA_COUNTRY_URL.format(code=MOFA_OPENDATA_CODES[iso]))
+        if head is None:
+            errors[iso] = why
             continue
-        title = title_m.group(1).strip()
-        # CDATA 除去
-        title = re.sub(r"<!\[CDATA\[(.*?)\]\]>", r"\1", title)
-
-        # 危険レベルを判定
-        level = 0
-        for lv, pattern in _MOFA_LEVEL_PATTERNS:
-            if re.search(pattern, title):
-                level = lv
-                break
-
-        if level == 0:
-            continue
-
-        # 国名を判定
-        matched_code = None
-        for country_ja, code in MOFA_COUNTRY_MAP.items():
-            if country_ja in title:
-                matched_code = code
-                break
-
-        if matched_code:
-            # 同一国に複数エントリがある場合は高い方を採用
-            existing = result.get(matched_code, 0)
-            result[matched_code] = max(existing, level)
-
-    return result
+        lv = _parse_mofa_country_xml(head)
+        if lv is None:
+            errors[iso] = "riskLevel 無し（形式違い）"
+        else:
+            levels[iso] = lv
+    return levels, errors
 
 
 # ==============================================================
@@ -980,24 +997,31 @@ def run_country_risk_update(
     print(f"   対象国数: {len(all_codes)} 件")
     print(f"   対象日付: {today_str}")
 
-    # ── ① 外務省RSS 取得・解析 ────────────────────────────────
+    # ── ① 外務省オープンデータ 取得・解析 ────────────────────────────────
     mofa_levels: dict[str, int] = {}
-    mofa_available = False   # RSS取得成功フラグ（失敗時は合成スコアから除外）
-    print("   📡 外務省RSS 取得中...")
+    mofa_available = False   # 取得成功フラグ（失敗時は合成スコアから除外）
+    print("   📡 外務省オープンデータ 取得中...")
     try:
-        mofa_xml = _fetch_url(MOFA_RSS_URL)
-        if mofa_xml:
-            mofa_available = True
-            mofa_levels = _parse_mofa_rss(mofa_xml)
-            print(f"   ✅ 外務省RSS: {len(mofa_levels)} 件の危険情報取得")
-            # 高レベル国を表示
+        mofa_levels, _mofa_errors = _fetch_mofa_levels([c for c in all_codes if c in MOFA_OPENDATA_CODES])
+        _mofa_total = len([c for c in all_codes if c in MOFA_OPENDATA_CODES])
+        # 取得できた国が半数以上なら有効。取れなかった国は 0 扱いにせず合成から外すため、
+        # 全滅（サイト側の障害・Actions からの遮断）のときだけ外務省成分を丸ごと外す。
+        mofa_available = bool(mofa_levels) and len(mofa_levels) * 2 >= _mofa_total
+        print(f"   ✅ 外務省: {len(mofa_levels)}/{_mofa_total} 国取得")
+        if _mofa_errors:
+            _why = {}
+            for _c, _r in _mofa_errors.items():
+                _why.setdefault(_r, []).append(_c)
+            print(f"   ⚠️  外務省 取得失敗 {len(_mofa_errors)} 国: {_why}")
+        if not mofa_available:
+            mofa_levels = {}
+            print("   ⚠️  外務省: 取得失敗（スキップ）→ 合成スコアはGDELT+国務省で再正規化")
+        else:
             high_mofa = {k: v for k, v in mofa_levels.items() if v >= 3}
             if high_mofa:
                 print(f"   ⚠️  レベル3以上: {high_mofa}")
-        else:
-            print("   ⚠️  外務省RSS: 取得失敗（スキップ）")
     except Exception as e:
-        print(f"   ⚠️  外務省RSS 解析エラー: {str(e)[:80]}")
+        print(f"   ⚠️  外務省 取得エラー: {str(e)[:80]}")
 
     # ── ② 国務省RSS 取得・解析 ─────────────────────────────────
     # 403は _fetch_url でリトライしないため、失敗時の実行時間ロスは1リクエスト分のみ。
