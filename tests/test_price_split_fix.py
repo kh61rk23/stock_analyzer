@@ -90,3 +90,22 @@ def test_writer_drops_split_mismatched_ticker(monkeypatch):
         "6574.T": {"2026-10-23": 102.0}, "7203.T": {"2026-10-23": 3010.0}})
     kept, flagged = w.drop_split_mismatched(rows, client=object())
     assert [r["ticker"] for r in kept] == ["7203.T"] and set(flagged) == {"6574.T"}
+
+
+class _LockedOnceYF(_FakeYF):
+    """並列取得の回だけ1銘柄が取れない（yfinance の sqlite の取り合い）。並列なしの取り直しでは取れる。"""
+
+    def download(self, tickers, **kw):
+        df = super().download(tickers, **kw)
+        if kw.get("threads") is not False and "SMX" in tickers:
+            df = df.drop(columns="SMX", level=0)
+        return df
+
+
+def test_refetch_retries_missing_without_threads(monkeypatch):
+    monkeypatch.setattr(pu, "load_rows", lambda c, rows: len(rows))
+    monkeypatch.setattr(pu, "CHUNK_PAUSE_SEC", 0)
+    yf = _LockedOnceYF()
+    res = pu.refetch_split_tickers(object(), yf, ["A", "SMX"], date(2026, 11, 3))
+    assert set(res["fixed"]) == {"A", "SMX"} and res["no_data"] == []
+    assert yf.calls[-1][0] == ["SMX"] and yf.calls[-1][1]["threads"] is False

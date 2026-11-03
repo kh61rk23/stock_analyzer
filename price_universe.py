@@ -541,10 +541,10 @@ def download_chunk(yf, chunk: list[str], period: str):
                        auto_adjust=False, threads=YF_THREADS, progress=False)
 
 
-def download_since(yf, chunk: list[str], start: str):
+def download_since(yf, chunk: list[str], start: str, threads=None):
     """download_chunk と同じ auto_adjust=False（終値は分割調整済み・配当は調整しない）で開始日から取る。"""
     return yf.download(chunk, start=start, interval="1d", group_by="ticker",
-                       auto_adjust=False, threads=YF_THREADS, progress=False)
+                       auto_adjust=False, threads=YF_THREADS if threads is None else threads, progress=False)
 
 
 def closes_by_ticker(frames: dict, cutoff: date) -> dict:
@@ -628,6 +628,14 @@ def refetch_split_tickers(client, yf, tickers, cutoff: date, dry_run: bool = Fal
         res["no_data"].extend(t for t in chunk if t not in frames)
         if len(todo) > CHUNK_SIZE:
             time.sleep(CHUNK_PAUSE_SEC)
+    # 並列取得では yfinance の時刻帯キャッシュ（sqlite）の取り合いで "database is locked" になる銘柄が出るので、
+    # 取れなかった分だけ並列なしでもう一度取る
+    if res["no_data"]:
+        retry = list(res["no_data"])
+        frames = extract_frames(download_since(yf, retry, start, threads=False), retry)
+        rows.extend(rows_from_frames(frames, set(), cutoff, now_iso, source="yfinance_split_refetch"))
+        res["fixed"].extend(t for t in retry if t in frames)
+        res["no_data"] = [t for t in retry if t not in frames]
     res["rows"] = len(rows)
     if rows and not dry_run:
         load_rows(client, rows)
@@ -841,7 +849,11 @@ def repair_splits(cfg, since: str, dry_run: bool, max_tickers: int = 400) -> int
     # 上限を超える分は --repair-splits をもう一度流せば（跳びが残る銘柄だけ）続きを直す
     res = refetch_split_tickers(client, yf, tickers, cutoff, max_tickers=max_tickers)
     print(json.dumps(res, ensure_ascii=False, default=str))
-    return 0 if not res["no_data"] else 1
+    # 上場廃止などで取れない銘柄は毎回少し残る。1銘柄も直せなかったときだけ失敗にする
+    mark = "✅" if not res["no_data"] else ("⚠️" if res["fixed"] else "❌")
+    print(f"{mark} price_repair_splits: 跳びのある銘柄 {len(tickers)}・取り直し {len(res['fixed'])}・取れず {len(res['no_data'])}"
+          f"・次回へ {len(res['deferred'])}・追記 {res['rows']:,}行")
+    return 1 if res["no_data"] and not res["fixed"] else 0
 
 
 def main(argv=None) -> int:
