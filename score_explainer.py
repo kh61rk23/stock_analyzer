@@ -43,6 +43,40 @@ def _safe_avg(values: list) -> Optional[float]:
 # BLOCK 1: 根拠文の生成（v1.0後方互換）
 # ==============================================================
 
+_FACTOR_LABELS = (("value_score", "割安度"), ("quality_score", "財務の質"), ("sector_score", "業種の追い風"))
+
+
+def top_factor_text(cand: dict, top_n: int = 2, min_score: float = 60.0) -> str:
+    """銘柄の総合点を押し上げている上位の構成要素を文にする（純関数）。
+
+    構成点（value/quality/sector）のうち min_score 以上を高い順に top_n 件。
+    無ければ空文字（呼び出し側は文ごと省く）。
+    """
+    vals = []
+    for key, label in _FACTOR_LABELS:
+        v = cand.get(key)
+        if isinstance(v, (int, float)) and v >= min_score:
+            vals.append((float(v), label))
+    vals.sort(reverse=True)
+    return "・".join(f"{lb}{v:.0f}点" for v, lb in vals[:top_n])
+
+
+def market_wide_text(us_macro: dict | None) -> str:
+    """全業種に共通の市場要因（米10年債・VIX）を1行にする（純関数）。無ければ空文字。"""
+    parts = []
+    if us_macro:
+        us10y = us_macro.get("us10y")
+        if us10y is not None:
+            if us10y > 4.0:
+                parts.append(f"▽米10年債{us10y:.2f}%")
+            elif us10y < 3.5:
+                parts.append(f"△米10年債{us10y:.2f}%")
+        vix = us_macro.get("vix")
+        if vix is not None and vix > 20:
+            parts.append(f"▽VIX{vix:.0f}")
+    return "市場共通: " + " / ".join(parts) if parts else ""
+
+
 def build_reason_text(
     sector_code:     str,
     composite_score: float,
@@ -113,16 +147,8 @@ def build_reason_text(
             display = f"{name_part}{short_val}" if short_val else name_part
             factors.append((-1, display, "headwind"))
 
-    if us_macro:
-        us10y = us_macro.get("us10y")
-        if us10y is not None:
-            if us10y > 4.0:
-                factors.append((-0.5, f"米10年債{us10y:.2f}%", "headwind"))
-            elif us10y < 3.5:
-                factors.append((0.5, f"米10年債{us10y:.2f}%", "tailwind"))
-        vix = us_macro.get("vix")
-        if vix is not None and vix > 20:
-            factors.append((-0.5, f"VIX{vix:.0f}", "headwind"))
+    # us_macro（米金利・VIX）は全業種に同じく効く市場共通要因なので、業種別の主因には入れない
+    # （入れると全業種の主因が同一文になる）。市場共通の要因は market_wide_text() で別に出す。
 
     if not factors:
         return f"スコア{composite_score:.0f}点（シグナルなし）"

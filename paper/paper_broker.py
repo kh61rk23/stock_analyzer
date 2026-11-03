@@ -170,6 +170,66 @@ def last_close(bars: list, before: str):
     return (rows[-1][0], float(rows[-1][1])) if rows else None
 
 
+SPLIT_RATIOS = (2, 3, 4, 5, 10, 20, 25, 50)
+
+
+def _int_ratio(r: float) -> float:
+    """日をまたいだ終値の比が分割・併合の比率（SPLIT_RATIOS）かその逆数に近ければその倍率、そうでなければ 1。
+
+    分割・併合の日にも株価そのものが動くので、比はちょうどの整数にならない（10:1 の併合で -6% 動けば 9.4）。
+    倍率が5以上なら ±12% まで、2〜4倍は ±6% まで許す（2倍は値動きと区別しにくいので狭くする）。
+    """
+    if not r or r <= 0:
+        return 1.0
+    big = r if r >= 1 else 1 / r
+    # 実際の分割・併合の比率はほぼこの中にある（9倍・7倍などは無い）。いちばん近い比率に寄せる
+    n = min(SPLIT_RATIOS, key=lambda k: abs(big - k) / k)
+    tol = 0.12 if n >= 5 else 0.06
+    if abs(big - n) / n < tol:
+        return float(n) if r >= 1 else 1.0 / n
+    return 1.0
+
+
+def split_factor(rows: list, after: str, upto: str) -> float:
+    """after より後・upto より前の日の終値の跳ねのうち、株式分割・併合とみられるもの（整数倍）の積（純関数）。
+
+    analytics.price_daily_latest は日付ごとに最後に取り込んだ行を採るので、分割・併合の前後で未調整の値と
+    調整済みの値が日によって入れ替わることがある（10倍と1/10が交互に出る）。跳ねを全部掛け合わせれば、
+    その打ち消し分を除いた正味の倍率になる。1 なら分割・併合なし。
+    """
+    f, prev = 1.0, None
+    for d, _o, c in sorted(rows or []):
+        if not c or c <= 0:
+            continue
+        if prev is not None and after < d < upto:
+            f *= _int_ratio(c / prev)
+        prev = c
+    return f
+
+
+def lot_size(ticker: str) -> int:
+    """売買単位。日本株は100株（単元）、米国株は1株。"""
+    return 100 if is_jp_ticker(ticker) else 1
+
+
+def lot_qty(ticker: str, raw_qty: float, price: float, equity: float, max_mult: float = 3.0,
+            max_pct: float = 0.20) -> int:
+    """目標の株数を売買単位に切り下げる（純関数）。
+
+    切り下げて0になるときは、1単位の金額が目標額の max_mult 倍以内かつ口座の max_pct 以内なら1単位買い、
+    そうでなければ買わない（0）。単元未満の端株で約定させると、実際には出せない注文の成績になる。
+    """
+    lot = lot_size(ticker)
+    q = int(raw_qty // lot) * lot
+    if q > 0:
+        return q
+    one = lot * price
+    target = raw_qty * price
+    if raw_qty > 0 and one <= target * max_mult and one <= equity * max_pct:
+        return lot
+    return 0
+
+
 def fetch_bars(tickers, start: str, end_exclusive: str) -> dict:
     """BQ から銘柄の始値・終値を1クエリで読む。{ticker: [(日付, 始値, 終値)]}。
     price_daily は trade_date でパーティションされ、ビューを通しても日付の絞り込みが効く（2週間・数銘柄で 4MB 前後）。"""
@@ -299,6 +359,13 @@ def run_paper_trading(cfg, results: dict, bars: dict = None,
         for sid in strategies:
             need |= set(((accounts.get(sid) or {}).get("positions") or {}))
         starts = [od["eligible"] for ods in pending_all.values() for od in ods or []]
+        # 分割・併合の確認のため、保有の前回確認日（無ければ取得日）からの値も読む（最長 PAPER_SPLIT_LOOKBACK_DAYS 日）
+        floor = (date.fromisoformat(today) - timedelta(days=int(getattr(cfg, "PAPER_SPLIT_LOOKBACK_DAYS", 45)))).isoformat()
+        for sid in strategies:
+            for p in ((accounts.get(sid) or {}).get("positions") or {}).values():
+                since = p.get("split_checked") or p.get("entry_date")
+                if since:
+                    starts.append(max(str(since), floor))
         start = min(starts + [(date.fromisoformat(today) - timedelta(days=14)).isoformat()])
         try:
             bars = fetch_bars(need, start, today)
@@ -332,6 +399,24 @@ def run_paper_trading(cfg, results: dict, bars: dict = None,
             return p.get("last_close") or p["avg_cost"]   # 取れない→前回の終値→簿価
 
         fills, expired, waiting = [], [], []
+        # 0) 株式分割・併合：保有の株数と取得単価を、前回確認した日より後の終値の整数倍の跳ねで直す
+        if not already and price_info["asof"]:
+            for t, p in list(acc["positions"].items()):
+                rows = bars.get(t)
+                if not rows:
+                    continue
+                since = str(p.get("split_checked") or p.get("entry_date") or "")
+                f = split_factor(rows, since, today)
+                if f != 1.0:
+                    p["qty"] = p["qty"] / f
+                    p["avg_cost"] = p["avg_cost"] * f
+                    append_event(cfg, {"type": "split_adjust", "strategy": sid, "date": today, "ticker": t,
+                                       "factor": f, "qty": round(p["qty"], 4), "avg_cost": round(p["avg_cost"], 4),
+                                       "since": since})
+                    print(f"    🔀 [paper:{sid}] {t} 分割・併合を反映（価格×{f:g} → 株数÷{f:g}）")
+                last_bar = max((d for d, _o, c in rows if d < today and c), default=None)
+                if last_bar:
+                    p["split_checked"] = last_bar
         if not already:
             # 1) 約定待ちの仮想約定（約定日の古い順・同じ日は売りを先に＝売った現金で買える）
             queue = []
@@ -353,7 +438,15 @@ def run_paper_trading(cfg, results: dict, bars: dict = None,
                 if qty is None:
                     eq_est = acc["cash"] + sum(mark_of(t, p) * p["qty"]
                                                for t, p in acc["positions"].items())
-                    qty = int(max(0.0, od.get("weight", 0)) * eq_est / open_px) if open_px > 0 else 0
+                    raw_q = max(0.0, od.get("weight", 0)) * eq_est / open_px if open_px > 0 else 0
+                    qty = lot_qty(od["ticker"], raw_q, open_px, eq_est,
+                                  float(getattr(cfg, "PAPER_LOT_MAX_MULT", 3.0)),
+                                  float(getattr(cfg, "PAPER_LOT_MAX_PCT", 0.20)))
+                    if qty <= 0:
+                        append_event(cfg, {"type": "skip", "strategy": sid, "date": today, "ticker": od["ticker"],
+                                           "side": od["side"], "reason": "単元（100株）の金額が目標額・口座の上限を超える",
+                                           "open": round(open_px, 4), "target_yen": round(raw_q * open_px, 0)})
+                        continue
                 qty = float(qty)
                 if qty <= 0:
                     continue
@@ -365,7 +458,8 @@ def run_paper_trading(cfg, results: dict, bars: dict = None,
                 if od["side"] == "BUY":
                     cost = price * qty + fee
                     if cost > acc["cash"]:
-                        qty = int((acc["cash"] - fee) / price) if price > 0 else 0
+                        lot = lot_size(od["ticker"])
+                        qty = int((acc["cash"] - fee) / price / lot) * lot if price > 0 else 0
                         if qty <= 0:
                             continue
                         cost = price * qty + fee
@@ -400,12 +494,16 @@ def run_paper_trading(cfg, results: dict, bars: dict = None,
         # 2) equity 更新（BQ の終値）
         invested = sum(mark_of(t, p) * p["qty"] for t, p in acc["positions"].items())
         equity = acc["cash"] + invested
-        prev = acc["equity_history"][-1]["equity"] if acc["equity_history"] else initial
+        prev_h = acc["equity_history"][-1] if acc["equity_history"] else {}
+        prev = prev_h.get("equity", initial)
         day_pnl = equity - prev
+        # 評価に使う終値の日が前回の評価と同じ（土曜・休場明けの朝の実行）なら、前日比は値動きではない
+        price_stale = bool(prev_h) and bool(price_info["asof"]) and prev_h.get("price_asof") == price_info["asof"]
         if not already:
             acc["equity_history"].append({"date": today,
                                           "equity": round(equity, 2),
-                                          "day_pnl": round(day_pnl, 2)})
+                                          "day_pnl": round(day_pnl, 2),
+                                          "price_asof": price_info["asof"]})
             acc["equity_history"] = acc["equity_history"][-750:]   # 約3年分
             append_event(cfg, {"type": "mark", "strategy": sid, "date": today,
                                "equity": round(equity, 2),
@@ -441,6 +539,7 @@ def run_paper_trading(cfg, results: dict, bars: dict = None,
 
         summary[sid] = {"equity": round(equity, 2),
                         "day_pnl": round(day_pnl, 2),
+                        "price_stale": price_stale,
                         "mtd_pnl": round(_mtd_pnl(acc["equity_history"],
                                                   equity, today), 2),
                         "total_pnl": round(equity - initial, 2),

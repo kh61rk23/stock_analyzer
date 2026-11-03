@@ -324,8 +324,37 @@ def run_daily(cfg, candidates: list, today: date | None = None, client=None) -> 
                             lambda t: ape.build_packet_text(t))
     res = write_queue(client, rows, today,
                       Path(_cfg(cfg, "DATA_DIR", "stock_data/data")) / "tmp")
-    res.update(queued=len(rows), packets=pk["ok"], packet_failed=pk["failed"])
+    res.update(queued=len(rows), packets=pk["ok"], packet_failed=pk["failed"],
+               queue=queue_rows_for_report(rows))
     return res
+
+
+def queue_rows_for_report(rows: list) -> list:
+    """キュー行（build_queue の戻り）をメール用の軽い形にする（純関数）。
+
+    メールは BQ の当日分書き込みより前に組まれるため、BQ ではなく results 経由で
+    今日のキューを渡す。packet_md など大きい列は含めない。
+    """
+    keys = ("ticker", "sector_code", "priority_rank", "source", "reason",
+            "final_score", "composite_score", "universe_score", "queue_date")
+    out = []
+    for r in rows or []:
+        d = {k: r.get(k) for k in keys}
+        d["name"] = r.get("company_name")
+        d["composite_score"] = d["final_score"] if d.get("final_score") is not None else d.get("composite_score")
+        out.append(d)
+    return out
+
+
+def preview_daily(cfg, candidates: list, today: date | None = None, client=None) -> dict:
+    """BQ へ書かずに今日のキューを組む。日次メールが今日の候補を載せるために、メール生成より前に呼ぶ。
+
+    run_daily と同じ build_queue を同じ入力で通すので順位は一致する（パケットは付けない）。
+    """
+    today = today or today_jst()
+    client = client or _client()
+    rows = build_queue(candidates, load_latest_deliberations(client), load_holdings(cfg), cfg, today)
+    return {"queue": queue_rows_for_report(rows), "preview": True, "queued": len(rows)}
 
 
 # ── 審議結果の書き出しと承認の書き戻し ─────────────────────────
@@ -524,19 +553,24 @@ def get_queue_for_report(cfg, results: dict = None, top_n: int = 5, client=None)
     """
     try:
         client = client or _client()
-        sql = f"""
-        SELECT ticker, company_name AS name, sector_code, priority_rank, source, reason,
-               final_score, composite_score, universe_score, queue_date
-        FROM {_fq(client, QUEUE_TABLE)}
-        WHERE queue_date = (SELECT MAX(queue_date) FROM {_fq(client, QUEUE_TABLE)})
-          AND status = '{STATUS_PENDING}'
-        ORDER BY priority_rank LIMIT {max(1, int(top_n))}"""
+        today_q = ((results or {}).get("deliberation_queue") or {}).get("queue")
         queue = []
-        for r in client.query(sql, location=LOCATION).result():
-            d = dict(r.items())
-            d["composite_score"] = d.get("final_score") if d.get("final_score") is not None \
-                else d.get("composite_score")
-            queue.append(d)
+        if today_q:
+            # 今日分は書き込み前の BQ には無い。results に載せた今日のキューを優先する
+            queue = list(today_q)[:max(1, int(top_n))]
+        else:
+            sql = f"""
+            SELECT ticker, company_name AS name, sector_code, priority_rank, source, reason,
+                   final_score, composite_score, universe_score, queue_date
+            FROM {_fq(client, QUEUE_TABLE)}
+            WHERE queue_date = (SELECT MAX(queue_date) FROM {_fq(client, QUEUE_TABLE)})
+              AND status = '{STATUS_PENDING}'
+            ORDER BY priority_rank LIMIT {max(1, int(top_n))}"""
+            for r in client.query(sql, location=LOCATION).result():
+                d = dict(r.items())
+                d["composite_score"] = d.get("final_score") if d.get("final_score") is not None \
+                    else d.get("composite_score")
+                queue.append(d)
         cnt = list(client.query(
             f"SELECT COUNT(*) AS n FROM {_fq(client, LATEST_VIEW)}", location=LOCATION).result())[0]["n"]
         return {"queue": queue, "source": "BQ invest.deliberation_queue", "already_count": int(cnt),

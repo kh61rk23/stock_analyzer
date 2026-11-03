@@ -94,12 +94,12 @@ def extract_candidates(event_source: str, results: dict) -> list[dict]:
         return [c for c in ((results.get("pead") or {}).get("alert_candidates")
                             or []) if c.get("ticker")]
     if event_source == "earnings_surprise":
-        es = results.get("earnings_surprise") or {}
-        rows = es.get("candidates") or es.get("surprises") or []
-        return [c for c in rows if isinstance(c, dict) and c.get("ticker")]
+        return earnings_candidates(results.get("earnings_surprise") or {})
     if event_source == "tdnet_monitor":
         out = []
         for ev in ((results.get("tdnet") or {}).get("buyback") or []):
+            if not is_new_buyback(ev.get("title")):
+                continue
             if ev.get("ticker") or ev.get("code"):
                 out.append({**ev, "ticker": ev.get("ticker") or ev.get("code"),
                             "category": ev.get("category", "BUYBACK")})
@@ -109,6 +109,47 @@ def extract_candidates(event_source: str, results: dict) -> list[dict]:
         return [{"ticker": t, "event_type": "ceo_change"}
                 for t in (u8.get("ceo_change_tickers") or [])]
     return []
+
+
+# 自社株買いの開示のうち、新しく決めた買付だけを買いの合図にする。「取得状況」「取得終了」「結果」は
+# 既に発表済みの買付の途中経過・完了報告で、発表の翌日の需給改善という前提に合わない。訂正も除く。
+_BUYBACK_SKIP_WORDS = ("取得状況", "取得終了", "取得結果", "結果に関する", "訂正", "消却")
+
+
+def is_new_buyback(title) -> bool:
+    t = str(title or "")
+    if not t:
+        return True                      # 題名の無い開示は区別できないので落とさない
+    return not any(w in t for w in _BUYBACK_SKIP_WORDS)
+
+
+def earnings_candidates(es: dict, today: str | None = None, fresh_days: int = 75) -> list[dict]:
+    """run_earnings_surprise の結果（{"results": {ticker: {...}}}）を、プレイブックの条件で読める平たい行にする。
+
+    surprise_pct は直近の四半期（latest_q）の値。四半期末から fresh_days 日を過ぎたものは使わない
+    （決算の発表から日が経った上振れで買うと、発表直後のモメンタムという前提に合わない）。
+    """
+    from datetime import date, timedelta
+    lim = (date.fromisoformat(today) if today else date.today()) - timedelta(days=fresh_days)
+    rows = es.get("candidates") or es.get("surprises")
+    if rows:
+        return [c for c in rows if isinstance(c, dict) and c.get("ticker")]
+    out = []
+    for t, r in (es.get("results") or {}).items():
+        if not isinstance(r, dict):
+            continue
+        q = r.get("latest_q") or {}
+        sp = q.get("surprise_pct")
+        try:
+            if sp is None or sp != sp or str(q.get("quarter", "")) < lim.isoformat():
+                continue
+        except TypeError:
+            continue
+        out.append({**{k: v for k, v in r.items() if k not in ("history", "latest_q")},
+                    "ticker": r.get("ticker") or t, "surprise_pct": float(sp),
+                    "quarter": q.get("quarter"), "consecutive_pos": int(r.get("consecutive_pos") or 0)})
+    out.sort(key=lambda c: -float(c.get("surprise_score") or 0))
+    return out
 
 
 def _num(v, nd=1):
@@ -180,9 +221,11 @@ def evaluate_entries(playbook: dict, results: dict, held: set,
     if entry.get("side") != "BUY" or playbook.get("status") != "paper":
         return []                      # WATCHや非paperは注文を出さない
     cands = extract_candidates(playbook["event_source"], results)
-    slots = int(entry.get("max_concurrent", 0))
-    weight = (float(entry.get("size_pct_of_casino", 0)) / 100.0
-              * casino_pct / 100.0)    # カジノ枠%→equity比の近似
+    # max_concurrent は同時に持つ銘柄数の上限（1日の新規の上限ではない）。保有中の銘柄の分を引く
+    slots = int(entry.get("max_concurrent", 0)) - len(held)
+    # 1銘柄の大きさは戦略の口座の size_pct_of_casino %。口座そのものがカジノ枠の仮想口座なので、
+    # 枠の比率をさらに掛けない（掛けると1銘柄が口座の1%未満になり、日本株は単元を買えない）
+    weight = float(entry.get("size_pct_of_casino", 0)) / 100.0
     orders = []
     for c in cands:
         if slots <= 0:
@@ -244,12 +287,17 @@ def make_playbook_adapter(playbook: dict):
         casino_pct = getattr(cfg, "CASINO_BUDGET_PCT", 15.0)
         positions = account.get("positions", {})
         held = {t for t, p in positions.items() if p.get("qty", 0) > 0}
-        # 現値ヒント（screener candidates から）
+        # 現値：口座の評価に使った終値（paper_broker が保有ごとに last_close を入れる）を先に使い、
+        # 無ければスクリーナーの候補の値。候補だけだと、候補外の銘柄（イベントで買った銘柄の大半）で
+        # 損切り・利確が効かない。
         price_hint = {}
         for c in ((results.get("screener") or {}).get("candidates") or []):
             t, px = c.get("ticker"), c.get("price") or c.get("close")
             if t and px:
                 price_hint[t] = float(px)
+        for t, p in positions.items():
+            if p.get("last_close"):
+                price_hint[t] = float(p["last_close"])
         orders = []
         # exit判定
         for t, p in positions.items():

@@ -24,9 +24,14 @@
 #
 # 【screener 統合】
 #   dcf_discount = (理論株価 - 現在株価) / 現在株価 × 100
-#   discount > 20%:  value_score に +8pt（大幅割安）
-#   discount > 10%:  value_score に +4pt
-#   discount < -20%: value_score に -6pt（割高）
+#   discount 10〜20%: +1〜+2pt、20〜100%: +2〜+8pt（線形・100%超は+8で頭打ち）
+#   discount <= -20%: value_score に -6pt（割高）
+#   discount > 300%: モデル破綻とみなし無効（ボーナス0・割安リストに載せない）
+#
+# 【DCF を適用しない銘柄】
+#   銀行・証券・保険・不動産賃貸業は営業CFに預金・預り金・契約負債の増減が混ざり、
+#   営業CF+capex が事業のFCFにならない。業種で除外し、業種が取れなくても
+#   FCF/時価総額 > DCF_MAX_FCF_YIELD の銘柄は同じ理由で除外する。
 #
 # 【依存】yfinance / config.py
 # ==============================================================
@@ -68,6 +73,26 @@ _CFG_CONST_MAP = {
 }
 
 CACHE_HOURS       = 24 * 7  # 週次（財務データは変化が緩やか）
+CACHE_SCHEMA      = 2       # 古い版のキャッシュ（業種未保存・旧ボーナス）は再計算する
+
+# 株主資本コストの下限。beta が小さい銘柄で WACC が g に近づくと TV が発散する
+DCF_WACC_FLOOR     = 0.06
+# FCF平均/時価総額がこれを超えると預金・預り金などの混入とみなし DCF を適用しない
+DCF_MAX_FCF_YIELD  = 0.15
+# 乖離率がこれを超える結果はモデルの破綻として無効にする
+DCF_MAX_DISCOUNT   = 300.0
+# ボーナスを計算する乖離率の上限（これ以上は頭打ち）
+DCF_BONUS_CAP_DISCOUNT = 100.0
+DCF_BONUS_MAX      = 8.0
+
+# DCF の前提が成り立たない業種（yfinance sector / industry の語）
+DCF_EXCLUDED_SECTORS = ("Financial Services",)
+DCF_EXCLUDED_INDUSTRY_WORDS = (
+    "Bank", "Insurance", "Capital Markets", "Credit Services",
+    "Mortgage Finance", "Asset Management", "REIT",
+)
+# 東証33業種コード（銀行・証券・保険・その他金融）。業種コードが取れる場合に使う
+DCF_EXCLUDED_JP_SECTOR_CODES = ("1028", "1029", "1030", "1031")
 
 # 感応度分析のWACC/g グリッド
 WACC_RANGE        = [-0.02, 0.0, +0.02]   # ベース ± 2%
@@ -146,6 +171,8 @@ def _fetch_dcf_inputs(ticker: str) -> dict:
         beta   = info.get("beta") or DEFAULT_BETA
         shares = info.get("sharesOutstanding") or 0
         mc     = info.get("marketCap") or 0
+        sector   = info.get("sector") or ""
+        industry = info.get("industry") or ""
 
         # 純有利子負債
         total_debt = info.get("totalDebt") or 0
@@ -168,6 +195,8 @@ def _fetch_dcf_inputs(ticker: str) -> dict:
             "market_cap":         float(mc),
             "currency":           currency,
             "name":               name[:30],
+            "sector":             sector,
+            "industry":           industry,
         }
     except Exception:
         return {}
@@ -181,6 +210,7 @@ def calc_wacc(
     beta:        float,
     rf:          float,
     market_rp:   float = MARKET_RISK_PREM,
+    floor:       Optional[float] = None,
 ) -> float:
     """
     CAPM ベースの WACC（株主資本コストのみ簡易版）を計算する。
@@ -190,8 +220,9 @@ def calc_wacc(
     加重平均（負債コスト含む）はデータ要件が高いため簡略化。
     """
     ke = rf + float(beta) * market_rp
-    # 合理的な範囲にクランプ（4%〜25%）
-    return round(max(0.04, min(0.25, ke)), 4)
+    # 下限を置くのは、低betaで WACC が g に迫ると TV が発散し理論株価が桁違いになるため
+    lo = DCF_WACC_FLOOR if floor is None else float(floor)
+    return round(max(lo, min(0.25, ke)), 4)
 
 
 # ==============================================================
@@ -332,17 +363,48 @@ def calc_dcf_discount(intrinsic: float, current: float) -> Optional[float]:
     return round((intrinsic - current) / current * 100, 2)
 
 
+def is_valid_discount(discount_pct: Optional[float]) -> bool:
+    """乖離率が算出でき、かつモデル破綻でない（<= DCF_MAX_DISCOUNT）か。"""
+    return discount_pct is not None and discount_pct <= DCF_MAX_DISCOUNT
+
+
 def calc_dcf_bonus(discount_pct: Optional[float]) -> float:
-    """value_score への加算ボーナスを計算する。"""
-    if discount_pct is None:
+    """value_score への加算ボーナスを計算する。
+
+    乖離率が大きいほど段階的に加点する（一律加点だと FCF の誤差で全銘柄が
+    満点になり順位がつかない）。無効な乖離率（None / 300%超）は 0。
+      10%→+1 … 20%→+2 … 100%以上→+8（20〜100%は線形）
+    """
+    if not is_valid_discount(discount_pct):
         return 0.0
-    if discount_pct >= DCF_LARGE_DISCOUNT:
-        return 8.0
-    if discount_pct >= DCF_SMALL_DISCOUNT:
-        return 4.0
     if discount_pct <= DCF_OVERVALUED:
         return -6.0
+    if discount_pct >= DCF_LARGE_DISCOUNT:
+        d = min(discount_pct, DCF_BONUS_CAP_DISCOUNT)
+        span = max(DCF_BONUS_CAP_DISCOUNT - DCF_LARGE_DISCOUNT, 1e-9)
+        return round(2.0 + (d - DCF_LARGE_DISCOUNT) * (DCF_BONUS_MAX - 2.0) / span, 2)
+    if discount_pct >= DCF_SMALL_DISCOUNT:
+        span = max(DCF_LARGE_DISCOUNT - DCF_SMALL_DISCOUNT, 1e-9)
+        return round(1.0 + (discount_pct - DCF_SMALL_DISCOUNT) / span, 2)
     return 0.0
+
+
+def dcf_skip_reason(inputs: dict) -> Optional[str]:
+    """DCF を適用しない理由を返す（適用してよければ None）。"""
+    sector   = str(inputs.get("sector") or "")
+    industry = str(inputs.get("industry") or "")
+    code     = str(inputs.get("sector_code") or "")
+    if code and code in DCF_EXCLUDED_JP_SECTOR_CODES:
+        return f"金融業種コード{code}"
+    if sector in DCF_EXCLUDED_SECTORS:
+        return f"金融業({sector})"
+    if any(w in industry for w in DCF_EXCLUDED_INDUSTRY_WORDS):
+        return f"金融・賃貸業({industry})"
+    fcf = inputs.get("fcf_avg")
+    mc  = inputs.get("market_cap")
+    if fcf and mc and mc > 0 and fcf / mc > DCF_MAX_FCF_YIELD:
+        return f"FCF/時価総額{fcf / mc * 100:.0f}%が異常に高い"
+    return None
 
 
 def get_dcf_bonus(ticker: str, dcf_cache: dict) -> float:
@@ -432,7 +494,8 @@ def _load_cache(cfg) -> dict:
         data = json.loads(p.read_text(encoding="utf-8"))
         if datetime.now() - datetime.fromisoformat(data.get("cached_at", "2000-01-01")) \
                 < timedelta(hours=CACHE_HOURS):
-            return data.get("results", {})
+            return {t: r for t, r in data.get("results", {}).items()
+                    if isinstance(r, dict) and r.get("schema") == CACHE_SCHEMA}
     except Exception:
         pass
     return {}
@@ -467,6 +530,7 @@ def run_dcf_valuation(cfg, tickers: list) -> dict:
     sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     print(f"\n  📐 DCF理論株価計算開始（{len(tickers)}銘柄）...")
 
+    wacc_floor = float(getattr(cfg, "DCF_WACC_FLOOR", DCF_WACC_FLOOR))
     cached   = _load_cache(cfg)
     to_fetch = [t for t in tickers if t not in cached]
     results  = dict(cached)
@@ -477,9 +541,21 @@ def run_dcf_valuation(cfg, tickers: list) -> dict:
             # FCFがマイナス or 取得不能は除外（DCF不適用）
             continue
 
+        skip = dcf_skip_reason(inputs)
+        if skip:
+            # 理由つきで保存し、毎回取り直さない。bonus 0 で割安リストには載らない
+            results[ticker] = {
+                "ticker": ticker, "name": inputs.get("name", ticker),
+                "inputs": inputs, "dcf": {}, "sensitivity": {},
+                "discount_pct": None, "dcf_bonus": 0.0,
+                "dcf_skip": skip, "schema": CACHE_SCHEMA,
+            }
+            time.sleep(FETCH_DELAY)
+            continue
+
         # WACC 計算
         rf   = DEFAULT_RF_JP if ticker.endswith(".T") else DEFAULT_RF_US
-        wacc = calc_wacc(inputs.get("beta", DEFAULT_BETA), rf)
+        wacc = calc_wacc(inputs.get("beta", DEFAULT_BETA), rf, floor=wacc_floor)
 
         # DCF 計算
         dcf = calc_dcf(
@@ -502,6 +578,7 @@ def run_dcf_valuation(cfg, tickers: list) -> dict:
         # 割引率とボーナス
         intrinsic = dcf.get("intrinsic_per_share")
         discount  = calc_dcf_discount(intrinsic, inputs.get("current_price"))
+        invalid   = discount is not None and not is_valid_discount(discount)
         bonus     = calc_dcf_bonus(discount)
 
         entry = {
@@ -514,10 +591,12 @@ def run_dcf_valuation(cfg, tickers: list) -> dict:
             "terminal_growth": DEFAULT_GROWTH,
             "discount_pct":    discount,
             "dcf_bonus":       bonus,
+            "dcf_invalid":     invalid,
+            "schema":          CACHE_SCHEMA,
         }
         results[ticker] = entry
 
-        if discount is not None and abs(discount) >= 10:
+        if discount is not None and not invalid and abs(discount) >= 10:
             icon = "🟢" if discount > 0 else "🔴"
             print(f"      {ticker}: 理論株価{intrinsic:,.0f} 現在{inputs['current_price']:,.0f} "
                   f"{icon}{discount:+.1f}% bonus={bonus:+.0f}pt")
@@ -527,12 +606,14 @@ def run_dcf_valuation(cfg, tickers: list) -> dict:
 
     top_undervalued = sorted(
         [{"ticker": t, **d} for t, d in results.items()
-         if d.get("discount_pct") is not None and d["discount_pct"] >= DCF_SMALL_DISCOUNT],
+         if is_valid_discount(d.get("discount_pct"))
+         and d["discount_pct"] >= DCF_SMALL_DISCOUNT],
         key=lambda x: -x["discount_pct"])[:5]
 
     n_under = len(top_undervalued)
     n_over  = sum(1 for d in results.values()
-                  if d.get("discount_pct") and d["discount_pct"] <= DCF_OVERVALUED)
+                  if is_valid_discount(d.get("discount_pct"))
+                  and d["discount_pct"] <= DCF_OVERVALUED)
 
     print(f"    ✅ DCF完了: {len(results)}銘柄 / "
           f"割安{n_under}件 / 割高{n_over}件")

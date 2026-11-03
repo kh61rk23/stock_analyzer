@@ -9,7 +9,8 @@ def test_build_collects_reports(tmp_path):
     (tmp_path / "commodity_alloc_202610.md").write_text("# コモディティ", encoding="utf-8")
     subject, body, n = mm.build("202609", tmp_path)
     assert n == 2 and "2026-09" in subject
-    assert "<table" in body and "<b>2</b>" in body and "・項目" in body
+    assert "<table" in body and ("<b>2</b>" in body or "<strong>2</strong>" in body)
+    assert "<li" in body and "項目" in body and ".md" not in body   # 箇条書きは <ul><li>・ファイル名は出さない
 
 
 def test_monthly_runner_has_mail_step_last():

@@ -1483,8 +1483,8 @@ def save_contraction_history(
     contraction: dict,
 ) -> None:
     """
-    G-6: 縮退状態を CACHE_DIR/contraction/contraction_history.jsonl に追記する。
-    1行1JSON（JSON Lines形式）。ファイルが存在しない場合は新規作成する。
+    G-6: 縮退状態を CACHE_DIR/contraction/contraction_history.jsonl に保存する。
+    1行1JSON（JSON Lines形式）で、同じ日付の行があれば置き換える。ファイルが存在しない場合は新規作成する。
     書き込み失敗は警告のみ（システム全体を止めない）。
     """
     try:
@@ -1500,8 +1500,23 @@ def save_contraction_history(
             "triggered_flags": contraction.get("triggered_flags", []),
             "coefficient":     contraction.get("coefficient", 1.00),
         }
-        with hist_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        # 同じ日付の行は置き換える（日次で毎回呼ばれても1日1行・再実行は最新値に）。
+        # 他の日付の行と、JSONとして読めない行はそのまま残す。
+        kept: list = []
+        if hist_path.exists():
+            for line in hist_path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    if json.loads(line).get("date") == record["date"]:
+                        continue
+                except (ValueError, AttributeError):
+                    pass
+                kept.append(line)
+        kept.append(json.dumps(record, ensure_ascii=False))
+        tmp = hist_path.with_suffix(hist_path.suffix + ".tmp")
+        tmp.write_text("\n".join(kept) + "\n", encoding="utf-8")
+        tmp.replace(hist_path)
     except Exception as e:
         print(f"    ⚠️  縮退履歴保存失敗（スキップ）: {str(e)[:60]}")
 

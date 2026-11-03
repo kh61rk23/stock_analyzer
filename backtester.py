@@ -200,12 +200,22 @@ def price_on(closes: dict, date_str: str, forward_days: int = 5) -> Optional[flo
 
 
 def fill_prices(records: list, closes: dict, bench: dict) -> None:
-    """entry_price の欠け・exit_price・同期間のベンチマークを埋める（純関数）。"""
+    """entry_price・exit_price・同期間のベンチマークを埋める（純関数）。
+
+    exit は auto_adjust=True（分割・配当調整済み）の終値なので、entry も同じ取得元の
+    調整済み終値にそろえる。保存済みの screener 価格（調整前の生値）と混ぜると、
+    株式分割のあった銘柄が -90% 級の偽の暴落になる。調整済み終値が取れない時だけ
+    保存済み価格を使い、entry_price_source に "screener_raw" と記す。
+    """
     for r in records:
         c = closes.get(r["ticker"], {})
-        if not r.get("entry_price"):
-            r["entry_price"] = price_on(c, r["entry_date"])
+        adj = price_on(c, r["entry_date"])
+        if adj:
+            r["entry_price_raw"] = r.get("entry_price")
+            r["entry_price"] = adj
             r["entry_price_source"] = "close"
+        elif r.get("entry_price"):
+            r["entry_price_source"] = "screener_raw"
         r["exit_price"] = price_on(c, r["exit_date"])
         b0, b1 = price_on(bench, r["entry_date"]), price_on(bench, r["exit_date"])
         r["benchmark_return"] = round((b1 - b0) / b0 * 100, 3) if b0 and b1 else None
@@ -289,13 +299,29 @@ def _fetch_benchmark_return(start_date: str, end_date: str) -> Optional[float]:
 # BLOCK 3: パフォーマンス指標計算
 # ==============================================================
 
-def calc_performance_stats(returns: list, benchmark_ret: Optional[float] = None) -> dict:
+def portfolio_return_series(returns: list, dates: list) -> list:
+    """同じ entry_date の銘柄リターンを等ウェイト平均した、日付順の系列（%）。
+
+    銘柄・日付の違うリターンを1本の列に並べて複利にすると、同時期に持つ別銘柄の
+    損益を直列に掛け合わせてしまうため、ドローダウンは日付ごとの平均で測る。
+    """
+    by_date: dict = {}
+    for r, d in zip(returns, dates):
+        by_date.setdefault(d, []).append(r)
+    return [sum(v) / len(v) for _, v in sorted(by_date.items())]
+
+
+def calc_performance_stats(returns: list, benchmark_ret: Optional[float] = None,
+                           dates: Optional[list] = None) -> dict:
     """
     リターンのリストから統計指標を計算する。
 
     Args:
         returns:       個別株リターン（%）のリスト
         benchmark_ret: ベンチマーク同期間リターン（%）
+        dates:         returns と同じ長さの entry_date。渡すと max_drawdown を
+                       日付ごとの等ウェイト平均リターンの複利系列で測る
+                       （省略時は渡された順にそのまま複利）
 
     Returns:
         {
@@ -304,7 +330,8 @@ def calc_performance_stats(returns: list, benchmark_ret: Optional[float] = None)
           "avg_return":   float,
           "avg_alpha":    float,   # 平均超過リターン
           "sharpe":       float,
-          "max_drawdown": float,
+          "max_drawdown": float,   # 日付別等ウェイト平均の複利系列
+          "worst_return":  float,  # 個別銘柄の最悪リターン
           "hit_rate_naive": float, # +0%超えの単純勝率
         }
     """
@@ -324,8 +351,10 @@ def calc_performance_stats(returns: list, benchmark_ret: Optional[float] = None)
     hit_naive        = sum(1 for r in returns if r > 0) / n
 
     # 最大ドローダウン（累積リターン系列から計算）
+    series = (portfolio_return_series(returns, dates)
+              if dates is not None and len(dates) == n else returns)
     cumulative = [100.0]
-    for r in returns:
+    for r in series:
         cumulative.append(cumulative[-1] * (1 + r / 100))
     peak = cumulative[0]
     max_dd = 0.0
@@ -344,6 +373,7 @@ def calc_performance_stats(returns: list, benchmark_ret: Optional[float] = None)
         "std_return":     round(std, 3),
         "sharpe":         sharpe,
         "max_drawdown":   round(max_dd, 2),
+        "worst_return":   round(min(returns), 2),
         "hit_rate_naive": round(hit_naive, 3),
     }
 
@@ -392,28 +422,30 @@ def run_backtest_analysis(records: list, exit_prices: dict) -> dict:
         return {"overall": {"n": 0}, "evaluated_count": 0, "missing_count": missing}
 
     avg_bm = sum(bm_rets) / len(bm_rets) if bm_rets else 0
-    returns = [e["return_pct"] for e in evaluated]
+    def _stats(rows):
+        return calc_performance_stats([e["return_pct"] for e in rows], avg_bm,
+                                      [e["entry_date"] for e in rows])
 
-    overall = calc_performance_stats(returns, avg_bm)
+    overall = _stats(evaluated)
 
     # スコア帯別分析
-    high = [e["return_pct"] for e in evaluated if e["composite_score"] >= 70]
-    mid  = [e["return_pct"] for e in evaluated if 50 <= e["composite_score"] < 70]
-    low  = [e["return_pct"] for e in evaluated if e["composite_score"] < 50]
+    high = [e for e in evaluated if e["composite_score"] >= 70]
+    mid  = [e for e in evaluated if 50 <= e["composite_score"] < 70]
+    low  = [e for e in evaluated if e["composite_score"] < 50]
 
     by_score = {
-        "high_70plus": calc_performance_stats(high, avg_bm) if high else {"n": 0},
-        "mid_50_70":   calc_performance_stats(mid,  avg_bm) if mid  else {"n": 0},
-        "low_sub50":   calc_performance_stats(low,  avg_bm) if low  else {"n": 0},
+        "high_70plus": _stats(high) if high else {"n": 0},
+        "mid_50_70":   _stats(mid)  if mid  else {"n": 0},
+        "low_sub50":   _stats(low)  if low  else {"n": 0},
     }
 
     # セクター別分析
     sector_groups: dict[str, list] = {}
     for e in evaluated:
-        sector_groups.setdefault(e.get("sector_code", "?"), []).append(e["return_pct"])
+        sector_groups.setdefault(e.get("sector_code", "?"), []).append(e)
 
     by_sector = {
-        code: calc_performance_stats(rets, avg_bm)
+        code: _stats(rets)
         for code, rets in sector_groups.items()
         if len(rets) >= 3
     }
@@ -425,26 +457,26 @@ def run_backtest_analysis(records: list, exit_prices: dict) -> dict:
     cluster_comparison: dict = {}
     try:
         with_cluster    = [
-            e["return_pct"] for e in evaluated
+            e for e in evaluated
             if float(e.get("cluster_phase_bonus", 0) or 0) > 0
         ]
         without_cluster = [
-            e["return_pct"] for e in evaluated
+            e for e in evaluated
             if float(e.get("cluster_phase_bonus", 0) or 0) == 0
         ]
         if with_cluster and without_cluster:
             cluster_comparison = {
                 "with_cluster_bonus": {
-                    **calc_performance_stats(with_cluster, avg_bm),
+                    **_stats(with_cluster),
                     "n": len(with_cluster),
                 },
                 "without_cluster_bonus": {
-                    **calc_performance_stats(without_cluster, avg_bm),
+                    **_stats(without_cluster),
                     "n": len(without_cluster),
                 },
                 "alpha_lift": round(
-                    (sum(with_cluster)    / len(with_cluster))
-                    - (sum(without_cluster) / len(without_cluster)),
+                    (sum(e["return_pct"] for e in with_cluster) / len(with_cluster))
+                    - (sum(e["return_pct"] for e in without_cluster) / len(without_cluster)),
                     3,
                 ),
             }
@@ -493,7 +525,8 @@ def format_backtest_report(bt_result: dict) -> str:
         f"| 平均アルファ | {ov.get('avg_alpha',0):+.2f}% |",
         f"| 勝率（対ベンチ） | {ov.get('win_rate',0):.1%} |",
         f"| シャープレシオ | {ov.get('sharpe','N/A')} |",
-        f"| 最大ドローダウン | {ov.get('max_drawdown',0):.1f}% |",
+        f"| 最大ドローダウン（日付別平均の複利） | {ov.get('max_drawdown',0):.1f}% |",
+        f"| 個別最悪リターン | {ov.get('worst_return',0):.1f}% |",
         "",
     ]
 

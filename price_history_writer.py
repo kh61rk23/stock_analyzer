@@ -17,6 +17,14 @@
 #   照会に失敗したときは全行を追記する（読む側の analytics.price_daily_latest が重複を除く）。
 #   既にある日の値は上書きしない（price_universe と同じ扱い）。
 #
+# 【株式分割・併合との整合】
+#   yf_cache の日足は呼び出し元ごとに auto_adjust が違う（True＝配当も調整）うえ、取得時点の
+#   分割調整の基準で返る。表に旧基準の日が残る銘柄へ新基準の日を足すと、ビュー
+#   （ingested_at 最新）で日付ごとに基準が混ざる。そこで追記前に、取れた終値と表の終値を同じ日で
+#   突き合わせ（price_universe.detect_split_mismatch）、分割比のずれがある銘柄は書かない。
+#   その銘柄は price_universe が全期間を取り直して揃える（auto_adjust=False・終値は分割調整のみ）。
+#   突き合わせに失敗したときは従来どおり書く（照会1回・課金は下限の10MB）。
+#
 # 【依存】yf_cache / edinet_bq_client / config.py
 # ==============================================================
 
@@ -130,6 +138,26 @@ def fetch_existing_keys(days: int) -> set:
     return existing_keys(EDINETBQClient().client, days)
 
 
+def drop_split_mismatched(rows: list[dict], client=None) -> tuple[list[dict], dict]:
+    """表の終値と分割比のずれがある銘柄の行を除く。(残す行, {ticker: 比})。照会は 1 本。"""
+    from price_universe import detect_split_mismatch, fetch_stored_closes
+    if client is None:
+        from edinet_bq_client import EDINETBQClient
+        client = EDINETBQClient().client
+    fetched: dict = {}
+    for r in rows:
+        if r.get("close") is not None:
+            fetched.setdefault(r["ticker"], {})[r["trade_date"]] = float(r["close"])
+    if not fetched:
+        return rows, {}
+    since = min(d for m in fetched.values() for d in m)
+    stored = fetch_stored_closes(client, fetched.keys(), since)
+    flagged = detect_split_mismatch(fetched, stored)
+    if not flagged:
+        return rows, {}
+    return [r for r in rows if r["ticker"] not in flagged], flagged
+
+
 def run_price_history_writer(cfg, results: dict = None) -> dict:
     """yf_cache が集めた日足を BQ へ書き出す。
 
@@ -165,11 +193,17 @@ def run_price_history_writer(cfg, results: dict = None) -> dict:
 
     built = len(rows)
     try:
+        rows, split_flagged = drop_split_mismatched(rows)
+        if split_flagged:
+            print(f"    ✂️ 分割ずれのため書かない銘柄（price_universe が取り直す）: {sorted(split_flagged)}")
+    except Exception as exc:
+        print(f"    ⚠️  分割ずれの突き合わせに失敗（そのまま書く）: {str(exc)[:80]}")
+    try:
         # since は date.today()（実行環境の日付）。JST との1日のずれを覆うため +1 日広く引く
         rows = drop_existing(rows, fetch_existing_keys(int(LOOKBACK_DAYS) + 1))
     except Exception as exc:
         print(f"    ⚠️  株価履歴の既存キー照会に失敗（全行を追記）: {str(exc)[:80]}")
-    skipped_dup = built - len(rows)
+    skipped_dup = built - len(rows)  # 重複と分割ずれで除いた行の合計
     if not rows:
         return {"skipped": True, "rows": 0, "tickers": len(prices), "inserted": False,
                 "reason": f"直近{LOOKBACK_DAYS}日は全て登録済み（{built}行）", "duplicates": skipped_dup}

@@ -16,6 +16,7 @@ on:
           - price_universe_jp
           - price_universe_us
           - price_universe_backfill
+          - price_repair_splits
           - us_company_facts_update
           - us_company_facts_backfill
           - us_company_facts_segments
@@ -95,6 +96,8 @@ jobs:
             price_universe_jp) python -u price_universe.py --market jp ;;
             price_universe_us) python -u price_universe.py --market us ;;
             price_universe_backfill) python -u price_universe.py --market all --backfill ;;
+            # 分割・併合の前後で未調整と調整済みの終値が混ざった銘柄を、調整済みの長い履歴で取り直す（今年の分）
+            price_repair_splits) python -u price_universe.py --repair-splits --since "$(date +%Y)-01-01" ;;
             us_company_facts_update) python -u us_company_facts.py --mode update ;;
             us_company_facts_backfill) python -u us_company_facts.py --mode backfill --budget-minutes 100 ;;
             us_company_facts_segments) python -u us_segments.py ;;

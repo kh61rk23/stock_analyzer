@@ -37,7 +37,41 @@ def positions_at_month_end(events: list, ym: str) -> dict:
     return {k: v.get("positions", {}) for k, v in rebuild_accounts_from_events(upto).items()}
 
 
-def judge_promotion(acc: dict, cfg=None, fills: int | None = None) -> dict:
+def round_trips(events: list, strategy: str, upto_ym: str | None = None) -> list[dict]:
+    """約定の記録から、売りで決着した取引ごとの損益を作る（純関数）。
+
+    買いは平均取得単価で積み、売りのたびに (売値−平均取得単価)×株数−手数料 を1取引の損益とする。
+    分割・併合（split_adjust）があれば、その時点で株数と取得単価を直す。upto_ym（YYYY-MM）より後の約定は使わない。
+    """
+    pos: dict = {}
+    out = []
+    for e in sorted((e for e in events or [] if e.get("strategy") == strategy),
+                    key=lambda e: (str(e.get("date", "")), 0 if e.get("type") == "split_adjust" else 1)):
+        d = str(e.get("date", ""))
+        if upto_ym and d[:7] > upto_ym:
+            continue
+        t = e.get("ticker")
+        if e.get("type") == "split_adjust" and t in pos and e.get("factor"):
+            q, c = pos[t]
+            pos[t] = (q / float(e["factor"]), c * float(e["factor"]))
+            continue
+        if e.get("type") != "fill" or not t:
+            continue
+        qty, px, fee = float(e.get("qty") or 0), float(e.get("price") or 0), float(e.get("fee") or 0)
+        q, c = pos.get(t, (0.0, 0.0))
+        if e.get("side") == "BUY":
+            nq = q + qty
+            pos[t] = (nq, (q * c + qty * px) / nq if nq else 0.0)
+        elif q > 0:
+            sq = min(qty, q)
+            pnl = (px - c) * sq - fee
+            out.append({"date": d, "ticker": t, "qty": sq, "pnl": pnl,
+                        "ret": (px / c - 1) if c else 0.0})
+            pos[t] = (q - sq, c)
+    return out
+
+
+def judge_promotion(acc: dict, cfg=None, fills: int | None = None, trips: list | None = None) -> dict:
     """実弾昇格M2基準の判定。
 
     基準（config.py BLOCK 45）:
@@ -61,17 +95,19 @@ def judge_promotion(acc: dict, cfg=None, fills: int | None = None) -> dict:
     min_pf     = float(getattr(cfg, "PROMOTION_MIN_PF", 1.3))
     max_p      = float(getattr(cfg, "PROMOTION_MAX_P", 0.10))
 
-    # 取引数は約定イベント数（events.jsonl の fill）。口座（accounts.json）には件数を持たないので
-    # 呼び出し側が数えて渡す。equity_history から推定しない（水増しになるため）。
-    trades = int(fills if fills is not None else (acc.get("total_fills", 0) or 0))
-
-    # 月次リターン系列 → PF / bootstrap p
-    by_month = {}
-    for h in acc.get("equity_history", []):
-        by_month[str(h.get("date", ""))[:7]] = h.get("equity")
-    months = sorted(by_month)
-    eqs = [by_month[m] for m in months]
-    rets = [eqs[i] / eqs[i - 1] - 1 for i in range(1, len(eqs)) if eqs[i - 1]]
+    if trips is not None:
+        # 取引数・PF・p は、売りで決着した取引（往復）で見る。買いと売りの約定を足した数や、
+        # 月末の評価額の月次リターン（数点しかない）では、勝ち負けの実績にならない
+        trades = len(trips)
+        rets = [t["ret"] for t in trips]
+    else:
+        trades = int(fills if fills is not None else (acc.get("total_fills", 0) or 0))
+        by_month = {}
+        for h in acc.get("equity_history", []):
+            by_month[str(h.get("date", ""))[:7]] = h.get("equity")
+        months = sorted(by_month)
+        eqs = [by_month[m] for m in months]
+        rets = [eqs[i] / eqs[i - 1] - 1 for i in range(1, len(eqs)) if eqs[i - 1]]
     # 昇格判定は全期間の実績で見る（淘汰の6ヶ月窓とは別基準）
     pf = calc_profit_factor(rets, months=0)
     p  = bootstrap_p_value(rets, months=0)
@@ -119,15 +155,13 @@ def build_report(accounts: dict, yyyymm: str, cfg=None, events: list | None = No
     # ── 実弾昇格M2判定 ─────────────
     lines += ["", "## 実弾昇格M2判定",
               "", "> 3基準を全て満たすと「昇格候補」。**最終判断は利用者**（D-01）。",
+              "", "> 取引数・PF・p は売りで決着した取引（往復）の損益から。保有中の含み損益は入らない。",
               "", "| 戦略 | 取引数 | PF | bootstrap p | 判定 | 未達項目 |",
               "|---|---|---|---|---|---|"]
     for sid, acc in sorted(accounts.items()):
         if sid.startswith("_") or not isinstance(acc, dict):
             continue
-        j = judge_promotion(acc, cfg, fills=(sum(1 for e in events if e.get("type") == "fill"
-                                                 and e.get("strategy") == sid
-                                                 and str(e.get("date", ""))[:7] <= ym)
-                                             if events else None))
+        j = judge_promotion(acc, cfg, trips=round_trips(events, sid, ym) if events else None)
         pf_s = "—" if j["pf"] is None else f"{j['pf']:.2f}"
         p_s  = "—" if j["p"] is None else f"{j['p']:.3f}"
         mark = "🎯 昇格候補" if j["eligible"] else "—"

@@ -340,6 +340,52 @@ def fetch_etf_data(etf_symbols: list, days: int = 365) -> dict:
 # BLOCK 2: スコアリング
 # ==============================================================
 
+RAW_SCORE_MAX = 75.0       # 各成分の理論上の最大（モメンタム40+52週10+出来高5+マクロ20）
+REL_WEIGHT = 0.30          # 最終スコアに占める「同業比較(対SPY超過の順位)」の割合
+BENCH_SYMBOL = "SPY"
+
+
+def normalize_raw_score(raw: float) -> float:
+    """加算スコア(約 -75〜+75)を 0〜100 に写す。0点=50、符号付きのまま見せない。"""
+    return round(max(0.0, min(100.0, 50.0 + raw * 50.0 / RAW_SCORE_MAX)), 1)
+
+
+def _excess_return(etf: dict, bench: dict) -> Optional[float]:
+    """対SPYの超過リターン(%)。1M/3M/12M を 0.2/0.4/0.4 で加重し、欠けた期間は重みを詰める。"""
+    num = den = 0.0
+    for key, w in (("ret_1m", 0.2), ("ret_3m", 0.4), ("ret_12m", 0.4)):
+        a, b = etf.get(key), bench.get(key)
+        if a is not None and b is not None:
+            num += w * (a - b)
+            den += w
+    return num / den if den > 0 else None
+
+
+def apply_relative_strength(sector_results: list, bench: dict) -> None:
+    """絶対スコアに「SPY に対する超過リターンの同業順位」を混ぜ、同点を解消する。
+
+    モメンタムは各期間で頭打ち(3%/5%/10%)のため、相場が強いと複数セクターが
+    同じ満点になり順位がつかない。超過リターンは頭打ちされないので順位に使える。
+    score_result["score_abs"] に絶対スコアを残し、score を混合後の値に置き換える。
+    """
+    ok = [r["score_result"] for r in sector_results if r["score_result"].get("fetch_ok")]
+    for sr in ok:
+        sr["score_abs"] = sr["score"]
+        ex = _excess_return(sr.get("etf_data") or {}, bench or {})
+        sr["excess_return"] = round(ex, 2) if ex is not None else None
+    ranked = [sr for sr in ok if sr["excess_return"] is not None]
+    if len(ranked) < 3:
+        return
+    vals = sorted(sr["excess_return"] for sr in ranked)
+    n = len(vals)
+    for sr in ranked:
+        lo = vals.index(sr["excess_return"])
+        hi = n - 1 - vals[::-1].index(sr["excess_return"])
+        pct = (lo + hi) / 2.0 / (n - 1) * 100.0       # 同値は平均順位
+        sr["rel_rank_pct"] = round(pct, 1)
+        sr["score"] = round((1 - REL_WEIGHT) * sr["score_abs"] + REL_WEIGHT * pct, 1)
+
+
 def score_sector(sector_def: dict, etf_data: dict,
                  macro_snapshot: dict) -> dict:
     """
@@ -363,6 +409,7 @@ def score_sector(sector_def: dict, etf_data: dict,
     if not etf.get("fetch_ok"):
         return {
             "score":        0,
+            "raw_score":    0,
             "components":   {},
             "signals":      [],
             "risk_level":   "unknown",
@@ -471,18 +518,17 @@ def score_sector(sector_def: dict, etf_data: dict,
     score += macro_score
     components["macro"] = macro_score
 
-    # リスクレベル
+    # リスクレベル（加算スコア基準。low / medium / high の3段階）
     if score >= 30:
         risk = "low"
-    elif score >= 10:
-        risk = "medium"
     elif score >= -10:
         risk = "medium"
     else:
         risk = "high"
 
     return {
-        "score":      round(score, 1),
+        "score":      normalize_raw_score(score),
+        "raw_score":  round(score, 1),
         "components": components,
         "signals":    signals,
         "risk_level": risk,
@@ -527,13 +573,13 @@ def build_us_report(sector_results: list) -> str:
         r3m    = etf.get("ret_3m")
         r12m   = etf.get("ret_12m")
         risk   = sr["risk_level"]
-        score_icon = "📈" if score > 20 else ("📉" if score < 0 else "➡️")
+        score_icon = "📈" if score > 60 else ("📉" if score < 40 else "➡️")
         r1m_s  = f"{r1m:+.1f}%" if r1m  is not None else "―"
         r3m_s  = f"{r3m:+.1f}%" if r3m  is not None else "―"
         r12m_s = f"{r12m:+.1f}%" if r12m is not None else "―"
         lines.append(
             f"| {rank} | {score_icon} **{s['name_ja']}** | `{s['etf']}` "
-            f"| **{score:.0f}点** | {r1m_s} | {r3m_s} | {r12m_s} | {risk} |")
+            f"| **{score:.1f}点** | {r1m_s} | {r3m_s} | {r12m_s} | {risk} |")
 
     lines += ["", "---", "", "## 🔍 セクター別 詳細", ""]
     for r in sorted_results:
@@ -543,10 +589,10 @@ def build_us_report(sector_results: list) -> str:
             continue
         score  = sr["score"]
         etf    = sr.get("etf_data", {})
-        icon   = "📈" if score > 20 else ("📉" if score < -10 else "➡️")
+        icon   = "📈" if score > 60 else ("📉" if score < 40 else "➡️")
         lines += [
             f"### {icon} {s['name_ja']}（{s['name_en']}）`{s['etf']}`",
-            f"**スコア: {score:.0f}点** / リスク: {sr['risk_level']}",
+            f"**スコア: {score:.1f}点**（0〜100・50が中立） / リスク: {sr['risk_level']}",
             f"**現在値**: ${etf.get('current', 0):.2f} "
             f"/ 52週高値: ${etf.get('high_52w', 0):.2f}",
             "",
@@ -646,7 +692,7 @@ def run_us_sector_pipeline(cfg, macro_snapshot: Optional[dict] = None) -> dict:
 
     # ETFデータ取得（11銘柄を一括）
     etf_symbols = [s["etf"] for s in US_SECTORS]
-    etf_data    = fetch_etf_data(etf_symbols)
+    etf_data    = fetch_etf_data(etf_symbols + [BENCH_SYMBOL])
 
     if not etf_data:
         print("  ❌ ETFデータ取得失敗")
@@ -658,7 +704,10 @@ def run_us_sector_pipeline(cfg, macro_snapshot: Optional[dict] = None) -> dict:
     for s in US_SECTORS:
         sr = score_sector(s, etf_data, macro_snapshot)
         sector_results.append({"sector": s, "score_result": sr})
-        status = f"スコア:{sr['score']:.0f} / リスク:{sr['risk_level']}"
+    apply_relative_strength(sector_results, etf_data.get(BENCH_SYMBOL) or {})
+    for r in sector_results:
+        s, sr = r["sector"], r["score_result"]
+        status = f"スコア:{sr['score']:.1f} / リスク:{sr['risk_level']}"
         ok_str = "✅" if sr.get("fetch_ok") else "⚠️ データなし"
         print(f"    {ok_str} [{s['etf']}] {s['name_ja']}: {status}")
 
@@ -687,6 +736,9 @@ def run_us_sector_pipeline(cfg, macro_snapshot: Optional[dict] = None) -> dict:
         "name_ja":    r["sector"]["name_ja"],
         "name_en":    r["sector"]["name_en"],
         "score":      r["score_result"]["score"],
+        "score_abs":  r["score_result"].get("score_abs", r["score_result"]["score"]),
+        "excess_return": r["score_result"].get("excess_return"),
+        "fetch_ok":   r["score_result"].get("fetch_ok", False),
         "risk_level": r["score_result"]["risk_level"],
         "signals":    r["score_result"]["signals"],
         "etf_data":   r["score_result"].get("etf_data", {}),
@@ -712,6 +764,7 @@ def run_us_sector_pipeline(cfg, macro_snapshot: Optional[dict] = None) -> dict:
                 "sectors": {
                     etf: {"composite_score": data.get("score", 0)}
                     for etf, data in sectors_dict.items()
+                    if data.get("fetch_ok")
                 }
             }, ensure_ascii=False), encoding="utf-8")
         print(f"  💾 us_sector_scores_{today_str}.json 出力")

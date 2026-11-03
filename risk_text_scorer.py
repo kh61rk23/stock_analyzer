@@ -32,7 +32,7 @@ FLAG_WEIGHT = 4
 FLAG_SEVERITY = 5
 
 SQL = """
-SELECT edinet_code, ANY_VALUE(sec_code) sec_code, fiscal_year_end, ANY_VALUE(doc_id) doc_id, ANY_VALUE(raw_text) raw_text
+SELECT edinet_code, MAX(sec_code) sec_code, fiscal_year_end, ANY_VALUE(doc_id) doc_id, ANY_VALUE(raw_text) raw_text
 FROM `{p}.edinet.gov_text_blocks`
 WHERE section_type = '事業等のリスク' AND raw_text IS NOT NULL AND fiscal_year_end IS NOT NULL
 GROUP BY edinet_code, fiscal_year_end
@@ -114,9 +114,11 @@ def run(cfg=None, dry: bool = False, client=None) -> dict:
 
 
 ALERT_SQL = """
-SELECT r.sec_code, c.name, r.fy_latest, r.severity, r.new_terms, r.change_ratio
+SELECT r.sec_code, COALESCE(c.name, r.edinet_code) AS name, r.fy_latest, r.severity, r.new_terms, r.change_ratio,
+       COUNT(*) OVER() AS total_n
 FROM `{p}.edinet.risk_text_changes` r LEFT JOIN `{p}.edinet.company` c USING (edinet_code)
-WHERE r.flag AND r.fy_latest >= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL 400 DAY)
+WHERE r.flag AND r.sec_code IS NOT NULL AND LENGTH(r.sec_code) >= 4
+  AND r.fy_latest >= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL 400 DAY)
 ORDER BY r.severity DESC, r.change_ratio DESC LIMIT 200
 """
 
@@ -140,10 +142,11 @@ def build_alert(cfg, results: dict, client=None) -> dict | None:
     for t in (results.get("holdings_tickers") or []):
         watch.add(str(t).split(".")[0])
     rows.sort(key=lambda r: (str(r.get("sec_code") or "")[:4] not in watch, -int(r["severity"] or 0)))
+    total = int(rows[0].get("total_n") or len(rows))   # LIMIT 前の該当数（表示件数ではない）
     lines = [f"{'★ ' if str(r.get('sec_code') or '')[:4] in watch else ''}{r.get('name') or '-'}（{str(r.get('sec_code') or '')[:4]}.T）"
              f": 新しく増えた語 {r['new_terms']}（期末 {r['fy_latest']}・記述の変化 {float(r['change_ratio']):.0%}）" for r in rows[:10]]
     return {"trigger": "risk_text_deterioration", "severity": "warning",
-            "title": f"📄 有報「事業等のリスク」が悪化した会社 {len(rows)}社（前期の有報と比べて重い語が新しく出た・★は通過銘柄）",
+            "title": f"📄 有報「事業等のリスク」が悪化した会社 {total}社（前期の有報と比べて重い語が新しく出た・★は通過銘柄）",
             "body": "\n".join(lines)}
 
 

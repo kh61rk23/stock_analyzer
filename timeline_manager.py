@@ -139,6 +139,21 @@ def detect_trend_changes(prices_df, window: int = 3, threshold: float = 0.02) ->
     return out
 
 
+def classify_sector_cross(detail: dict) -> str:
+    """業種内の銘柄別クロスを多数決で1つにまとめる。
+
+    ゴールデン／デッドが同数なら "" を返す。両方に載せると同じ業種が
+    買いと売りの両リストに出て読み手が判断できなくなるため、片側だけにする。
+    """
+    n_g = sum(1 for v in detail.values() if v.get("cross") == "golden")
+    n_d = sum(1 for v in detail.values() if v.get("cross") == "dead")
+    if n_g > n_d:
+        return "golden"
+    if n_d > n_g:
+        return "dead"
+    return ""
+
+
 def run_long_term_analysis(cfg) -> dict:
     """全業種代表銘柄で長期月次トレンド分析を実行する。"""
     months    = getattr(cfg, "LONG_TERM_MONTHS",       12)
@@ -171,16 +186,16 @@ def run_long_term_analysis(cfg) -> dict:
         trend_summary = "up" if ups > downs else ("down" if downs > ups else "flat")
 
         cross_flags = []
-        has_gc = has_dc = False
         for tkr, d in detail.items():
             if d["cross"] == "golden":
                 cross_flags.append(f"{tkr}: ⚡ ゴールデンクロス（MA上抜け）")
-                has_gc = True
             elif d["cross"] == "dead":
                 cross_flags.append(f"{tkr}: 💀 デッドクロス（MA下抜け）")
-                has_dc = True
-        if has_gc: golden_cross.append({"sector_code": code, "sector_name": name})
-        if has_dc: dead_cross.append({"sector_code": code, "sector_name": name})
+        side = classify_sector_cross(detail)
+        if side == "golden":
+            golden_cross.append({"sector_code": code, "sector_name": name})
+        elif side == "dead":
+            dead_cross.append({"sector_code": code, "sector_name": name})
 
         sector_trends.append({
             "sector_code":    code,

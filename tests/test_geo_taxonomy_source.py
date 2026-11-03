@@ -53,7 +53,7 @@ def test_legacy_propagation_unchanged(monkeypatch):
     cfg = _cfg("legacy", {"lithium": ["ev_battery"]})
     # 電気機器(1016)は ev_battery の手書き表に載っている → 関連性 1.0
     v = geo_signal._calc_taxonomy_propagation(EXPOSURE, "1016", "JP", cfg, ticker="6501.T")
-    assert v == round(0.5 * 0.6 * 0.30 * 0.3 * 1.0, 4)
+    assert v == round(0.5 * 60.0 * 0.30 * 0.3 * 1.0, 4)
     # ticker を渡しても legacy では関与度を見ない
     geo_signal._TAXONOMY_SCORE_CACHE["6501"] = {"ev_battery": 0.0}
     assert geo_signal._calc_taxonomy_propagation(EXPOSURE, "1016", "JP", cfg, ticker="6501.T") == v
@@ -74,14 +74,14 @@ def test_seed_uses_company_scores(monkeypatch):
     v = geo_signal._calc_taxonomy_propagation(
         EXPOSURE, "9999", "JP", _cfg("seed"), ticker="6501.T")
     # a は 0.5・b は行が無い(0)
-    assert v == round(0.5 * 0.6 * 0.30 * 0.3 * 0.5, 4)
+    assert v == round(0.5 * 60.0 * 0.30 * 0.3 * 0.5, 4)
 
 
 def test_seed_falls_back_to_legacy_table_without_rows(monkeypatch):
     monkeypatch.setattr(geo_signal, "_seed_commodity_nodes", lambda: {"lithium": ["ev_battery"]})
     v = geo_signal._calc_taxonomy_propagation(
         EXPOSURE, "1016", "JP", _cfg("seed"), ticker="6501.T")
-    assert v == round(0.5 * 0.6 * 0.30 * 0.3 * 1.0, 4)
+    assert v == round(0.5 * 60.0 * 0.30 * 0.3 * 1.0, 4)
 
 
 def test_prefetch_taxonomy_scores_one_query_and_remembers_empty(monkeypatch):

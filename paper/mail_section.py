@@ -53,7 +53,8 @@ def strategy_lines(summary: dict) -> list:
         init = float(s.get("initial") or 0)
         tot = s.get("total_pnl", s["equity"] - init if init else 0.0)
         pct = f"（{tot / init * 100:+.1f}%）" if init else ""
-        rows.append((sid, f"  {sid}: {_yen(s['equity'])}　前日比 {_signed(s['day_pnl'])}　開始来 {_signed(tot)}{pct}"
+        day = "価格未更新" if s.get("price_stale") else _signed(s['day_pnl'])
+        rows.append((sid, f"  {sid}: {_yen(s['equity'])}　前日比 {day}　開始来 {_signed(tot)}{pct}"
                           f"　保有{s.get('positions', 0)}銘柄"))
     rows.sort(key=lambda r: r[0])
     return [r[1] for r in rows]
@@ -106,6 +107,8 @@ def build_alert(summary: dict | None, opt_events: list | None = None, opt_book: 
         if any(s.get("already") for s in summary.values() if isinstance(s, dict)):
             lines.append("（今日は記帳済み。数字は記帳済みの口座から）")
         lines.append("■ 戦略別（評価額・前日比・開始来）")
+        if any(s.get("price_stale") for s in summary.values() if isinstance(s, dict)):
+            lines.append(f"（評価に使う終値が前回と同じ {asof} のため、前日比は出さない＝休場明け・土曜の朝の実行）")
         lines += strat
         accts = {k: v for k, v in summary.items() if isinstance(v, dict) and "equity" in v}
         new = [(sid, od) for sid, s in accts.items() for od in s.get("new_list") or []]

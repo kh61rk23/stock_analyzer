@@ -108,8 +108,8 @@ class TestEntries:
              "direction": "positive"}]}}       # B は surprise 不足
         orders = evaluate_entries(PEAD_PB, results, held=set(), casino_pct=15.0)
         assert [o["ticker"] for o in orders] == ["A.T"]
-        # weight = 5% × 15% = 0.75%
-        assert orders[0]["weight"] == pytest.approx(0.0075)
+        # weight = 口座の 5%（口座そのものがカジノ枠なので枠の比率は掛けない）
+        assert orders[0]["weight"] == pytest.approx(0.05)
 
     def test_max_concurrent_respected(self):
         pb = {**PEAD_PB, "entry": {**PEAD_PB["entry"], "max_concurrent": 1}}

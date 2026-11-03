@@ -20,7 +20,10 @@ import sys
 from datetime import date
 from pathlib import Path
 
+import mail_html
+
 REPO = Path(__file__).resolve().parent
+_MAIL_MAX_BYTES = 98_000
 
 
 def _next_month(ym: str) -> str:
@@ -91,6 +94,32 @@ def summarize_report(name: str, text: str) -> tuple[str, bool]:
     return ("", False)
 
 
+def _kpis(files: list) -> list:
+    """メール上部の KPI 帯: 提案件数・判断が要るもの・ペーパー月次損益の合計。
+
+    各レポートが自分で書いた集計行から読む（summarize_report と同じ元）。読めない項目は「—」。"""
+    proposals, asks, paper_total = None, 0, None
+    for _title, p in files:
+        try:
+            text = p.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        line, ask = summarize_report(p.name, text)
+        asks += 1 if ask else 0
+        if p.name.startswith("signal_culling_"):
+            m = _first(r"重みの変更提案 (\d+)件", line)
+            proposals = int(m.group(1)) if m else proposals
+        elif p.name.startswith("paper_"):
+            rows = re.findall(r"^\| (\S+) \| [\d,]+ \| [\d,]+ \| ([+-][\d,]+) \| ([+-][\d.]+%) \|",
+                              text.replace("**", ""), re.M)
+            if rows:
+                paper_total = sum(int(r[1].replace(",", "")) for r in rows)
+    return [("提案件数", f"{proposals}件" if proposals is not None else "—", "#1d4ed8"),
+            ("判断が要るもの", f"{asks}件", "#d97706" if asks else "#059669"),
+            ("ペーパー月次損益", f"{paper_total:+,}円" if paper_total is not None else "—",
+             "#6b7280" if paper_total is None else ("#059669" if paper_total >= 0 else "#dc2626"))]
+
+
 def summary_html(files: list) -> str:
     """冒頭の「要点」節（各レポートの1行と、利用者の判断が要るもの）。"""
     rows, asks = [], []
@@ -100,79 +129,89 @@ def summary_html(files: list) -> str:
         except OSError:
             continue
         if line:
-            rows.append(f"<li><b>{html.escape(title)}</b>: {html.escape(line)}</li>")
+            rows.append(f"<li><b>{html.escape(_plain_title(title))}</b>: {html.escape(line)}</li>")
             if ask:
-                asks.append(html.escape(title))
+                asks.append(html.escape(_plain_title(title)))
     if not rows:
         return ""
-    out = ['<h3>📌 要点</h3>', "<ul>" + "".join(rows) + "</ul>"]
-    out.append(f"<div>🙋 判断が要るもの: {'・'.join(asks)}（各節の提案を確認）</div>" if asks
-               else "<div>🙋 判断が要るもの: なし</div>")
-    return "\n".join(out)
+    out = ['<ul style="margin:4px 0;padding-left:20px;font-size:13px;line-height:1.7;color:#374151">'
+           + "".join(rows) + "</ul>"]
+    out.append(f'<p style="margin:6px 0 0;font-size:13px">🙋 判断が要るもの: {"・".join(asks)}（各節の提案を確認）</p>' if asks
+               else '<p style="margin:6px 0 0;font-size:13px">🙋 判断が要るもの: なし</p>')
+    return mail_html.section_card("📌 要点", "".join(out))
+
+
+def _plain_title(title: str) -> str:
+    """節の題から内部の記号（E12・S2 等）を落とす。"""
+    return mail_html.strip_dev_codes(title)
 
 
 def md_to_html(md: str) -> str:
-    """最低限の Markdown → HTML（見出し・表・箇条書き・引用・強調）（純関数）。"""
-    out, in_table = [], False
-    for raw in md.split("\n"):
-        line = raw.rstrip()
-        if line.startswith("|") and line.endswith("|"):
-            cells = [c.strip() for c in line.strip("|").split("|")]
-            if all(re.fullmatch(r":?-{2,}:?", c or "--") for c in cells):
-                continue
-            if not in_table:
-                out.append('<table style="border-collapse:collapse;font-size:13px">')
-                in_table = True
-            out.append("<tr>" + "".join(
-                f'<td style="border:1px solid #ddd;padding:3px 6px">{_inline(c)}</td>' for c in cells) + "</tr>")
-            continue
-        if in_table:
-            out.append("</table>")
-            in_table = False
-        if not line.strip():
-            out.append("<br>")
-        elif line.startswith("#"):
-            lvl = min(4, len(line) - len(line.lstrip("#")) + 1)
-            out.append(f"<h{lvl}>{_inline(line.lstrip('#').strip())}</h{lvl}>")
-        elif line.lstrip().startswith(("- ", "* ")):
-            out.append(f"<div>・{_inline(line.lstrip()[2:])}</div>")
-        elif line.startswith(">"):
-            out.append(f'<div style="color:#666">{_inline(line[1:].strip())}</div>')
-        else:
-            out.append(f"<div>{_inline(line)}</div>")
-    if in_table:
-        out.append("</table>")
-    return "\n".join(out)
+    """Markdown → HTML。変換器は週次と共有（mail_html.md_to_html）。"""
+    return mail_html.md_to_html(md)
 
 
 def _inline(s: str) -> str:
-    s = html.escape(s)
-    s = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s)
-    # レポートは強調に *…* も使う（signal_culling・tax 等）。** を先に処理してから単独の * を斜体に
-    return re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"<i>\1</i>", s)
+    return mail_html._inline(s)
+
+
+_FILE_REF_RE = re.compile(r"`?[A-Za-z][A-Za-z0-9_]*\.md`?\s*[:：]?\s*")
+
+
+def _drop_h1(md: str) -> str:
+    """メール用に本文を整える: 冒頭の「# 題」（節カードの題と重複）と、見出しの内部記号（E4 等）、
+    本文中の保存ファイル名（読み手には意味がない）を落とす。"""
+    out = []
+    for ln in md.split("\n"):
+        if re.match(r"^# ", ln):
+            continue
+        if ln.startswith("#"):
+            ln = re.sub(r"^(#+\s+)(.*)$", lambda m: m.group(1) + mail_html.strip_dev_codes(m.group(2)), ln)
+        out.append(_FILE_REF_RE.sub("", ln))
+    return "\n".join(out)
 
 
 def build(ym: str, insights: Path, tax_months: tuple = (1, 4, 7, 10, 11), late_note: str = "",
           gave_up: list | None = None) -> tuple[str, str, int]:
     files = report_files(insights, ym, tax_months)
     subject = f"📅 月次レポート {ym[:4]}-{ym[4:]}（{len(files)}本）" + ("（遅れて送信）" if late_note else "")
-    parts = [f"<h2>📅 月次レポート {ym[:4]}年{int(ym[4:])}月</h2>",
-             "<div>月次処理（monthly_runner）が作成した各レポートです。数値の一次情報は各元ファイルを正本とします。</div>",
-             *([f'<div style="color:#b45309">⚠️ {html.escape(late_note)}</div>'] if late_note else []),
-             *([f'<div style="color:#b91c1c">❌ 次のステップは失敗が続いたため今月は作れていません（レポートに含まれない）: '
-                f'{html.escape(", ".join(gave_up))}</div>'] if gave_up else []),
-             summary_html(files) or ("<ul>" + "".join(f"<li>{html.escape(t)}</li>" for t, _ in files) + "</ul>")]
+    # Gmail は 102KB を超える本文を途中で切る。超えるときは各レポートの冒頭だけに絞って収める
+    texts = []
     for title, p in files:
         try:
-            body = p.read_text(encoding="utf-8")
+            texts.append((title, _drop_h1(p.read_text(encoding="utf-8")), p))
         except OSError:
             continue
-        parts.append(f'<hr><h2>{html.escape(title)}</h2>'
-                     f'<div style="font-size:12px;color:#888">{p.name}</div>')
-        parts.append(md_to_html(body))
-    if not files:
-        parts.append("<div>⚠️ 対象月のレポートが見つかりませんでした。</div>")
-    return subject, "\n".join(parts), len(files)
+    page = ""
+    for limit in (None, 120, 60, 30):
+        parts = []
+        if late_note:
+            parts.append(mail_html.section_card(
+                "遅れて送信", f'<p style="font-size:13px;margin:4px 0">{html.escape(late_note)}</p>', severity="medium"))
+        if gave_up:
+            parts.append(mail_html.section_card(
+                "作れなかったステップ",
+                f'<p style="font-size:13px;margin:4px 0">次のステップは失敗が続いたため今月は作れていません（レポートに含まれない）: '
+                f'{html.escape(", ".join(gave_up))}</p>', severity="high"))
+        parts.append(summary_html(files))
+        for title, body, _p in texts:
+            lines = body.split("\n")
+            cut = limit is not None and len(lines) > limit
+            inner = md_to_html("\n".join(lines[:limit]) if cut else body)
+            if cut:
+                inner += '<p style="font-size:11px;color:#9ca3af">…以降は省略（全文は月次レポートの保存ファイル）</p>'
+            parts.append(mail_html.section_card(_plain_title(title), inner))
+        if not files:
+            parts.append(mail_html.section_card("レポートなし", "<p>対象月のレポートが見つかりませんでした。</p>",
+                                                severity="medium"))
+        page = mail_html.page(
+            f"📅 月次レポート {ym[:4]}年{int(ym[4:])}月",
+            f"月次処理が作成した各レポートです（{len(files)}本）。数値の一次情報は各レポートの集計行です。",
+            _kpis(files), "\n".join(x for x in parts if x),
+            "stock_analyzer の月次処理（monthly_runner）より自動送信")
+        if len(page.encode("utf-8")) <= _MAIL_MAX_BYTES:
+            break
+    return subject, page, len(files)
 
 
 def main(argv=None) -> int:

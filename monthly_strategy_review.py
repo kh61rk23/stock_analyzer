@@ -128,19 +128,18 @@ def build_review(sources: dict, yyyymm: str) -> str:
     ym = f"{yyyymm[:4]}-{yyyymm[4:]}"
     lines = [f"# 月次戦略レビュー {ym}（E12）",
              "",
-             "> LLM不使用・各サブシステムのキャッシュをテンプレ整形。"
-             "数値の一次情報は各元ファイルを正本とする。",
+             "> 各処理の記録をまとめた表。数値の一次情報は各レポート・台帳。",
              "",
-             "## ① スコア帯別的中率（performance_tracker の週次評価）"]
+             "## ① スコア帯別の的中率（週次の評価）"]
     lines += _score_band_table(sources.get("performance_log", {}), yyyymm)
 
     lines += ["", "## ② シグナル淘汰（E4）"]
     e4 = sources.get("signal_culling")
     if e4:
-        lines.append(f"- signal_culling_{yyyymm}.md: 提案 {e4.get('proposals','?')}件"
+        lines.append(f"- シグナル淘汰のレポート: 重みの変更提案 {e4.get('proposals','?')}件"
                      f" / 判定不能 {e4.get('undecidable','?')}件")
     else:
-        lines.append("- E4レポート: データなし（当月未生成 or N<60で判定不能）")
+        lines.append("- シグナル淘汰のレポート: データなし（当月は未作成、または件数不足で判定不能）")
 
     lines += ["", "## ③ 審議台帳の当月成績（E2）"]
     dm = sources.get("deliberations_month")
