@@ -80,6 +80,10 @@ def collect(src: Path | None = None) -> tuple[list[Path], list[str], list[str]]:
         rel = p.relative_to(src)
         if ".git" in rel.parts:
             continue
+        # 02 の中のリンク（他のシステムのフォルダへのショートカット）の先は同期しない。資料ではなく、個人のデータを含みうるため
+        if any((src.joinpath(*rel.parts[:i + 1])).is_symlink() for i in range(len(rel.parts))):
+            excluded.append(str(rel))
+            continue
         if nfc(rel.parts[0]) in EXCLUDE_DIRS or is_excluded(p.name):
             excluded.append(str(rel))
         elif p.suffix.lower() not in TEXT_SUFFIXES:

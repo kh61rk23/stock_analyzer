@@ -79,7 +79,9 @@ python3 maintenance_packet.py   # 全監査+台帳+直近変更を MAINTENANCE_P
    - `../02_Configuration_Management/07_DBスキーマ/bq_all_schemas_<日付>.json`：BQの表・列を変えたら取り直す
    - `../02_Configuration_Management/01_設計書/SPEC_core.md`：処理の流れ・構造を変えたら
    - `../02_Configuration_Management/06_BI基盤/`：BI のマート・テンプレを変えたら（TEMPLATE_CATALOG.md は `python3 bi/tools/gen_template_catalog.py` で再生成）
-   - 進捗が動いたら `../02_Configuration_Management/04_進捗管理/TODO_LIST.md`、調査・提案のレポートは `05_提案・検証記録/` に置く
+   - 残タスクは board のタスク（`Vault2_ClaudeCode_Local/board/tasks/`・department G-dev・`board/ui/srv/tasks_data.py` の `create_task`）だけに書く。
+     `04_進捗管理/TODO_LIST.md` は完了・中止の要約と決定済み事項だけを持ち、残タスクを書かない（二重管理で更新漏れが出るため）。
+     調査・提案のレポートは `05_提案・検証記録/` に置く
 4. **開発ダッシュボードを更新する**：board の G-dev `10_案件台帳.md` の stock_analyzer 行
    （概要・現在地／次アクション）を最新にする（開発ログ＝/dev の明細と、台帳＝現在地の両方）
 5. **構成管理資料を BigQuery へ保存する**（改修のたびに最新版を保存。資料は公開しないため git には入れない）
