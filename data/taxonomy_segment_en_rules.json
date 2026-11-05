@@ -20,7 +20,30 @@
   "Soft Bank Vision Funds": "asset_management",
   "Holding Company Investment": "business_investment",
   "Infrastructure Materials": "commodity_chemical",
-  "Electronics Materials": "electronic_chemical"
+  "Electronics Materials": "electronic_chemical",
+  "NITORI": "furniture_interior",
+  "SHIMACHU": "home_center",
+  "DAIFUKU": "automated_warehouse",
+  "Matsumoto Kiyoshi Group": "drugstore_chain",
+  "Cocokara Fine Group": "drugstore_chain",
+  "Yoshinoya": "restaurant_chain",
+  "Marugame Seimen": "restaurant_chain",
+  "KAPPACRIATE": "restaurant_chain",
+  "DOUTORGROUP": "fast_food_cafe",
+  "Takara Shuzo": "beer_spirits",
+  "Takara Shuzo International Group": "beer_spirits",
+  "Dulux Group": "adhesive_coating",
+  "NIPSEA": "adhesive_coating",
+  "ARNESTONECORPORATION": "condominium_detached",
+  "Pressance Corporation Co Ltd": "condominium_detached",
+  "TACTHOMECO": "condominium_detached",
+  "TOUEIHOMECORPORATION": "condominium_detached",
+  "IDHOMECO": "condominium_detached",
+  "Nippon COMSYSGroup": "electrical_construction",
+  "NDSGroup": "electrical_construction",
+  "TSUKENGroup": "electrical_construction",
+  "RENOSYMarketplace": "real_estate_brokerage",
+  "AUTOBACSBusiness": "specialty_retail"
  },
  "rules": [
   {
@@ -30,6 +53,142 @@
   {
    "pattern": "^(the )?(india|indonesia|korea|mexico|vietnam|thailand|usa|us|united states|netherlands?|east asia.*|southeast.*|rest of world|north (and )?(central )?(and south )?america|the americas|mainland china.*|europe and africa|japan( business| east asia)?|oversea subsidiaries|foreign related businesses|holdings|headoffice.*|operating|otehr|new business(es)?( and others)?|growth business and other|stock segment)$",
    "skip": true
+  },
+  {
+   "pattern": "^(europe middle east and africa|(emea|americas?|china|asia|europe|india|north america) ?(rhq|business)|south asia and oceania|greater china|south east asia|northeast asia|europe americas|middle and south america|united states of america|american states|domestic associate companies|domestic business department\\w*|oversea .*|subsidiaries|group company business|two|three|step|business division ?\\d*|domestic working business)$",
+   "skip": true
+  },
+  {
+   "pattern": "^(kyushu|kansai|kanto|tohoku|hokkaido|chubu|tokai|hokuriku|chugoku|shikoku|chukyo|okinawa)( (and )?(kyushu|kansai|kanto|tohoku|hokkaido|chubu|tokai|hokuriku|chugoku|shikoku|chukyo|okinawa|area|region))*$",
+   "skip": true
+  },
+  {
+   "pattern": "\\bcvs ?operations|convenience stores?",
+   "node": "cvs_chain"
+  },
+  {
+   "pattern": "^gms$|superstore|gyomu super",
+   "node": "discount_general"
+  },
+  {
+   "pattern": "single family homes?|^homes$",
+   "node": "custom_home"
+  },
+  {
+   "pattern": "^pictures$",
+   "node": "media_entertainment"
+  },
+  {
+   "pattern": "\\bpersonal care\\b|cosmetar",
+   "node": "cosmetics_personal_care"
+  },
+  {
+   "pattern": "industrial automation|^fa ?(business|system)|advanced automation",
+   "node": "factory_automation"
+  },
+  {
+   "pattern": "^flour|emulsified",
+   "node": "processed_food"
+  },
+  {
+   "pattern": "vinyl acetate|\\bmma ?(and|\\b)|isoprene|\\borganic chemistry|acetyl chain",
+   "node": "petrochemical"
+  },
+  {
+   "pattern": "chocolate",
+   "node": "confectionery_bakery"
+  },
+  {
+   "pattern": "chlor ?alkali|inorganic chemistry",
+   "node": "inorganic_chemical"
+  },
+  {
+   "pattern": "carbon black",
+   "node": "commodity_chemical"
+  },
+  {
+   "pattern": "^seating$",
+   "node": "auto_parts_body"
+  },
+  {
+   "pattern": "^seal$",
+   "node": "industrial_rubber"
+  },
+  {
+   "pattern": "^refiner(y|ies)$",
+   "node": "refinery"
+  },
+  {
+   "pattern": "ichthys|\\blng\\b",
+   "node": "lng_project"
+  },
+  {
+   "pattern": "commercial propert",
+   "node": "real_estate_development"
+  },
+  {
+   "pattern": "^developer business",
+   "node": "real_estate_development"
+  },
+  {
+   "pattern": "rental related",
+   "node": "leasing"
+  },
+  {
+   "pattern": "^department$",
+   "node": "department_store_urban"
+  },
+  {
+   "pattern": "electronic parts|electrical parts|disk drive",
+   "node": "electronic_component"
+  },
+  {
+   "pattern": "^condenser$",
+   "node": "passive_component"
+  },
+  {
+   "pattern": "^brass$",
+   "node": "nonferrous_metals"
+  },
+  {
+   "pattern": "^cardboard$",
+   "node": "paperboard_packaging"
+  },
+  {
+   "pattern": "newly built ship",
+   "node": "shipyard"
+  },
+  {
+   "pattern": "probe card",
+   "node": "semiconductor_equipment"
+  },
+  {
+   "pattern": "^ambulance$",
+   "node": "special_vehicle"
+  },
+  {
+   "pattern": "fire protection",
+   "node": "security_system"
+  },
+  {
+   "pattern": "^liner( trade| business)?$|ferries|\\bro ro\\b",
+   "node": "shipping_marine"
+  },
+  {
+   "pattern": "\\blp ?gas",
+   "node": "lp_gas"
+  },
+  {
+   "pattern": "^coffee",
+   "node": "soft_drink"
+  },
+  {
+   "pattern": "eyewear",
+   "node": "specialty_apparel_shoes"
+  },
+  {
+   "pattern": "facilit(y|ies) (management|operations?)",
+   "node": "building_maintenance"
   },
   {
    "pattern": "imaging and sensing|image sensor",

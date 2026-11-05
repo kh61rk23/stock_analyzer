@@ -41,3 +41,26 @@ def test_total_rows_are_not_in_denominator():
             {"code": "9984", "member": "ReportableSegmentsMember", "value": 100.0}]
     rows, _ = sm.build_rows(recs, exact, rules, as_of="2026-10-30")
     assert [(r["node_id"], r["relevance_score"]) for r in rows] == [("telecom_carrier", 0.6), ("ai_software", 0.4)]
+
+
+def test_brand_and_business_names_added():
+    exact, rules = sm.load_rules()
+    f = lambda n: sm.node_for(n, exact, rules)
+    assert f("NITORI") == ("furniture_interior", False)
+    assert f("Matsumoto Kiyoshi Group") == ("drugstore_chain", False)
+    assert f("Superstore Operations") == ("discount_general", False)
+    assert f("Single Family Homes Related Business") == ("custom_home", False)
+    assert f("Ichthys Project") == ("lng_project", False)
+    assert f("Chlor Alkali") == ("inorganic_chemical", False)
+    assert f("Flour Milling")[0] == "processed_food"
+    assert f("FASystem")[0] == "factory_automation"       # IT の語（system）より先に当たる
+    # 似た語を巻き込まない：Milling Machine（工作機械）・Help Gas・Robot Rows
+    assert f("Milling Machine")[0] != "processed_food"
+    assert f("Help Gas Station")[0] != "lp_gas"
+
+
+def test_added_regions_stay_out_of_denominator():
+    exact, rules = sm.load_rules()
+    for n in ("Europe Middle East And Africa", "Americas RHQ", "United States Of America", "Kyushu Chugoku",
+              "Greater China", "North America Business", "Business Division1"):
+        assert sm.node_for(n, exact, rules) == (None, True), n
