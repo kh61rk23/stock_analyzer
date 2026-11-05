@@ -50,8 +50,8 @@ from config_sync import sync_module_constants
 # BLOCK 0: デフォルト定数（config.py BLOCK 30 で上書き可能）
 # ==============================================================
 
-_DEFAULT_MIN_SCORE_LINE      = 3.0    # 通知閾値
-_DEFAULT_CRITICAL_SCORE      = 3.5    # 最高警戒閾値
+_DEFAULT_MIN_SCORE_LINE      = 2.0    # 通知閾値（config.py の IGNITION_MIN_SCORE_LINE と同じ。届く上限は約2.7）
+_DEFAULT_CRITICAL_SCORE      = 2.5    # 最高警戒閾値
 _DEFAULT_CRITICAL_REPEAT     = 14     # 最高警戒反復判定日数
 _DEFAULT_ALERT_TTL           = 14     # ignition_alerts.json TTL（日）
 _DEFAULT_HISTORY_TTL         = 180    # ignition_history.json TTL（日）

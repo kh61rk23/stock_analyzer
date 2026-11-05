@@ -145,7 +145,9 @@ def build_alert(cfg, results: dict, client=None) -> dict | None:
     total = int(rows[0].get("total_n") or len(rows))   # LIMIT 前の該当数（表示件数ではない）
     lines = [f"{'★ ' if str(r.get('sec_code') or '')[:4] in watch else ''}{r.get('name') or '-'}（{str(r.get('sec_code') or '')[:4]}.T）"
              f": 新しく増えた語 {r['new_terms']}（期末 {r['fy_latest']}・記述の変化 {float(r['change_ratio']):.0%}）" for r in rows[:10]]
-    return {"trigger": "risk_text_deterioration", "severity": "warning",
+    hit = any(str(r.get("sec_code") or "")[:4] in watch for r in rows)
+    # 保有・通過銘柄が無い日は全上場の一覧なので参考（段4）に下げ、「今日まず見るもの」に出さない
+    return {"trigger": "risk_text_deterioration", "severity": "warning", "tier": 1 if hit else 4,
             "title": f"📄 有報「事業等のリスク」が悪化した会社 {total}社（前期の有報と比べて重い語が新しく出た・★は通過銘柄）",
             "body": "\n".join(lines)}
 

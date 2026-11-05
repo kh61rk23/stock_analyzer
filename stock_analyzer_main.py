@@ -3573,7 +3573,8 @@ def run_all_tasks(mode: str = "all") -> dict:
                         logger.add(
                             "institutional_13f", "l3_override",
                             f"L3発動: {_iss_result['override_tickers']} "
-                            f"({len(_iss_result['override_sectors'])}業種)",
+                            f"(日本株の業種に結び付いたもの {len(_iss_result['override_sectors'])}業種。"
+                            f"13Fは米国株なので0業種は正常)",
                         )
                     else:
                         logger.add(

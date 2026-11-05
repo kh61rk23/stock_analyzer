@@ -2104,6 +2104,16 @@ def extract_alerts(cfg, results: dict) -> list:
         except Exception as _rte:
             print(f"    ⚠️ 金利節の生成失敗: {str(_rte)[:80]}")
 
+        # 建玉の偏り（CFTC の COT・極端だけ）
+    try:
+        import cot_signal
+        _cl = cot_signal.mail_lines(cot_signal.load_signals(cfg), cfg)
+        if _cl:
+            alerts.append({"trigger": "cot_positioning", "title": "🧭 建玉の偏り（COT・投機筋の極端）",
+                           "body": "\n".join(_cl), "severity": "info"})
+    except Exception as _cte:
+        print(f"    ⚠️ COT 節の生成失敗: {str(_cte)[:80]}")
+
         # 不動産DB（取り込みと業種スコアへの反映）
     if getattr(cfg, "ALERT_ON_REAL_ESTATE", True):
         try:
@@ -2161,7 +2171,7 @@ def extract_alerts(cfg, results: dict) -> list:
         except Exception as _ope:
             print(f"    ⚠️ 運用の監視の生成失敗: {str(_ope)[:80]}")
 
-    # 今日の変化（前の営業日からの通過銘柄の入れ替わり・点の動き）はメールの先頭に置く
+    # 今日の変化（前の営業日からの通過銘柄の入れ替わり・点の動き）。メール内の位置は build_message の段で決まる
     try:
         import daily_changes
         _dc = daily_changes.build_alert(cfg, results)
@@ -2540,18 +2550,66 @@ def build_edinetdb_ingest_alert(ing: dict, web: dict | None = None, ledger: dict
 # BLOCK 2: メッセージ本文生成
 # ==============================================================
 
-def build_message(alerts: list, mode: str = "email") -> str:
+_SEVERITY_RANK = {"critical": 0, "high": 1, "warning": 2, "medium": 2, "info": 3, "low": 4}
+FIRST_LOOK_MAX = 5   # 冒頭「今日まず見るもの」に並べる見出しの上限
+
+
+def _section_tier(al: dict, tiers: dict | None, default: int) -> int:
+    # 節が自分で段を持つとき（例：有報リスクは保有・通過銘柄を含む日だけ段1）はそれを優先する
+    if al.get("tier") is not None:
+        return int(al["tier"])
+    return int((tiers or {}).get(al.get("trigger"), default))
+
+
+def sort_alerts_by_tier(alerts: list, tiers: dict | None = None, default: int = 3) -> list:
+    """節を段（小さいほど上）→ severity（critical > high > warning/medium > info）の順に並べる。
+    同じ段・同じ severity は元の順のまま（sorted は安定）。tiers は config.ALERT_SECTION_TIER。"""
+    return sorted(alerts, key=lambda a: (_section_tier(a, tiers, default),
+                                         _SEVERITY_RANK.get(a.get("severity"), 3)))
+
+
+def first_look_html(alerts: list, tiers: dict | None = None, default: int = 3) -> str:
+    """段1（今日動くべきこと）の節の見出しだけを並べた冒頭の枠。該当が無ければ空文字。"""
+    first = [a for a in sort_alerts_by_tier(alerts, tiers, default) if _section_tier(a, tiers, default) == 1]
+    if not first:
+        return ""
+    items = "".join(f'<li style="margin:2px 0;">{a["title"]}</li>' for a in first[:FIRST_LOOK_MAX])
+    more = (f'<div style="font-size:12px;color:#991b1b;margin-top:4px;">ほか {len(first) - FIRST_LOOK_MAX} 件は本文</div>'
+            if len(first) > FIRST_LOOK_MAX else "")
+    return f"""
+  <!-- 今日まず見るもの -->
+  <div style="padding:12px 24px;background:#fef2f2;border-bottom:1px solid #fecaca;">
+<div style="font-size:13px;font-weight:bold;color:#b91c1c;margin-bottom:4px;">今日まず見るもの</div>
+<ul style="margin:0;padding-left:18px;font-size:13px;color:#7f1d1d;line-height:1.6;">{items}</ul>{more}
+  </div>
+"""
+
+
+def build_message(alerts: list, mode: str = "email", tiers: dict | None = None) -> str:
     """
-    アラートリストからメール本文（HTML）を生成する。
+    アラートリストからメール本文（HTML）を生成する。節は重要度の段順に並べ替え、冒頭に段1の見出しを置く。
 
     Args:
         alerts : extract_alerts() の返り値
         mode   : "email" だけ（呼び出し側との互換のために残す）
+        tiers  : trigger → 段。None なら config.ALERT_SECTION_TIER
     """
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    default_tier = 3
+    if tiers is None:
+        try:
+            import config as _cfgmod
+            tiers = getattr(_cfgmod, "ALERT_SECTION_TIER", None)
+            default_tier = int(getattr(_cfgmod, "ALERT_SECTION_TIER_DEFAULT", 3))
+        except Exception:
+            tiers = None
+    alerts = sort_alerts_by_tier(alerts, tiers, default_tier)
+    first_look = first_look_html(alerts, tiers, default_tier)
 
-    severity_color = {"high": "#ef4444", "medium": "#f59e0b", "info": "#3b82f6"}
-    severity_label = {"high": "🔴 重要", "medium": "🟡 注意", "info": "ℹ️  情報"}
+    severity_color = {"critical": "#b91c1c", "high": "#ef4444", "warning": "#f59e0b",
+                      "medium": "#f59e0b", "info": "#3b82f6"}
+    severity_label = {"critical": "🚨 最重要", "high": "🔴 重要", "warning": "🟡 注意",
+                      "medium": "🟡 注意", "info": "ℹ️  情報"}
     # 末尾に本日の保存ファイル一覧を付ける
     _files, _files_html = [], ""
     try:
@@ -2615,12 +2673,12 @@ def build_message(alerts: list, mode: str = "email") -> str:
 <span style="font-size:13px;color:#1d4ed8;">
   本日のシグナル: <strong>{len(alerts)}件</strong>
   &nbsp;|&nbsp;
-  高重要度: <strong style="color:#ef4444;">{sum(1 for a in alerts if a['severity']=='high')}件</strong>
+  高重要度: <strong style="color:#ef4444;">{sum(1 for a in alerts if a['severity'] in ('critical', 'high'))}件</strong>
   &nbsp;|&nbsp;
-  注意: <strong style="color:#f59e0b;">{sum(1 for a in alerts if a['severity']=='medium')}件</strong>
+  注意: <strong style="color:#f59e0b;">{sum(1 for a in alerts if a['severity'] in ('medium', 'warning'))}件</strong>
 </span>
   </div>
-
+{first_look}
   <!-- アラート本文 -->
   <table style="border-collapse:collapse;width:100%;padding:0 16px;">
 {rows}
@@ -2767,7 +2825,7 @@ def run_alert_notifier(cfg, results: dict) -> dict:
             subject   = (
                 f"【投資AIエージェント】{len(_gmail_alerts)}件のアラート ({now_str})"
             )
-            html_body = build_message(_gmail_alerts, mode="email")
+            html_body = build_message(_gmail_alerts, mode="email", tiers=getattr(cfg, "ALERT_SECTION_TIER", None))
             ok, err   = send_gmail(gmail_from, gmail_pwd, gmail_to, subject, html_body)
             # 送った節（注意項目を含む全部）と、その中の銘柄を BQ に残す。メールを過ぎると追えなくなるため
             if ok and getattr(cfg, "ENABLE_ALERT_STORE", True):

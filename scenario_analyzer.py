@@ -549,6 +549,13 @@ def run_scenario_analysis(
     keys = scenario_keys or ["bear_case", "base_case", "bull_case"]
     target_scenarios = {k: all_scenarios[k] for k in keys if k in all_scenarios}
 
+    # 建玉の偏り（COT）で想定の市場変動を小さく伸縮する。ファイルが無い・古いときは 1.0
+    try:
+        import cot_signal
+        _cot = cot_signal.load_signals(cfg)
+    except Exception:
+        cot_signal, _cot = None, None
+
     # 各シナリオを評価
     evaluated = {}
     for sc_name, sc_def in target_scenarios.items():
@@ -575,7 +582,8 @@ def run_scenario_analysis(
             "sector_scores": sector_scores,
             "top_gainers":   gainers,
             "top_losers":    losers,
-            "market_shock_pct": sc_def.get("market_shock_pct", 0.0),
+            "market_shock_pct": round(sc_def.get("market_shock_pct", 0.0) * (
+                cot_signal.scenario_factor(sc_def.get("market_shock_pct", 0.0), _cot, cfg) if cot_signal else 1.0), 3),
             "shock_markets":    sc_def.get("shock_markets"),
         }
 

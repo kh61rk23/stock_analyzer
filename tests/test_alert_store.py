@@ -27,9 +27,13 @@ def test_round_trip_from_sent_html():
     """実際に送る HTML から、同じ節（見出し・本文・重要度）を取り出せる。過去メールの取り込みもこの経路。"""
     html = an.build_message(ALERTS, mode="email")
     got = ast.parse_mail_html(html)
-    assert [g["title"] for g in got] == [a["title"] for a in ALERTS]
-    assert [g["severity"] for g in got] == ["medium", "info", "high"]
-    assert "ソディック（6143.T）" in got[0]["body"] and got[0]["body"].count("\n") == 2
+    # メールの節は段 → severity の順（自己株式取得は段2、あとは未登録の段3で high → info）
+    by_title = {g["title"]: g for g in got}
+    assert [g["title"] for g in got] == [ALERTS[0]["title"], ALERTS[2]["title"], ALERTS[1]["title"]]
+    assert [g["severity"] for g in got] == ["medium", "high", "info"]
+    buyback = by_title[ALERTS[0]["title"]]
+    assert "ソディック（6143.T）" in buyback["body"] and buyback["body"].count("\n") == 2
+    got = [by_title[a["title"]] for a in ALERTS]
     secs, items = ast.rows_from_alerts(got, "2026-10-15", "mail_backfill", "2026-10-15T05:13:16+00:00", "<id>")
     assert [s["section_key"] for s in secs] == ["buyback", "us_summary", "earnings_surprise_up"]
     assert {i["ticker"] for i in items} == {"6143.T", "4397.T", "130A.T", "MU", "GOOGL", "7309.T"}

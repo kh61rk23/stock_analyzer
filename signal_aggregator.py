@@ -1248,7 +1248,7 @@ def calc_signal_score(
 # BLOCK 3: 市場レジーム判定
 # ==============================================================
 
-def detect_market_regime(results: dict) -> str:
+def detect_market_regime(results: dict, cot_adj: float = 0.0) -> str:
     """
     複数指標から市場全体のレジームを判定する。
 
@@ -1284,7 +1284,8 @@ def detect_market_regime(results: dict) -> str:
     if not scores:
         return "中立"
 
-    avg = sum(scores) / len(scores)
+    # 建玉の偏り（COT）の逆張りシグナル。cot_signal.regime_adj が小さな点数にして渡す
+    avg = sum(scores) / len(scores) + float(cot_adj or 0.0)
     if avg >= 70:   return "リスクオン強"
     if avg >= 57:   return "リスクオン"
     if avg >= 43:   return "中立"
@@ -1710,7 +1711,13 @@ def run_signal_aggregator(cfg, results: dict) -> dict:
     top_avoid = [c for c, d in ranked if d.get("signal_score", 50) <= 40][-3:]
 
     # 市場レジーム
-    regime = detect_market_regime(results)
+    cot_adj = 0.0
+    try:
+        import cot_signal
+        cot_adj = cot_signal.regime_adj(cot_signal.load_signals(cfg), cfg)
+    except Exception as _ce:
+        print(f"    ⚠️ COT のレジーム補正を読めない: {str(_ce)[:80]}")
+    regime = detect_market_regime(results, cot_adj)
 
     # 上位/下位を表示
     for code, d in ranked[:3]:
@@ -1725,6 +1732,7 @@ def run_signal_aggregator(cfg, results: dict) -> dict:
     aggregated = {
         "sector_signals":  sector_signals,
         "market_regime":   regime,
+        "cot_regime_adj":  cot_adj,
         "top_buy":         top_buy,
         "top_avoid":       top_avoid,
         "weights_used":    weights,

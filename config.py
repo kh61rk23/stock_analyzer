@@ -1311,6 +1311,11 @@ EDINETDB_ITEMS_MERGE_CHUNK: int = 4000
 EDINETDB_REFRESH_DAYS: int = 180
 # 政府 EDINET の書類一覧で直近この日数に有報を出した会社を、取り込みの先頭（P0）で取る（鮮度に関係なく・提出の翌日以降に1回）
 EDINETDB_NEW_FILING_DAYS: int = 30
+# EdinetDB に財務がまだ無い会社（API が 404＝上場直後で初回の有報が未反映など）を取り直すまでの最短日数。
+# 連続して無ければ2倍ずつ延ばし EDINETDB_MISSING_MAX_DAYS で止める。
+# 政府 EDINET に新しい有報の提出が見えた会社は、この待ちを飛ばして次の回に取る。
+EDINETDB_MISSING_RECHECK_DAYS: int = 14
+EDINETDB_MISSING_MAX_DAYS: int = 60
 EDINETDB_TEXTBLOCK_EVERY_N: int = 2
 EDINETDB_ROTATION_META: str = "edinetdb_rotation_meta.json"
 EDINETDB_DOC_INDEX_LIMIT: int = 10
@@ -2961,8 +2966,11 @@ M_SCORE_MEDIUM_MULTIPLIER  = 0.75    # 中ペナルティ乗数（D3 を0.75倍�
 IGNITION_CONVERGENCE_WINDOW_DAYS  = 14
 
 # 通知閾値（変数名の LINE は旧名。アラートはメールには載せない）
-IGNITION_MIN_SCORE_LINE            = 3.0   # convergence_score ≥ 3.0 → high
-IGNITION_MAX_SCORE_LINE_CRITICAL   = 3.5   # ≥ 3.5 かつ反復検出 → 最高警戒
+# 本番の入力で届く上限は約2.7（A≦0.7＝ローテーションだけ、B≦0.25＝マクロ追い風だけ、C≦0.7＝総合点だけ。
+# 機関保有率・アナリスト修正・52週騰落率・論文の業種対応はスクリーナー通過銘柄に載らない）。
+# 3.0 以上は一度も達しなかったので、届く範囲の上位（ローテーション初動＋総合点が高い）に置く。
+IGNITION_MIN_SCORE_LINE            = 2.0   # convergence_score ≥ 2.0 → 発火
+IGNITION_MAX_SCORE_LINE_CRITICAL   = 2.5   # ≥ 2.5 かつ反復検出 → 最高警戒
 
 # 最高警戒判定: IGNITION_CRITICAL_REPEAT_DAYS 以内に2回以上検出で発動
 IGNITION_CRITICAL_REPEAT_DAYS     = 14
@@ -5136,7 +5144,7 @@ B5_COUNTRY_RISK_UPDATER_GDELT_TOTAL_FAIL_LIMIT = 8  # _GDELT_TOTAL_FAIL_LIMIT
 B6_LEARNING_AUDIT_LOG_MANUAL_REVIEW_TRIGGER = 2  # MANUAL_REVIEW_TRIGGER
 B6_REGIME_DETECTOR_N_STATES = 4  # N_STATES
 B6_REGIME_DETECTOR_N_FEATURES = 7  # N_FEATURES
-B6_IGNITION_DETECTOR_DEFAULT_CRITICAL_SCORE = 3.5  # _DEFAULT_CRITICAL_SCORE
+B6_IGNITION_DETECTOR_DEFAULT_CRITICAL_SCORE = 2.5  # _DEFAULT_CRITICAL_SCORE
 B6_IGNITION_DETECTOR_DEFAULT_CRITICAL_REPEAT = 14  # _DEFAULT_CRITICAL_REPEAT
 B6_IGNITION_DETECTOR_DEFAULT_ALERT_TTL = 14  # _DEFAULT_ALERT_TTL
 B6_IGNITION_DETECTOR_DEFAULT_HISTORY_TTL = 180  # _DEFAULT_HISTORY_TTL
@@ -5429,6 +5437,10 @@ EDINET_GOV_BACKFILL_FLOOR: str = "2016-01-01"
 EDINET_GOV_RECENT_DAYS: int = 7            # 直近この日数は毎回一覧を取り直す（取り下げ・訂正・遅れて出る書類）
 EDINET_GOV_TEXT_MAX_CHARS: int = 2000      # 文字の値（テキストブロック等）はここで切る
 EDINET_GOV_FACTS_MAX_GB: float = 2.5       # edinet.gov_doc_facts だけでこれを超えたら中身を取らない（他のデータ源の余地を残す）
+# 大量保有（350/360/370）は1書類で約100行になるが、読み手（edinet.large_holdings view）が引くのは十数個の要素だけ。
+# True の間は、その要素だけを入れる（view の結果は変わらない・他の要素は BQ に残らない）。180/190（臨時報告書）は全要素を入れる。
+# 利用者の判断待ちのため False（全要素を入れる）。
+EDINET_GOV_LVH_ELEMENTS_ONLY: bool = False
 EDINET_GOV_DOCS_TIME_BUDGET_MIN: float = 30.0   # 1回の実行で使う時間（日次の取得 workflow の既定）
 
 # ==============================================================
@@ -5440,6 +5452,8 @@ EDINET_GOV_DOCS_TIME_BUDGET_MIN: float = 30.0   # 1回の実行で使う時間�
 BQ_STORAGE_STOP_GB: float = 8.0
 BQ_STORAGE_WARN_GB: float = 7.0
 BQ_STORAGE_HIGH_GB: float = 9.0
+# 表の作り直し・古い行の削除（bq_compact.py）の1回のクエリ量の上限。dryRun の見積もりがこれを超えたら実行しない
+BQ_COMPACT_MAX_BYTES: int = 1024 ** 3
 
 # ==============================================================
 # BLOCK 67: 取得系 workflow の終了通知（workflow_notify.py）
@@ -5461,6 +5475,11 @@ SEC_FILINGS_RECENT_DAYS: int = 5
 SEC_FILINGS_MIN_INTERVAL_SEC: float = 0.15
 SEC_FILINGS_MAX_GB: float = 0.6            # us.sec_filings＋sec_13dg＋sec_filers の合計の上限（米国の配分 1.0GB の内）
 SEC_FILINGS_TIME_BUDGET_MIN: float = 20.0
+# 提出一覧に入れる書類の種類（先頭一致）。読み手は 8-K の項目・10-K/10-Q の件数・13D/13G だけで、
+# Form 3/4/5・424B・144・NPORT・D・FWP など（全体の約85%）は誰も読まない。空のタプルは全種類を入れる。
+# 絞るときの種類は SEC_FILINGS_KEEP_FORMS_READ。利用者の判断待ちのため今は全種類を入れる。
+SEC_FILINGS_KEEP_FORMS_READ: tuple = ("8-K", "10-K", "10-Q", "10-KT", "20-F", "40-F", "6-K", "SC 13", "SCHEDULE 13")
+SEC_FILINGS_KEEP_FORMS: tuple = ()
 
 # ==============================================================
 # BLOCK 69: 有報の本文（政府 EDINET・edinet_gov_text.py）
@@ -5543,3 +5562,70 @@ DCF_WACC_FLOOR: float = 0.06            # WACC の下限。低βで4%まで下�
 # 発火しない＝減点しない。下げると多くの輸出企業が新たに減点されるので、検証してから下げる
 GEO_UNDEFINED_DIR_RISK_MIN: float = 50.0
 INDEPENDENCE_MIN_R_SQUARED: float = 0.05   # 市場との回帰の R² がこれ未満は「独立」ではなく「判定不能」
+
+# ==============================================================
+# BLOCK 79: 日次メールの節の並び順（alert_notifier.sort_alerts_by_tier）
+# ==============================================================
+# trigger → 段（小さいほど上）。1＝今日動くべきこと（損切り・利確・急変・重大な異常・保有の悪材料）、
+# 2＝今日の候補と判断材料（新顔・審議・仮想トレードの注文・高警戒）、3＝市場の状況、4＝参考、5＝運用の状態。
+# 未登録の trigger は 3。同じ段の中は severity（critical > high > warning/medium > info）順、同点は追加順のまま
+ALERT_SECTION_TIER_DEFAULT: int = 3
+ALERT_SECTION_TIER: dict = {
+    # 1: 今日動くべきこと
+    "exit_rule_engine": 1, "deliberation_run_failed": 1, "inference_crisis": 1, "inference_risk_off": 1,
+    "recession_warning": 1, "anomaly_detection": 1, "score_jump": 1, "bayesian_drift": 1, "macro_delta": 1,
+    "risk_text_deterioration": 1, "correlation_risk": 1, "portfolio_rebalance": 1, "negative_surprise_risk": 1,
+    # 2: 今日の候補と判断材料
+    "daily_changes": 2, "deliberation_followup": 2, "deliberation_queue": 2, "paper_trading": 2,
+    "high_score_idea": 2, "analyst_strong_buy": 2, "high_prob_surprise": 2, "earnings_surprise": 2,
+    "breakout_signal": 2, "screener_surge": 2, "top_sectors": 2, "us_summary": 2, "intl_summary": 2,
+    "financial_risk": 2, "signal_agg_bullish": 2, "wave2_revision_ignition": 2, "wave3_diversity_warning": 2,
+    "wave3_pead_alert": 2, "wave7_latent_promoted": 2, "pearl_ss_alert": 2,
+    "wave2_ignition_convergence": 2, "wave2_ignition_critical": 2, "wave3_triple_catalyst": 2,
+    "buffett_new_position": 2, "large_institution_new_position": 2,
+    "tdnet_activist_catalyst": 2, "activist_entry_detected": 2, "8k_screener_hit": 2, "8k_ceo_change": 2,
+    "tdnet_buyback": 2, "foreign_investor_spike": 2, "politician_signal": 2, "insider_monitor": 2,
+    "midterm_plan_announced": 2, "midterm_risk": 2, "large_holding_buyers": 2, "us_positioning": 2,
+    # 4: 参考
+    "tech_map": 4, "weekly_report": 4, "high_dividend": 4, "tdnet_div_up": 4, "dividend_calendar": 4,
+    "anomaly_season": 4, "midterm_overtrack": 4, "sentiment_improving": 4, "pick_outcomes_monthly": 4,
+    "universe_factor_ic": 4,
+    # 5: 運用の状態
+    "edinetdb_ingest": 5, "real_estate": 5, "seisakudb": 5, "data_sla_violation": 5, "ops_health": 5,
+    "self_eval_degrading": 5, "miss_factor_review": 5,
+}
+
+# ==============================================================
+# BLOCK 80: 建玉の偏り（cot_signal.py・CFTC の COT を逆張りのシグナルにしてマクロ判断へ小さく足す）
+# ==============================================================
+# 投機筋（tff＝Leveraged Funds／legacy＝Non-Commercial）の買い越し（建玉に対する割合）を、過去 COT_SIGNAL_YEARS 年の中の
+# 位置（パーセンタイル）にして、COT_SIGNAL_PCT_HI 以上（買い過ぎ）・COT_SIGNAL_PCT_LO 以下（売り過ぎ）を極端とする。
+# 極端は逆張りで読む（買い過ぎ＝その資産は下げやすい）。週1回、market_positioning の取り込みの直後に BQ を1本だけ読み
+# （約10MB）、stock_data/data/cot_signals.json に置く。日次のメール・レジーム判定・シナリオはこのファイルだけを読む（BQ は引かない）。
+ENABLE_COT_SIGNAL: bool = True
+COT_SIGNAL_YEARS: int = 3
+COT_SIGNAL_MIN_WEEKS: int = 52              # 履歴がこれ未満の市場は判定しない
+COT_SIGNAL_PCT_HI: float = 90.0
+COT_SIGNAL_PCT_LO: float = 10.0
+COT_SIGNAL_CHANGE_WEEKS: int = 4            # 「直近の変化」を見る週数
+COT_SIGNAL_STALE_DAYS: int = 21             # 最新の週がこれより古ければ使わない（取り込みの停止）
+COT_SIGNAL_MAX_BYTES: int = 100 * 1024 ** 2   # 1回の読みの上限（dryRun の見積もりがこれを超えたら読まない）
+# レジーム判定（signal_aggregator.detect_market_regime）：5指標の平均（0〜100）へ、極端の合成（-1〜+1）× この点数を足す。
+# 区分の幅は13〜14点なので、全市場がそろって極端な場合でも1区分は動かさない大きさ
+COT_REGIME_MAX_PT: float = 4.0
+# シナリオ（scenario_analyzer）：想定の市場変動（%）を、極端の合成 × この割合だけ伸縮する（下げ想定は買い過ぎで増幅・
+# 上げ想定は売り過ぎで増幅。逆なら縮む）。0.15＝最大 ±15%
+COT_SCENARIO_SHOCK_WEIGHT: float = 0.15
+COT_MAIL_MAX_LINES: int = 3
+# 市場：キー → report（tff/legacy）・market_code・表示名・資産が上がったときのリスク選好への向き（risk_sign：+1＝リスクオン、
+# -1＝リスクオフ）・合成の重み（w）。コードは CFTC の cftc_contract_market_code
+COT_SIGNAL_MARKETS: dict = {
+    "sp500":  {"report": "tff",    "code": "13874A", "name": "S&P500先物（E-mini）", "risk_sign": 1,  "w": 2.0},
+    "nasdaq": {"report": "tff",    "code": "209742", "name": "ナスダック100先物（Mini）", "risk_sign": 1, "w": 1.0},
+    "ust10":  {"report": "tff",    "code": "043602", "name": "米10年債先物",          "risk_sign": -1, "w": 1.0},
+    "yen":    {"report": "tff",    "code": "097741", "name": "円先物",                "risk_sign": -1, "w": 1.0},
+    "vix":    {"report": "tff",    "code": "1170E1", "name": "VIX先物",               "risk_sign": -1, "w": 1.0},
+    "gold":   {"report": "legacy", "code": "088691", "name": "金先物",                "risk_sign": -1, "w": 1.0},
+    "wti":    {"report": "legacy", "code": "067651", "name": "WTI原油先物",           "risk_sign": 1,  "w": 1.0},
+    "copper": {"report": "legacy", "code": "085692", "name": "銅先物",                "risk_sign": 1,  "w": 1.0},
+}

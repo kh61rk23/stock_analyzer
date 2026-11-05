@@ -31,7 +31,7 @@ DATASET = "analytics"
 LOCATION = "asia-northeast1"
 SUBJECT_MARK = "【投資AIエージェント】"
 
-_SEVERITY_FROM_LABEL = {"🔴": "high", "🟡": "medium", "ℹ": "info"}
+_SEVERITY_FROM_LABEL = {"🚨": "critical", "🔴": "high", "🟡": "medium", "ℹ": "info"}
 _JP_TICKER = re.compile(r"(?<![0-9A-Z])(\d[0-9A-Z]\d[0-9A-Z])\.T\b")
 _US_TICKER = re.compile(r"[（(]([A-Z]{1,5}(?:\.[A-Z]{1,3})?)[）)]")
 # 13F の節など、括弧なしで「新規取得: MSFT Microsoft …」と書く行

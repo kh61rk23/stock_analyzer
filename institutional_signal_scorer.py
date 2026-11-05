@@ -160,6 +160,15 @@ def _build_sector_boosts(
 # BLOCK 3: Level 3 Override 適用
 # ==============================================================
 
+def _same_market(ticker: str, candidates: list) -> bool:
+    """ticker が candidates と同じ市場（日本株の .T か、それ以外）か。candidates が空なら False。"""
+    if not candidates:
+        return False
+    jp = sum(1 for c in candidates if str(c.get("ticker", "")).endswith(".T"))
+    cand_is_jp = jp * 2 >= len(candidates)
+    return str(ticker).endswith(".T") == cand_is_jp
+
+
 def _apply_l3_override(
     scored:    list[dict],
     results:   dict,
@@ -214,8 +223,10 @@ def _apply_l3_override(
         )
 
         if target_idx is None:
-            # candidates にない場合は新規エントリとして先頭に追加
-            if adj_pt > 0:
+            # candidates にない場合は新規エントリとして先頭に追加。ただし 13F は米国株なので、
+            # 日本株のスクリーナー候補に米国ティッカーを入れない（総合点に調整値をそのまま入れた行になる）。
+            # 米国株への反映は us_stock_screener が override_tickers を見て行う
+            if adj_pt > 0 and _same_market(ticker, candidates):
                 candidates.insert(0, {
                     "ticker":              ticker,
                     "sector_code":         ticker_sector.get(ticker, ""),

@@ -27,6 +27,29 @@ def _days_between(d1: str, d2: str) -> int:
         return 0
 
 
+def _ignition_alerts(cfg, results: dict, today: str) -> list:
+    """発火セクターの一覧。当日の results に無ければ保存済みの ignition_alerts.json（有効期限内）を使う。
+
+    発火検知は週次のモジュールで、ペーパーの注文生成より後に走る。日次の results には発火結果が無く、
+    週次の実行でも注文生成の時点ではまだ無いので、保存済みの結果を読まないと注文が一度も出ない。
+    """
+    ign = results.get("ignition")
+    if isinstance(ign, dict) and "alerts" in ign:
+        return ign.get("alerts") or []
+    try:
+        import json
+        from pathlib import Path
+        p = Path(getattr(cfg, "CACHE_DIR", "/tmp")) / "ignition_alerts.json"
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        ttl = int(getattr(cfg, "IGNITION_ALERT_TTL_DAYS", 14))
+        if _days_between(str(raw.get("generated", "")), today) > ttl:
+            return []
+        return [a for a in (raw.get("alerts") or [])
+                if not a.get("ttl_expiry") or str(a["ttl_expiry"]) >= today]
+    except Exception:
+        return []
+
+
 def _reason(text: str, **kw) -> dict:
     return {"text": text, **{k: v for k, v in kw.items() if v is not None}}
 
@@ -89,7 +112,7 @@ def ignition_adapter(cfg, results: dict, account: dict, today: str) -> list:
                if p["qty"] > 0 and t not in exiting)
     slots = 4 - held
     sector_map = getattr(cfg, "SECTOR_REPRESENTATIVE_TICKERS", {}) or {}
-    for alert in ((results.get("ignition") or {}).get("alerts") or []):
+    for alert in _ignition_alerts(cfg, results, today):
         if slots <= 0:
             break
         code = str(alert.get("sector_code", alert.get("code", "")) or "")

@@ -203,16 +203,19 @@ def run(cfg, budget_min: float | None = None) -> dict:
     cfloor = date.fromisoformat(str(getattr(cfg, "COT_BACKFILL_FLOOR", "2015-01-01")))
     cot_state = state.setdefault("cot", {})
     cdates = []
-    for report, rid in COT_REPORTS.items():
-        done_w = set(cot_state.get(report) or [])
-        weeks = weeks_to_run(state, report, today, recent, cfloor)
-        # 1回の問い合わせで13週ぶん（最大 5,000 行）を引く
-        for i in range(0, len(weeks), 13):
-            if time.monotonic() - t0 > budget:
-                stat["budget_out"] = True
-                break
-            chunk = weeks[i:i + 13]
-            lo, hi = min(chunk), max(chunk) + timedelta(days=6)
+    # 2種類は同じ日の同じパーティションに入るので、週ごとに両方を取ってから1回で入れ替える
+    # （別々に入れ替えると後の報告が前の報告の行を消す）。済みの印は両方がそろった週だけ「both」に付ける
+    done_w = set(cot_state.get("both") or [])
+    weeks = weeks_to_run(state, "both", today, recent, cfloor)
+    # 1回の問い合わせで13週ぶん（最大 5,000 行）を報告ごとに引く
+    for i in range(0, len(weeks), 13):
+        if time.monotonic() - t0 > budget:
+            stat["budget_out"] = True
+            break
+        chunk = weeks[i:i + 13]
+        lo, hi = min(chunk), max(chunk) + timedelta(days=6)
+        rows, failed = [], False
+        for report, rid in COT_REPORTS.items():
             _wait()
             try:
                 r = requests.get(CFTC_URL.format(rid=rid), timeout=120, params={
@@ -221,21 +224,30 @@ def run(cfg, budget_min: float | None = None) -> dict:
             except Exception:
                 recs = None
             if recs is None:
-                stat["errors"] += 1
-                continue
-            rows = cot_rows(recs, report, now)
-            if rows:
-                _replace_days(client, T_COT, COT_SCHEMA, rows, "report_date")
-                cdates += [x["report_date"] for x in rows]
-            for w in chunk:
-                if w + timedelta(days=6) < today:
-                    done_w.add(w.isoformat())
-            stat["cot_weeks"] += len(chunk)
-            stat["cot_rows"] += len(rows)
-        cot_state[report] = sorted(done_w)
+                failed = True
+                break
+            rows += cot_rows(recs, report, now)
+        if failed:
+            stat["errors"] += 1
+            continue
+        if rows:
+            _replace_days(client, T_COT, COT_SCHEMA, rows, "report_date")
+            cdates += [x["report_date"] for x in rows]
+        for w in chunk:
+            if w + timedelta(days=6) < today:
+                done_w.add(w.isoformat())
+        stat["cot_weeks"] += len(chunk)
+        stat["cot_rows"] += len(rows)
+    cot_state["both"] = sorted(done_w)
     stat["cot_range"] = [min(cdates), max(cdates)] if cdates else None
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state, separators=(",", ":"), sort_keys=True), encoding="utf-8")
+    # 取り込み直後に、建玉の偏り（マクロ判断の入力）を週1回の読みで作り直す。失敗しても取り込みの結果は返す
+    try:
+        import cot_signal
+        stat["cot_signal"] = cot_signal.refresh(cfg, client)
+    except Exception as e:
+        stat["cot_signal"] = {"error": str(e)[:120]}
     return stat
 
 
