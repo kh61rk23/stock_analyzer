@@ -442,6 +442,8 @@ def select_ingest_targets(
     today: date | None = None,
     web_annual: bool = False,
     new_filings: dict | None = None,
+    missing_recheck_days: int = 0,
+    missing_max_days: int = 60,
 ) -> list[str]:
     """P0→P4順、重複排除、鮮度除外、予算上限で対象を返す純関数。
 
@@ -494,9 +496,20 @@ def select_ingest_targets(
         value = str(info.get("last_attempt") or "")[:10]
         if not value:
             return False
+        # 政府 EDINET に新しい有報の提出が見え、その提出の翌日以降に試していなければ待たずに取る
+        if code in new_filings:
+            try:
+                if value <= (date.fromisoformat(str(new_filings[code])[:10]) + timedelta(days=1)).isoformat():
+                    return False
+            except ValueError:
+                pass
         fails = int(info.get("fail_count") or 1)
         # 1日 → 2 → 4 → 8 …（上限 fail_backoff_max_days）
         wait = min(2 ** max(0, fails - 1), max(1, int(fail_backoff_max_days)))
+        if info.get("missing_since") and missing_recheck_days > 0:
+            # EdinetDB に財務がまだ無い会社は、毎日聞いても答えが変わらない。長めに空けて2倍ずつ延ばす
+            wait = min(int(missing_recheck_days) * 2 ** max(0, fails - 1),
+                       max(int(missing_recheck_days), int(missing_max_days)))
         try:
             return (today - date.fromisoformat(value)).days < wait
         except ValueError:
@@ -870,6 +883,8 @@ def _plan_targets(companies: list[dict], cfg, meta: dict, budget: int) -> list[s
         refresh_days=int(getattr(cfg, "EDINETDB_REFRESH_DAYS", 180)),
         web_annual=bool(getattr(cfg, "EDINETDB_ANNUAL_FROM_WEB", False)),
         new_filings=recent_annual_filings(cfg),
+        missing_recheck_days=int(getattr(cfg, "EDINETDB_MISSING_RECHECK_DAYS", 0)),
+        missing_max_days=int(getattr(cfg, "EDINETDB_MISSING_MAX_DAYS", 60)),
     )
 
 
@@ -902,6 +917,38 @@ def recent_annual_filings(cfg) -> dict:
         print(f"  ⚠️ 新しい有報の一覧（gov_documents）を読めない: {type(e).__name__}")
         out = {}
     recent_annual_filings._memo = out
+    return out
+
+
+def _company_cache_fresh(cfg, company_cache) -> bool:
+    cache_date = str(company_cache.get("fetched_at", ""))[:10] if isinstance(company_cache, dict) else ""
+    try:
+        return (date.today() - date.fromisoformat(cache_date)).days < int(
+            getattr(cfg, "EDINETDB_COMPANY_CACHE_DAYS", 7))
+    except ValueError:
+        return False
+
+
+def _quarterly_targets(cfg, companies: list[dict], meta: dict, today: date | None = None) -> list[str]:
+    """四半期財務を取り直す会社（保有・スクリーナー候補で q_fetched が期限切れか未取得）。"""
+    if int(getattr(cfg, "EDINETDB_QUARTERLY_DAILY_CALLS", 0) or 0) <= 0:
+        return []
+    today = today or date.today()
+    q_refresh = int(getattr(cfg, "EDINETDB_QUARTERLY_REFRESH_DAYS", 30))
+    holdings_t, screener_t, _reps = _priority_tickers(cfg)
+    by_sec = {_sec4(c.get("sec_code")): c.get("edinet_code") for c in companies if c.get("sec_code")}
+    out: list[str] = []
+    for t in list(holdings_t) + list(screener_t):
+        ec = by_sec.get(_sec4(t))
+        if not ec or ec in out:
+            continue
+        last = str((meta.get(ec) or {}).get("q_fetched") or "")[:10]
+        try:
+            if (today - date.fromisoformat(last)).days < q_refresh:
+                continue
+        except ValueError:
+            pass
+        out.append(ec)
     return out
 
 
@@ -984,6 +1031,19 @@ def run_edinetdb_ingest(
     api_key = str(getattr(cfg, "EDINETDB_API_KEY", "") or "").strip()
     if not api_key:
         return {"skipped": True, "reason": "EDINETDB_API_KEY missing"}
+    # 会社マスタが新しく、取る会社も四半期の対象も無い日は API を1回も呼ばずに終える
+    if budget is None and target_limit is None and cached_companies and _company_cache_fresh(cfg, company_cache) \
+            and not getattr(cfg, "EDINETDB_ITEMS_BACKFILL", True) \
+            and not _plan_targets(cached_companies, cfg, meta, _w3_company_budget(cfg, daily_budget)) \
+            and not _quarterly_targets(cfg, cached_companies, meta):
+        return {
+            "skipped": False, "success": 0, "failure": 0, "missing": 0, "doc_index_rows": 0,
+            "ingested": [], "missing_companies": [], "web_skipped": [],
+            "reasons": {"financials": 0, "segments": 0, "text_blocks": 0, "bq_merge": 0, "missing": 0},
+            "targets": [], "budget": daily_budget, "api_calls": 0, "items_rows": 0,
+            "items_companies": 0, "items_backfilled": 0, "quarterly_companies": 0,
+            "quarterly_rows": 0, "budget_caps": {}, "usage": {}, "no_new_targets": True,
+        }
     client = DBRestClient(
         getattr(cfg, "EDINETDB_BASE_URL", "https://edinetdb.jp/v1"), api_key,
         data_dir / "edinetdb_cache", daily_budget, "edinetdb",
@@ -1115,21 +1175,7 @@ def run_edinetdb_ingest(
     q_done: list[str] = []
     q_budget = int(getattr(cfg, "EDINETDB_QUARTERLY_DAILY_CALLS", 0) or 0)
     if q_budget > 0 and not _stop_ingest(client):
-        q_refresh = int(getattr(cfg, "EDINETDB_QUARTERLY_REFRESH_DAYS", 30))
-        holdings_t, screener_t, _reps = _priority_tickers(cfg)
-        by_sec = {_sec4(c.get("sec_code")): c.get("edinet_code") for c in companies if c.get("sec_code")}
-        q_targets = []
-        for t in list(holdings_t) + list(screener_t):
-            ec = by_sec.get(_sec4(t))
-            if not ec or ec in q_targets:
-                continue
-            last = str((meta.get(ec) or {}).get("q_fetched") or "")[:10]
-            try:
-                if (date.today() - date.fromisoformat(last)).days < q_refresh:
-                    continue
-            except ValueError:
-                pass
-            q_targets.append(ec)
+        q_targets = _quarterly_targets(cfg, companies, meta)
         for ec in q_targets[:q_budget]:
             if _stop_ingest(client) or (
                     getattr(client, "daily_budget", daily_budget) - client.calls - reserve_calls < 1):

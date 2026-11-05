@@ -187,6 +187,44 @@ def _append(client, rows: list[dict], table: str = TABLE, schema=SCHEMA) -> None
     client.load_table_from_json(rows, f"{client.project}.{DATASET}.{table}", job_config=cfg, location=LOCATION).result()
 
 
+# 状態の「取り済み」と表の突き合わせの版（上げると、本文の行が1つも無い取り済みの書類を、次の1回だけ取り直す）
+RECONCILE_VERSION = 1
+DOC_IDS_SQL = "SELECT DISTINCT doc_id FROM `{p}.edinet.gov_text_blocks`"   # 1列だけ読む（約0.6MB・課金は最小の10MB）
+
+
+def requeue_rowless(client, state: dict, sets: dict[str, set]) -> int:
+    """状態に「取り済み」とあるのに gov_text_blocks に1行も無い書類を、取り直す対象へ戻す。版ごとに1回だけ。
+    書き込みに失敗した書類が済みに入っていても、ここで拾える。本当に本文が無い書類は取り直しても空なので、また済みになる。
+    戻した件数を返す（表が読めなかったときは0で、版を進めない）。"""
+    if state.get("reconcile_version") == RECONCILE_VERSION:
+        return 0
+    try:
+        have = {r.doc_id for r in client.query(DOC_IDS_SQL.format(p=client.project), location=LOCATION).result()}
+    except Exception as e:
+        print(f"    ⚠️ 取り済みと表の突き合わせができない: {type(e).__name__}")
+        return 0
+    if not have:                                            # 空の表は読み違いを疑う（全件を戻さない）
+        return 0
+    n = 0
+    for k in ("done", "prev_done"):
+        gone = {d for d in sets[k] if d not in have}
+        sets[k] -= gone
+        n += len(gone)
+        if k == "done":
+            sets["seg_done"] -= gone
+            sets["seg_text_done"] -= gone
+    state["reconcile_version"] = RECONCILE_VERSION
+    return n
+
+
+def summary_line(st: dict) -> str:
+    """夜の回の1行（メールに出す）。取れなかったもの（失敗）と本文が無いものを分ける。"""
+    return (f"有報の本文：書類 {st.get('docs', 0):,}件（新規 {st.get('new_docs', 0):,}・前期 {st.get('prev_docs', 0):,}・"
+            f"セグメントのみ {st.get('seg_only_docs', 0):,}）・本文{st.get('rows', 0):,}行・セグメント売上{st.get('seg_rows', 0):,}行"
+            f"／本文なし {st.get('no_text', 0):,}（書類に節が無い）・書類側で取れない {st.get('gone', 0):,}"
+            f"・取得失敗 {st.get('errors', 0):,}・取り直しに戻した {st.get('requeued', 0):,}・残り {st.get('remaining', 0):,}")
+
+
 def run(cfg, budget_min: float | None = None, limit: int | None = None) -> dict:
     key = (os.environ.get("EDINET_GOV_API_KEY") or str(getattr(cfg, "EDINET_GOV_API_KEY", "") or "")).strip()
     if not key:
@@ -212,12 +250,14 @@ def run(cfg, budget_min: float | None = None, limit: int | None = None) -> dict:
     # セグメント情報の注記（本文）と、セグメント別売上は別に数える（売上の拾い方の版が上がったら売上だけ取り直す）
     seg_text_done = set(state.get("seg_text_doc_ids") or state.get("seg_doc_ids") or [])
     seg_done = set(state.get("seg_rev_doc_ids") or []) if state.get("seg_rev_version") == SEG_REV_VERSION else set()
+    prev_done = set(state.get("prev_risk_doc_ids") or [])
+    sets = {"done": done, "prev_done": prev_done, "seg_done": seg_done, "seg_text_done": seg_text_done}
+    requeued = requeue_rowless(client, state, sets)
     latest = list(client.query(TARGET_SQL.format(p=client.project), location=LOCATION).result())
     # 本文がまだの書類を先に、本文は取ったがセグメントがまだの書類を後に
     targets = [r for r in latest if r.doc_id not in done] + \
               [r for r in latest if r.doc_id in done and (r.doc_id not in seg_done or r.doc_id not in seg_text_done)]
     # 最後に、前期の有報の「事業等のリスク」だけ（今期の分が揃ってから）
-    prev_done = set(state.get("prev_risk_doc_ids") or [])
     have = {r.doc_id for r in latest}
     prev = [r for r in client.query(PREV_SQL.format(p=client.project), location=LOCATION).result()
             if r.doc_id not in prev_done and r.doc_id not in have]
@@ -228,8 +268,8 @@ def run(cfg, budget_min: float | None = None, limit: int | None = None) -> dict:
     t0, last = time.monotonic(), 0.0
     ensure_seg_table(client)
     seg_buf: list[dict] = []
-    stat = {"targets": len(targets), "docs": 0, "rows": 0, "seg_rows": 0, "seg_docs": 0, "no_text": 0, "errors": 0,
-            "budget_out": False,
+    stat = {"targets": len(targets), "docs": 0, "rows": 0, "seg_rows": 0, "seg_docs": 0, "no_text": 0, "gone": 0, "errors": 0,
+            "new_docs": 0, "seg_only_docs": 0, "requeued": requeued, "budget_out": False,
             "table_gb": round(mine, 3), "storage_gb": m["total_gb"]}
     buf: list[dict] = []
     now = datetime.now(timezone.utc).isoformat()
@@ -253,7 +293,7 @@ def run(cfg, budget_min: float | None = None, limit: int | None = None) -> dict:
         ok, code, why = ega.check_zip(z)
         if not ok and code in ega.GONE_CODES:
             # 書類側で取れない（毎回同じ答え）。本文なしとして済みにし、次の回から取り直さない
-            stat["no_text"] += 1
+            stat["gone"] += 1
             if r.doc_id in prev_ids:
                 prev_done.add(r.doc_id)
             else:
@@ -283,10 +323,13 @@ def run(cfg, budget_min: float | None = None, limit: int | None = None) -> dict:
             stat["prev_docs"] = stat.get("prev_docs", 0) + 1
         elif r.doc_id in done:                               # 本文は取り済み。まだのセグメント情報の注記だけ足す
             blocks = [b for b in blocks if b[1] == SEGMENT_SECTION and r.doc_id not in seg_text_done]
+            stat["seg_only_docs"] += 1
+        else:
+            stat["new_docs"] += 1
+            if not blocks:                                   # 取れた応答に対象の節が1つも無い（取得の失敗ではない）
+                stat["no_text"] += 1
         if r.doc_id in seg_done:                             # 売上は取り済み（注記だけ取りに来た）
             segs = []
-        elif not blocks:
-            stat["no_text"] += 1
         for sg in segs:
             seg_buf.append({"doc_id": r.doc_id, "edinet_code": r.edinet_code, "sec_code": r.sec,
                             "fiscal_year_end": r.fye.isoformat() if r.fye else None, **sg, "fetched_at": now})

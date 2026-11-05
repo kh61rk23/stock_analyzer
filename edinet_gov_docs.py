@@ -15,6 +15,8 @@
 #   対象書類の顔ぶれが前回と違う時だけ取り直す。過去分は、済んだ最も古い日の前日から EDINET_GOV_BACKFILL_FLOOR
 #   まで遡る。1回の実行は時間の予算（--budget-min）で区切り、途中の日は記録しない（次の回にその日をやり直す）。
 #   進み具合は stock_data/data/edinet_gov_docs_state.json（日付ごとの件数と、中身を取った書類の顔ぶれのハッシュ）。
+#   大量保有（350/360/370）は1書類が約100行になるが、large_holdings view が引くのは十数個の要素だけ。
+#   EDINET_GOV_LVH_ELEMENTS_ONLY の間は、その要素だけを入れる（180/190 は全要素）。
 # 【容量】BigQuery の全表が BQ_STORAGE_STOP_GB（bq_storage.py）、または gov_doc_facts が EDINET_GOV_FACTS_MAX_GB を
 #   超えたら中身は取らない（一覧だけは続ける。一覧は1日数百行で小さい）。測った値は bq_storage.record で残す。
 # 【キー】EDINET_GOV_API_KEY。要求 URL にキーが入るので、例外は型名だけを出す。連続アクセスは
@@ -116,9 +118,21 @@ def _number(v: str):
         return None
 
 
-def facts_from_csv_zip(blob: bytes, meta: dict, day: date, text_max: int) -> tuple[list[dict], dict]:
-    """type=5 の ZIP（XBRL_TO_CSV/*.csv・UTF-16・タブ区切り）→ (gov_doc_facts の行, {要素名: 項目名})。"""
+LVH_TYPES = ("350", "360", "370")
+
+
+def lvh_element_ids() -> set[int]:
+    """large_holdings view が引く要素の element_id。"""
+    names = [n for n, _ in _LVH_FIELDS_DOC.values()] + [n for n, _ in _LVH_FIELDS_HOLDER.values()]
+    return {element_id("jplvh_cor:" + n) for n in names}
+
+
+def facts_from_csv_zip(blob: bytes, meta: dict, day: date, text_max: int,
+                       lvh_only: bool = False) -> tuple[list[dict], dict]:
+    """type=5 の ZIP（XBRL_TO_CSV/*.csv・UTF-16・タブ区切り）→ (gov_doc_facts の行, {要素名: 項目名})。
+    lvh_only なら、大量保有（350/360/370）は large_holdings view が引く要素だけ。"""
     rows, labels = [], {}
+    only = lvh_element_ids() if lvh_only and meta.get("docTypeCode") in LVH_TYPES else None
     zf = zipfile.ZipFile(io.BytesIO(blob))
     for name in zf.namelist():
         if not name.endswith(".csv"):
@@ -129,6 +143,8 @@ def facts_from_csv_zip(blob: bytes, meta: dict, day: date, text_max: int) -> tup
             if len(c) < 9 or c[8] in EMPTY_VALUES:
                 continue
             element, label, ctx, unit, val = c[0], c[1], c[2], c[6], c[8]
+            if only is not None and element_id(element) not in only:
+                continue
             labels.setdefault(element, label)
             period, member = split_context(ctx)
             num = _number(val) if unit and unit not in ("", "-") else None
@@ -286,6 +302,7 @@ def run(cfg, budget_min: float | None = None, only_dates: list[date] | None = No
     gap = float(getattr(cfg, "EDINET_GOV_MIN_INTERVAL_SEC", 1.0))
     types = tuple(getattr(cfg, "EDINET_GOV_FACT_DOC_TYPES", ("350", "360", "370", "180", "190")))
     text_max = int(getattr(cfg, "EDINET_GOV_TEXT_MAX_CHARS", 2000))
+    lvh_only = bool(getattr(cfg, "EDINET_GOV_LVH_ELEMENTS_ONLY", True))
     floor = date.fromisoformat(str(getattr(cfg, "EDINET_GOV_BACKFILL_FLOOR", "2016-01-01")))
     t0, last = time.monotonic(), 0.0
 
@@ -367,7 +384,7 @@ def run(cfg, budget_min: float | None = None, only_dates: list[date] | None = No
                     continue
                 streak.ok()
                 try:
-                    frows, labels = facts_from_csv_zip(z.content, t, day, text_max)
+                    frows, labels = facts_from_csv_zip(z.content, t, day, text_max, lvh_only)
                 except Exception as e:
                     print(f"    ⚠️ {t['docID']}: {type(e).__name__}")
                     failed += 1

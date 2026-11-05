@@ -33,6 +33,9 @@ on:
           - edinet_gov_fv_ingest
           - taxonomy_mapper
           - edinet_gov_segment_probe
+          - bq_compact_price_dedupe
+          - bq_compact_sec_forms
+          - bq_compact_gov_facts
 
 permissions:
   contents: write
@@ -58,7 +61,7 @@ jobs:
       - name: Install dependencies
         run: |
           case "${{ inputs.task }}" in
-            price_universe_*|us_company_facts_*|stock_real_estate|alert_backfill|ontology_export|edinet_gov_probe|edinet_gov_fv_ingest|edinet_gov_segment_probe) pip install -r requirements-prices.txt ;;
+            price_universe_*|us_company_facts_*|bq_compact_*|stock_real_estate|alert_backfill|ontology_export|edinet_gov_probe|edinet_gov_fv_ingest|edinet_gov_segment_probe) pip install -r requirements-prices.txt ;;
             *) pip install -r requirements.txt ;;
           esac
       # dual: checkout 直後の sha を基準として記録 ／ bq: BigQuery から状態を書き戻す（失敗したら止める）
@@ -124,6 +127,11 @@ jobs:
             taxonomy_mapper) python -u taxonomy_company_mapper.py ;;
             # 調べる用：三菱商事・ソニー・ソフトバンクG・信越化学の有報の CSV にあるセグメント別の売上の要素名を書き出す
             edinet_gov_segment_probe) python -u edinet_gov_text.py --probe-segments 8058 6758 9984 4063 7203 ;;
+            # 保存量を減らす（bq_compact.py・dryRun の見積もりが 1GiB を超えたら実行しない）。price_dedupe は株価の重複を最新の1行に作り直す
+            # （週次の daily_run でも流れる）。sec_forms は SEC の提出一覧から読み手のいない書類を、gov_facts は大量保有の使わない要素を消す
+            bq_compact_price_dedupe) python -u bq_compact.py price_dedupe ;;
+            bq_compact_sec_forms) python -u bq_compact.py sec_forms ;;
+            bq_compact_gov_facts) python -u bq_compact.py gov_facts ;;
           esac
           TASK
           TASK="${{ inputs.task }}" python actions_log.py --workflow manual_task --step "${{ inputs.task }}" -- bash "$RUNNER_TEMP/task.sh"

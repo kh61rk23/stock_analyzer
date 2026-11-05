@@ -505,3 +505,63 @@ def test_text_analysis_merge_leaves_omitted_columns_untouched():
         assert column not in sql
     assert "T.`raw_text` = S.`raw_text`" in sql
     assert "INSERT (`text_id`" in sql
+
+
+# ── データ無しの会社を毎日取り直さない ────────────────
+
+class TestMissingRecheck:
+    def _missing(self, last_attempt, fails=1):
+        return {"E1": {"last_attempt": last_attempt, "fail_count": fails, "missing_since": last_attempt}}
+
+    def test_missing_company_waits_recheck_days(self):
+        import edinetdb_ingestor as m
+        today = date(2026, 11, 5)
+        meta = self._missing("2026-11-01")   # 4日前: 従来の1日待ちなら戻るが、14日空ける
+        assert m.select_ingest_targets([], [], [], ["E1"], meta, budget=30, today=today,
+                                       missing_recheck_days=14) == []
+        assert m.select_ingest_targets([], [], [], ["E1"], meta, budget=30, today=today) == ["E1"]
+
+    def test_missing_company_returns_after_wait_and_grows_and_caps(self):
+        import edinetdb_ingestor as m
+        today = date(2026, 11, 30)
+        kw = dict(budget=30, today=today, missing_recheck_days=14, missing_max_days=60)
+        assert m.select_ingest_targets([], [], [], ["E1"], self._missing("2026-11-15"), **kw) == ["E1"]
+        # 2連続: 28日待つ
+        assert m.select_ingest_targets([], [], [], ["E1"], self._missing("2026-11-15", 2), **kw) == []
+        # 上限60日
+        assert m.select_ingest_targets([], [], [], ["E1"], self._missing("2026-09-29", 9), **kw) == ["E1"]
+
+    def test_new_annual_filing_skips_the_wait(self):
+        import edinetdb_ingestor as m
+        today = date(2026, 11, 5)
+        meta = self._missing("2026-11-02")
+        got = m.select_ingest_targets([], [], [], [], meta, budget=30, today=today,
+                                      new_filings={"E1": "2026-11-04"}, missing_recheck_days=14)
+        assert got == ["E1"]
+        # 提出の翌日より後に試し済みなら待つ
+        meta = self._missing("2026-11-05")
+        assert m.select_ingest_targets([], [], [], [], meta, budget=30, today=today,
+                                       new_filings={"E1": "2026-11-02"}, missing_recheck_days=14) == []
+
+
+def test_no_targets_day_makes_no_api_call(tmp_path, monkeypatch):
+    import json
+    import edinetdb_ingestor as module
+
+    class Boom:
+        def __init__(self, *a, **k):
+            raise AssertionError("API クライアントを作った")
+
+    monkeypatch.setattr(module, "DBRestClient", Boom)
+    monkeypatch.setattr(module, "recent_annual_filings", lambda cfg: {})
+    today = date.today().isoformat()
+    (tmp_path / "edinetdb_company_cache.json").write_text(json.dumps({
+        "fetched_at": today, "companies": [{"edinet_code": "E1", "sec_code": "10000"}]}))
+    (tmp_path / "rotation.json").write_text(json.dumps({"E1": {"last_fetched": today}}))
+    cfg = SimpleNamespace(
+        ENABLE_EDINETDB_INGEST=True, EDINETDB_API_KEY="key", EDINETDB_DAILY_BUDGET=97,
+        EDINETDB_REFRESH_DAYS=180, EDINETDB_ROTATION_META="rotation.json", DATA_DIR=tmp_path,
+        EDINETDB_RECONCILE_WITH_BQ=False, EDINETDB_ITEMS_BACKFILL=False,
+        EDINETDB_QUARTERLY_DAILY_CALLS=0, SECTOR_REPRESENTATIVE_TICKERS={})
+    r = module.run_edinetdb_ingest(cfg)
+    assert r["api_calls"] == 0 and r["targets"] == [] and not r["failure"] and not r["skipped"]

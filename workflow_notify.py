@@ -129,6 +129,10 @@ def digest_jp(client, steps: list[dict]) -> list[tuple[str, list[str]]]:
                 f"{r.issuer_name}（{r.issuer_sec_code or '-'}）: {r.holder_name} "
                 f"{'新規' if r.prior_ratio is None else f'{r.prior_ratio * 100:.2f}%'} → {r.holding_ratio * 100:.2f}%"
                 f"（{r.purpose or ''}）" for r in rows]))
+    txt = step_json(steps, "edinet_gov_text")
+    if txt and not txt.get("skipped"):
+        import edinet_gov_text
+        out.append(("有報の本文の取り込み（失敗と本文なしの内訳）", [edinet_gov_text.summary_line(txt)]))
     rows = _q(client, f"""SELECT COUNT(DISTINCT g.edinet_code) n, ARRAY_AGG(DISTINCT c.name IGNORE NULLS LIMIT 10) names
               FROM `{p}.edinet.gov_text_blocks` g LEFT JOIN `{p}.edinet.company` c USING (edinet_code)
               WHERE g.fetched_at >= @s""", sp)

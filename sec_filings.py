@@ -11,6 +11,8 @@
 # 【進め方】edinet_gov_docs.py と同じ。直近 SEC_FILINGS_RECENT_DAYS 日は毎回取り直し、過去は SEC_FILINGS_BACKFILL_FLOOR
 #   まで遡る。土日・祝日は一覧が無い（404）ので0件として記録する。1回の実行は時間の予算で区切り、途中の日は記録しない。
 #   進み具合は stock_data/data/sec_filings_state.json。
+#   入れる書類の種類は SEC_FILINGS_KEEP_FORMS（先頭一致）。8-K の項目・10-K/10-Q・13D/13G など読み手のある種類だけで、
+#   Form 3/4/5・424B・144 などは入れない（入れると保存量の約85%がこれらになる）。
 # 【容量】全体が BQ_STORAGE_STOP_GB、またはこの3表の合計が SEC_FILINGS_MAX_GB を超えたら書かない。
 # 【名乗り】SEC_USER_AGENT（無ければ何もしない）。連続アクセスは SEC_FILINGS_MIN_INTERVAL_SEC 空ける（SEC は1秒10回まで）。
 # 【実行】python3 sec_filings.py [--budget-min 20] [--dates 2026-10-21 ...]
@@ -48,8 +50,14 @@ def index_url(day: date) -> str:
     return f"{ARCHIVES}/daily-index/{day.year}/QTR{(day.month - 1) // 3 + 1}/master.{day:%Y%m%d}.idx"
 
 
-def parse_master(text: str, day: date) -> tuple[list[dict], dict]:
-    """master.idx（CIK|Company Name|Form Type|Date Filed|Filename）→ (sec_filings の行, {cik: 会社名})。"""
+def keep_form(form: str, keep_forms) -> bool:
+    """keep_forms（先頭一致の書類種類）に当たるか。空・None は全種類を入れる。"""
+    return not keep_forms or str(form or "").upper().startswith(tuple(k.upper() for k in keep_forms))
+
+
+def parse_master(text: str, day: date, keep_forms=None) -> tuple[list[dict], dict]:
+    """master.idx（CIK|Company Name|Form Type|Date Filed|Filename）→ (sec_filings の行, {cik: 会社名})。
+    keep_forms があれば、その種類の書類だけ（会社名も、その書類を出した会社だけ）。"""
     rows, names = [], {}
     started = False
     for line in (text or "").splitlines():
@@ -62,6 +70,8 @@ def parse_master(text: str, day: date) -> tuple[list[dict], dict]:
         try:
             c = int(cik)
         except ValueError:
+            continue
+        if not keep_form(form, keep_forms):
             continue
         acc = fn.rsplit("/", 1)[-1].removesuffix(".txt")
         rows.append({"filed_date": day.isoformat(), "cik": c, "form": form.strip(), "accession": acc, "items": None})
@@ -191,6 +201,7 @@ def run(cfg, budget_min: float | None = None, only_dates: list[date] | None = No
     budget = 60 * float(budget_min if budget_min is not None else getattr(cfg, "SEC_FILINGS_TIME_BUDGET_MIN", 20))
     gap = float(getattr(cfg, "SEC_FILINGS_MIN_INTERVAL_SEC", 0.15))
     floor = date.fromisoformat(str(getattr(cfg, "SEC_FILINGS_BACKFILL_FLOOR", "2016-01-01")))
+    keep_forms = tuple(getattr(cfg, "SEC_FILINGS_KEEP_FORMS", ()) or ())
     t0, last = time.monotonic(), 0.0
     session = requests.Session()
     session.headers.update({"User-Agent": ua, "Accept-Encoding": "gzip, deflate"})
@@ -242,7 +253,7 @@ def run(cfg, budget_min: float | None = None, only_dates: list[date] | None = No
             done_now.append(day.isoformat())
             stat["days"] += 1
             continue
-        rows, names = parse_master(r.text, day)
+        rows, names = parse_master(r.text, day, keep_forms)
         dg_rows, cut = [], False
         for row in rows:
             if time.monotonic() - t0 > budget:

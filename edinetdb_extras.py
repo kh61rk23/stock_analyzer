@@ -9,6 +9,7 @@
 #   同じ会社の中では ENDPOINTS の並び順。1日の枠を使い切ったらその日は終わり（残りは翌日）。
 # 【枠】API の1日100回（EDINETDB_DAILY_BUDGET）を本体の取り込み（edinetdb_ingestor）と分け合う。
 #   本体は EDINETDB_EXTRAS_DAILY_CALLS を残して止まり（_w3_company_budget）、この取り込みは本体の後に動く。
+#   本体が使い残した枠（日次予算−当日の使用回数）も、この取り込みが次の対象に回す。
 #   回数は db_rest_client の日次台帳（edinetdb_cache/daily_<日付>.json）を本体と共有する。
 # 【表】edinet.edinetdb_extras（load job で追記）：endpoint・edinet_code・fetched_at・payload（JSON。返事の data そのまま）。
 #   SQL は JSON 関数で引く（例: JSON_QUERY_ARRAY(payload) で配列を行に開く）。
@@ -106,8 +107,10 @@ def run(cfg) -> dict:
     except (OSError, ValueError):
         state = {}
     today = date.today()
-    todo = plan(_tiers(cfg, companies), state, today, limit)
     api = DBRestClient.edinetdb(cfg)
+    # 本体の取り込みが使い残した日次枠もここで使う（本体は対象が尽きた日に API を呼ばない）
+    limit = max(limit, int(api.daily_budget) - int(api.calls))
+    todo = plan(_tiers(cfg, companies), state, today, limit)
     rows, stat = [], {"planned": len(todo), "ok": 0, "no_data": 0, "stopped": None, "by_endpoint": {}}
     now = datetime.now(timezone.utc).isoformat()
     for ep, code in todo:

@@ -65,3 +65,96 @@ def test_large_holdings_table_function_filters_dates_before_grouping():
     sql = gd.large_holdings_tf_sql("p")
     assert sql.startswith("CREATE OR REPLACE TABLE FUNCTION `p.edinet.large_holdings_between`(a DATE, b DATE)")
     assert "doc_type_code IN ('350','360','370') AND submit_date BETWEEN a AND b)" in sql
+
+
+# ---- 本文なし・失敗・取り直し ----
+class _Rows(list):
+    def result(self):
+        return self
+
+
+class _Client:
+    project = "p"
+
+    def __init__(self, ids=None, boom=False):
+        self.ids, self.boom, self.n = ids, boom, 0
+
+    def query(self, sql, **kw):
+        self.n += 1
+        if self.boom:
+            raise RuntimeError("quota")
+        return _Rows(type("R", (), {"doc_id": d}) for d in (self.ids or []))
+
+
+def _sets(done, prev=(), seg=(), segt=()):
+    return {"done": set(done), "prev_done": set(prev), "seg_done": set(seg), "seg_text_done": set(segt)}
+
+
+def test_requeue_rowless_puts_done_docs_without_rows_back_once():
+    st, s = {}, _sets(["A", "B", "C"], prev=["P", "Q"], seg=["A", "B", "C"], segt=["A", "B", "C"])
+    assert g.requeue_rowless(_Client(["A", "C", "P"]), st, s) == 2
+    assert s["done"] == {"A", "C"} and s["seg_done"] == {"A", "C"} and s["seg_text_done"] == {"A", "C"}
+    assert s["prev_done"] == {"P"}
+    assert st["reconcile_version"] == g.RECONCILE_VERSION
+    c = _Client(["A"])                                       # 版が済みなら表を読まず、何も戻さない
+    assert g.requeue_rowless(c, st, s) == 0 and c.n == 0 and s["done"] == {"A", "C"}
+
+
+def test_requeue_rowless_keeps_everything_when_table_unreadable_or_empty():
+    for c in (_Client(boom=True), _Client([])):
+        st, s = {}, _sets(["A"], prev=["P"])
+        assert g.requeue_rowless(c, st, s) == 0
+        assert s["done"] == {"A"} and s["prev_done"] == {"P"} and "reconcile_version" not in st
+
+
+def test_summary_line_separates_failures_from_no_text():
+    line = g.summary_line({"docs": 10, "new_docs": 4, "prev_docs": 3, "seg_only_docs": 3, "rows": 50, "seg_rows": 7,
+                           "no_text": 1, "gone": 2, "errors": 3, "requeued": 5, "remaining": 9})
+    assert "本文なし 1" in line and "書類側で取れない 2" in line and "取得失敗 3" in line and "取り直しに戻した 5" in line
+    assert "セグメントのみ 3" in line
+
+
+def _run_with(monkeypatch, tmp_path, responses, done=(), seg_text=(), seg_rev=()):
+    """run() を、BQ と HTTP を差し替えて動かす。responses は doc_id → (HTTP 状態, 中身)。"""
+    import json as _json
+    import sys
+    import types
+    import bq_storage
+    import edinet_gov_api as ega
+    monkeypatch.setattr(g, "_append", lambda *a, **k: None)
+    monkeypatch.setattr(g, "ensure_table", lambda c: None)
+    monkeypatch.setattr(g, "ensure_seg_table", lambda c: None)
+    monkeypatch.setattr(g, "_client", lambda cfg: _Client(list(done)))
+    monkeypatch.setattr(g.time, "sleep", lambda s: None)
+    monkeypatch.setattr(bq_storage, "measure", lambda c: {"tables": {}, "total_gb": 1.0})
+    monkeypatch.setattr(bq_storage, "record", lambda *a: None)
+    monkeypatch.setattr(bq_storage, "allowed", lambda *a: True)
+    docs = [type("T", (), {"doc_id": d, "edinet_code": "E" + d, "sec": "1000", "fye": None, "d": None}) for d in responses]
+    cl = _Client(list(done))
+    cl.query = lambda sql, **k: _Rows(docs if "ROW_NUMBER() OVER (PARTITION BY edinet_code ORDER BY d DESC" in sql else
+                                      ([] if "= 2" in sql else [type("R", (), {"doc_id": d}) for d in done]))
+    monkeypatch.setattr(g, "_client", lambda cfg: cl)
+
+    def get(url, params=None, timeout=None):
+        code, body = responses[url.rsplit("/", 1)[1]]
+        return types.SimpleNamespace(status_code=code, content=body, json=lambda: _json.loads(body))
+    monkeypatch.setitem(sys.modules, "requests", types.SimpleNamespace(get=get))
+    cfg = types.SimpleNamespace(EDINET_GOV_API_KEY="k", DATA_DIR=str(tmp_path), EDINET_GOV_MIN_INTERVAL_SEC=0)
+    path = tmp_path / "edinet_gov_text_state.json"
+    path.write_text(_json.dumps({"doc_ids": sorted(done), "seg_text_doc_ids": sorted(seg_text), "seg_rev_doc_ids": sorted(seg_rev),
+                                 "seg_rev_version": g.SEG_REV_VERSION, "reconcile_version": g.RECONCILE_VERSION}), encoding="utf-8")
+    st = g.run(cfg)
+    return st, _json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_run_counts_gone_empty_error_and_segment_only_separately(monkeypatch, tmp_path):
+    rows = [["jpcrp_cor:DescriptionOfBusinessTextBlock", "事業", "x", "", "", "", "", "", "本文"]]
+    nothing = _zip([["jpcrp_cor:Other", "他", "x", "", "", "", "", "", "関係ない"]])
+    gone = b'{"metadata":{"status":"404","message":"Not Found"}}'
+    st, state = _run_with(monkeypatch, tmp_path,
+                          {"NEW": (200, _zip(rows)), "EMPTY": (200, nothing), "GONE": (404, gone), "FAIL": (500, b"x"),
+                           "SEGONLY": (200, nothing)},
+                          done=["SEGONLY"], seg_text=[], seg_rev=["SEGONLY"])
+    assert (st["new_docs"], st["no_text"], st["gone"], st["errors"], st["seg_only_docs"]) == (2, 1, 1, 1, 1)
+    assert "FAIL" not in state["doc_ids"]                    # 取得の失敗は済みにしない
+    assert "GONE" in state["doc_ids"] and "EMPTY" in state["doc_ids"]

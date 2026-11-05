@@ -488,6 +488,15 @@ jobs:
           BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
         run: python state_store.py prune
 
+      # 株価（analytics.price_daily）は追記だけなので、週次の回に (ticker, trade_date) の重複を最新の1行にして作り直す。
+      # 見積もりが 1GiB を超えたら実行しない。株価の取得 workflow は朝より前に終わっている。
+      - name: 🧽 Dedupe price_daily (weekly)
+        if: always() && steps.set-mode.outputs.mode == 'weekly'
+        continue-on-error: true
+        env:
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+        run: python bq_compact.py price_dedupe
+
       # ── 5-B. 状態ファイル・キャッシュをリポジトリにコミット ───────
       # 2026-07-12 BUG-03対応: .iqy生成（Excel Webクエリ）は廃止（ENABLE_EXCEL_EXPORT=False）。
       # あわせて「ダッシュボードCSVが存在する時だけコミット」というゲートを撤去した。
