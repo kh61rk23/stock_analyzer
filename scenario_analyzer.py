@@ -81,7 +81,7 @@ PRESET_SCENARIOS = {
             "eurjpy":  140.0,
             "audjpy":  85.0,    # AUD安（リスクオフ）
             "us10y":    5.5,    # 米長期金利高止まり
-            "oil_wti":  65.0,   # 景気後退で原油安
+            "oil_wti_x": 0.87,   # 景気後退で原油安（現在値の倍率）
             "vix":      35.0,   # 恐怖指数上昇
             "us_unrate": 5.0,   # 失業率上昇
             "us_hy_spread": 6.5, # 信用収縮
@@ -104,7 +104,7 @@ PRESET_SCENARIOS = {
             "eurjpy":  172.0,
             "audjpy":  105.0,   # AUD高（リスクオン）
             "us10y":    3.8,    # 金利低下
-            "oil_wti":  90.0,   # 景気拡大で原油高
+            "oil_wti_x": 1.20,   # 景気拡大で原油高（現在値の倍率）
             "vix":      14.0,   # 安定
             "us_unrate": 3.8,   # 完全雇用
             "us_hy_spread": 2.8, # 信用良好
@@ -130,7 +130,7 @@ PRESET_SCENARIOS = {
         "overrides": {
             "cnyjpy":  18.5,    # 人民元安
             "usdcny":   7.6,
-            "oil_wti":  95.0,   # 有事で原油高
+            "oil_wti_x": 1.27,   # 有事で原油高（現在値の倍率）
             "audjpy":  88.0,    # リスクオフ
             "vix":      30.0,
         },
@@ -144,7 +144,7 @@ PRESET_SCENARIOS = {
             "usdjpy":  165.0,
             "eurjpy":  178.0,
             "audjpy":  108.0,
-            "oil_wti":  88.0,   # 円建て輸入コスト急騰
+            "oil_wti_x": 1.17,   # 円建て輸入コスト急騰（現在値の倍率）
         },
         # 円安は円建ての日本株だけに効く。米国株は円換算の為替差が別にあるが、
         # ここでは株価の想定変動に限る
@@ -160,9 +160,19 @@ PRESET_SCENARIOS = {
 # ==============================================================
 
 def _apply_scenario_overrides(base_snapshot: dict, overrides: dict) -> dict:
-    """ベーススナップショットにシナリオ値を上書きして返す。"""
+    """ベーススナップショットにシナリオ値を上書きして返す。
+
+    キーが「_x」で終わる値は現在値に掛ける倍率（例: oil_wti_x=1.2 は WTI を現在値の1.2倍に）。
+    原油のように水準が大きく動く指標を絶対値で置くと、現在値が変わったとき「原油高」のシナリオが
+    現在より安くなるため。現在値が取れていない指標の倍率は無視する。"""
     scenario_snapshot = deepcopy(base_snapshot)
-    scenario_snapshot.update(overrides)
+    for k, v in (overrides or {}).items():
+        if k.endswith("_x"):
+            base = (base_snapshot or {}).get(k[:-2])
+            if isinstance(base, (int, float)) and base > 0:
+                scenario_snapshot[k[:-2]] = round(float(base) * float(v), 2)
+        else:
+            scenario_snapshot[k] = v
     return scenario_snapshot
 
 
@@ -578,7 +588,7 @@ def run_scenario_analysis(
         evaluated[sc_name] = {
             "label":         sc_def["label"],
             "description":   sc_def.get("description", ""),
-            "assumptions":   {**macro_snapshot, **sc_def.get("overrides", {})},
+            "assumptions":   scenario_snapshot,
             "sector_scores": sector_scores,
             "top_gainers":   gainers,
             "top_losers":    losers,

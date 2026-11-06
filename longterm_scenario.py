@@ -613,24 +613,33 @@ def _format_summary(
             lines.append(f"- {t['desc']}")
         lines.append("")
 
-    # 長期スコア上位・下位
+    # 長期スコア上位・下位。影響表に無い業種は 50 のままなので、有望は 50 超・不利は 50 未満の業種だけを挙げる
     sorted_scores = sorted(
         [(c, s) for c, s in longterm_scores.items()],
         key=lambda x: x[1], reverse=True
     )
+    ups = [(c, s) for c, s in sorted_scores if s > 50.0][:5]
+    downs = [(c, s) for c, s in reversed(sorted_scores) if s < 50.0][:5]
+    n_flat = sum(1 for _, s in sorted_scores if s == 50.0)
     lines.append("### 📈 長期有望業種（10年スコア上位）")
     lines.append("")
-    for code, score in sorted_scores[:5]:
+    for code, score in ups:
         name    = japan_sectors.get(code, {}).get("name_ja", code)
         stance  = investment_stances.get(code, {}).get("icon", "")
         lines.append(f"- {stance} **{name}**: {score:.0f}pt")
+    if not ups:
+        lines.append("- 50点を超える業種なし")
     lines.append("")
 
     lines.append("### 📉 長期不利業種（10年スコア下位）")
     lines.append("")
-    for code, score in sorted_scores[-5:]:
+    for code, score in downs:
         name = japan_sectors.get(code, {}).get("name_ja", code)
         lines.append(f"- ⚪ **{name}**: {score:.0f}pt")
+    if not downs:
+        lines.append("- 50点を下回る業種なし")
+    if n_flat:
+        lines.append(f"- （{n_flat}業種はシナリオの影響表に無く 50点のまま＝有望とも不利とも言えない）")
     lines.append("")
 
     # 投資スタンス集計

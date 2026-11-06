@@ -1058,7 +1058,7 @@ def _section_biz_summaries(results: dict) -> list:
 # BLOCK 7: グローバルマクロ
 # ==============================================================
 
-def _section_macro(results: dict) -> list:
+def _section_macro(results: dict, cfg=None) -> list:
     lines = ["## 🌍 グローバルマクロ サマリー", ""]
 
     # 政策金利
@@ -1110,62 +1110,62 @@ def _section_macro(results: dict) -> list:
                 lines.append(f"  {icon} {label}")
             lines.append("")
 
+    lines += _cot_lines(cfg)
     return lines
 
-def _section_us_macro(results: dict) -> list:
-    """[Phase US-2] 米国マクロ拡張指標セクション"""
-    um = results.get("us_macro", {})
-    if not um or um.get("skipped") or not um.get("indicators"):
+
+def _cot_lines(cfg, max_lines: int = 3) -> list:
+    """建玉の偏り（CFTC の COT）の今週の位置。極端な市場だけを max_lines 行まで。信号が無い・古いときは出さない。"""
+    try:
+        import cot_signal
+        sig = cot_signal.load_signals(cfg)
+        body = cot_signal.mail_lines(sig, cfg)
+    except Exception as e:
+        print(f"  ⚠️ COT の週の位置を読めない: {str(e)[:80]}")
         return []
+    if not body:
+        return []
+    asof = [ln for ln in body if "CFTC" in ln]
+    rows = [ln for ln in body if "CFTC" not in ln][:max_lines]
+    return ["**建玉の偏り（CFTC・逆張りで読む）**"] + rows + asof + [""]
 
-    indicators = um.get("indicators", {})
-    score      = um.get("composite_us_macro_score", 50)
+def _section_us_macro(results: dict) -> list:
+    """米国マクロ拡張指標。us_macro_pipeline の macro_snapshot_ext（失業率・CPI前年比・HYスプレッド・
+    失業保険申請・住宅着工許可・10Y-2Y・鉱工業生産）と先行シグナルを表にする。"""
+    um = results.get("us_macro", {})
+    snap = um.get("macro_snapshot_ext") if isinstance(um, dict) else None
+    if not snap:
+        return []
+    score = um.get("composite_us_macro_score", 50)
+    icon = "🟢" if score >= 65 else ("🔴" if score < 40 else "🟡")
+    lines = ["## 🇺🇸 米国マクロ拡張指標", "",
+             f"**総合スコア**: {icon} {score:.0f}/100（高いほど景気に追い風）", "",
+             "| 指標 | 値 | 前月比 | 見方 |", "|---|---|---|---|"]
 
-    lines = ["## 🇺🇸 米国マクロ拡張指標（Phase US-2）", ""]
-    icon  = "🟢" if score >= 65 else ("🔴" if score < 40 else "🟡")
-    lines.append(f"**総合スコア**: {icon} {score:.0f}/100")
-    lines.append("")
-    lines.append("| 指標 | 値 | シグナル | 補足 |")
-    lines.append("|------|-----|---------|------|")
+    def _pct(v):
+        return f"{v:+.1f}%" if v is not None else "—"
 
-    INDICATOR_LABELS = {
-        "payems":   "非農業部門雇用",
-        "unrate":   "失業率",
-        "cpi":      "CPI前年比",
-        "pce":      "PCE価格指数",
-        "indpro":   "鉱工業生産",
-        "houst":    "住宅着工",
-        "umcsent":  "消費者信頼感",
-        "hy_spread":"HYスプレッド",
-        "icsa":     "失業保険申請",
-        "lei":      "景気先行指数",
-        "m2sl":     "M2マネーサプライ",
-        "dgorder":  "耐久財受注",
-        "rsxfs":    "小売売上（除自動車）",
-    }
-    SIGNAL_ICONS = {"tailwind": "📈", "headwind": "📉", "neutral": "➡️"}
-
-    for key, label in INDICATOR_LABELS.items():
-        ind = indicators.get(key)
-        if not ind:
+    rows = [
+        ("失業率", snap.get("unrate"), "{:.1f}%", None, "低いほど良い"),
+        ("CPI前年比", snap.get("cpi_yoy"), "{:.1f}%", None, "2%前後が目安"),
+        ("HYスプレッド", snap.get("hy_spread"), "{:.2f}%", None, "5%以上で信用不安"),
+        ("10Y-2Yスプレッド", snap.get("t10y2y"), "{:+.2f}%", None, "マイナスは逆イールド"),
+        ("失業保険新規申請", snap.get("icsa"), "{:,.0f}件", snap.get("icsa_mom_pct"), "4週前比+15%で雇用悪化"),
+        ("住宅着工許可", snap.get("permit"), "{:,.0f}千戸", snap.get("permit_mom_pct"), "増加は景気先行の改善"),
+        ("鉱工業生産", None, "", snap.get("indpro_mom_pct"), "前月比のみ"),
+    ]
+    for label, val, fmt, mom, note in rows:
+        if val is None and mom is None:
             continue
-        val     = ind.get("value")
-        yoy     = ind.get("yoy_pct") or ind.get("yoy")
-        mom     = ind.get("mom_pct") or ind.get("mom_change")
-        signal  = ind.get("signal", "neutral")
-        icon_s  = SIGNAL_ICONS.get(signal, "➡️")
-        unit    = ind.get("unit", "")
-        note    = f"YoY:{yoy:+.1f}%" if yoy is not None else (f"MoM:{mom:+.1f}" if mom is not None else "")
-        lines.append(
-            f"| {label} | {val} {unit[:3]} | {icon_s} {signal} | {note} |"
-            if val else f"| {label} | N/A | - | - |"
-        )
-
-    # 国債残高
-    td = um.get("treasury_debt")
-    if td:
-        lines.append(f"| 米国国債残高 | ${td.get('total_debt_trillion','?')}兆ドル | ➡️ | {td.get('as_of_date','')} |")
-
+        lines.append(f"| {label} | {fmt.format(val) if val is not None else '—'} | {_pct(mom)} | {note} |")
+    sigs = um.get("leading_signals") or []
+    lines.append("")
+    if sigs:
+        for sg in sigs:
+            ic = "📈" if sg.get("signal") == "tailwind" else "📉"
+            lines.append(f"- {ic} {sg.get('label', '')}: {sg.get('detail', '')}")
+    else:
+        lines.append("- 先行シグナルの発火なし")
     lines.append("")
     return lines
 
@@ -1746,7 +1746,17 @@ def _section_inference(results: dict) -> list:
     if not ie:
         return []
     text = ie.get("summary_md", "")
-    return text.split("\n") if text else []
+    if not text:
+        return []
+    out = []
+    for ln in text.split("\n"):
+        if ln.startswith("**根拠指標**"):
+            # 内部キー（top_scenario: シナリオ識別子）は読み手に意味が無いので落とす
+            ln = re.sub(r"(\s*/\s*)?top_scenario:\s*\S+", "", ln).replace("**根拠指標**:", "**根拠指標**:").rstrip(" :/")
+            if ln.strip() in ("**根拠指標**", "**根拠指標**:"):
+                continue
+        out.append(ln)
+    return out
 
 #統合シグナル — 業種別スコア表
 def _section_signal_aggregator(results: dict) -> list:
@@ -1890,7 +1900,7 @@ def _section_dcf(results: dict) -> list:
     if not top:
         return []
     lines = ["## 📐 DCF割安候補（理論株価ベース）", ""]
-    lines += ["| 銘柄 | 理論株価 | 現在株価 | 割引率 | ボーナス |",
+    lines += ["| 銘柄 | 理論株価 | 現在株価 | 割安率 | ボーナス |",
               "|-----|--------|--------|-------|-------|"]
     for d in top[:5]:
         intr = d.get("dcf",{}).get("intrinsic_per_share",0)
@@ -1900,6 +1910,12 @@ def _section_dcf(results: dict) -> list:
         lines.append(f"| {_display_name(d)} "
                      f"| {intr:,.0f}円 | {curr:,.0f}円 "
                      f"| {disc:+.1f}% | {bonus:+.0f}pt |")
+    # 割安率は成長率・資本コストの仮定で全体が上下する。候補全体の中央値を添えて、絶対値でなく順位で読ませる
+    vals = sorted(d["discount_pct"] for d in (dcf.get("results") or {}).values()
+                  if isinstance(d, dict) and d.get("discount_pct") is not None and not d.get("dcf_invalid"))
+    if len(vals) >= 10:
+        lines += ["", f"*割安率＝(理論株価÷現在株価−1)。対象 {len(vals)}銘柄の中央値は {vals[len(vals) // 2]:+.0f}%。"
+                      "仮定（資本コスト・FCF成長率）で全体が動くので、絶対値でなく順位で読む。*"]
     return lines
 
 # ==============================================================
@@ -3716,6 +3732,153 @@ def _section_facility_expansion(results: dict, cfg=None) -> list:
 # BLOCK 10: メインレポート生成
 # ==============================================================
 
+def _section_paper_weekly(cfg) -> list:
+    """仮想トレードの週の成績（口座と約定のファイルだけを読む。BQ は引かない）。"""
+    try:
+        from paper.weekly_section import build_from_files
+        return build_from_files(cfg)
+    except Exception as e:
+        print(f"  ⚠️ 仮想トレードの週の成績を作れない: {str(e)[:80]}")
+        return []
+
+
+def _section_universe_factor_ic(results: dict) -> list:
+    """一次採点の観点別の効き（その回に universe_factor_ic が計算した要約があるときだけ）。"""
+    res = results.get("universe_factor_ic") or {}
+    body = res.get("lines") if isinstance(res, dict) else None
+    if not body:
+        return []
+    return ["## 📐 一次採点の観点別の効き", ""] + list(body) + [""]
+
+
+def _tier_of(key: str, cfg) -> int:
+    tiers = getattr(cfg, "WEEKLY_SECTION_TIER", None) or {}
+    return int(tiers.get(key, getattr(cfg, "WEEKLY_SECTION_TIER_DEFAULT", 3)))
+
+
+def order_sections(sections: list, cfg) -> tuple:
+    """(識別子, 行リスト) の並びを段の順に並べ替える。同じ段の中は元の順のまま（sorted は安定）。
+
+    見出し（# 始まりの行）がまったく無い節は先頭の非空行を見出しにする。節の間は空行1つで区切る。
+    戻り値: (並べ替えた [(識別子, 行リスト)], {見出し: 段})"""
+    kept = []
+    for key, lines in sections:
+        lines = list(lines or [])
+        if not any(ln.strip() and not ln.startswith("#") for ln in lines):
+            continue    # 空の節・見出しだけの節は出さない
+        if not any(ln.startswith("#") for ln in lines):
+            i = next(k for k, ln in enumerate(lines) if ln.strip())
+            lines[i] = "## " + lines[i].strip()
+        if lines[-1].strip():
+            lines.append("")
+        kept.append((key, lines))
+    kept.sort(key=lambda kv: _tier_of(kv[0], cfg))
+    tiers = {}
+    for key, lines in kept:
+        for ln in lines:
+            if ln.startswith("## "):
+                tiers[ln[3:].strip()] = _tier_of(key, cfg)
+    return kept, tiers
+
+
+def _first_row_of_queue(lines: list):
+    """審議キューの表の先頭行（▶ 1）から (コード, 銘柄名)。"""
+    for ln in lines:
+        if "▶ 1" in ln and ln.lstrip().startswith("|"):
+            cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+            code = next((c.strip("`") for c in cells if c.startswith("`")), "")
+            name = next((c for c in cells[1:] if c and not c.startswith("`") and not re.fullmatch(r"[\d.\-—]+", c)), "")
+            return code, name
+    return "", ""
+
+
+def build_first_look(results: dict, cfg, summary_hint: dict | None = None) -> list:
+    """冒頭「今週まず見るもの」。市場・保有・仮想トレード・推奨のその後・来週の候補の順に、取れたものだけ最大
+    WEEKLY_FIRST_LOOK_MAX 行。各項目は独立に作り、失敗しても他を止めない。"""
+    limit = int(getattr(cfg, "WEEKLY_FIRST_LOOK_MAX", 5))
+    secs = (summary_hint or {}).get("sections") or {}
+    out = []
+
+    def _market():
+        tss = results.get("total_signal_score", results.get("total_signal")) or {}
+        score = tss.get("total_signal_score") if isinstance(tss, dict) else None
+        mode = ((results.get("rule_optimizer") or {}).get("contraction_flag") or {}).get("mode")
+        regime = (results.get("signal_aggregator") or {}).get("market_regime")
+        parts = []
+        if score is not None:
+            parts.append(f"総合シグナル {float(score):.1f}点")
+        if regime:
+            parts.append(f"レジーム {regime}")
+        if mode:
+            label = {"Normal": "通常", "Warning": "警戒", "Emergency": "緊急縮退"}.get(mode, mode)
+            parts.append(f"縮退 {label}" + ("" if mode == "Normal" else "（要確認）"))
+        return "- **市場**: " + "／".join(parts) if parts else ""
+
+    def _holdings():
+        from portfolio_diversity_filter import load_holdings_concentration
+        hc = load_holdings_concentration()
+        if not hc.get("total_jpy"):
+            return ""
+        hs, hk = hc["hhi_sector"], hc["hhi_stock"]
+        warn = "⚠️ " if max(hs, hk) >= 0.25 else ""
+        mw = hc.get("market_weights") or {}
+        return (f"- **保有**: {warn}評価額 {hc['total_jpy'] / 1e4:,.0f}万円・業種HHI {hs:.3f}・銘柄HHI {hk:.3f}"
+                f"・上位3銘柄 {hc['top3_share']:.0%}・日本株 {mw.get('JP', 0):.0%}（0.25以上で警告）")
+
+    def _paper():
+        from paper.weekly_section import headline
+        from paper.paper_broker import load_accounts
+        h = headline(load_accounts(cfg), int(getattr(cfg, "WEEKLY_PAPER_DAYS", 7)))
+        return f"- **仮想トレード**: {h}" if h else ""
+
+    def _outcome():
+        perf = results.get("performance") or {}
+        if not perf or perf.get("skipped") or perf.get("win_rate") is None:
+            return ""
+        corr = perf.get("score_return_corr")
+        c = ""
+        if corr is not None:
+            c = f"・スコアと成績の相関 {corr:+.2f}" + ("（高スコアほど悪い向き）" if corr < -0.1 else "")
+        return (f"- **推奨のその後**: 先週のスクリーナー {perf.get('candidates_n', 0)}銘柄の勝率 "
+                f"{perf['win_rate'] * 100:.1f}%・平均 {perf.get('avg_return', 0):+.1f}%{c}")
+
+    def _next():
+        parts = []
+        code, name = _first_row_of_queue(secs.get("deliberation_queue") or [])
+        if code:
+            parts.append(f"審議の先頭 {name}（{code}）" if name else f"審議の先頭 {code}")
+        scr = results.get("screener") or {}
+        n_pass = len([c for c in scr.get("candidates", []) if c.get("pass_filters")])
+        if n_pass:
+            parts.append(f"スクリーナー通過 {n_pass}社")
+        cat = results.get("catalyst") or {}
+        ups = sorted((e for e in cat.get("upcoming_14d", []) if 0 <= e.get("days_until", 99) <= 7),
+                     key=lambda e: e.get("days_until", 99))
+        if ups:
+            e = ups[0]
+            parts.append(f"直近の予定 {str(e.get('description', ''))[:24]}（{str(e.get('date', ''))[5:]}）")
+        return "- **来週の候補**: " + "・".join(parts) if parts else ""
+
+    def _ops():
+        for ln in secs.get("module_ledger") or []:
+            m = re.search(r"失敗 \*\*(\d+)\*\*", ln)
+            if m and int(m.group(1)) > 0:
+                return f"- **運用**: ⚠️ 実行台帳に失敗 {m.group(1)} 件（モジュール実行台帳の節を確認）"
+        return ""
+
+    for fn in (_market, _holdings, _paper, _outcome, _next, _ops):
+        try:
+            line = fn()
+        except Exception as e:
+            print(f"  ⚠️ 今週まず見るもの: {fn.__name__} を作れない: {str(e)[:60]}")
+            line = ""
+        if line:
+            out.append(line)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def generate_weekly_report(cfg, results: dict) -> dict:
     """
     全セクションを結合して週次レポートを生成する。
@@ -3734,96 +3897,90 @@ def generate_weekly_report(cfg, results: dict) -> dict:
     dow_names = ["月", "火", "水", "木", "金", "土", "日"]
     dow       = dow_names[datetime.now().weekday()]
 
-    print("\n  📊 週次レポート生成中 ({today} {dow}曜)...")
+    print(f"\n  📊 週次レポート生成中 ({today} {dow}曜)...")
 
-    # 全セクションを構築
+    # 全セクションを (識別子, 行リスト) の並びで構築し、段（config.WEEKLY_SECTION_TIER）の順に並べ替える。
+    # 行リストは「行のリスト」を1個ずつ入れる（文字列を直接入れると1文字ずつ展開される）
     sections = []
-        # タイトルを先頭、推論・signal_aggregatorをその直後に配置
-    sections.append([
-        f"# 📊 週次投資判断レポート",
-        f"**{today}（第{week_num}週）** — stock_analyzer 自動生成",
-        "",
-        "---",
-        "",
-    ])
-    sections.append(_section_inference(results))
-    sections.append(_section_signal_aggregator(results))
-    sections.append(_section_module_ledger(cfg))                  # OBS-1: 実行台帳（健全性）
-    sections.append(_section_rule_optimizer_alert(results, cfg))  # 縮退アラート
-    sections.append(_section_macro(results))
-    sections.append(_section_us_macro(results))
-    sections.append(_section_anomaly_season(results))
-    sections.append(_section_market_breadth(results))
-    sections.append(_section_jp_sectors(results))
-    sections.append(_section_geo_country_risk(results, cfg))# G-N: 国別リスク
-    sections.append(_section_us_sectors(results))
-    sections.append(_section_etf(results))
-    sections.append(_section_risk_constraints(results))
-    sections.append(_section_screener(results))
-    sections.append(_section_deliberation_queue(results, cfg))
-    sections.append(_section_analyst_revision(results, cfg))        # FE-2
-    sections.append(_section_ignition_alert(results, cfg))          # FE-4
-    sections.append(_section_pead_drift_candidates(results, cfg))   # FE-5
-    sections.append(_section_portfolio_concentration(results, cfg)) # FE-6
-    sections.append(_section_pearl_ranking(results, cfg))           # Pearl Ph1
-    sections.append(_section_latent_pearl_promotion(results, cfg))  # Independence Ph1
-    sections.append(_section_wave7_premarket_signals(results, cfg))  # 市場形成前シグナル
-    sections.append(_section_wave7_size_taxonomy(results, cfg))      # size×taxonomy比較
-    sections.append(_section_wave7_independence(results, cfg))       # 市場独立性スコア
-    sections.append(_section_strategy_breakdown(results))
-    sections.append(_section_earnings_watchlist(results))
-    sections.append(_section_midterm_tracker(results))
-    sections.append(_section_scenario(results))
-    sections.append(_section_longterm_scenario(results))
-    sections.append(_section_performance(results))
-    sections.append(_section_position_sizer(results))
-    sections.append(_section_biz_summaries(results))
-    sections.append(_section_news(results))
-    sections.append(_section_policy_radar(results))
-    sections.append(_section_catalyst_upcoming(results, cfg)) # FE-7
-    sections.append(_section_politician_highlight(results))   # Policy Ph1
-    sections.append(_section_finbert_sentiment(results))
-    sections.append(_section_technology_cluster(results, cfg))  # B: 技術クラスター
-        # 人材投資（求人票）・役員体制転換・施設着工は廃止済みなので節を出さない
-    sections.append(_section_action_guide(results))
-    sections.append(_section_stress_test(results))
-    sections.append(_section_dividend_calendar(results))
-    sections.append(_section_options_monitor(results))
-    sections.append(_section_options_advisor(results))   # OPT-1
-    sections.append(_section_sr_vp(results))
-    sections.append(_section_jp_us_bridge(results))
-    sections.append(_section_jp_us_correlation(results))      # Idea2-A
-    sections.append(_section_rule_optimizer(results))
-    sections.append(_section_alpha_attribution(results))
-    sections.append(_section_backtest(results))
-    sections.append(_section_comps(results))
-    sections.append(_section_seisakudb(results, cfg))
-    sections.append(_section_self_evaluator(results))
-    sections.append(_section_wave7_pearl_backtest(results, cfg))  # Pearl BT
-    sections.append(_section_screener_heatmap(results))
-    sections.append(_section_portfolio_optimizer(results))
-    sections.append(_section_dcf(results))
-    # ── [R-3] 投資ジャーナルセクション ──────────────────────────
+
+    def add(key: str, lines) -> None:
+        sections.append((key, lines or []))
+
+    add("inference", _section_inference(results))
+    add("signal_aggregator", _section_signal_aggregator(results))
+    add("module_ledger", _section_module_ledger(cfg))
+    add("contraction_alert", _section_rule_optimizer_alert(results, cfg))
+    add("macro", _section_macro(results, cfg))
+    add("us_macro", _section_us_macro(results))
+    add("anomaly_season", _section_anomaly_season(results))
+    add("market_breadth", _section_market_breadth(results))
+    add("jp_sectors", _section_jp_sectors(results))
+    add("geo_country_risk", _section_geo_country_risk(results, cfg))
+    add("us_sectors", _section_us_sectors(results))
+    add("etf", _section_etf(results))
+    add("risk_constraints", _section_risk_constraints(results))
+    add("screener", _section_screener(results))
+    add("deliberation_queue", _section_deliberation_queue(results, cfg))
+    add("analyst_revision", _section_analyst_revision(results, cfg))
+    add("ignition_alert", _section_ignition_alert(results, cfg))
+    add("pead_drift", _section_pead_drift_candidates(results, cfg))
+    add("portfolio_concentration", _section_portfolio_concentration(results, cfg))
+    add("pearl_ranking", _section_pearl_ranking(results, cfg))
+    add("latent_pearl", _section_latent_pearl_promotion(results, cfg))
+    add("premarket_signals", _section_wave7_premarket_signals(results, cfg))
+    add("size_taxonomy", _section_wave7_size_taxonomy(results, cfg))
+    add("independence", _section_wave7_independence(results, cfg))
+    add("strategy_breakdown", _section_strategy_breakdown(results))
+    add("earnings_watchlist", _section_earnings_watchlist(results))
+    add("midterm_tracker", _section_midterm_tracker(results))
+    add("scenario", _section_scenario(results))
+    add("longterm_scenario", _section_longterm_scenario(results))
+    add("performance", _section_performance(results))
+    add("paper_weekly", _section_paper_weekly(cfg))
+    add("position_sizer", _section_position_sizer(results))
+    add("biz_summaries", _section_biz_summaries(results))
+    add("news", _section_news(results))
+    add("policy_radar", _section_policy_radar(results))
+    add("catalyst_upcoming", _section_catalyst_upcoming(results, cfg))
+    add("politician", _section_politician_highlight(results))
+    add("finbert", _section_finbert_sentiment(results))
+    add("technology_cluster", _section_technology_cluster(results, cfg))
+    # 人材投資（求人票）・役員体制転換・施設着工・JP×US相関マトリクスは廃止済みなので節を出さない
+    add("action_guide", _section_action_guide(results))
+    add("stress_test", _section_stress_test(results))
+    add("dividend_calendar", _section_dividend_calendar(results))
+    add("options_monitor", _section_options_monitor(results))
+    add("options_advisor", _section_options_advisor(results))
+    add("sr_vp", _section_sr_vp(results))
+    add("jp_us_bridge", _section_jp_us_bridge(results))
+    add("universe_factor_ic", _section_universe_factor_ic(results))
+    add("rule_optimizer", _section_rule_optimizer(results))
+    add("alpha_attribution", _section_alpha_attribution(results))
+    add("backtest", _section_backtest(results))
+    add("comps", _section_comps(results))
+    add("seisakudb", _section_seisakudb(results, cfg))
+    add("self_evaluator", _section_self_evaluator(results))
+    add("pearl_backtest", _section_wave7_pearl_backtest(results, cfg))
+    add("screener_heatmap", _section_screener_heatmap(results))
+    add("portfolio_optimizer", _section_portfolio_optimizer(results))
+    add("dcf", _section_dcf(results))
+    # 投資ジャーナル（記入待ち・月次パターン）
     try:
         import sys as _sys, importlib as _imp
         _sys.path.insert(0, str(Path(__file__).parent))
         _ij = _imp.import_module("investment_journal")
-        sections.append(_ij.format_journal_section(cfg))    # 記入待ち
-        sections.append(_ij.format_pattern_section(cfg))    # 月次パターン
+        add("investment_journal", _ij.format_journal_section(cfg))
+        add("investment_journal", _ij.format_pattern_section(cfg))
     except Exception:
         pass
 
-        # G-X: 資源権益・地政学影響セクション
-        # sections は「行リストのリスト」（末尾で2重ループで結合する）。文字列を直接 append すると
-        # 1文字ずつ展開されるので、必ず「行リストを1個 append する」。
+    # 資源権益・地政学影響
     try:
         if getattr(cfg, "ENABLE_GEO_SIGNAL", False):
-            sections.append([""])
-            sections.append(_section_geo_exposure(results, cfg))
-            sections.append(_section_geo_signal_detail(results, cfg))
+            add("geo_exposure", _section_geo_exposure(results, cfg))
+            add("geo_signal_detail", _section_geo_signal_detail(results, cfg))
         elif results.get("geo_risk") and not results["geo_risk"].get("skipped"):
-            # ENABLE_GEO_SIGNAL=False でも国別リスクデータがあれば簡易表示
-            sections.append([
+            add("geo_exposure", [
                 "",
                 "## ⛏️ 資源権益・地政学影響（Wave 6 - G-X）",
                 "",
@@ -3833,20 +3990,24 @@ def generate_weekly_report(cfg, results: dict) -> dict:
                 "",
             ])
     except Exception as _gx_err:
-        # G-X セクション生成失敗はレポート全体を止めない
-        sections.append([
-            "",
-            f"*[G-X] 地政学セクション生成エラー（スキップ）: "
-            f"{str(_gx_err)[:80]}*",
-            "",
-        ])
+        add("geo_exposure", ["", f"*[G-X] 地政学セクション生成エラー（スキップ）: {str(_gx_err)[:80]}*", ""])
 
-        # フッターは必ず最後に置く
-    sections.append([
-        "---",
-        f"*自動生成: stock_analyzer_main.py | {today}*",
+    ordered, tiers = order_sections(sections, cfg)
+    first_look = build_first_look(results, cfg, summary_hint={"sections": dict(ordered)})
+    head = [
+        "# 📊 週次投資判断レポート",
+        f"**{today}（第{week_num}週）** — stock_analyzer 自動生成",
         "",
-    ])
+        "---",
+        "",
+    ]
+    if first_look:
+        head += ["## 👀 今週まず見るもの", ""] + first_look + [""]
+        tiers["👀 今週まず見るもの"] = 0
+    body = [ln for _, lines in ordered for ln in lines]
+    # フッターは必ず最後に置く
+    foot = ["---", f"*自動生成: stock_analyzer_main.py | {today}*", ""]
+    sections = [head, body, foot]
 
     # Markdown全文結合
     report_md = "\n".join(line for sec in sections for line in sec)
@@ -3896,6 +4057,7 @@ def generate_weekly_report(cfg, results: dict) -> dict:
         "top_picks":      pick_names,
         "report_path":    report_path,
         "report_md":      report_md[:500],  # アラートメール用の先頭500字
+        "section_tiers":  tiers,            # 見出し → 段（メールで全文にする節を選ぶ）
     }
 
     print(f"    📈 注目業種TOP3: {' > '.join(top3_names)}")
@@ -3916,7 +4078,7 @@ def generate_weekly_report(cfg, results: dict) -> dict:
 
 # Gmail は 102KB を超える本文を途中で切るため、HTML 全体をこの値以下に収める
 _EMAIL_MAX_BYTES = 98_000
-# 全文で載せる節（見出しに含まれる語。この並びが表示順）
+# 段の情報（summary["section_tiers"]）が無いときだけ使う、全文で載せる節（見出しに含まれる語。この並びが表示順）
 _EMAIL_PRIORITY = ("投資判断サマリー", "総合投資シグナル", "注目業種", "個別銘柄スクリーニング",
                    "審議キュー", "ポジションサイジング", "ペーパー", "リスク制約", "ポートフォリオ集中リスク", "緊急縮退")
 _EMAIL_FULL_BUDGET = 62_000   # 全文で載せる節の合計の目安。超えた節は要約表示に落とす
@@ -3999,45 +4161,68 @@ def _email_kpis(summary: dict, report_md: str) -> list:
     ]
 
 
+def _tier_settings() -> tuple:
+    """(段の表示名, 全文にする段の上限)。config が読めなければ既定。"""
+    try:
+        import config as _c
+        return (dict(getattr(_c, "WEEKLY_TIER_LABELS", {}) or {}),
+                int(getattr(_c, "WEEKLY_EMAIL_FULL_MAX_TIER", 2)))
+    except Exception:
+        return {1: "今週の結論", 2: "来週の候補", 3: "業種・マクロ・シナリオ", 4: "検証", 5: "運用"}, 2
+
+
 def build_weekly_email_html(report_md: str, summary: dict) -> str:
     """
     週次レポートをメール用 HTML に変換する（alert_notifier.send_gmail に渡す）。
 
-    「## 」見出しごとに節カードへ分け、判断に直結する節を先頭に全文で置く。残りは見出しと
-    冒頭数行の要約カードにする。Gmail は 102KB を超えると本文を切るので、HTML 全体が
-    _EMAIL_MAX_BYTES 以下になるまで要約の行数を減らす。
+    「## 」見出しごとに節カードへ分け、md の順（段の順）のまま並べる。段が WEEKLY_EMAIL_FULL_MAX_TIER 以下の節は
+    全文、それより下の段は見出しと冒頭数行の要約カード。Gmail は 102KB を超えると本文を切るので、HTML 全体が
+    _EMAIL_MAX_BYTES 以下になるまで要約の行数を減らす。summary["section_tiers"]（見出し→段）が無いときは
+    _EMAIL_PRIORITY の語を含む節を全文にして先頭へ寄せる（段の情報が無い古い md 向け）。
     """
     from mail_html import page, section_card, md_to_html, strip_dev_codes, relabel
 
     today = summary.get("report_date", datetime.now().strftime("%Y-%m-%d"))
-    sections = [(strip_dev_codes(relabel(t)), b) for t, b in _split_md_sections(report_md)]
+    raw = _split_md_sections(report_md)
+    tiers = summary.get("section_tiers") or {}
+    labels, full_max = _tier_settings()
 
-    def _prio(title: str) -> int:
-        for k, key in enumerate(_EMAIL_PRIORITY):
-            if key in title:
-                return k
-        return -1
-
-    first = sorted((x for x in sections if _prio(x[0]) >= 0), key=lambda x: _prio(x[0]))
-    rest = [x for x in sections if _prio(x[0]) < 0]
+    if tiers:
+        sections = [(strip_dev_codes(relabel(t)), b, int(tiers.get(t, 3))) for t, b in raw]
+    else:
+        def _prio(title: str) -> int:
+            for k, key in enumerate(_EMAIL_PRIORITY):
+                if key in title:
+                    return k
+            return -1
+        titled = [(strip_dev_codes(relabel(t)), b) for t, b in raw]
+        first = sorted((x for x in titled if _prio(x[0]) >= 0), key=lambda x: _prio(x[0]))
+        rest = [x for x in titled if _prio(x[0]) < 0]
+        sections = [(t, b, 1) for t, b in first] + [(t, b, 3) for t, b in rest]
 
     footer = ("データソース: yfinance / EdinetDB / IMF / DeepL<br>"
               "stock_analyzer が自動送信。最終判断はご自身でご確認ください。")
 
+    def _divider(label: str) -> str:
+        return (f'<div style="margin:18px 0 6px;padding:4px 10px;background:#eef2ff;border-left:4px solid #2563eb;'
+                f'font-size:12px;font-weight:bold;color:#1e3a5f">{label}</div>')
+
     def _build(compact_lines: int) -> str:
-        cards, used = [], 0
-        compact_first = []
-        for title, body in first:
-            card = section_card(title, md_to_html(_clean_headings(body)))
-            if used + len(card.encode("utf-8")) > _EMAIL_FULL_BUDGET:
-                compact_first.append((title, body))
-                continue
-            used += len(card.encode("utf-8"))
-            cards.append(card)
-        tail = compact_first + rest
-        if tail:
-            cards.append(f'<p style="margin:16px 0 4px;font-size:11px;color:#6b7280">{_EMAIL_NOTE}</p>')
-        for title, body in tail:
+        cards, used, last_tier, noted = [], 0, None, False
+        for title, body, tier in sections:
+            if tiers and tier != last_tier and tier in labels:
+                cards.append(_divider(labels[tier]))
+            last_tier = tier
+            if tier <= full_max:
+                card = section_card(title, md_to_html(_clean_headings(body)))
+                size = len(card.encode("utf-8"))
+                if used + size <= _EMAIL_FULL_BUDGET:
+                    used += size
+                    cards.append(card)
+                    continue
+            if not noted:
+                cards.append(f'<p style="margin:10px 0 4px;font-size:11px;color:#6b7280">{_EMAIL_NOTE}</p>')
+                noted = True
             if compact_lines <= 0:
                 cards.append(f'<div style="margin:6px 0;padding-left:12px;border-left:3px solid #e5e7eb;'
                              f'font-size:13px;color:#374151">{title}</div>')
