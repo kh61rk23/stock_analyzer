@@ -13,6 +13,12 @@
 # 【流れ】週1回、market_positioning の取り込み後に refresh() が BQ を1本だけ読み（dryRun の見積もりが
 #   COT_SIGNAL_MAX_BYTES 以下のときだけ）、stock_data/data/cot_signals.json を書く。日次のメール・
 #   レジーム判定・シナリオは load_signals() でそのファイルだけを読む（BQ は引かない）。
+# 【商品】COT_COMMODITY_MARKETS の商品（legacy・エネルギー／貴金属／金属／穀物／ソフト／畜産／木材）にも同じ位置・変化を出す
+#   （signals["commodities"]）。composite には入れない。極端は逆張りで価格の向き（買い過ぎ→下げやすい）にし、
+#   ・sector_adjustments : 影響先の業種（日本33業種・米国業種ETF）へ、向き×大きさ(1〜3)/3×重み×COT_COMMODITY_PT を足し上げる
+#     （1業種の合計は ±COT_COMMODITY_SECTOR_MAX_PT）。点の内訳（どの商品が何点）も返し、後で効きを測れるようにする
+#   ・mail_lines         : メールの節に商品の極端を COT_MAIL_COMMODITY_MAX_LINES 行まで足す
+#   影響先は bond_commodity_pipeline.SECTOR_IMPACT_MAP（"+"＝価格上昇が追い風）を既定にし、商品ごとの jp／us で上書きできる。
 # 【欠けの扱い】履歴が COT_SIGNAL_MIN_WEEKS 週未満・最新の値が欠けた市場は判定せず、合成の分母にも入れない。
 #   ファイルが無い・最新の週が COT_SIGNAL_STALE_DAYS 日より古い場合は None（呼び出し側は何も足さない）。
 # ==============================================================
@@ -33,6 +39,28 @@ def _param(cfg, name: str, default):
 
 def _markets(cfg) -> dict:
     return _param(cfg, "COT_SIGNAL_MARKETS", {}) or {}
+
+
+def commodity_markets(cfg) -> dict:
+    """COT_COMMODITY_MARKETS を {key: {report, code, name, impact, jp, us, w}} に解く（純関数）。
+    signal を持つ項目は COT_SIGNAL_MARKETS の同じキーからコード・名前を取る。解けない項目は除く。"""
+    if not _param(cfg, "ENABLE_COT_COMMODITY", True):
+        return {}
+    base, out = _markets(cfg), {}
+    for key, c in (_param(cfg, "COT_COMMODITY_MARKETS", {}) or {}).items():
+        ref = base.get(c.get("signal")) if c.get("signal") else None
+        code, name = (ref.get("code"), ref.get("name")) if ref else (c.get("code"), c.get("name"))
+        if not code or (ref and ref.get("report") != "legacy"):
+            continue
+        out[key] = {"report": "legacy", "code": str(code), "name": name or key, "impact": c.get("impact"),
+                    "jp": c.get("jp"), "us": c.get("us"), "w": float(c.get("w", 1.0)), "signal": c.get("signal")}
+    return out
+
+
+def legacy_codes(cfg) -> set:
+    """legacy で使う市場コード（COT_SIGNAL_MARKETS と商品）。market_positioning が BQ に残す市場の元になる。"""
+    codes = {str(m["code"]) for m in _markets(cfg).values() if m.get("report") == "legacy" and m.get("code")}
+    return codes | {m["code"] for m in commodity_markets(cfg).values()}
 
 
 # ── 純関数 ───────────────────────────────────────────────
@@ -97,36 +125,54 @@ def market_signal(series: list, cfg=None, risk_sign: int = 1) -> dict | None:
             "extreme": ex, "risk_tilt": risk_tilt(ex, risk_sign)}
 
 
+def _series(rows: list, report: str, code: str) -> list:
+    """rows から 1 市場の [(date, net_pct, net)]（日付昇順・欠けた週は含めない）。"""
+    series = {}
+    for r in rows or []:
+        if r.get("report") != report or str(r.get("market_code", "")).strip() != code:
+            continue
+        p = net_pct(r.get("spec_long"), r.get("spec_short"), r.get("open_interest"))
+        if p is None:
+            continue
+        d = r["report_date"] if isinstance(r["report_date"], date) else date.fromisoformat(str(r["report_date"])[:10])
+        series[d] = (p, float(r["spec_long"]) - float(r["spec_short"]))
+    return [(d, p, n) for d, (p, n) in sorted(series.items())]
+
+
+def price_tilt(extreme: str | None) -> int:
+    """極端 → 価格の向き（逆張り）。買い過ぎ＝-1（下げやすい）・売り過ぎ＝+1（上げやすい）・極端なし＝0。"""
+    return {"long": -1, "short": 1}.get(extreme, 0)
+
+
 def build_signals(rows: list, cfg=None, today: date | None = None) -> dict:
     """BQ の行 → 市場ごとの指標と合成。
 
     rows＝[{report_date, report, market_code, open_interest, spec_long, spec_short}]。
-    返り値＝{as_of, markets:{key:指標}, composite, extremes:[key…]}。判定できた市場が無ければ markets は空。
+    返り値＝{as_of, markets:{key:指標}, composite, extremes:[key…], commodities:{key:指標}, commodity_extremes:[key…]}。
+    判定できた市場が無ければ markets・commodities は空。
     """
     today = today or date.today()
     out, w_sum, tilt_sum = {}, 0.0, 0.0
     for key, m in _markets(cfg).items():
-        series = {}
-        for r in rows or []:
-            if r.get("report") != m["report"] or str(r.get("market_code", "")).strip() != m["code"]:
-                continue
-            p = net_pct(r.get("spec_long"), r.get("spec_short"), r.get("open_interest"))
-            if p is None:
-                continue
-            d = r["report_date"] if isinstance(r["report_date"], date) else date.fromisoformat(str(r["report_date"])[:10])
-            series[d] = (p, float(r["spec_long"]) - float(r["spec_short"]))
-        sig = market_signal([(d, p, n) for d, (p, n) in sorted(series.items())], cfg, int(m.get("risk_sign", 1)))
+        sig = market_signal(_series(rows, m["report"], m["code"]), cfg, int(m.get("risk_sign", 1)))
         if sig is None:
             continue
         sig.update(name=m["name"], w=float(m.get("w", 1.0)))
         out[key] = sig
         w_sum += sig["w"]
         tilt_sum += sig["w"] * sig["risk_tilt"]
-    dates = [s["date"] for s in out.values()]
+    com = {}
+    for key, m in commodity_markets(cfg).items():
+        sig = out.get(m["signal"]) if m.get("signal") else market_signal(_series(rows, m["report"], m["code"]), cfg, 1)
+        if sig is None:
+            continue
+        com[key] = {k: v for k, v in sig.items() if k not in ("risk_tilt", "w")}
+        com[key].update(name=m["name"], w=m["w"], price_tilt=price_tilt(sig["extreme"]))
+    dates = [s["date"] for s in list(out.values()) + list(com.values())]
+    by_pos = lambda d: [k for k, s in sorted(d.items(), key=lambda kv: -abs(kv[1]["percentile"] - 50)) if s["extreme"]]
     return {"as_of": max(dates) if dates else None, "generated": today.isoformat(), "markets": out,
-            "composite": round(tilt_sum / w_sum, 3) if w_sum else 0.0,
-            "extremes": [k for k, s in sorted(out.items(), key=lambda kv: -abs(kv[1]["percentile"] - 50))
-                         if s["extreme"]]}
+            "composite": round(tilt_sum / w_sum, 3) if w_sum else 0.0, "extremes": by_pos(out),
+            "commodities": com, "commodity_extremes": by_pos(com)}
 
 
 def is_fresh(signals: dict | None, cfg=None, today: date | None = None) -> bool:
@@ -160,8 +206,76 @@ def scenario_factor(shock_pct: float, signals: dict | None, cfg=None) -> float:
 _EX_JA = {"long": ("買い越し", "買い過ぎ→下げやすい"), "short": ("売り越し", "売り過ぎ→上げやすい")}
 
 
+def _impact_map() -> dict:
+    try:
+        from bond_commodity_pipeline import SECTOR_IMPACT_MAP
+        return SECTOR_IMPACT_MAP
+    except Exception:
+        return {}
+
+
+def _targets(m: dict, impact_map: dict) -> dict:
+    """商品の影響先 {"jp": [(コード, "+"/"-", 1〜3)], "us": [...]}。項目の jp／us が impact より優先。"""
+    base = impact_map.get(m.get("impact")) or {}
+    return {"jp": m.get("jp") if m.get("jp") is not None else base.get("jp", []),
+            "us": m.get("us") if m.get("us") is not None else base.get("us", [])}
+
+
+def sector_adjustments(signals: dict | None, cfg=None, impact_map: dict | None = None) -> dict:
+    """商品の極端 → 業種への加点。{"jp": {コード: {"delta", "detail"}}, "us": {ETF: …}, "as_of", "extremes"}。
+
+    1つの極端が 1業種に入れる点 = 価格の向き(逆張り) × 影響の向き(+1/-1) × 大きさ/3 × 重み × COT_COMMODITY_PT。
+    delta は業種ごとに ±COT_COMMODITY_SECTOR_MAX_PT で打ち止め、detail は打ち止め前の商品別の点（内訳）。
+    信号が無い・古い・極端が無ければ jp／us とも空。
+    """
+    res = {"jp": {}, "us": {}, "as_of": None, "extremes": []}
+    if not is_fresh(signals, cfg) or not _param(cfg, "ENABLE_COT_COMMODITY", True):
+        return res
+    impact_map = _impact_map() if impact_map is None else impact_map
+    unit = float(_param(cfg, "COT_COMMODITY_PT", 1.0))
+    cap = float(_param(cfg, "COT_COMMODITY_SECTOR_MAX_PT", 2.0))
+    ms = commodity_markets(cfg)
+    com = signals.get("commodities") or {}
+    for key in signals.get("commodity_extremes") or []:
+        s, m = com.get(key), ms.get(key)
+        if not s or not m or not s.get("price_tilt"):
+            continue
+        res["extremes"].append(key)
+        for area, rows in _targets(m, impact_map).items():
+            for code, direction, mag in rows:
+                d = s["price_tilt"] * (1 if direction == "+" else -1) * float(mag) / 3.0 * m["w"] * unit
+                e = res[area].setdefault(str(code), {"delta": 0.0, "detail": []})
+                e["detail"].append({"key": key, "name": m["name"], "delta": round(d, 3)})
+                e["delta"] += d
+    for area in ("jp", "us"):
+        for e in res[area].values():
+            e["delta"] = round(max(-cap, min(cap, e["delta"])), 2)
+    res["as_of"] = signals.get("as_of")
+    return res
+
+
+def _jp_name(code: str, cfg) -> str:
+    v = (_param(cfg, "JAPAN_SECTORS", {}) or {}).get(code) or {}
+    return v.get("name_ja") or code
+
+
+def _commodity_line(key: str, s: dict, m: dict | None, cfg, impact_map: dict) -> str:
+    side, _ = _EX_JA[s["extreme"]]
+    view = "価格は下げやすい" if s["price_tilt"] < 0 else "価格は上げやすい"
+    chg = f"・直近{int(_param(cfg, 'COT_SIGNAL_CHANGE_WEEKS', 4))}週 {s['chg_pct']:+.1f}%pt" if s.get("chg_pct") is not None else ""
+    eff = ""
+    if m:
+        pos, neg = [], []
+        for code, direction, mag in sorted(_targets(m, impact_map)["jp"], key=lambda t: -t[2]):
+            (pos if s["price_tilt"] * (1 if direction == "+" else -1) > 0 else neg).append(_jp_name(str(code), cfg))
+        eff = "".join(f" {lab}:{'・'.join(names[:3])}" for lab, names in (("追い風", pos), ("逆風", neg)) if names)
+    return (f"  [商品] {s['name']}: 投機筋の{side}が過去{int(_param(cfg, 'COT_SIGNAL_YEARS', 3))}年の"
+            f"{s['percentile']:.0f}%点{chg}（逆張りでは{view}）{('→' + eff) if eff else ''}")
+
+
 def mail_lines(signals: dict | None, cfg=None) -> list[str]:
-    """メールの節の行（極端だけを COT_MAIL_MAX_LINES 行まで・位置が両端に近い順）。無ければ []。"""
+    """メールの節の行（市場の極端を COT_MAIL_MAX_LINES 行・商品の極端を COT_MAIL_COMMODITY_MAX_LINES 行まで、
+    いずれも位置が両端に近い順）。無ければ []。"""
     if not is_fresh(signals, cfg):
         return []
     mk = signals.get("markets") or {}
@@ -176,6 +290,16 @@ def mail_lines(signals: dict | None, cfg=None) -> list[str]:
                      f"{s['percentile']:.0f}%点{chg}（逆張りでは{view}）")
         if len(lines) >= int(_param(cfg, "COT_MAIL_MAX_LINES", 3)):
             break
+    if _param(cfg, "ENABLE_COT_COMMODITY", True):
+        com, ms, imap, n = signals.get("commodities") or {}, commodity_markets(cfg), _impact_map(), 0
+        for key in signals.get("commodity_extremes") or []:
+            s = com.get(key)
+            if not s or not s.get("extreme"):
+                continue
+            lines.append(_commodity_line(key, s, ms.get(key), cfg, imap))
+            n += 1
+            if n >= int(_param(cfg, "COT_MAIL_COMMODITY_MAX_LINES", 4)):
+                break
     if lines:
         lines.append(f"  （CFTC {signals['as_of']} 時点・週次）")
     return lines
@@ -208,8 +332,9 @@ def build_query(cfg=None) -> str:
     """要る市場の直近の週だけを1本で読む SQL（日付とクラスタ列で絞る）。"""
     years = int(_param(cfg, "COT_SIGNAL_YEARS", 3))
     by_report: dict = {}
-    for m in _markets(cfg).values():
-        by_report.setdefault(m["report"], []).append(m["code"])
+    for m in list(_markets(cfg).values()) + list(commodity_markets(cfg).values()):
+        if m["code"] not in by_report.setdefault(m["report"], []):
+            by_report[m["report"]].append(m["code"])
     cond = " OR ".join(
         f"(report = '{rep}' AND market_code IN ({', '.join(repr(c) for c in codes)}))"
         for rep, codes in sorted(by_report.items()))
@@ -248,5 +373,6 @@ def refresh(cfg, client=None) -> dict:
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(sig, ensure_ascii=False, indent=1), encoding="utf-8")
     tmp.replace(p)
-    return {"rows": len(rows), "markets": len(sig["markets"]), "extremes": sig["extremes"],
+    return {"rows": len(rows), "markets": len(sig["markets"]), "commodities": len(sig["commodities"]),
+            "commodity_extremes": sig["commodity_extremes"], "extremes": sig["extremes"],
             "composite": sig["composite"], "as_of": sig["as_of"], "mb": round(est / 1024 ** 2, 1)}
