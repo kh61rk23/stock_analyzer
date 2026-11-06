@@ -1343,6 +1343,10 @@ ENABLE_REIT_INGEST: bool = True
 REIT_INGEST_EVERY_DAYS: int = 7
 REIT_CALLS_PER_RUN: int = 16            # REIT ごとの指標4本＋物件（REIT 12本ぶん）
 REIT_PROPERTY_REITS_PER_RUN: int = 12
+# 物件が100件を超える REIT は、用途・エリアで割って取り直す。1回の取り直しの回数（REIT_CALLS_PER_RUN の中。取り直す REIT がある間は
+# 物件の REIT の本数がその分減る）と、取り直しが済んだ REIT をもう一度割るまでの日数（有報は年1〜2回しか変わらない）
+REIT_SPLIT_CALLS_PER_RUN: int = 6
+REIT_SPLIT_REFRESH_DAYS: int = 180
 FUDOSAN_PLAN_DAILY_LIMIT: int = 100       # 不動産DB の契約上の1日の上限（8/1以降）。メールの【API使用】の分母。自動取り込みは POST_CUTOFF_BUDGET まで
 FUDOSAN_REFRESH_DAYS: int = 365
 FUDOSAN_ROTATION_META: str = "fudosan_rotation_meta.json"
@@ -5449,6 +5453,9 @@ EDINET_GOV_DOCS_TIME_BUDGET_MIN: float = 30.0   # 1回の実行で使う時間�
 # データを溜める取り込みは、全表の論理サイズが BQ_STORAGE_STOP_GB 以上なら書かない。
 # 日次メールの「運用の監視」は BQ_STORAGE_WARN_GB 以上で注意、BQ_STORAGE_HIGH_GB 以上で重要として出す。
 BQ_STORAGE_STOP_GB: float = 8.0
+BQ_STORAGE_FREE_GB: float = 10.0          # 保存の無料枠（その月に保存している合計・論理サイズ）
+BQ_QUERY_FREE_GIB_PER_MONTH: float = 1024.0   # クエリの無料枠（月 1TiB・課金バイト）
+BQ_QUERY_DAILY_CAP_GIB: float = 30.7      # QueryUsagePerDay（1日の上限・16:00 JST に戻る）
 BQ_STORAGE_WARN_GB: float = 7.0
 BQ_STORAGE_HIGH_GB: float = 9.0
 # 表の作り直し・古い行の削除（bq_compact.py）の1回のクエリ量の上限。dryRun の見積もりがこれを超えたら実行しない
@@ -5593,6 +5600,29 @@ ALERT_SECTION_TIER: dict = {
 }
 
 # ==============================================================
+# BLOCK 79b: 月次メールの節の並び順（monthly_mail.section_key / ordered）
+# ==============================================================
+# 節の key → 段（小さいほど上）。日次・週次の trigger 名とは別の辞書（キーが衝突しないよう接頭辞なしの節名だけ）。
+# 1＝今月の成績（仮想トレードの月次・推奨のその後）、2＝来月の方針と承認が要るもの（配分・コモディティ・税・重みの変更案）、
+# 3＝検証（観点別の効き・的中率・審議）、4＝市場・業種の月次の振り返り、5＝運用（BQ の使用量と保存量・遅れて送信）。
+# 未登録の key は MONTHLY_SECTION_TIER_DEFAULT。signal_culling は提案が1件以上あれば段2へ上がる（monthly_mail 側）
+MONTHLY_SECTION_TIER_DEFAULT: int = 3
+MONTHLY_SECTION_TIER: dict = {
+    "paper": 1, "pick_outcomes": 1,
+    "allocation": 2, "commodity": 2, "tax": 2,
+    "signal_culling": 3, "strategy_review": 3,
+    "market_trend": 4,
+    "bq_usage": 5, "late_note": 5,
+}
+MONTHLY_TIER_LABELS: dict = {1: "今月の成績", 2: "来月の方針と承認が要るもの", 3: "検証", 4: "市場・業種の月次の振り返り", 5: "運用"}
+# シグナル淘汰：観点ごとに「日ごとの業種横断の順位相関」を取り、その平均で判定する。先リターンの窓が重なるので、
+# 独立な日数は 評価日数÷先の営業日数。これ未満は判定しない
+B4_SIGNAL_CULLING_REPORT_MIN_EFFECTIVE_DAYS: float = 3.0
+B4_SIGNAL_CULLING_REPORT_MIN_SECTORS: int = 10   # 1日の業種横断の相関を取るのに要る業種数
+# 月次メールが BQ を引く（使用量の INFORMATION_SCHEMA 約0.2GB＋推奨のその後 約10MB）。月1回だけ。False で引かない
+MONTHLY_MAIL_BQ_EXTRAS: bool = True
+
+# ==============================================================
 # BLOCK 80: 建玉の偏り（cot_signal.py・CFTC の COT を逆張りのシグナルにしてマクロ判断へ小さく足す）
 # ==============================================================
 # 投機筋（tff＝Leveraged Funds／legacy＝Non-Commercial）の買い越し（建玉に対する割合）を、過去 COT_SIGNAL_YEARS 年の中の
@@ -5616,7 +5646,7 @@ COT_SCENARIO_SHOCK_WEIGHT: float = 0.15
 COT_MAIL_MAX_LINES: int = 3
 # 市場：キー → report（tff/legacy）・market_code・表示名・資産が上がったときのリスク選好への向き（risk_sign：+1＝リスクオン、
 # -1＝リスクオフ）・合成の重み（w）。コードは CFTC の cftc_contract_market_code
-COT_LEGACY_EXTRA_CODES: tuple = ()   # legacy（商品）で cot_signal の市場のほかに残す市場コード（他は保存量のため入れない）
+COT_LEGACY_EXTRA_CODES: tuple = ()   # legacy（商品）で COT_SIGNAL_MARKETS・COT_COMMODITY_MARKETS のほかに残す市場コード（他は保存量のため入れない）
 COT_SIGNAL_MARKETS: dict = {
     "sp500":  {"report": "tff",    "code": "13874A", "name": "S&P500先物（E-mini）", "risk_sign": 1,  "w": 2.0},
     "nasdaq": {"report": "tff",    "code": "209742", "name": "ナスダック100先物（Mini）", "risk_sign": 1, "w": 1.0},
@@ -5627,3 +5657,89 @@ COT_SIGNAL_MARKETS: dict = {
     "wti":    {"report": "legacy", "code": "067651", "name": "WTI原油先物",           "risk_sign": 1,  "w": 1.0},
     "copper": {"report": "legacy", "code": "085692", "name": "銅先物",                "risk_sign": 1,  "w": 1.0},
 }
+
+# 商品の建玉の偏り（cot_signal.sector_adjustments・業種スコアへ小さく足す／cot_signal.mail_lines・メールの商品の節）。
+# 商品ごとに legacy の投機筋（Non-Commercial）の位置を出し、極端（HI以上／LO以下）を逆張りで価格の向きにして、
+# 影響先の業種（日本33業種・米国業種ETF）へ向きと大きさ（1〜3）で割り振る。合成（composite）には入れない。
+# 項目：code・name・impact（bond_commodity_pipeline.SECTOR_IMPACT_MAP のキー＝影響先の既定。そこの "+" は価格上昇が追い風）・
+# jp／us（影響先を [(コード or ETF, "+"/"-", 大きさ1〜3)] で指定すると impact より優先）・w（重み・省略時 1.0）。
+# signal を持つ項目は COT_SIGNAL_MARKETS の同じキーのコード・名前を使う（二重に持たない）。
+# market_positioning はここと COT_SIGNAL_MARKETS の legacy のコードだけを BQ に残し、未取得の市場が増えたら過去
+# COT_COMMODITY_BACKFILL_YEARS 年分を取り直す。
+ENABLE_COT_COMMODITY: bool = True
+COT_COMMODITY_BACKFILL_YEARS: int = 3
+COT_COMMODITY_PT: float = 1.0               # 大きさ3・重み1・極端1つあたりの業種への点（大きさ n なら n/3 倍）
+COT_COMMODITY_SECTOR_MAX_PT: float = 2.0    # 1業種に入る商品分の合計の上限（±）
+COT_MAIL_COMMODITY_MAX_LINES: int = 4
+COT_COMMODITY_MARKETS: dict = {
+    # エネルギー
+    "wti":       {"signal": "wti", "impact": "WTI"},
+    "brent":     {"code": "06765T", "name": "ブレント原油", "impact": "BRENT"},
+    "natgas":    {"code": "023651", "name": "天然ガス（NYMEX）", "impact": "NATGAS"},
+    "gasoline":  {"code": "111659", "name": "ガソリン（RBOB）", "impact": "GASOLINE"},
+    "heatoil":   {"code": "022651", "name": "灯油・軽油（NYハーバーULSD）", "impact": "HEATOIL"},
+    # 貴金属
+    "gold":      {"signal": "gold", "impact": "GOLD",
+                  "jp": [("1013", "+", 2), ("1002", "+", 2), ("1029", "+", 1)],
+                  "us": [("GDX", "+", 3), ("XLB", "+", 1), ("XLF", "-", 1)]},
+    "silver":    {"code": "084691", "name": "銀", "impact": "SILVER"},
+    "platinum":  {"code": "076651", "name": "プラチナ", "impact": "PLATINUM"},
+    "palladium": {"code": "075651", "name": "パラジウム", "impact": "PALLADIUM"},
+    # 産業金属
+    "copper":    {"signal": "copper", "impact": "COPPER"},
+    "aluminum":  {"code": "191693", "name": "アルミ（COMEX）", "impact": "ALUMINUM", "w": 0.5},   # 建玉が小さい
+    # 穀物・油糧種子
+    "corn":      {"code": "002602", "name": "コーン", "impact": "CORN"},
+    "soybeans":  {"code": "005602", "name": "大豆", "impact": "SOYBEANS"},
+    "soymeal":   {"code": "026603", "name": "大豆粕", "impact": "SOYMEAL"},
+    "soyoil":    {"code": "007601", "name": "大豆油", "impact": "SOYOIL"},
+    "wheat_srw": {"code": "001602", "name": "小麦（シカゴ）", "impact": "WHEAT"},
+    "wheat_hrw": {"code": "001612", "name": "小麦（カンザス）", "impact": "WHEAT"},
+    "rice":      {"code": "039601", "name": "米（籾）", "impact": "RICE", "w": 0.5},
+    "palm_oil":  {"code": "037021", "name": "パーム油", "impact": "PALM_OIL", "w": 0.5},
+    # ソフト
+    "sugar":     {"code": "080732", "name": "砂糖", "impact": "SUGAR"},
+    "coffee":    {"code": "083731", "name": "コーヒー", "impact": "COFFEE"},
+    "cocoa":     {"code": "073732", "name": "ココア", "impact": "COCOA"},
+    "cotton":    {"code": "033661", "name": "綿花", "impact": "COTTON"},
+    "oj":        {"code": "040701", "name": "オレンジジュース", "impact": "OJ", "w": 0.5},
+    # 畜産・木材
+    "cattle":    {"code": "057642", "name": "生牛", "impact": "CATTLE"},
+    "hogs":      {"code": "054642", "name": "豚（リーン）", "impact": "HOGS"},
+    "feeder":    {"code": "061641", "name": "フィーダー牛", "impact": "FEEDER"},
+    "lumber":    {"code": "058644", "name": "木材", "impact": "LUMBER", "w": 0.5},
+}
+
+# ==============================================================
+# BLOCK 81: 週次メール・週次レポートの節の並び順（weekly_report_generator.generate_weekly_report）
+# ==============================================================
+# 節の識別子 → 段（小さいほど上）。1＝今週の結論（市場の状態・保有の成績とリスク・仮想トレードの週の成績・推奨のその後）、
+# 2＝来週の候補（スクリーナー上位・審議・決算の予定・来週のアクション）、3＝業種・テーマ・マクロ・地政学・シナリオ、
+# 4＝検証（観点別の効き・バックテスト・自己評価）、5＝運用（実行台帳・ジャーナル）。未登録の節は WEEKLY_SECTION_TIER_DEFAULT。
+# 同じ段の中は生成の順のまま。日次メールの ALERT_SECTION_TIER とは別の表（trigger ではなく節の識別子で引く）
+WEEKLY_SECTION_TIER_DEFAULT: int = 3
+WEEKLY_SECTION_TIER: dict = {
+    # 1: 今週の結論
+    "inference": 1, "signal_aggregator": 1, "contraction_alert": 1, "performance": 1, "paper_weekly": 1,
+    "portfolio_concentration": 1, "portfolio_optimizer": 1, "position_sizer": 1, "stress_test": 1,
+    # 2: 来週の候補
+    "action_guide": 2, "screener": 2, "deliberation_queue": 2, "earnings_watchlist": 2, "catalyst_upcoming": 2,
+    "analyst_revision": 2, "ignition_alert": 2, "pead_drift": 2, "pearl_ranking": 2, "latent_pearl": 2,
+    "strategy_breakdown": 2, "risk_constraints": 2, "dcf": 2, "comps": 2, "options_advisor": 2, "sr_vp": 2,
+    "politician": 2,
+    # 3: 業種・テーマ・マクロ・地政学・シナリオ
+    "macro": 3, "us_macro": 3, "market_breadth": 3, "jp_sectors": 3, "us_sectors": 3, "etf": 3,
+    "geo_country_risk": 3, "scenario": 3, "longterm_scenario": 3, "anomaly_season": 3, "jp_us_bridge": 3,
+    "jp_us_correlation": 3, "options_monitor": 3, "policy_radar": 3, "technology_cluster": 3, "geo_exposure": 3,
+    "geo_signal_detail": 3, "midterm_tracker": 3, "premarket_signals": 3, "size_taxonomy": 3, "screener_heatmap": 3,
+    "finbert": 3, "news": 3, "dividend_calendar": 3,
+    # 4: 検証
+    "universe_factor_ic": 4, "backtest": 4, "alpha_attribution": 4, "self_evaluator": 4, "pearl_backtest": 4,
+    "rule_optimizer": 4, "independence": 4, "seisakudb": 4, "biz_summaries": 4,
+    # 5: 運用
+    "module_ledger": 5, "investment_journal": 5,
+}
+WEEKLY_TIER_LABELS: dict = {1: "今週の結論", 2: "来週の候補", 3: "業種・マクロ・シナリオ", 4: "検証", 5: "運用"}
+WEEKLY_FIRST_LOOK_MAX: int = 5          # 冒頭「今週まず見るもの」の行数の上限
+WEEKLY_EMAIL_FULL_MAX_TIER: int = 2     # メールで全文を載せる段の上限（これより下の段は、容量が余れば全文・足りなければ要約）
+WEEKLY_PAPER_DAYS: int = 7              # 仮想トレードの「週の成績」を測る暦日数

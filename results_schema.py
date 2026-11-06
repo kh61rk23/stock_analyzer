@@ -36,6 +36,7 @@ SCHEMA: dict[str, list[str]] = {
     "backtest": ["stock_analyzer_main"],
     "biz_summaries": ["stock_analyzer_main"],
     "bond_commodity": ["stock_analyzer_main"],
+    "cot_commodity": ["stock_analyzer_main"],
     "catalyst": ["stock_analyzer_main"],
     "ceo_scores": ["stock_analyzer_main"],
     "seisakudb": ["stock_analyzer_main"],

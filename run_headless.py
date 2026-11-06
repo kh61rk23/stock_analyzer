@@ -10,7 +10,12 @@ import importlib.util
 import os
 import sys
 from datetime import datetime
+import warnings
 from pathlib import Path
+
+# yfinance 内部の inplace 非推奨警告が1回の実行で約6,000行出てログを埋め、本物の警告が読めなくなる。
+# 自前のコードから出る警告（module が yfinance 以外）は消さない
+warnings.filterwarnings("ignore", message=r".*inplace keyword.*", module=r"yfinance(\..*)?$")
 
 #指定されたパスにあるPythonファイルを、指定した名前のモジュールとして動的に読み込む関数
 def _load_module(name: str, path: Path):

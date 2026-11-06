@@ -2723,6 +2723,28 @@ def run_all_tasks(mode: str = "all") -> dict:
             print(f"  ⚠️  多通貨モニタリングエラー: {str(e)[:80]}")
     else:
         print("  ⏩ 多通貨モニタリング: スキップ（ENABLE_MULTI_CURRENCY=False）")
+    # ── 商品の建玉の偏り（COT）を業種スコアへ小さく加える。内訳は業種の cot_commodity_detail に残す ──
+    try:
+        import cot_signal
+        _cc = cot_signal.sector_adjustments(cot_signal.load_signals(cfg), cfg)
+        if sector_results and (_cc["jp"] or _cc["us"]):
+            _cc_jp = {c: v["delta"] for c, v in _cc["jp"].items() if c in sector_results and v["delta"]}
+            _apply_capped_adjustment(
+                sector_results, _cc_jp,
+                adj_key        = "cot_commodity_adjustment",
+                cap_config_key = "COT_COMMODITY_SECTOR_MAX_PT",
+                label          = "COT_COMMODITY",
+            )
+            for c in _cc_jp:
+                sector_results[c]["cot_commodity_detail"] = _cc["jp"][c]["detail"]
+            results["sectors"] = sector_results
+            results["cot_commodity"] = {"as_of": _cc["as_of"], "extremes": _cc["extremes"],
+                                        "jp": _cc["jp"], "us_etf": _cc["us"]}
+            logger.add("cot_commodity", "success",
+                       f"商品の極端 {len(_cc['extremes'])}件 / {len(_cc_jp)}業種に加点（米国ETF {len(_cc['us'])}本は記録のみ）")
+    except Exception as e:
+        logger.add("cot_commodity", "error", str(e)[:100])
+        print(f"  ⚠️  COT 商品の業種加点エラー: {str(e)[:80]}")
     # ── [2-5] FEDカレンダー取得 ────────────────────────────────────
     if getattr(cfg, "ENABLE_FED_CALENDAR", True) and _in_mode("policy"):
         print("\n  📅 FEDカレンダー取得中...")

@@ -242,13 +242,20 @@ def run(cfg, limit: int | None = None) -> dict:
             bigquery.ArrayQueryParameter("codes", "STRING", [c for c in cands if c in companies])])).result()} \
         if companies else {}
     targets = pick_targets(cands, companies, latest, limit)
-    rows, fetched, empty, failed = [], [], [], []
+    rows, fetched, empty, failed, no_data = [], [], [], [], []
     today = date.today().isoformat()
     for code in targets:
         data = client.get(f"/companies/{code}/real-estate")
         if data is None:
-            if getattr(client, "last_error", None) == "budget":
+            err = getattr(client, "last_error", None)
+            if err == "budget":
                 break
+            if err == "not_found":
+                # EdinetDB に注記が無い会社（404）は恒久的な不在。状態に残さないと未取得の先頭に居座り、枠を毎日塞ぐ
+                # （有報が新しく出れば pick_targets の stale で取り直す）
+                no_data.append(code)
+                state[code] = {"fetched": today, "years": 0, "fv_years": 0, "status": "no_data"}
+                continue
             failed.append(code)
             continue
         got = map_real_estate(code, data)
@@ -268,7 +275,8 @@ def run(cfg, limit: int | None = None) -> dict:
             state.pop(code, None)
     state_path.write_text(json.dumps(state, ensure_ascii=False, indent=1), encoding="utf-8")
     info = {"enabled": enabled, "candidates": len(cands), "targets": len(targets), "with_fair_value": len(fetched),
-            "no_fair_value": len(empty), "failed": len(failed), "rows": len(rows), "written": written,
+            "no_fair_value": len(empty), "no_data": len(no_data), "failed": len(failed), "rows": len(rows),
+            "written": written,
             "remaining_never": sum(1 for c in cands if c not in state),
             "budget_stop": getattr(client, "last_error", None) == "budget"}
     print(f"  🏢 賃貸等不動産: {info}")

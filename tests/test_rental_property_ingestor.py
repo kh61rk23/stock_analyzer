@@ -30,3 +30,59 @@ def test_pick_targets_new_first_then_refiled():
     latest = {"E2": "2026-06-20", "E3": "2026-06-25", "E4": "2026-06-28"}
     assert rp.pick_targets(["E1", "E2", "E3", "E4"], state, latest, 10) == ["E1", "E4", "E2"]
     assert rp.pick_targets(["E1", "E2", "E3", "E4"], state, latest, 2) == ["E1", "E4"]
+
+
+def test_run_records_404_so_queue_advances(monkeypatch, tmp_path):
+    """404（EdinetDB に注記なし）の会社は状態に残し、翌日の未取得の先頭に居座らない。"""
+    import json
+    import sys
+    from types import ModuleType, SimpleNamespace
+
+    class FakeClient:
+        last_error = None
+
+        def get(self, path):
+            code = path.split("/")[2]
+            if code == "E1":
+                self.last_error = "not_found"
+                return None
+            if code == "E2":
+                self.last_error = "http_500"
+                return None
+            self.last_error = None
+            return {"real_estate_notes": [{"fiscal_year": 2025, "bs": {"land_m_yen": 5}, "lease_disclosure": {}}]}
+
+    class FakeRows:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def result(self):
+            return self._rows
+
+    class FakeBQ:
+        project = "p"
+
+        def __init__(self):
+            self.client = SimpleNamespace(
+                get_table=lambda *_: True,
+                query=lambda *a, **k: FakeRows([SimpleNamespace(edinet_code=c) for c in ("E1", "E2", "E3")]))
+
+        def merge_rows(self, *a, **k):
+            return True
+
+    bq_mod = ModuleType("edinet_bq_client")
+    bq_mod.EDINETBQClient = FakeBQ
+    monkeypatch.setitem(sys.modules, "edinet_bq_client", bq_mod)
+    gov = ModuleType("edinet_gov_xbrl")
+    gov.ok_codes = lambda cfg: set()
+    monkeypatch.setitem(sys.modules, "edinet_gov_xbrl", gov)
+    monkeypatch.setattr(rp, "_client", lambda cfg: FakeClient())
+    cfg = SimpleNamespace(DATA_DIR=str(tmp_path), ENABLE_RENTAL_PROPERTY_FV=True, RENTAL_FV_DAILY_BUDGET=3,
+                          RENTAL_FV_PRIORITY_CODES=())
+    info = rp.run(cfg)
+    assert info["no_data"] == 1 and info["failed"] == 1
+    state = json.loads((tmp_path / "rental_property_state.json").read_text(encoding="utf-8"))
+    assert state["E1"]["status"] == "no_data"
+    assert "E2" not in state            # 一時障害は翌日やり直す
+    assert "E3" in state
+    assert info["remaining_never"] == 1

@@ -146,7 +146,9 @@ def run_jp_filings(cfg, results: dict, logger, in_mode=lambda key: True, probe=N
             logger.add("reit_ingest", _reit_status,
                        value.get("reason", "") if value.get("skipped") else
                        f"物件{value.get('properties', 0)}件 / 指標{value.get('metrics', 0)}行 / API {value.get('calls', 0)}回"
-                       + (f" / 上限で切れた REIT {len(value['truncated'])}本" if value.get("truncated") else ""))
+                       + f" / 100件で切れて未完の REIT {len(value.get('truncated') or [])}本"
+                       + (f"（取り直し{value['split_calls']}回）" if value.get("split_calls") else "")
+                       + (f" / 取り直しで増えた物件 累計{value['split_gained']}件" if value.get("split_gained") else ""))
         except Exception as exc:
             logger.add("reit_ingest", "error", f"{type(exc).__name__}: {str(exc)[:80]}")
 
