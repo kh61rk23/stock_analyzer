@@ -36,6 +36,7 @@ on:
           - bq_compact_price_dedupe
           - bq_compact_sec_forms
           - bq_compact_gov_facts
+          - bq_compact_cot_legacy
 
 permissions:
   contents: write
@@ -132,6 +133,7 @@ jobs:
             bq_compact_price_dedupe) python -u bq_compact.py price_dedupe ;;
             bq_compact_sec_forms) python -u bq_compact.py sec_forms ;;
             bq_compact_gov_facts) python -u bq_compact.py gov_facts ;;
+            bq_compact_cot_legacy) python -u bq_compact.py cot_legacy ;;
           esac
           TASK
           TASK="${{ inputs.task }}" python actions_log.py --workflow manual_task --step "${{ inputs.task }}" -- bash "$RUNNER_TEMP/task.sh"

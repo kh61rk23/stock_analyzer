@@ -46,11 +46,22 @@ def gov_facts_sql(project: str) -> str:
             f"WHERE doc_type_code IN ({types}) AND element_id NOT IN ({ids})")
 
 
+def cot_legacy_sql(project: str, cfg) -> str:
+    import market_positioning as mp
+    codes = sorted(mp.cot_keep_codes(cfg))
+    if not codes:
+        raise ValueError("残す legacy の市場が無い（COT_SIGNAL_MARKETS を確かめる）")
+    keep = ", ".join("'%s'" % c.replace("'", "") for c in codes)
+    return (f"DELETE FROM `{project}.analytics.cot_positions`\n"
+            f"WHERE report = 'legacy' AND (market_code IS NULL OR market_code NOT IN ({keep}))")
+
+
 TASKS = {   # 名前 → (SQL を作る関数, location, 対象の表)
     "price_dedupe": (lambda p, cfg: price_dedupe_sql(p), PRICE_LOCATION, "analytics.price_daily"),
     "sec_forms": (lambda p, cfg: sec_forms_sql(p, tuple(getattr(cfg, "SEC_FILINGS_KEEP_FORMS", ()) or ())),
                   SEC_LOCATION, "us.sec_filings"),
     "gov_facts": (lambda p, cfg: gov_facts_sql(p), GOV_LOCATION, "edinet.gov_doc_facts"),
+    "cot_legacy": (lambda p, cfg: cot_legacy_sql(p, cfg), PRICE_LOCATION, "analytics.cot_positions"),
 }
 
 

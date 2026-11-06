@@ -5616,6 +5616,7 @@ COT_SCENARIO_SHOCK_WEIGHT: float = 0.15
 COT_MAIL_MAX_LINES: int = 3
 # 市場：キー → report（tff/legacy）・market_code・表示名・資産が上がったときのリスク選好への向き（risk_sign：+1＝リスクオン、
 # -1＝リスクオフ）・合成の重み（w）。コードは CFTC の cftc_contract_market_code
+COT_LEGACY_EXTRA_CODES: tuple = ()   # legacy（商品）で cot_signal の市場のほかに残す市場コード（他は保存量のため入れない）
 COT_SIGNAL_MARKETS: dict = {
     "sp500":  {"report": "tff",    "code": "13874A", "name": "S&P500先物（E-mini）", "risk_sign": 1,  "w": 2.0},
     "nasdaq": {"report": "tff",    "code": "209742", "name": "ナスダック100先物（Mini）", "risk_sign": 1, "w": 1.0},

@@ -74,6 +74,21 @@ def cot_rows(records: list, report: str, now: str) -> list[dict]:
     return out
 
 
+def cot_keep_codes(cfg) -> set:
+    """legacy で残す市場コード。legacy は商品の全市場（約300）なので、読み手（cot_signal）が使う市場と
+    COT_LEGACY_EXTRA_CODES だけ残す（保存量のため）。tff は金融先物だけなので全部残す。"""
+    codes = {str(m.get("code")) for m in (getattr(cfg, "COT_SIGNAL_MARKETS", {}) or {}).values()
+             if m.get("report") == "legacy" and m.get("code")}
+    return codes | {str(c) for c in (getattr(cfg, "COT_LEGACY_EXTRA_CODES", ()) or ())}
+
+
+def keep_cot_markets(rows: list, cfg) -> list:
+    codes = cot_keep_codes(cfg)
+    if not codes:
+        return rows
+    return [r for r in rows if r["report"] != "legacy" or r["market_code"] in codes]
+
+
 def months_to_run(state: dict, today: date, recent: int, floor: date) -> list[date]:
     """取り込む月（月初の日付・新しい順）。直近 recent か月は毎回、残りは未取得の月だけ。"""
     m = date(today.year, today.month, 1)
@@ -226,7 +241,7 @@ def run(cfg, budget_min: float | None = None) -> dict:
             if recs is None:
                 failed = True
                 break
-            rows += cot_rows(recs, report, now)
+            rows += keep_cot_markets(cot_rows(recs, report, now), cfg)
         if failed:
             stat["errors"] += 1
             continue

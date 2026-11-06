@@ -94,3 +94,17 @@ def test_run_refuses_when_estimate_exceeds_limit():
     c = _Client()
     r = bc.run(c, SimpleNamespace(BQ_COMPACT_MAX_BYTES=1024 ** 3), "price_dedupe")
     assert r["refused"] and not r["ran"] and c.queries == [True]   # 見積もりの1本だけ
+
+
+def test_cot_legacy_keeps_only_signal_markets():
+    import types
+    import market_positioning as mp
+    cfg = types.SimpleNamespace(COT_SIGNAL_MARKETS={"gold": {"report": "legacy", "code": "088691"},
+                                                    "sp": {"report": "tff", "code": "13874A"}},
+                                COT_LEGACY_EXTRA_CODES=("023651",))
+    rows = [{"report": "legacy", "market_code": "088691"}, {"report": "legacy", "market_code": "001602"},
+            {"report": "tff", "market_code": "999999"}]
+    assert [r["market_code"] for r in mp.keep_cot_markets(rows, cfg)] == ["088691", "999999"]
+    import bq_compact as bc
+    sql = bc.cot_legacy_sql("p", cfg)
+    assert "report = 'legacy'" in sql and "'023651'" in sql and "'088691'" in sql and "13874A" not in sql
