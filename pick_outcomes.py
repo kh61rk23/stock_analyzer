@@ -264,6 +264,17 @@ def monthly_report(cfg, today: date | None = None, force: bool = False) -> dict 
         state = {}
     if not force and state.get("last_report_month") == month:
         return None
+    alert = month_alert(cfg, start, end, month)
+    if alert is None:
+        return None
+    state["last_report_month"] = month
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    return alert
+
+
+def month_alert(cfg, start: date, end: date, month: str) -> dict | None:
+    """start 以上 end 未満に選ばれた銘柄の成績表の alert（状態は触らない）。日次メールの月初の回と月次メールが共有する。"""
     from google.cloud import bigquery
     client = _client(cfg)
     jc = bigquery.QueryJobConfig(query_parameters=[
@@ -279,9 +290,6 @@ def monthly_report(cfg, today: date | None = None, force: bool = False) -> dict 
     new20 = sorted((r for r in rows if r.get("is_new") and r.get("ex_20d") is not None and int(r["rank"] or 99) <= 25),
                    key=lambda r: r["ex_20d"], reverse=True)
     lines = report_lines(month, summary, new20[:5], new20[-5:][::-1] if len(new20) > 5 else [])
-    state["last_report_month"] = month
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
     return {"trigger": "pick_outcomes_monthly", "title": f"📈 推奨のその後（{month} の成績表）",
             "body": "\n".join(lines), "severity": "info"}
 

@@ -106,8 +106,14 @@ def build_order_tickets(allocations: dict, total_assets: float,
 
 # ── I/O層 ────────────────────────────────────────────────────
 
-def _fetch_closes(ticker: str, days: int = 300) -> list:
-    """yfinanceで調整済み終値を取得（best-effort・失敗は空）。"""
+def _history_days(long_lb: int) -> int:
+    """long_lb 営業日ぶんの終値に要るカレンダー日数（営業日は暦日の約 0.7 倍・休場の余裕を足す）。"""
+    return int(long_lb / 0.65) + 30
+
+
+def _fetch_closes(ticker: str, days: int = 440) -> list:
+    """yfinanceで調整済み終値を取得（best-effort・失敗は空）。
+    days は 12-1 モメンタムの 252 営業日に足りる暦日数にする（300 日では約 205 営業日しか取れず常に None になる）。"""
     try:
         import yf_cache as yf
         h = yf.Ticker(ticker).history(period=f"{days}d", auto_adjust=True)
@@ -116,6 +122,21 @@ def _fetch_closes(ticker: str, days: int = 300) -> list:
     except Exception:
         pass
     return []
+
+
+def latest_cycle_phase(cfg) -> str:
+    """経済サイクルの直近の象限。月次は日次の results を持たないので、日次が毎回書く履歴ファイルの最後の行を読む。
+    読めないときは B（コモディティ配分なし＝現金）。"""
+    path = (Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
+            / getattr(cfg, "CYCLE_PHASE_HISTORY_FILE", "cycle_phase_history.json"))
+    try:
+        hist = json.loads(path.read_text(encoding="utf-8"))
+        for h in reversed(hist):
+            if h.get("phase") in ("A", "B", "C", "D"):
+                return h["phase"]
+    except Exception:
+        pass
+    return "B"
 
 
 def run_commodity_rotation(cfg, results: dict = None,
@@ -131,14 +152,14 @@ def run_commodity_rotation(cfg, results: dict = None,
     long_lb, short_lb = getattr(cfg, "CMD_MOM_LOOKBACK", (252, 21))
 
     if regime is None:
-        regime = ((results or {}).get("economic_cycle") or {}).get("phase", "B")
+        regime = ((results or {}).get("economic_cycle") or {}).get("phase") or latest_cycle_phase(cfg)
 
     # モメンタム算出（注入 or yfinance）
     momentum, prices = {}, {}
     for ticker in universe:
         closes = (closes_by_ticker or {}).get(ticker)
         if closes is None:
-            closes = _fetch_closes(ticker)
+            closes = _fetch_closes(ticker, _history_days(long_lb))
         if closes:
             prices[ticker] = closes[-1]
             momentum[ticker] = calc_12_1_momentum(closes, long_lb, short_lb)
@@ -197,6 +218,14 @@ def build_report(plan: dict, yyyymm: str) -> str:
                      f"{f'{mom:+.1%}' if mom is not None else '-'} |")
     if not plan.get("allocations"):
         lines.append("| （現金100%・配分なし） | | | |")
+    mom = plan.get("momentum") or {}
+    if universe:
+        lines += ["", "## 12-1モメンタム（参考・全ETF）", "| ETF | カテゴリ | 12-1モメンタム |", "|---|---|---|"]
+        for t, cat in universe.items():
+            m = mom.get(t)
+            lines.append(f"| {t} | {cat} | {f'{m:+.1%}' if m is not None else '価格不足'} |")
+        if all(mom.get(t) is None for t in universe):
+            lines.append("- ⚠️ どのETFも約1年ぶんの価格が取れていない（取得の失敗）。配分の判定はできていない")
     return "\n".join(lines) + "\n"
 
 

@@ -48,6 +48,10 @@ def calc_tax_harvest(positions: list, realized_gain_ytd: float,
               and float(p.get("unrealized_pnl", 0) or 0) < 0]
     losers.sort(key=lambda x: -x["loss"])
     total_loss = round(sum(x["loss"] for x in losers), 2)
+    if realized_gain_ytd is None:
+        # 実現損益のデータが無いとき 0 円として相殺可能額 ¥0 と出すと「損出しは不要」と読めてしまう
+        return {"candidates": losers, "total_loss": total_loss, "realized_gain": None,
+                "harvestable": None, "tax_saving": None}
     gain = max(0.0, float(realized_gain_ytd or 0))
     harvestable = round(min(total_loss, gain), 2)   # 相殺できる損失
     return {
@@ -106,10 +110,15 @@ def build_report(harvest: dict, countdown: list, usage: dict,
              "候補提示のみ・自動発注なし（D-01）。",
              "",
              "## ① 損出し候補（特定口座・当年実現益との相殺）"]
-    lines.append(f"- 当年実現益: ¥{harvest['realized_gain']:,.0f} / "
-                 f"特定口座の含み損合計: ¥{harvest['total_loss']:,.0f}")
-    lines.append(f"- **相殺可能額: ¥{harvest['harvestable']:,.0f} → "
-                 f"節税額の目安: ¥{harvest['tax_saving']:,.0f}**（20.315%）")
+    if harvest["realized_gain"] is None:
+        lines.append(f"- 当年実現益: **不明**（実現損益.csv が見つからない） / "
+                     f"特定口座の含み損合計: ¥{harvest['total_loss']:,.0f}")
+        lines.append("- 相殺可能額・節税額の目安は出せない（実現益が分かれば、含み損のうち実現益の範囲が節税に効く）")
+    else:
+        lines.append(f"- 当年実現益: ¥{harvest['realized_gain']:,.0f} / "
+                     f"特定口座の含み損合計: ¥{harvest['total_loss']:,.0f}")
+        lines.append(f"- **相殺可能額: ¥{harvest['harvestable']:,.0f} → "
+                     f"節税額の目安: ¥{harvest['tax_saving']:,.0f}**（20.315%）")
     if harvest["candidates"]:
         lines += ["", "| 銘柄 | 含み損 |", "|---|---|"]
         for c in harvest["candidates"][:15]:
@@ -149,8 +158,8 @@ def _read_csv(path: Path) -> list:
         return []
 
 
-def _realized_gain_ytd(cfg, year: int) -> float:
-    """実現損益.csv から当年の実現損益合計を集計（列名に頑健）。"""
+def _realized_gain_ytd(cfg, year: int):
+    """実現損益.csv から当年の実現損益合計を集計（列名に頑健）。ファイルが無い・空なら None（0 円とは別）。"""
     vault = Path(getattr(cfg, "INVESTMENT_DEPT_VAULT_DIR", "")) if cfg else Path("")
     candidates = [vault.parent / "data" / "実現損益.csv",
                   vault / "data" / "実現損益.csv",
@@ -172,7 +181,7 @@ def _realized_gain_ytd(cfg, year: int) -> float:
                         pass
                     break
         return total
-    return 0.0
+    return None
 
 
 def _load_positions(cfg) -> list:
@@ -227,7 +236,8 @@ def main():
     out = insight_dir / f"tax_report_{year}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(md, encoding="utf-8")
-    print(f"✅ 税・NISAレポート出力: {out}（節税目安 ¥{harvest['tax_saving']:,.0f}）")
+    saving = "不明" if harvest["tax_saving"] is None else f"¥{harvest['tax_saving']:,.0f}"
+    print(f"✅ 税・NISAレポート出力: {out}（節税目安 {saving}）")
 
 
 if __name__ == "__main__":

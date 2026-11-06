@@ -2,9 +2,11 @@
 # signal_culling_report.py — シグナル自動淘汰レポート（R1-4 / E4）
 # ==============================================================
 # 【役割】月次で22カテゴリ各シグナルの IC を算出し、重み変更「提案」を出す。
-#   IC = 当日カテゴリスコアと20日先リターンの Spearman 相関（業種横断プール）
-#   t  = IC×sqrt(N-2)/sqrt(1-IC²)
-#   判定: N<60 →「判定不能」/ t<=-2.0 →「重みゼロ化提案」/
+#   IC = 日ごとに、その日のカテゴリスコアと20日先リターンの業種横断 Spearman 相関を取り、その平均
+#   t  = 平均IC / (日ごとのICの標準偏差 / sqrt(独立な日数))。独立な日数 = 評価日数 ÷ 先の営業日数
+#        （先リターンの窓が重なるので、日数をそのまま数えると t が約 sqrt(20) 倍に膨らむ）
+#   業種で値が同じカテゴリ（市場共通の指標）は業種横断の相関が取れないので判定不能
+#   判定: 独立な日数 < B4_SIGNAL_CULLING_REPORT_MIN_EFFECTIVE_DAYS →「判定不能」/ t<=-2.0 →「重みゼロ化提案」/
 #         t>=+2.0 →「重み+20%提案」/ それ以外 → 現状維持
 # 【原則】自動では変更しない。提案MDのうち承認されたものだけ
 #   次セッションで signal_aggregator.DEFAULT_WEIGHTS を変更し
@@ -19,6 +21,7 @@
 
 from __future__ import annotations
 
+import bisect
 import json
 import sys
 from datetime import date
@@ -33,12 +36,15 @@ from config_sync import sync_module_constants
 _CFG_CONST_MAP = {
     'B4_SIGNAL_CULLING_REPORT_FWD_DAYS': 'FWD_DAYS',
     'B6_SIGNAL_CULLING_REPORT_T_PROMOTE': 'T_PROMOTE',
+    'B4_SIGNAL_CULLING_REPORT_MIN_EFFECTIVE_DAYS': 'MIN_EFFECTIVE_DAYS',
+    'B4_SIGNAL_CULLING_REPORT_MIN_SECTORS': 'MIN_SECTORS',
 }
 
 FWD_DAYS = 20          # 先リターンの営業日数（ML_TARGET_HORIZON_D と同値）
-N_MIN = 60             # これ未満は「判定不能」
 T_PROMOTE = 2.0        # 重み+20%提案
 T_DEMOTE = -2.0        # 重みゼロ化提案
+MIN_EFFECTIVE_DAYS = 3.0   # 独立な日数（評価日数÷FWD_DAYS）の下限（config B4_SIGNAL_CULLING_REPORT_MIN_EFFECTIVE_DAYS）
+MIN_SECTORS = 10           # 1日の業種横断の相関に要る業種数（config B4_SIGNAL_CULLING_REPORT_MIN_SECTORS）
 
 
 # ── 純粋ロジック（pytest対象） ────────────────────────────────
@@ -73,56 +79,60 @@ def spearman(x: list, y: list):
     return cov / (vx * vy) ** 0.5
 
 
-def t_stat(ic: float, n: int):
-    if ic is None or n < 3 or abs(ic) >= 1.0:
-        return None
-    return ic * ((n - 2) ** 0.5) / ((1 - ic * ic) ** 0.5)
+def judge_daily_ics(ics: list, current_weight: float, fwd_days: int | None = None,
+                    min_effective: float | None = None) -> dict:
+    """日ごとの業種横断 IC の列 → 判定（純関数）。
 
-
-def judge_category(ic, n: int, current_weight: float) -> dict:
-    """判定（要件定義書 §R1-4 の確定閾値）。"""
-    if n < N_MIN or ic is None:
-        return {"ic": ic, "t": None, "n": n, "verdict": "判定不能",
-                "proposed_weight": current_weight}
-    t = t_stat(ic, n)
-    if t is None:
-        return {"ic": ic, "t": None, "n": n, "verdict": "判定不能",
-                "proposed_weight": current_weight}
+    独立な日数 = len(ics) / fwd_days。これが min_effective 未満、または IC のばらつきが 0 なら判定不能。"""
+    fwd = fwd_days or FWD_DAYS
+    need = MIN_EFFECTIVE_DAYS if min_effective is None else min_effective
+    n = len(ics)
+    undecided = {"ic": None, "t": None, "n": n, "verdict": "判定不能", "proposed_weight": current_weight}
+    if n < 2 or n / fwd < need:
+        return undecided
+    mean = sum(ics) / n
+    sd = (sum((x - mean) ** 2 for x in ics) / (n - 1)) ** 0.5
+    if sd <= 0:
+        return undecided
+    t = mean / (sd / (n / fwd) ** 0.5)
+    base = {"ic": round(mean, 4), "t": round(t, 2), "n": n}
     if t <= T_DEMOTE:
-        return {"ic": round(ic, 4), "t": round(t, 2), "n": n,
-                "verdict": "重みゼロ化提案", "proposed_weight": 0.0}
+        return {**base, "verdict": "重みゼロ化提案", "proposed_weight": 0.0}
     if t >= T_PROMOTE:
-        return {"ic": round(ic, 4), "t": round(t, 2), "n": n,
-                "verdict": "重み+20%提案",
-                "proposed_weight": round(current_weight * 1.2, 4)}
-    return {"ic": round(ic, 4), "t": round(t, 2), "n": n,
-            "verdict": "現状維持", "proposed_weight": current_weight}
+        return {**base, "verdict": "重み+20%提案", "proposed_weight": round(current_weight * 1.2, 4)}
+    return {**base, "verdict": "現状維持", "proposed_weight": current_weight}
 
 
-def build_judgments(panel: list, fwd_returns: dict, weights: dict) -> dict:
+def build_judgments(panel: list, fwd_returns: dict, weights: dict, min_sectors: int | None = None) -> dict:
     """
     panel: [{"date": d, "sectors": {code: {cat: score}}}, ...]
     fwd_returns: {(date, code): 20日先リターン}
     weights: {cat: 現行重み}
-    Returns: {cat: judge_category(...)}
+    1日ごとに業種横断の Spearman を取る（業種数が min_sectors 未満、またはスコアが全業種同じ日は取れない）。
+    Returns: {cat: judge_daily_ics(...)}
     """
-    obs: dict = {}                                # {cat: ([scores], [rets])}
+    need = MIN_SECTORS if min_sectors is None else min_sectors
+    daily: dict = {}                              # {cat: [日ごとのIC]}
     for row in panel:
         d = row.get("date")
+        per_cat: dict = {}
         for code, comps in (row.get("sectors") or {}).items():
             ret = fwd_returns.get((d, code))
             if ret is None:
                 continue
             for cat, score in comps.items():
-                xs, ys = obs.setdefault(cat, ([], []))
+                if score is None:
+                    continue
+                xs, ys = per_cat.setdefault(cat, ([], []))
                 xs.append(float(score))
                 ys.append(float(ret))
-    out = {}
-    for cat, w in weights.items():
-        xs, ys = obs.get(cat, ([], []))
-        ic = spearman(xs, ys) if xs else None
-        out[cat] = judge_category(ic, len(xs), w)
-    return out
+        for cat, (xs, ys) in per_cat.items():
+            if len(xs) < need:
+                continue
+            ic = spearman(xs, ys)
+            if ic is not None:
+                daily.setdefault(cat, []).append(ic)
+    return {cat: judge_daily_ics(daily.get(cat, []), w) for cat, w in weights.items()}
 
 
 def render_report(judgments: dict, weights: dict, yyyymm: str,
@@ -135,7 +145,7 @@ def render_report(judgments: dict, weights: dict, yyyymm: str,
              ""]
     if note:
         lines += [f"> {note}", ""]
-    lines += ["| カテゴリ | 現行重み | 提案重み | IC | t | N | 判定 | 承認 |",
+    lines += ["| カテゴリ | 現行重み | 提案重み | IC | t | 評価日数 | 判定 | 承認 |",
               "|---|---|---|---|---|---|---|---|"]
     for cat in sorted(weights, key=lambda c: -weights[c]):
         j = judgments.get(cat, {})
@@ -194,10 +204,11 @@ def fetch_forward_returns(panel: list, cfg) -> dict:
                       for idx, r in h.iterrows()]
         except Exception:
             continue
-        date_idx = {d: i for i, (d, _) in enumerate(closes)}
+        # パネルの日付が休場日（土日・祝日）なら、直前の営業日の終値を起点にする
+        cdates = [d for d, _ in closes]
         for d in dates:
-            i = date_idx.get(d)
-            if i is None or i + FWD_DAYS >= len(closes):
+            i = bisect.bisect_right(cdates, d) - 1
+            if i < 0 or i + FWD_DAYS >= len(closes):
                 continue
             c0, c1 = closes[i][1], closes[i + FWD_DAYS][1]
             if c0 > 0:
@@ -239,6 +250,11 @@ def main():
                 f"先リターンには各日から{FWD_DAYS}営業日後の終値が要る。蓄積不足か株価の取得失敗）。")
         print(f"    {note}")
     judgments = build_judgments(panel, fwd, weights)
+    if fwd and not note and all(j["verdict"] == "判定不能" for j in judgments.values()):
+        days = len({d for d, _ in fwd})
+        note = (f"⚠️ 先リターンが取れた日は {days}日分。判定には独立な日数（評価日数÷{FWD_DAYS}）が"
+                f"{MIN_EFFECTIVE_DAYS:g}以上（評価日数 {int(MIN_EFFECTIVE_DAYS * FWD_DAYS)}日）要る。"
+                "市場共通の指標（業種で値が同じもの）は業種横断の相関が取れず、この方式では判定できない。")
     md = render_report(judgments, weights, yyyymm, note)
 
     out_dir = Path(getattr(cfg, "INSIGHT_DIR", REPO / "stock_data" / "insights"))

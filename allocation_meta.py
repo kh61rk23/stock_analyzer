@@ -181,6 +181,7 @@ def build_allocation(strategy_returns: dict, strategy_pf: dict,
         "stats": stats, "weights": weights, "allocations": allocations,
         "culled": culled, "insufficient": insufficient,
         "casino_budget": casino_budget, "min_months": min_months,
+        "history_months": {sid: len(r) for sid, r in strategy_returns.items()},
         "reason": (f"{len(stats)}戦略に配分 / 淘汰{len(culled)} / "
                    f"データ不足{len(insufficient)}"),
     }
@@ -188,7 +189,25 @@ def build_allocation(strategy_returns: dict, strategy_pf: dict,
 
 # ── I/O層 ────────────────────────────────────────────────────
 
-def _load_paper_returns(cfg) -> tuple[dict, dict, dict]:
+def monthly_returns(equity_history: list, upto_ym: str | None = None) -> list:
+    """equity_history（日次の評価額）→ 月次リターンの系列（純関数）。
+
+    月末（その月の最後の記録）の評価額を前月末と比べる。最初の記録がある月は月の途中から始まる部分月なので
+    基準にだけ使い、リターンには数えない。upto_ym（YYYY-MM）より後の月は使わない（作成日の月は途中までしか
+    記録が無く、1日分の値動きを1か月のリターンとして混ぜてしまうため）。"""
+    by_month = {}
+    for h in equity_history or []:
+        ym = str(h.get("date", ""))[:7]
+        if upto_ym and ym > upto_ym:
+            continue
+        if h.get("equity") is not None:
+            by_month[ym] = h["equity"]
+    months = sorted(by_month)
+    eqs = [by_month[m] for m in months]
+    return [eqs[i] / eqs[i - 1] - 1 for i in range(1, len(eqs)) if eqs[i - 1]]
+
+
+def _load_paper_returns(cfg, upto_ym: str | None = None) -> tuple[dict, dict, dict]:
     """paper/accounts.json の equity_history から月次リターン系列を復元。"""
     paper_dir = Path(getattr(cfg, "PAPER_LEDGER_PATH", "stock_data/paper"))
     p = paper_dir / "accounts.json"
@@ -202,15 +221,7 @@ def _load_paper_returns(cfg) -> tuple[dict, dict, dict]:
     for sid, acc in accounts.items():
         if sid.startswith("_") or not isinstance(acc, dict):
             continue
-        # 月末equityの系列 → 月次リターン
-        by_month = {}
-        for h in acc.get("equity_history", []):
-            ym = str(h.get("date", ""))[:7]
-            by_month[ym] = h.get("equity")
-        months = sorted(by_month)
-        eqs = [by_month[m] for m in months]
-        rets = [eqs[i] / eqs[i-1] - 1 for i in range(1, len(eqs))
-                if eqs[i-1]]
+        rets = monthly_returns(acc.get("equity_history", []), upto_ym)
         if rets:
             returns[sid] = rets
         # PF / bootstrap p を実際に算出する。None 固定だと cull_check() が
@@ -268,8 +279,10 @@ def build_report(plan: dict, yyyymm: str) -> str:
         lines += ["", f"## 淘汰提案（retired）: {', '.join(plan['culled'])}",
                   "- 直近6ヶ月 PF<1.0 かつ bootstrap p>0.5 → 配分0を提案"]
     if plan.get("insufficient"):
-        lines += ["", f"## データ不足（最低{plan.get('min_months', 3)}ヶ月未満・保留）: "
-                  f"{', '.join(plan['insufficient'])}"]
+        hm = plan.get("history_months") or {}
+        need = plan.get("min_months", 3)
+        lines += ["", f"## データ不足（最低{need}ヶ月未満・保留）: "
+                  + "、".join(f"{x}（{hm[x]}/{need}か月）" if x in hm else x for x in plan["insufficient"])]
     return "\n".join(lines) + "\n"
 
 
@@ -300,7 +313,7 @@ def main(argv: list[str] | None = None):
         import config as cfg
     except Exception:
         cfg = None
-    returns, pf, pval = _load_paper_returns(cfg)
+    returns, pf, pval = _load_paper_returns(cfg, f"{yyyymm[:4]}-{yyyymm[4:]}")
     if not returns:
         print(
             "⏩ S2月次リターンなし → 資金配分提案をスキップ"

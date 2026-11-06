@@ -100,6 +100,10 @@ def judge_promotion(acc: dict, cfg=None, fills: int | None = None, trips: list |
         # 月末の評価額の月次リターン（数点しかない）では、勝ち負けの実績にならない
         trades = len(trips)
         rets = [t["ret"] for t in trips]
+        # PF は金額で数える（損益額の合計の比）。1取引ごとの騰落率を足すと、小さい約定が大きい約定と同じ重さになる
+        gain = sum(t["pnl"] for t in trips if t["pnl"] > 0)
+        loss = -sum(t["pnl"] for t in trips if t["pnl"] < 0)
+        pf_money = round(gain / loss, 4) if loss > 0 else None
     else:
         trades = int(fills if fills is not None else (acc.get("total_fills", 0) or 0))
         by_month = {}
@@ -109,13 +113,13 @@ def judge_promotion(acc: dict, cfg=None, fills: int | None = None, trips: list |
         eqs = [by_month[m] for m in months]
         rets = [eqs[i] / eqs[i - 1] - 1 for i in range(1, len(eqs)) if eqs[i - 1]]
     # 昇格判定は全期間の実績で見る（淘汰の6ヶ月窓とは別基準）
-    pf = calc_profit_factor(rets, months=0)
+    pf = pf_money if trips is not None else calc_profit_factor(rets, months=0)
     p  = bootstrap_p_value(rets, months=0)
 
     # calc_profit_factor は「損失月なし」を None で返す（＝負けていないので
     # 淘汰判定の対象外という意味）。昇格判定では逆に最良ケースなので、
     # リターン実績があって損失月ゼロなら PF 基準は満たしたものとして扱う。
-    _no_loss = bool(rets) and all(r >= 0 for r in rets)
+    _no_loss = bool(rets) and (all(t["pnl"] >= 0 for t in trips) if trips is not None else all(r >= 0 for r in rets))
     pf_ok = (pf is not None and pf >= min_pf) or (pf is None and _no_loss)
 
     reasons = []
@@ -137,21 +141,26 @@ def build_report(accounts: dict, yyyymm: str, cfg=None, events: list | None = No
              "> S2仮想口座（実発注なし=D-01）。実弾昇格判定はM2基準"
              "（取引数>=30・PF>=1.3・bootstrap p<0.10・利用者承認）。",
              "",
-             "| 戦略 | 月初equity | 月末equity | 月次損益 | 月次リターン | 記録日数 |",
-             "|---|---|---|---|---|---|"]
+             "| 戦略 | 月初equity | 月末equity | 月次損益 | 月次リターン | 記録日数 | 月の実現損益 | 決済（勝/負） |",
+             "|---|---|---|---|---|---|---|---|"]
     for sid, acc in sorted(accounts.items()):
         if sid.startswith("_") or not isinstance(acc, dict):
             continue
         hist = [h for h in acc.get("equity_history", [])
                 if h["date"][:7] == ym]
         if not hist:
-            lines.append(f"| {sid} | - | - | - | - | 0 |")
+            lines.append(f"| {sid} | - | - | - | - | 0 | - | - |")
             continue
         start, end = month_start_equity(acc.get("equity_history", []), ym), hist[-1]["equity"]
         pnl = end - start
         ret = pnl / start if start > 0 else 0.0
+        # 月次損益は含み損益を含む。その月に売りで決着した分（実現）は別に出す
+        month_trips = [t for t in round_trips(events, sid, ym) if str(t["date"])[:7] == ym] if events else None
+        realized = f"{sum(t['pnl'] for t in month_trips):+,.0f}" if month_trips is not None else "-"
+        wl = (f"{sum(1 for t in month_trips if t['pnl'] > 0)}/{sum(1 for t in month_trips if t['pnl'] < 0)}"
+              if month_trips is not None else "-")
         lines.append(f"| {sid} | {start:,.0f} | {end:,.0f} | {pnl:+,.0f} | "
-                     f"{ret:+.2%} | {len(hist)} |")
+                     f"{ret:+.2%} | {len(hist)} | {realized} | {wl} |")
     # ── 実弾昇格M2判定 ─────────────
     lines += ["", "## 実弾昇格M2判定",
               "", "> 3基準を全て満たすと「昇格候補」。**最終判断は利用者**（D-01）。",
