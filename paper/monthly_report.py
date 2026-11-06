@@ -45,6 +45,9 @@ def round_trips(events: list, strategy: str, upto_ym: str | None = None) -> list
     """
     pos: dict = {}
     out = []
+    # 分割・併合で基準がずれたまま記録された売り（split_correction）は、売った日の基準に買いをそろえて損益を引き直す
+    fixes = {e.get("key"): float(e["factor"]) for e in events or []
+             if e.get("type") == "split_correction" and e.get("factor")}
     for e in sorted((e for e in events or [] if e.get("strategy") == strategy),
                     key=lambda e: (str(e.get("date", "")), 0 if e.get("type") == "split_adjust" else 1)):
         d = str(e.get("date", ""))
@@ -64,9 +67,10 @@ def round_trips(events: list, strategy: str, upto_ym: str | None = None) -> list
             pos[t] = (nq, (q * c + qty * px) / nq if nq else 0.0)
         elif q > 0:
             sq = min(qty, q)
-            pnl = (px - c) * sq - fee
-            out.append({"date": d, "ticker": t, "qty": sq, "pnl": pnl,
-                        "ret": (px / c - 1) if c else 0.0})
+            f = fixes.get(f"{strategy}|{t}|{d}", 1.0)
+            pnl = (px - c * f) * sq / f - fee
+            out.append({"date": d, "ticker": t, "qty": sq / f, "pnl": pnl,
+                        "ret": (px / (c * f) - 1) if c else 0.0})
             pos[t] = (q - sq, c)
     return out
 

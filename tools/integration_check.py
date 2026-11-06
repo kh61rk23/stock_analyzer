@@ -119,6 +119,15 @@ def check_paper(accounts: dict, events: list[dict], today: date) -> None:
         eqs = [round(float(m.get("equity") or 0), 0) for m in ms]
         if len(ms) >= 5 and len(set(eqs)) == 1 and held:
             find("paper_mark", "HIGH", f"{st}: 保有があるのに直近{len(ms)}回の評価額が同じ {eqs[0]:,.0f}円（評価が止まっている）")
+    # 売値と取得単価の比が分割・併合の整数比に近い売りは、基準がずれた偽の損益の疑い。
+    # 価格表で確かめて補正（split_correction）か見送り（split_review）の出来事が付いていれば問題なし
+    root = str(Path(__file__).resolve().parent.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from paper.paper_broker import candidate_split_sells
+    for c in candidate_split_sells(events)[:3]:
+        find("paper_split", "HIGH", f"{c['strategy']}: {c['ticker']} の売り（{c['sell_date']}）の売値が取得単価の "
+             f"{c['price'] / c['avg_cost']:.2f}倍で分割・併合の整数比に近いのに、補正も見送りの記録も無い（偽の実現損益の疑い）")
     # 約定待ちの注文（order）が出ていれば入力は来ている。約定は注文の翌営業日になる
     n_act = defaultdict(int)
     for ev in events:
