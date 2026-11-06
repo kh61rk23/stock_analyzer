@@ -5439,8 +5439,7 @@ EDINET_GOV_TEXT_MAX_CHARS: int = 2000      # 文字の値（テキストブロ�
 EDINET_GOV_FACTS_MAX_GB: float = 2.5       # edinet.gov_doc_facts だけでこれを超えたら中身を取らない（他のデータ源の余地を残す）
 # 大量保有（350/360/370）は1書類で約100行になるが、読み手（edinet.large_holdings view）が引くのは十数個の要素だけ。
 # True の間は、その要素だけを入れる（view の結果は変わらない・他の要素は BQ に残らない）。180/190（臨時報告書）は全要素を入れる。
-# 利用者の判断待ちのため False（全要素を入れる）。
-EDINET_GOV_LVH_ELEMENTS_ONLY: bool = False
+EDINET_GOV_LVH_ELEMENTS_ONLY: bool = True
 EDINET_GOV_DOCS_TIME_BUDGET_MIN: float = 30.0   # 1回の実行で使う時間（日次の取得 workflow の既定）
 
 # ==============================================================
@@ -5477,9 +5476,7 @@ SEC_FILINGS_MAX_GB: float = 0.6            # us.sec_filings＋sec_13dg＋sec_fil
 SEC_FILINGS_TIME_BUDGET_MIN: float = 20.0
 # 提出一覧に入れる書類の種類（先頭一致）。読み手は 8-K の項目・10-K/10-Q の件数・13D/13G だけで、
 # Form 3/4/5・424B・144・NPORT・D・FWP など（全体の約85%）は誰も読まない。空のタプルは全種類を入れる。
-# 絞るときの種類は SEC_FILINGS_KEEP_FORMS_READ。利用者の判断待ちのため今は全種類を入れる。
-SEC_FILINGS_KEEP_FORMS_READ: tuple = ("8-K", "10-K", "10-Q", "10-KT", "20-F", "40-F", "6-K", "SC 13", "SCHEDULE 13")
-SEC_FILINGS_KEEP_FORMS: tuple = ()
+SEC_FILINGS_KEEP_FORMS: tuple = ("8-K", "10-K", "10-Q", "10-KT", "20-F", "40-F", "6-K", "SC 13", "SCHEDULE 13")
 
 # ==============================================================
 # BLOCK 69: 有報の本文（政府 EDINET・edinet_gov_text.py）
