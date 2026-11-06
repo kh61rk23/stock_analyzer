@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import re
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -329,10 +330,11 @@ def main(argv=None) -> int:
     subject, body = build_mail(a.title, a.workflow, steps, counts, delta, storage, run_url,
                                datetime.now(ZoneInfo("Asia/Tokyo")), digest)
     from alert_notifier import send_gmail
-    ok, _err = send_gmail(os.environ.get("ALERT_GMAIL_FROM", ""), os.environ.get("ALERT_GMAIL_PASSWORD", ""),
-                          os.environ.get("ALERT_GMAIL_TO", ""), subject, body)
-    # 送れなかった理由はアドレスを含むことがあるので出さない（鍵の死活確認の Gmail 行で原因を見る）
-    print("✅ 通知メールを送った" if ok else "⚠️ 通知メールを送れなかった")
+    ok, err = send_gmail(os.environ.get("ALERT_GMAIL_FROM", ""), os.environ.get("ALERT_GMAIL_PASSWORD", ""),
+                         os.environ.get("ALERT_GMAIL_TO", ""), subject, body)
+    # 理由はアドレスを含むことがあるので、メールアドレスの形を伏せてから出す（本文の大きさも原因の手がかり）
+    why = re.sub(r"[\w.+-]+@[\w.-]+", "<address>", str(err or ""))[:120]
+    print("✅ 通知メールを送った" if ok else f"⚠️ 通知メールを送れなかった（{why}・本文 {len(body) // 1024}KB）")
     return 0
 
 
