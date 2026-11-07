@@ -221,15 +221,16 @@ def _targets(m: dict, impact_map: dict) -> dict:
             "us": m.get("us") if m.get("us") is not None else base.get("us", [])}
 
 
-def sector_adjustments(signals: dict | None, cfg=None, impact_map: dict | None = None) -> dict:
+def sector_adjustments(signals: dict | None, cfg=None, impact_map: dict | None = None,
+                       today: date | None = None) -> dict:
     """商品の極端 → 業種への加点。{"jp": {コード: {"delta", "detail"}}, "us": {ETF: …}, "as_of", "extremes"}。
 
     1つの極端が 1業種に入れる点 = 価格の向き(逆張り) × 影響の向き(+1/-1) × 大きさ/3 × 重み × COT_COMMODITY_PT。
     delta は業種ごとに ±COT_COMMODITY_SECTOR_MAX_PT で打ち止め、detail は打ち止め前の商品別の点（内訳）。
-    信号が無い・古い・極端が無ければ jp／us とも空。
+    信号が無い・古い・極端が無ければ jp／us とも空。today は鮮度の基準日（過去の週を再現するとき cot_commodity_ic が渡す）。
     """
     res = {"jp": {}, "us": {}, "as_of": None, "extremes": []}
-    if not is_fresh(signals, cfg) or not _param(cfg, "ENABLE_COT_COMMODITY", True):
+    if not is_fresh(signals, cfg, today) or not _param(cfg, "ENABLE_COT_COMMODITY", True):
         return res
     impact_map = _impact_map() if impact_map is None else impact_map
     unit = float(_param(cfg, "COT_COMMODITY_PT", 1.0))

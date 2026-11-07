@@ -1793,6 +1793,8 @@ def _section_seisakudb(results: dict, cfg=None) -> list:
         for r in rank[:10]:
             tk = f"{r.get('code')}.T"
             nm = r.get("listed_name") or name_of(tk, default="")
+            if (r.get("total_oku_raw") or 0) > (r.get("total_oku") or 0):
+                nm = f"{nm}（子会社経由は事務局分とみなし合計から除く）"
             lines.append(f"| {tk} | {nm} | {_oku(r.get('total_oku'))} | {_oku(r.get('subsidy_oku'))} "
                          f"| {_oku(r.get('procurement_oku'))} | {_oku(r.get('via_subsidiary_oku'))} |")
         lines.append("")

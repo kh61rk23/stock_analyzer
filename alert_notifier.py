@@ -34,6 +34,7 @@
 
 import json
 import smtplib
+import time
 import urllib.parse
 import urllib.request
 import textwrap
@@ -595,6 +596,15 @@ def extract_alerts(cfg, results: dict) -> list:
             alerts.append(_ufi_alert)
     except Exception as _ufi_err:
         print(f"  ⚠️  [alert] 一次採点の観点別の効きの節を作れない: {str(_ufi_err)[:80]}")
+
+    # 商品の建玉の加点の効き（週次の回だけ。逆向きなら warning で知らせる）
+    try:
+        import cot_commodity_ic as _cci
+        _cci_alert = _cci.build_alert(results)
+        if _cci_alert:
+            alerts.append(_cci_alert)
+    except Exception as _cci_err:
+        print(f"  ⚠️  [alert] 商品の加点の効きの節を作れない: {str(_cci_err)[:80]}")
 
     # 有報「事業等のリスク」の前期からの悪化（risk_text_scorer が夜に作る表を読む）。点数には入れない
     if getattr(cfg, "ALERT_ON_TEXT_RISK", True):
@@ -2396,7 +2406,8 @@ def build_seisakudb_alert(sk: dict, usage: dict | None = None) -> dict | None:
         lines.append("  【個社の公的支出（今回取得・5年合計の多い順）】")
         for h in hits[:8]:
             tk = f"{h['code']}.T"
-            lines.append(f"    {tk} {name_of(tk, default='')}: {h.get('n', 0)}件・{_yen(h.get('amount_yen'))}")
+            lines.append(f"    {tk} {name_of(tk, default='')}: {h.get('n', 0)}件・{_yen(h.get('amount_yen'))}"
+                         + ("（件数の上限で切れており実額はこれ以上）" if h.get("truncated") else ""))
     rec = [r for r in (sk.get("recent_sample") or []) if r.get("company_code")]
     if rec:
         lines.append("  【直近の公的支出イベント】")
@@ -2413,7 +2424,9 @@ def build_seisakudb_alert(sk: dict, usage: dict | None = None) -> dict | None:
             tk = f"{r.get('code')}.T"
             lines.append(f"    {tk} {r.get('listed_name') or name_of(tk, default='')}: "
                          f"合計{(r.get('total_oku') or 0):,.1f}億円"
-                         f"（補助金{(r.get('subsidy_oku') or 0):,.1f}・調達{(r.get('procurement_oku') or 0):,.1f}）")
+                         f"（補助金{(r.get('subsidy_oku') or 0):,.1f}・調達{(r.get('procurement_oku') or 0):,.1f}）"
+                         + (f"　※子会社経由 {(r.get('via_subsidiary_oku') or 0):,.0f}億円は事務局として受けた額とみなし除く"
+                            if (r.get("total_oku_raw") or 0) > (r.get("total_oku") or 0) else ""))
     if sk.get("certs_mapped"):
         lines.append(f"  【経済安保認定のうち証券コードに対応できた企業】{sk['certs_mapped']}件")
     subs = sorted((sk.get("open_subsidies") or []), key=lambda x: x.get("acceptance_end") or "9999")[:3]
@@ -2701,6 +2714,22 @@ def build_message(alerts: list, mode: str = "email", tiers: dict | None = None) 
 # BLOCK 4: Gmail 送信
 # ==============================================================
 
+GMAIL_RETRY_WAITS = (5, 20)   # 一時的な切断のとき、この秒数だけ空けて再送する（最大 len+1 回）
+
+
+def _smtp_send_once(from_addr: str, app_password: str, to_addr: str, raw: str, attempt: int) -> None:
+    """1回の送信。1回目は 465（SSL）、再送は 587（STARTTLS）に切り替える（片方の入口だけ切られる事があるため）。"""
+    if attempt % 2 == 0:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as smtp:
+            smtp.login(from_addr, app_password)
+            smtp.sendmail(from_addr, to_addr, raw)
+    else:
+        with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as smtp:
+            smtp.starttls()
+            smtp.login(from_addr, app_password)
+            smtp.sendmail(from_addr, to_addr, raw)
+
+
 def send_gmail(
     from_addr: str,
     app_password: str,
@@ -2710,6 +2739,10 @@ def send_gmail(
 ) -> tuple:
     """
     Gmail SMTP (App Password) でメールを送信する。
+
+    接続の切断・タイムアウトは一時的なことが多いので、間を空けて再送する。送れないまま終えると、日次は
+    分析の全体がやり直しになり（gate が失敗の回を再実行する）、送れた場合にだけ残す節の保存も失われる。
+    認証失敗は再送しても同じなのですぐ返す。
 
     Returns:
         (success: bool, error_msg: str)
@@ -2723,15 +2756,25 @@ def send_gmail(
         msg["From"]    = from_addr
         msg["To"]      = to_addr
         msg.attach(MIMEText(html_body, "html", "utf-8"))
-
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15) as smtp:
-            smtp.login(from_addr, app_password)
-            smtp.sendmail(from_addr, to_addr, msg.as_string())
-        return True, ""
-    except smtplib.SMTPAuthenticationError:
-        return False, "Gmail 認証失敗（App Password を確認してください）"
+        raw = msg.as_string()
     except Exception as e:
         return False, f"Gmail 送信エラー: {str(e)[:80]}"
+
+    err = ""
+    for attempt in range(len(GMAIL_RETRY_WAITS) + 1):
+        try:
+            _smtp_send_once(from_addr, app_password, to_addr, raw, attempt)
+            return True, ""
+        except smtplib.SMTPAuthenticationError:
+            return False, "Gmail 認証失敗（App Password を確認してください）"
+        except (smtplib.SMTPRecipientsRefused, smtplib.SMTPSenderRefused, smtplib.SMTPDataError) as e:
+            return False, f"Gmail 送信エラー: {str(e)[:80]}（本文 {len(raw) // 1024}KB）"
+        except Exception as e:
+            err = f"Gmail 送信エラー: {str(e)[:80]}（{attempt + 1}回試行・本文 {len(raw) // 1024}KB）"
+            if attempt < len(GMAIL_RETRY_WAITS):
+                print(f"    ⚠️ Gmail 送信に失敗、{GMAIL_RETRY_WAITS[attempt]}秒後に再送: {str(e)[:60]}")
+                time.sleep(GMAIL_RETRY_WAITS[attempt])
+    return False, err
 
 
 # ==============================================================

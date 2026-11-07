@@ -129,6 +129,7 @@ SCHEMA: dict[str, list[str]] = {
     "stock_snapshot": ["stock_analyzer_main"],
     "pick_outcomes": ["stock_analyzer_main"],
     "universe_factor_ic": ["stock_analyzer_main"],
+    "cot_commodity_ic": ["stock_analyzer_main"],
     "price_history": ["stock_analyzer_main"],
     "policy_signals": ["stock_analyzer_main"],
     "politician_monitor": ["stock_analyzer_main"],

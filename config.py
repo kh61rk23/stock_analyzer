@@ -1378,7 +1378,7 @@ ENABLE_SEISAKUDB: bool = True
 SEISAKUDB_DAILY_BUDGET: int = 950        # 1日に使う回数（API の上限は1000・50回は手動確認用に残す）。個社（約3,800社）は約4日で1周。1回約0.6秒で約10分かかるので、日次の分析ではなく朝の取得 workflow（fetch_stages.jp_filings）で取る
 SEISAKUDB_RESERVE: int = 0               # 手動確認用に残す回数
 SEISAKUDB_RECENT_LIMIT: int = 500        # 直近イベントの取得件数
-SEISAKUDB_TOP_LIMIT: int = 2000          # 公的支出ランキングの取得件数
+SEISAKUDB_TOP_LIMIT: int = 500          # 公的支出ランキングの取得件数
 SEISAKUDB_MIN_INTERVAL_SEC: float = 0.5  # 送信間隔の下限（300回で約3分。連打すると429を誘発する）
 # 公的支出の特徴量（銘柄ごとの受給額・経済安保認定）。スコア加点は承認後に True にする。
 ENABLE_PUBLIC_FUNDING_FEATURES: bool = True
@@ -1672,6 +1672,7 @@ WEEKLY_MODULES = [
         # 政策支援（BQ edinet.policy_support）の書き手。読む側は base_agent.get_policy_support_bonus。
     "nedo",                  # I-2: NEDO採択情報 → policy_support
     "universe_factor_ic",    # 一次採点の観点別の効き（順位相関 IC）→ analytics.universe_factor_ic・メールの節
+    "cot_commodity_ic",      # 商品の建玉の加点と業種の翌週の成績の順位相関 → analytics.cot_commodity_ic・メールの節
 ]
 
 # ウィークリー実行の曜日（0=月曜 〜 6=日曜）
@@ -4316,6 +4317,8 @@ ENABLE_DEEP_DIVE_TRIGGER: bool = True      # 深掘りトリガー [S3-4]
 ENABLE_TECHNOLOGY_MAPPER: bool = True      # 技術マッピング [B T-1]
 ENABLE_CLUSTER_ENGINE: bool = True         # クラスターエンジン [B T-2]
 ENABLE_EMERGING_DETECTOR: bool = True      # 萌芽テーマ検知 [B T-3]
+EMERGING_SCORE_MIN: float = 0.20           # 萌芽の下限（重み固定で論文だけでは最大0.24なので0.30では出ない）
+EMERGING_TOP_N: int = 15                   # 萌芽テーマを上位何件まで残すか（0で無制限）
 ENABLE_CLUSTER_GRAPH_EXPORT: bool = True   # クラスター結果出力 [B T-4]
 
 # ── BLOCK 39b: オントロジー層 設定 ──
@@ -5233,11 +5236,11 @@ B6_OPTIONS_MONITOR_SKEW_EXTREME = 145  # SKEW_EXTREME
 B6_OPTIONS_MONITOR_SKEW_ELEVATED = 130  # SKEW_ELEVATED
 B6_DCF_VALUATION_DEFAULT_RF_JP = 0.015  # DEFAULT_RF_JP
 B6_DCF_VALUATION_DEFAULT_RF_US = 0.045  # DEFAULT_RF_US
-B6_DCF_VALUATION_MARKET_RISK_PREM = 0.055  # MARKET_RISK_PREM
+B6_DCF_VALUATION_MARKET_RISK_PREM = 0.06  # MARKET_RISK_PREM
 B6_DCF_VALUATION_DEFAULT_BETA = 1.0  # DEFAULT_BETA
 B6_DCF_VALUATION_DEFAULT_GROWTH = 0.02  # DEFAULT_GROWTH
 B6_DCF_VALUATION_FORECAST_YEARS = 5  # FORECAST_YEARS
-B6_DCF_VALUATION_FCF_GROWTH_RATE = 0.05  # FCF_GROWTH_RATE
+B6_DCF_VALUATION_FCF_GROWTH_RATE = 0.03  # FCF_GROWTH_RATE
 B6_DCF_VALUATION_WACC_RANGE = [-0.02, 0.0, +0.02]  # WACC_RANGE
 B6_DCF_VALUATION_GROWTH_RANGE = [-0.01, 0.0, +0.01]  # GROWTH_RANGE
 B6_DCF_VALUATION_DCF_LARGE_DISCOUNT = 20.0  # DCF_LARGE_DISCOUNT
@@ -5330,19 +5333,22 @@ MARKET_PROFILE: dict = {
 #   上位 SCREEN_STAGE2_TOP_N 社だけを従来の詳細評価（yfinance 等）に回す。規模（時価総額）はどの観点にも入れない。
 # 観点の重み（合計1。実行時にも1へ正規化）。値が無い観点は中立50で coverage に記録する（不利にしない）。
 # ⑪ 銘柄独自を 0.05 足したとき、既存の10観点をそろって 1/1.05 にした（比率は変えていない）。
+# ⑩ 業種は universe_factor_ic の5日後の順位相関が全上場で平均 -0.16（9評価日・sd 0.18・実効の日数が足りず t は -1.2＝判定前）と、
+#   一次採点の通過銘柄の翌週成績の逆相関（-0.12〜-0.14）に最も寄っていた。業種の点は33業種ごとの共通値で独立な点が少なく、
+#   符号は反転せず重みだけ半分にし、浮いた分は他の10観点へ比例配分した（合計1）。効きが±0.02・|t|≥2 で出そろうまで再調整しない。
 ENABLE_SCREENER_UNIVERSE: bool = True
 SCREEN_UNIVERSE_WEIGHTS: dict = {
-    "move":      0.0952,   # ① 前日の値動き（騰落・出来高倍率・20日高値との距離）
-    "momentum":  0.1429,   # ② モメンタム（1か月・3か月・12か月−1か月・52週高値への近さ）
-    "technical": 0.0952,   # ③ technical_scorer の採点（＋ SR/VP 加点はキャッシュのある銘柄だけ）
-    "asset":     0.0952,   # ④ 簿価・資産の裏付け（stock_real_estate の不動産ボーナス・資産バリュー倍率・修正PBR）
-    "quality":   0.1429,   # ⑤ 質（アクルーアル tier・EDINET品質・ROIC・CF率・F-score）
-    "growth":    0.1429,   # ⑥ 成長・業績イベント（成長率・増益年数・決算サプライズ）
-    "value":     0.0952,   # ⑦ 割安（益回り・FCF利回り・EV/EBITDA・総還元利回り・DCF・コンプス）
-    "flow":      0.0476,   # ⑧ 需給・株主（信用残・インサイダー・配当）
-    "theme":     0.0476,   # ⑨ テーマ（銘柄ごとの max(関与度×ノード熱度)・同じタグの会社群の売上の伸び）
-    "sector":    0.0476,   # ⑩ 業種スコア（BOT_TIER の業種も点数としては入れる）
-    "idio":      0.0477,   # ⑪ 銘柄独自（TOPIX で説明できない値動きの荒さが小さい・テーマの会社群に出遅れた）
+    "move":      0.0975,   # ① 前日の値動き（騰落・出来高倍率・20日高値との距離）
+    "momentum":  0.1464,   # ② モメンタム（1か月・3か月・12か月−1か月・52週高値への近さ）
+    "technical": 0.0975,   # ③ technical_scorer の採点（＋ SR/VP 加点はキャッシュのある銘柄だけ）
+    "asset":     0.0975,   # ④ 簿価・資産の裏付け（stock_real_estate の不動産ボーナス・資産バリュー倍率・修正PBR）
+    "quality":   0.1464,   # ⑤ 質（アクルーアル tier・EDINET品質・ROIC・CF率・F-score）
+    "growth":    0.1464,   # ⑥ 成長・業績イベント（成長率・増益年数・決算サプライズ）
+    "value":     0.0975,   # ⑦ 割安（益回り・FCF利回り・EV/EBITDA・総還元利回り・DCF・コンプス）
+    "flow":      0.0488,   # ⑧ 需給・株主（信用残・インサイダー・配当）
+    "theme":     0.0488,   # ⑨ テーマ（銘柄ごとの max(関与度×ノード熱度)・同じタグの会社群の売上の伸び）
+    "sector":    0.0244,   # ⑩ 業種スコア（BOT_TIER の業種も点数としては入れる）。効きが逆向き寄りで半分にした（下の注）
+    "idio":      0.0488,   # ⑪ 銘柄独自（TOPIX で説明できない値動きの荒さが小さい・テーマの会社群に出遅れた）
 }
 # 11観点とは別に、全体の点へ小さな重みで足す観点（(1−合計)×11観点の加重和 ＋ Σ重み×その観点の点。材料の無い銘柄は中立50）。
 # geo＝地政学の加点（geo_signal・権益のある銘柄だけ）、holder＝積極目的の大量保有の買い増し（日本・直近 HOLDER_DAYS 日）、
@@ -5460,6 +5466,12 @@ BQ_STORAGE_WARN_GB: float = 7.0
 BQ_STORAGE_HIGH_GB: float = 9.0
 # 表の作り直し・古い行の削除（bq_compact.py）の1回のクエリ量の上限。dryRun の見積もりがこれを超えたら実行しない
 BQ_COMPACT_MAX_BYTES: int = 1024 ** 3
+# 日足（analytics.price_daily）を残す月数。これより古い月は月足（analytics.price_monthly）に畳み、日足を消す（bq_compact.py price_monthly）。
+# 読み手の最長は約440日（約14.5か月）、分割の取り直し（PRICE_SPLIT_REFETCH_DAYS）が書き直す範囲は暦で約20か月なので、それより長く取る。
+PRICE_DAILY_KEEP_MONTHS: int = 24
+PRICE_MONTHLY_MIN_KEEP_MONTHS: int = 22   # 下限。これより短い指定は実行を拒む（取り直しが届く範囲の日足を月足にしないため）
+PRICE_MONTHLY_MAX_MONTHS_PER_RUN: int = 3  # 1回の実行で畳む月数の上限（残りは次の回）
+PRICE_MONTHLY_SEAM_MAX_TICKERS: int = 50   # 境目の基準ずれを1回に直す銘柄数の上限（超えたら判定が荒れているとみて直さない）
 
 # ==============================================================
 # BLOCK 67: 取得系 workflow の終了通知（workflow_notify.py）
@@ -5551,6 +5563,16 @@ ENABLE_UNIVERSE_FACTOR_IC: bool = True
 UFI_LOOKBACK_DAYS: int = 200          # 直近この日数の評価日を毎回計算し直す
 UFI_MIN_EFFECTIVE_DAYS: float = 4.0   # 実効の日数（評価日の数÷先の日数）がこれ未満なら「日数不足」で判定しない
 
+# 商品の建玉の加点（cot_signal.sector_adjustments）が、公表後 5・20 取引日の日本33業種の成績を当てたかを週1回測る
+# （cot_commodity_ic.py）。逆向きでも点は自動では止めず、メールで知らせる。建玉1本（COT_SIGNAL_MAX_BYTES 以下）＋日足1本
+ENABLE_COT_COMMODITY_IC: bool = True
+COT_IC_WEEKS: int = 52                # 直近この週数の報告日の点を作り直して測る
+COT_IC_MIN_ADJ_SECTORS: int = 3       # 加点が付いた業種がこれ未満の週は IC を出さない
+COT_IC_MIN_WEEKS: float = 8.0         # 実効の週数（週数÷(先の日数/5)）がこれ未満なら「週数不足」で判定しない
+COT_IC_BAR: float = 0.05              # 平均IC がこの大きさ以上（かつ |t|≥COT_IC_T_BAR）で「効いている／逆向き」
+COT_IC_T_BAR: float = 2.0
+COT_IC_MAX_BYTES: int = 150 * 1024 ** 2   # 業種別リターンのクエリの上限
+
 # ==============================================================
 # BLOCK 77: 株価の分割・併合のそろえ直し（price_universe.fix_split_mismatches）
 # ==============================================================
@@ -5561,10 +5583,26 @@ PRICE_SPLIT_REFETCH_MAX: int = 50     # 1回の取得で取り直す銘柄数の
 # ==============================================================
 # BLOCK 78: 評価の下限・判定の閾値（dcf_valuation・geo_signal・independence_score_calculator）
 # ==============================================================
-DCF_WACC_FLOOR: float = 0.06            # WACC の下限。低βで4%まで下がると永続価値の倍率が50倍を超え、理論株価が膨らむ
-# 方向の決まっていない権益（販売網など）を、この点数以上の国で逆風として減点する。50 は実データ（国のリスク 0〜45点）で
-# 発火しない＝減点しない。下げると多くの輸出企業が新たに減点されるので、検証してから下げる
-GEO_UNDEFINED_DIR_RISK_MIN: float = 50.0
+# DCF の前提（dcf_valuation.py）。日本株は Rf 1.5%・β0.8 前後で式の値が 6% 台になり、永続価値が膨らんで
+# 候補全体の割安率の中央値が +110%・約8割が加点の上限に張り付いた。下限を 9% にし、成長率を名目成長率並みに置くと
+# 手元の写し（156銘柄）で中央値 +4%・上限（乖離率100%以上）は約8%になる。式の値は多くの銘柄で下限より低いので、下限が実質の資本コスト
+DCF_WACC_FLOOR: float = 0.09            # WACC の下限。低βで 4〜6% に下がると永続価値の倍率が膨らみ、理論株価が桁違いになる
+DCF_BETA_BLEND: float = 0.67            # 調整beta = これ×観測beta + (1−これ)。観測βが低い銘柄の資本コストを過小にしない
+DCF_TERMINAL_GROWTH_JP: float = 0.01    # 日本株のターミナル成長率（米国は B6_DCF_VALUATION_DEFAULT_GROWTH）
+DCF_FCF_GROWTH_BY_SECTOR: dict = {      # 予測期間の FCF 成長率（yfinance sector）。未登録は B6_DCF_VALUATION_FCF_GROWTH_RATE
+    "Technology": 0.04, "Healthcare": 0.04, "Communication Services": 0.03,
+    "Industrials": 0.03, "Consumer Cyclical": 0.03, "Basic Materials": 0.02,
+    "Consumer Defensive": 0.02, "Energy": 0.02, "Utilities": 0.015, "Real Estate": 0.02,
+}
+DCF_FCF_GROWTH_CAP: float = 0.05        # 成長率の上限（長期の名目成長率を大きく超えない）
+# 加点は対象全体の順位（中央値が 0pt）で付ける。最上位 +MAX・最下位 −MIN。対象が MIN_POP 未満なら乖離率の絶対値で付ける
+DCF_RANK_BONUS_MAX: float = 8.0
+DCF_RANK_BONUS_MIN: float = 6.0
+DCF_RANK_MIN_POP: int = 20
+# 方向の決まっていない権益（販売網など）を、この点数以上の国で逆風（係数 -0.5）として減点する。
+# 国別リスク(composite)は 59 か国で 8〜63 点。58 は上位約15%（9 か国）だけに効き、減点は銘柄あたり平均1〜1.5点（最大約6点）。
+# 50 だと上位約19%（11 か国）・30 だと半数近くの国に広がる
+GEO_UNDEFINED_DIR_RISK_MIN: float = 58.0
 INDEPENDENCE_MIN_R_SQUARED: float = 0.05   # 市場との回帰の R² がこれ未満は「独立」ではなく「判定不能」
 
 # ==============================================================
@@ -5593,7 +5631,7 @@ ALERT_SECTION_TIER: dict = {
     # 4: 参考
     "tech_map": 4, "weekly_report": 4, "high_dividend": 4, "tdnet_div_up": 4, "dividend_calendar": 4,
     "anomaly_season": 4, "midterm_overtrack": 4, "sentiment_improving": 4, "pick_outcomes_monthly": 4,
-    "universe_factor_ic": 4,
+    "universe_factor_ic": 4, "cot_commodity_ic": 4,
     # 5: 運用の状態
     "edinetdb_ingest": 5, "real_estate": 5, "seisakudb": 5, "data_sla_violation": 5, "ops_health": 5,
     "self_eval_degrading": 5, "miss_factor_review": 5,

@@ -2492,13 +2492,18 @@ def run_all_tasks(mode: str = "all") -> dict:
                         existing + usbe_result["cross_signals"]
                     )
                                 # 実行できた事実は件数に関わらず必ず台帳に記録する（0件の日も「記録なし」にしない）。
-                logger.add(
-                    "us_sector_bridge", "success",
-                    f"JP影響業種{len(usbe_result.get('jp_affected',[]))}業種 / "
-                    f"beat{len(usbe_result.get('beat_tickers',[]))} / "
-                    f"miss{len(usbe_result.get('miss_tickers',[]))} / "
-                    f"cross{len(usbe_result.get('cross_signals',[]))}",
-                )
+                if "us_8k" not in results:
+                    # 入力の results["us_8k"] はこの後ろの US 8-K 監視が作る。無い間は毎回空振りになるので、成功と書かない
+                    logger.add("us_sector_bridge", "skipped",
+                               "入力の us_8k が未生成（US 8-K 監視より前に実行されるため。実行順の問題）")
+                else:
+                    logger.add(
+                        "us_sector_bridge", "success",
+                        f"JP影響業種{len(usbe_result.get('jp_affected',[]))}業種 / "
+                        f"beat{len(usbe_result.get('beat_tickers',[]))} / "
+                        f"miss{len(usbe_result.get('miss_tickers',[]))} / "
+                        f"cross{len(usbe_result.get('cross_signals',[]))}",
+                    )
             else:
                 print("  ⚠️  us_sector_bridge_enhanced.py が見つかりません")
                 logger.add("us_sector_bridge", "warn",
@@ -2742,6 +2747,9 @@ def run_all_tasks(mode: str = "all") -> dict:
                                         "jp": _cc["jp"], "us_etf": _cc["us"]}
             logger.add("cot_commodity", "success",
                        f"商品の極端 {len(_cc['extremes'])}件 / {len(_cc_jp)}業種に加点（米国ETF {len(_cc['us'])}本は記録のみ）")
+        else:
+            # 極端が無い日・信号が古い／商品の列が無い日も台帳に残す（「記録なし」と区別するため）
+            logger.add("cot_commodity", "skipped", "商品の極端なし（または COT 信号が古い・商品の列が無い）")
     except Exception as e:
         logger.add("cot_commodity", "error", str(e)[:100])
         print(f"  ⚠️  COT 商品の業種加点エラー: {str(e)[:80]}")
@@ -4378,6 +4386,24 @@ def run_all_tasks(mode: str = "all") -> dict:
         except Exception as _ufie:
             logger.add("universe_factor_ic", "error", str(_ufie)[:100])
             print(f"  ⚠️  一次採点の観点別の効きの計算エラー（スキップ）: {str(_ufie)[:60]}")
+
+    # 商品の建玉の加点（業種へ足した点）が翌週の業種の成績を当てたかを週1回測る。逆向きでも点は止めず、メールで知らせる
+    if getattr(cfg, "ENABLE_COT_COMMODITY_IC", True) and _in_mode("cot_commodity_ic"):
+        try:
+            import cot_commodity_ic as _cci
+            _cci_res = _cci.run(cfg)
+            results["cot_commodity_ic"] = _cci_res
+            if _cci_res.get("skipped"):
+                logger.add("cot_commodity_ic", "skipped", str(_cci_res.get("reason", ""))[:80])
+            elif _cci_res.get("error"):
+                logger.add("cot_commodity_ic", "error", str(_cci_res["error"])[:100])
+            else:
+                logger.add("cot_commodity_ic", "success",
+                           f"{_cci_res.get('rows', 0)}行 / {_cci_res.get('gb_billed')}GB / "
+                           f"逆向き {len(_cci_res.get('reversed') or [])}")
+        except Exception as _ccie:
+            logger.add("cot_commodity_ic", "error", str(_ccie)[:100])
+            print(f"  ⚠️  商品の加点の効きの計算エラー（スキップ）: {str(_ccie)[:60]}")
 
         # ── [Size Ph1] 規模分類マスター生成（両スクリーナーの直後）────
         #   results["screener"]（stock_screener）と results["us_screener"]

@@ -38,9 +38,9 @@ def test_dcf_skip_financials_and_high_fcf_yield():
 
 
 def test_wacc_floor():
-    assert dcf.calc_wacc(0.1, 0.015) == pytest.approx(0.06)          # 既定の下限
+    assert dcf.calc_wacc(0.1, 0.015) == pytest.approx(dcf.DCF_WACC_FLOOR)   # 既定の下限
     assert dcf.calc_wacc(0.1, 0.015, floor=0.08) == pytest.approx(0.08)
-    assert dcf.calc_wacc(1.0, 0.015) == pytest.approx(0.07)
+    assert dcf.calc_wacc(1.0, 0.015, floor=0.0) == pytest.approx(0.015 + dcf.MARKET_RISK_PREM)
 
 
 def test_dcf_run_skips_bank_and_excludes_from_top(tmp_path, monkeypatch):

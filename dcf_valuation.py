@@ -13,9 +13,11 @@
 #
 # 【主要パラメータ】
 #   FCF:  yfinance の cashflow（営業CF - 投資CF）直近3年平均
-#   WACC: 推定式 = リスクフリーレート + β × リスクプレミアム
-#         デフォルト: rf=1.5%（JP10Y相当）, rp=5.5%, β=yfinanceから取得
-#   g:    ターミナル成長率（デフォルト2.0%）
+#   WACC: 推定式 = リスクフリーレート + β × リスクプレミアム（下限 DCF_WACC_FLOOR）
+#         デフォルト: rf=1.5%（JP10Y相当）, rp=6.0%, β=yfinance の値を平均回帰で調整（0.67β+0.33）
+#         日本株は低β・低金利で式の値が 6% 前後になり永続価値が膨らむため、下限 9% が実質の資本コストになる
+#   FCF 成長: 業種別（DCF_FCF_GROWTH_BY_SECTOR・既定3%・上限 DCF_FCF_GROWTH_CAP）。予測期間中は一定
+#   g:    ターミナル成長率（日本 1.0%・米国 2.0%。長期の名目成長率を超えない）
 #   n:    予測期間（デフォルト5年）
 #
 # 【感応度分析（Sensitivity Analysis）】
@@ -24,9 +26,12 @@
 #
 # 【screener 統合】
 #   dcf_discount = (理論株価 - 現在株価) / 現在株価 × 100
-#   discount 10〜20%: +1〜+2pt、20〜100%: +2〜+8pt（線形・100%超は+8で頭打ち）
-#   discount <= -20%: value_score に -6pt（割高）
-#   discount > 300%: モデル破綻とみなし無効（ボーナス0・割安リストに載せない）
+#   加点は対象全体（有効な乖離率を持つ銘柄）の中での順位で付ける（apply_rank_bonus）。
+#     中央値の順位が 0pt、最上位が +DCF_RANK_BONUS_MAX、最下位が -DCF_RANK_BONUS_MIN（線形）。
+#     ただし乖離率が正の銘柄だけが加点、負の銘柄だけが減点（中央値が負・正にずれても逆符号にしない）。
+#     前提（資本コスト・成長率）が甘くて全銘柄が割安に出ても、上限に張り付く銘柄は上位の一部だけになる。
+#   対象が DCF_RANK_MIN_POP 未満のときは乖離率の絶対値で付ける旧方式（calc_dcf_bonus）に戻す。
+#   discount > 300%: モデル破綻とみなし無効（ボーナス0・順位の母集団にも入れない）
 #
 # 【DCF を適用しない銘柄】
 #   銀行・証券・保険・不動産賃貸業は営業CFに預金・預り金・契約負債の増減が混ざり、
@@ -47,11 +52,11 @@ from typing import Optional
 # ── デフォルトパラメータ ──────────────────────────────────────
 DEFAULT_RF_JP     = 0.015   # リスクフリーレート（JP10年債 ~1.5%）
 DEFAULT_RF_US     = 0.045   # リスクフリーレート（US10年債 ~4.5%）
-MARKET_RISK_PREM  = 0.055   # 市場リスクプレミアム（日米共通5.5%）
+MARKET_RISK_PREM  = 0.06    # 市場リスクプレミアム（日米共通6.0%）
 DEFAULT_BETA      = 1.0     # β取得失敗時のデフォルト
 DEFAULT_GROWTH    = 0.02    # ターミナル成長率（2%）
 FORECAST_YEARS    = 5       # FCF 予測期間
-FCF_GROWTH_RATE   = 0.05    # 予測期間中のFCF成長率仮定（5%）
+FCF_GROWTH_RATE   = 0.03    # 予測期間中のFCF成長率の既定（業種別の値が無いとき）
 FETCH_DELAY       = 0.3
 CACHE_FILENAME    = "dcf_valuation_cache.json"
 from config_sync import sync_module_constants
@@ -71,12 +76,38 @@ _CFG_CONST_MAP = {
     'B6_DCF_VALUATION_DCF_LARGE_DISCOUNT': 'DCF_LARGE_DISCOUNT',
     'B6_DCF_VALUATION_DCF_SMALL_DISCOUNT': 'DCF_SMALL_DISCOUNT',
 }
+# B4〜B6 の接頭辞の規約に入らない評価の前提（config の BLOCK 78）。run_dcf_valuation の冒頭で取り込む
+_CFG_VALUATION_MAP = {
+    'DCF_WACC_FLOOR': 'DCF_WACC_FLOOR',
+    'DCF_BETA_BLEND': 'DCF_BETA_BLEND',
+    'DCF_TERMINAL_GROWTH_JP': 'DCF_TERMINAL_GROWTH_JP',
+    'DCF_FCF_GROWTH_BY_SECTOR': 'DCF_FCF_GROWTH_BY_SECTOR',
+    'DCF_FCF_GROWTH_CAP': 'DCF_FCF_GROWTH_CAP',
+    'DCF_RANK_BONUS_MAX': 'DCF_RANK_BONUS_MAX',
+    'DCF_RANK_BONUS_MIN': 'DCF_RANK_BONUS_MIN',
+    'DCF_RANK_MIN_POP': 'DCF_RANK_MIN_POP',
+}
 
 CACHE_HOURS       = 24 * 7  # 週次（財務データは変化が緩やか）
-CACHE_SCHEMA      = 2       # 古い版のキャッシュ（業種未保存・旧ボーナス）は再計算する
+CACHE_SCHEMA      = 3       # 古い版のキャッシュ（前提・ボーナスの方式が違うもの）は再計算する
 
 # 株主資本コストの下限。beta が小さい銘柄で WACC が g に近づくと TV が発散する
-DCF_WACC_FLOOR     = 0.06
+DCF_WACC_FLOOR     = 0.09
+# beta は平均回帰させて使う（観測 beta が低い銘柄の資本コストを過小にしない）: 調整beta = BLEND×beta + (1−BLEND)
+DCF_BETA_BLEND     = 0.67
+# ターミナル成長率（日本は名目成長率が低いので米国より低く置く）
+DCF_TERMINAL_GROWTH_JP = 0.01
+# 予測期間中の FCF 成長率（yfinance の sector 別）。上限は DCF_FCF_GROWTH_CAP
+DCF_FCF_GROWTH_BY_SECTOR = {
+    "Technology": 0.04, "Healthcare": 0.04, "Communication Services": 0.03,
+    "Industrials": 0.03, "Consumer Cyclical": 0.03, "Basic Materials": 0.02,
+    "Consumer Defensive": 0.02, "Energy": 0.02, "Utilities": 0.015, "Real Estate": 0.02,
+}
+DCF_FCF_GROWTH_CAP = 0.05
+# 順位ボーナスの最大加点・最大減点（pt）と、順位方式を使う最小の母集団
+DCF_RANK_BONUS_MAX = 8.0
+DCF_RANK_BONUS_MIN = 6.0
+DCF_RANK_MIN_POP   = 20
 # FCF平均/時価総額がこれを超えると預金・預り金などの混入とみなし DCF を適用しない
 DCF_MAX_FCF_YIELD  = 0.15
 # 乖離率がこれを超える結果はモデルの破綻として無効にする
@@ -218,8 +249,10 @@ def calc_wacc(
 
     注: 本実装では純粋に株主資本コスト（Ke）を WACC として使用。
     加重平均（負債コスト含む）はデータ要件が高いため簡略化。
+    beta は DCF_BETA_BLEND で 1 側へ寄せてから使う。
     """
-    ke = rf + float(beta) * market_rp
+    b = DCF_BETA_BLEND * float(beta) + (1.0 - DCF_BETA_BLEND)
+    ke = rf + b * market_rp
     # 下限を置くのは、低betaで WACC が g に迫ると TV が発散し理論株価が桁違いになるため
     lo = DCF_WACC_FLOOR if floor is None else float(floor)
     return round(max(lo, min(0.25, ke)), 4)
@@ -310,6 +343,7 @@ def calc_sensitivity(
     net_debt:        float,
     wacc_deltas:     list = WACC_RANGE,
     growth_deltas:   list = GROWTH_RANGE,
+    fcf_growth:      float = None,
 ) -> dict:
     """
     WACC と ターミナル成長率の組み合わせ（3×3=9通り）で
@@ -334,7 +368,8 @@ def calc_sensitivity(
     for w in wacc_vals:
         row = []
         for g in growth_vals:
-            r = calc_dcf(fcf_base, w, g, shares=shares, net_debt=net_debt)
+            r = calc_dcf(fcf_base, w, g, FCF_GROWTH_RATE if fcf_growth is None else fcf_growth,
+                         shares=shares, net_debt=net_debt)
             row.append(r.get("intrinsic_per_share"))
         prices.append(row)
 
@@ -387,6 +422,63 @@ def calc_dcf_bonus(discount_pct: Optional[float]) -> float:
         span = max(DCF_LARGE_DISCOUNT - DCF_SMALL_DISCOUNT, 1e-9)
         return round(1.0 + (discount_pct - DCF_SMALL_DISCOUNT) / span, 2)
     return 0.0
+
+
+def fcf_growth_for(sector: str) -> float:
+    """業種（yfinance sector）ごとの予測期間の FCF 成長率。未登録は既定値。上限 DCF_FCF_GROWTH_CAP。"""
+    g = DCF_FCF_GROWTH_BY_SECTOR.get(str(sector or ""), FCF_GROWTH_RATE)
+    return min(float(g), DCF_FCF_GROWTH_CAP)
+
+
+def terminal_growth_for(ticker: str) -> float:
+    """ターミナル成長率。日本株は低く、米国は DEFAULT_GROWTH。"""
+    return DCF_TERMINAL_GROWTH_JP if str(ticker).endswith(".T") else DEFAULT_GROWTH
+
+
+def apply_rank_bonus(results: dict) -> dict:
+    """有効な乖離率を持つ銘柄の中での順位から dcf_bonus を付け直す（results を書き換えて返す）。
+
+    順位 pct（0=最下位〜1=最上位・同値は平均順位）から c=(pct−0.5)×2 を作り、
+    c>0 かつ乖離率>0 なら c×DCF_RANK_BONUS_MAX、c<0 かつ乖離率<0 なら c×DCF_RANK_BONUS_MIN（負）、それ以外は 0。
+    各銘柄に dcf_rank_pct（0〜100）と dcf_bonus_basis（"rank"|"absolute"|"none"）を残す。
+    母集団が DCF_RANK_MIN_POP 未満なら絶対値方式（calc_dcf_bonus）。
+    """
+    pop = [(t, d["discount_pct"]) for t, d in results.items()
+           if isinstance(d, dict) and not d.get("dcf_skip") and is_valid_discount(d.get("discount_pct"))]
+    n = len(pop)
+    for d in results.values():
+        if isinstance(d, dict):
+            d.pop("dcf_rank_pct", None)
+            d["dcf_bonus"] = 0.0
+            d["dcf_bonus_basis"] = "none"
+    if n == 0:
+        return results
+    if n < DCF_RANK_MIN_POP:
+        for t, disc in pop:
+            results[t]["dcf_bonus"] = calc_dcf_bonus(disc)
+            results[t]["dcf_bonus_basis"] = "absolute"
+        return results
+    srt = sorted(pop, key=lambda kv: kv[1])
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and srt[j + 1][1] == srt[i][1]:
+            j += 1
+        pct = ((i + j) / 2.0) / (n - 1)
+        for k in range(i, j + 1):
+            t, disc = srt[k]
+            c = (pct - 0.5) * 2.0
+            if c > 0 and disc > 0:
+                bonus = c * DCF_RANK_BONUS_MAX
+            elif c < 0 and disc < 0:
+                bonus = c * DCF_RANK_BONUS_MIN
+            else:
+                bonus = 0.0
+            results[t]["dcf_bonus"] = round(bonus, 2)
+            results[t]["dcf_rank_pct"] = round(pct * 100.0, 1)
+            results[t]["dcf_bonus_basis"] = "rank"
+        i = j + 1
+    return results
 
 
 def dcf_skip_reason(inputs: dict) -> Optional[str]:
@@ -528,6 +620,7 @@ def run_dcf_valuation(cfg, tickers: list) -> dict:
         {"results": {ticker: dcf_result}, "top_undervalued": [...], "timestamp": str}
     """
     sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
+    sync_module_constants(globals(), cfg, _CFG_VALUATION_MAP)
     print(f"\n  📐 DCF理論株価計算開始（{len(tickers)}銘柄）...")
 
     wacc_floor = float(getattr(cfg, "DCF_WACC_FLOOR", DCF_WACC_FLOOR))
@@ -556,12 +649,15 @@ def run_dcf_valuation(cfg, tickers: list) -> dict:
         # WACC 計算
         rf   = DEFAULT_RF_JP if ticker.endswith(".T") else DEFAULT_RF_US
         wacc = calc_wacc(inputs.get("beta", DEFAULT_BETA), rf, floor=wacc_floor)
+        g_fcf  = fcf_growth_for(inputs.get("sector"))
+        g_term = terminal_growth_for(ticker)
 
         # DCF 計算
         dcf = calc_dcf(
             fcf_base        = inputs["fcf_avg"],
             wacc            = wacc,
-            terminal_growth = DEFAULT_GROWTH,
+            terminal_growth = g_term,
+            fcf_growth      = g_fcf,
             shares          = inputs.get("shares_outstanding", 1),
             net_debt        = inputs.get("net_debt", 0),
         )
@@ -570,16 +666,16 @@ def run_dcf_valuation(cfg, tickers: list) -> dict:
         sens = calc_sensitivity(
             fcf_base     = inputs["fcf_avg"],
             base_wacc    = wacc,
-            base_growth  = DEFAULT_GROWTH,
+            base_growth  = g_term,
             shares       = inputs.get("shares_outstanding", 1),
             net_debt     = inputs.get("net_debt", 0),
+            fcf_growth   = g_fcf,
         )
 
         # 割引率とボーナス
         intrinsic = dcf.get("intrinsic_per_share")
         discount  = calc_dcf_discount(intrinsic, inputs.get("current_price"))
         invalid   = discount is not None and not is_valid_discount(discount)
-        bonus     = calc_dcf_bonus(discount)
 
         entry = {
             "ticker":          ticker,
@@ -588,9 +684,10 @@ def run_dcf_valuation(cfg, tickers: list) -> dict:
             "dcf":             dcf,
             "sensitivity":     sens,
             "wacc":            wacc,
-            "terminal_growth": DEFAULT_GROWTH,
+            "terminal_growth": g_term,
+            "fcf_growth":      g_fcf,
             "discount_pct":    discount,
-            "dcf_bonus":       bonus,
+            "dcf_bonus":       0.0,
             "dcf_invalid":     invalid,
             "schema":          CACHE_SCHEMA,
         }
@@ -599,9 +696,10 @@ def run_dcf_valuation(cfg, tickers: list) -> dict:
         if discount is not None and not invalid and abs(discount) >= 10:
             icon = "🟢" if discount > 0 else "🔴"
             print(f"      {ticker}: 理論株価{intrinsic:,.0f} 現在{inputs['current_price']:,.0f} "
-                  f"{icon}{discount:+.1f}% bonus={bonus:+.0f}pt")
+                  f"{icon}{discount:+.1f}%")
         time.sleep(FETCH_DELAY)
 
+    apply_rank_bonus(results)
     _save_cache(cfg, results)
 
     top_undervalued = sorted(
