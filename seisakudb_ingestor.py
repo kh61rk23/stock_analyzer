@@ -52,6 +52,29 @@ _MONTHS = {m: i for i, m in enumerate(
 _RFC_DATE = re.compile(r"(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})")
 
 
+# 事務局として補助金を受け取り、事業者・消費者へ配る型の支出（例：電気・ガス価格激変緩和対策事業費補助金を
+# 博報堂が事務局として受けた 3.1兆円）は会社の収入ではなく、事業全体の予算がそのまま子会社の受給として載る。
+# 金額の単位（円）は正しいので単位換算では直らない。補助金系（子会社経由を含む）の1件がこの額以上なら、
+# 個社の集計から外す。調達（入札の落札）は実額なので対象にしない。
+PASSTHROUGH_MIN_YEN = 1.0e10
+TOP_MAX_LIMIT = 500
+# ランキング（/funding/top）は件ごとの内訳が無いので、子会社経由の合計がこの額（億円）以上なら
+# 受け取り側の事務局分とみなして、合計から子会社経由を引いた値で並べ直す。
+PASSTHROUGH_RANK_VIA_OKU = 1000.0
+
+
+def is_passthrough_record(kind, amount_yen, min_yen: float = PASSTHROUGH_MIN_YEN) -> bool:
+    """補助金系の1件が、事務局経由で配る型の巨額か（純関数）。"""
+    return "subsid" in str(kind or "").lower() and (amount_yen or 0) >= min_yen
+
+
+def adjusted_total_oku(rec: dict, via_min_oku: float = PASSTHROUGH_RANK_VIA_OKU) -> float:
+    """ランキング1行の合計（億円）から、事務局経由とみなす子会社経由分を引いた値（純関数）。"""
+    total = _num(rec.get("total_oku")) or 0.0
+    via = _num(rec.get("via_subsidiary_oku")) or 0.0
+    return round(total - via, 1) if via >= via_min_oku else total
+
+
 class SeisakuClient:
     """政策DB REST の薄いラッパー。1日の使用回数を記録し、上限・401・429 で止まる。"""
 
@@ -333,14 +356,15 @@ def run(cfg, tickers: list[str], today: date | None = None) -> dict:
     now = datetime.now(timezone.utc).isoformat()
     rows, certs, ranks = [], [], []
     stats = {"recent": 0, "top_count": 0, "companies_ok": 0, "companies_empty": 0, "certs": 0,
-             "certs_mapped": 0, "errors": 0}
+             "certs_mapped": 0, "errors": 0, "companies_truncated": 0}
 
     # a. 毎日の固定取得
     recent = results_of(client.get("/v1/funding/recent", {"limit": int(getattr(cfg, "SEISAKUDB_RECENT_LIMIT", 500))}))
     rows += [normalize(r, "funding_recent", None, now) for r in recent]
     stats["recent"] = len(recent)
 
-    top = results_of(client.get("/v1/funding/top", {"limit": int(getattr(cfg, "SEISAKUDB_TOP_LIMIT", 2000))}))
+    # /funding/top の limit は最大 500（超える値を渡しても 500 件で返る）
+    top = results_of(client.get("/v1/funding/top", {"limit": min(TOP_MAX_LIMIT, int(getattr(cfg, "SEISAKUDB_TOP_LIMIT", TOP_MAX_LIMIT)))}))
     ranks = [x for x in (rank_row(r, i, today, now) for i, r in enumerate(top, 1)) if x]
     stats["top_count"] = len(ranks)
 
@@ -361,6 +385,8 @@ def run(cfg, tickers: list[str], today: date | None = None) -> dict:
     all_codes = [code4_of(c.get("sec_code")) for c in companies if not c.get("is_delisted") and c.get("sec_code")]
     todo = due_companies([c for c in priority if c], [c for c in all_codes if c], meta, today)
     hits = []
+    pass_min = float(getattr(cfg, "SEISAKUDB_PASSTHROUGH_MIN_YEN", PASSTHROUGH_MIN_YEN))
+    via_min = float(getattr(cfg, "SEISAKUDB_PASSTHROUGH_RANK_VIA_OKU", PASSTHROUGH_RANK_VIA_OKU))
     for c in todo:
         if client.stopped:
             break
@@ -372,8 +398,13 @@ def run(cfg, tickers: list[str], today: date | None = None) -> dict:
         if recs:
             stats["companies_ok"] += 1
             rows += [normalize(r, "company_public_funding", c, now) for r in recs]
-            total = sum(x for x in (_num(_pick(r, _AMOUNT_KEYS)) for r in recs) if x)
-            hits.append({"code": c, "n": len(recs), "amount_yen": total})
+            total = sum(x for x in (_num(_pick(r, _AMOUNT_KEYS)) for r in recs
+                                    if not is_passthrough_record(_pick(r, _KIND_KEYS), _num(_pick(r, _AMOUNT_KEYS)),
+                                                                 pass_min)) if x)
+            # 応答は件数の上限で切られることがあり（truncated: true）、その会社の合計は実額より小さい
+            cut = bool(payload.get("truncated")) if isinstance(payload, dict) else False
+            stats["companies_truncated"] += int(cut)
+            hits.append({"code": c, "n": len(recs), "amount_yen": total, **({"truncated": True} if cut else {})})
         else:
             stats["companies_empty"] += 1
 
@@ -402,10 +433,11 @@ def run(cfg, tickers: list[str], today: date | None = None) -> dict:
                                               "kind", "ministry", "title")} for r in rows
                           if r["endpoint"] == "funding_recent"][:30],
         "open_subsidies": open_subs,
-        "rank_top": [{"code": r["company_code"], "listed_name": r["listed_name"], "total_oku": r["total_oku"],
+        "rank_top": [{"code": r["company_code"], "listed_name": r["listed_name"],
+                      "total_oku": adjusted_total_oku(r, via_min), "total_oku_raw": r["total_oku"],
                       "subsidy_oku": r["subsidy_oku"], "procurement_oku": r["procurement_oku"],
                       "via_subsidiary_oku": r.get("via_subsidiary_oku")}
-                     for r in sorted(ranks, key=lambda r: -(r["total_oku"] or 0))[:20]],
+                     for r in sorted(ranks, key=lambda r: -adjusted_total_oku(r, via_min))[:20]],
     }
     try:
         (data_dir / "seisakudb_last.json").write_text(json.dumps(summary, ensure_ascii=False, indent=1),
@@ -413,7 +445,7 @@ def run(cfg, tickers: list[str], today: date | None = None) -> dict:
     except OSError:
         pass
     print(f"    🏛️ [seisakudb] 直近イベント{stats['recent']}件 / ランキング{stats['top_count']}社 / "
-          f"個社{stats['companies_ok']}社（受給なし{stats['companies_empty']}）/ "
+          f"個社{stats['companies_ok']}社（受給なし{stats['companies_empty']}・件数上限で切れ{stats['companies_truncated']}）/ "
           f"経済安保{stats['certs']}件（コード対応{stats['certs_mapped']}）/ API {client.used}/{client.daily_budget}回"
           + (f" / 停止: {client.stopped}" if client.stopped and client.stopped != "budget" else ""))
     return summary

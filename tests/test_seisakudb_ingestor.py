@@ -98,3 +98,29 @@ def test_open_subsidy_rows_sorted_and_expired_dropped():
 def test_run_skips_without_key(monkeypatch):
     monkeypatch.delenv("SEISAKUDB_API_KEY", raising=False)
     assert si.run(object(), ["7011.T"])["skipped"] is True
+
+
+def test_passthrough_record_only_for_huge_subsidy_kinds():
+    # 博報堂が事務局として受けた電気・ガス価格激変緩和対策の 3.1兆円は会社の収入ではない
+    assert si.is_passthrough_record("subsidy_via_subsidiary", 3_107_361_287_000)
+    assert si.is_passthrough_record("subsidy", 2.0e10)
+    # 調達の巨額は落札の実額（NEC・富士通のハローワーク更改 931億）なので外さない
+    assert not si.is_passthrough_record("procurement", 93_180_000_000)
+    assert not si.is_passthrough_record("subsidy_via_subsidiary", 5.0e9)
+    assert not si.is_passthrough_record(None, None)
+
+
+def test_adjusted_total_oku_drops_only_huge_via_subsidiary():
+    hakuhodo = {"total_oku": 33170.4, "via_subsidiary_oku": 33170.4}
+    assert si.adjusted_total_oku(hakuhodo) == 0.0
+    mitsui = {"total_oku": 119.8, "via_subsidiary_oku": 113.7}
+    assert si.adjusted_total_oku(mitsui) == 119.8
+    assert si.adjusted_total_oku({"total_oku": None}) == 0.0
+
+
+def test_features_sql_excludes_passthrough_and_via_from_subsidy():
+    import public_funding_features as pff
+    q = " ".join(pff._sql("edinet").split())
+    assert "NOT LIKE '%via%'" in q
+    assert "IFNULL(amount_yen, 0) >= 10000000000.0" in q
+    assert "total_oku - via_subsidiary_oku" in q

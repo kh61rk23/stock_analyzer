@@ -77,23 +77,27 @@ def _row_to_feat(row: dict) -> dict:
     return feat
 
 
-def _sql(dataset: str) -> str:
+def _sql(dataset: str, passthrough_yen: float = 1.0e10, via_min_oku: float = 1000.0) -> str:
+    """passthrough_yen 以上の補助金系の1件（事務局として受けて配る型）は集計しない。subsidy_yen は
+    kind が子会社経由（subsidy_via_subsidiary）のものを含めない（'%subsid%' の部分一致では混ざる）。"""
     return f"""
     WITH req AS (SELECT code FROM UNNEST(@codes) AS code),
     pf AS (
       SELECT company_code,
         SUM(amount_yen) AS total_yen,
-        SUM(IF(LOWER(IFNULL(kind, '')) LIKE '%subsid%', amount_yen, 0)) AS subsidy_yen,
+        SUM(IF(LOWER(IFNULL(kind, '')) LIKE '%subsid%' AND LOWER(IFNULL(kind, '')) NOT LIKE '%via%', amount_yen, 0)) AS subsidy_yen,
         SUM(IF(LOWER(IFNULL(kind, '')) LIKE '%procure%', amount_yen, 0)) AS procurement_yen,
         SUM(IF(event_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 365 DAY), amount_yen, 0)) AS recent_1y_yen,
         COUNT(*) AS n_events,
         MAX(event_date) AS last_award
       FROM `{dataset}.public_funding`
       WHERE endpoint = 'company_public_funding' AND company_code IN (SELECT code FROM req)
+        AND NOT (LOWER(IFNULL(kind, '')) LIKE '%subsid%' AND IFNULL(amount_yen, 0) >= {float(passthrough_yen)})
       GROUP BY company_code
     ),
     rk AS (
-      SELECT company_code, ANY_VALUE(total_oku) AS rank_total_oku
+      SELECT company_code,
+        ANY_VALUE(IF(IFNULL(via_subsidiary_oku, 0) >= {float(via_min_oku)}, total_oku - via_subsidiary_oku, total_oku)) AS rank_total_oku
       FROM `{dataset}.public_funding_rank`
       WHERE fetched_date = (SELECT MAX(fetched_date) FROM `{dataset}.public_funding_rank`)
         AND company_code IN (SELECT code FROM req)
