@@ -534,14 +534,33 @@ def _raw_impact(strength: float, risk: float, scale: float) -> float:
 
 
 # 方向性が未定義の権益（販売網など資源コードの無いもの）を逆風と扱うリスクの下限。
-# 国別リスクの実測は 0〜45 点なので、50 では一度も発火しない。
-UNDEFINED_DIRECTION_RISK_MIN = 30.0
+# 国別リスク(composite)は 59 か国で 8〜63 点。58 点は上位約15%（9 か国）だけに効く。
+UNDEFINED_DIRECTION_RISK_MIN = 58.0
 
 
 def _undefined_direction(risk: float, cfg=None) -> float:
     """方向性未定義の権益の係数。リスクが閾値以上の国への権益だけ逆風(-0.5)。"""
     th = float(getattr(cfg, "GEO_UNDEFINED_DIR_RISK_MIN", UNDEFINED_DIRECTION_RISK_MIN))
     return -0.5 if risk >= th else 0.0
+
+
+# 銘柄ごとの点の内訳（直近の計算）。方向の決まらない権益の減点が、合計の中でいくらだったかを後から見られるようにする
+_BREAKDOWN: dict[tuple[str, str], dict] = {}
+
+
+def _record_breakdown(market: str, ticker: str, geo_raw: float, undef_raw: float,
+                      propagation: float, bonus: float) -> None:
+    _BREAKDOWN[(market, ticker)] = {
+        "direction_raw": round(geo_raw - undef_raw, 4),   # 資源の方向が決まっている権益の分
+        "undefined_dir": round(undef_raw, 4),             # 方向の決まらない権益（販売網など）の減点
+        "propagation": round(propagation, 4),
+        "bonus": bonus,
+    }
+
+
+def get_geo_breakdown(ticker: str, market: str = "JP") -> dict | None:
+    """直近に計算した geo_impact_bonus の内訳。未計算なら None。"""
+    return _BREAKDOWN.get((market, ticker))
 
 
 def _get_direction_coeff(
@@ -787,6 +806,7 @@ def calc_geo_impact_bonus_jp(
 
         # ③ 生インパクト計算
         geo_raw = 0.0
+        undef_raw = 0.0
         for exp in exposures:
             cc       = exp["country_code"]
             strength = float(exp.get("exposure_strength", 0.0))
@@ -804,6 +824,7 @@ def calc_geo_impact_bonus_jp(
             if direction == 0.0 and raw_impact > 0:
                 # 方向性未定義の場合はリスク高国への逆風として扱う
                 direction = _undefined_direction(risk, cfg)
+                undef_raw += raw_impact * direction
 
             geo_raw += raw_impact * direction
 
@@ -815,11 +836,12 @@ def calc_geo_impact_bonus_jp(
         # ⑤ 最終スコア
         total = geo_raw + propagation
         bonus = round(max(_impact_min, min(_impact_max, total)), 4)
+        _record_breakdown("JP", ticker, geo_raw, undef_raw, propagation, bonus)
 
-        if abs(bonus) >= 1.0:
+        if abs(bonus) >= 1.0 or undef_raw:
             print(
                 f"    🌐 [G-X] geo_impact [{ticker}/{sector_code}]: "
-                f"raw={geo_raw:+.2f} prop={propagation:+.2f} "
+                f"raw={geo_raw:+.2f}(うち方向未定の逆風{undef_raw:+.2f}) prop={propagation:+.2f} "
                 f"→ bonus={bonus:+.2f}pt "
                 f"({len(exposures)}権益)"
             )
@@ -902,6 +924,7 @@ def calc_geo_impact_bonus_us(
 
         # ③ 生インパクト計算
         geo_raw = 0.0
+        undef_raw = 0.0
         for exp in exposures:
             cc       = exp["country_code"]
             strength = float(exp.get("exposure_strength", 0.0))
@@ -917,6 +940,7 @@ def calc_geo_impact_bonus_us(
             )
             if direction == 0.0 and raw_impact > 0:
                 direction = _undefined_direction(risk, cfg)
+                undef_raw += raw_impact * direction
 
             geo_raw += raw_impact * direction
 
@@ -928,11 +952,12 @@ def calc_geo_impact_bonus_us(
         # ⑤ 最終スコア
         total = geo_raw + propagation
         bonus = round(max(_impact_min, min(_impact_max, total)), 4)
+        _record_breakdown("JP", ticker, geo_raw, undef_raw, propagation, bonus)
 
-        if abs(bonus) >= 1.0:
+        if abs(bonus) >= 1.0 or undef_raw:
             print(
                 f"    🌐 [G-X] geo_impact_us [{ticker}/{gics_key}]: "
-                f"raw={geo_raw:+.2f} prop={propagation:+.2f} "
+                f"raw={geo_raw:+.2f}(うち方向未定の逆風{undef_raw:+.2f}) prop={propagation:+.2f} "
                 f"→ bonus={bonus:+.2f}pt "
                 f"({len(exposures)}権益)"
             )

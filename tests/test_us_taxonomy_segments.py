@@ -57,14 +57,10 @@ def test_rules_nodes_are_approved():
     known = {n["node_id"] for n in select_approved_nodes(load_seed_batches())[0]}
     d = json.loads(um.US_RULES_PATH.read_text(encoding="utf-8"))
     used = {r["node"] for r in d["rules"] if r.get("node")} | {v for v in d["exact"].values() if v}
-    # 承認待ち（DRAFT）のバッチ13のノードだけは例外：承認されるまで mapper が「当たらない」扱いにする
-    import json as _j
-    from taxonomy_loader import SEED_DIR
-    draft = {n["node_id"] for n in _j.load(open(SEED_DIR / "batch13_consumer_electronics_cloud_draft.json", encoding="utf-8"))["nodes"]}
-    assert used <= known | draft, used - known - draft
+    assert used <= known, used - known
 
 
-def _approved_or_draft_nodes():
+def _all_seed_nodes():
     import glob
     import json
     from taxonomy_loader import SEED_DIR
@@ -75,9 +71,8 @@ def _approved_or_draft_nodes():
 
 
 def test_us_rule_and_sic_nodes_exist_in_seed():
-    # 承認待ちのバッチのノードも指してよい（承認されるまでは mapper が「当たらない」扱いにする）
     import json
-    ids = _approved_or_draft_nodes()
+    ids = _all_seed_nodes()
     d = json.load(open(um.US_RULES_PATH, encoding="utf-8"))
     used = {r["node"] for r in d["rules"] if r.get("node")} | {v for v in d["exact"].values() if v}
     m = json.load(open(um.MAP_PATH, encoding="utf-8"))
@@ -85,17 +80,29 @@ def test_us_rule_and_sic_nodes_exist_in_seed():
     assert used <= ids, used - ids
 
 
-def test_consumer_electronics_and_cloud_nodes_are_draft():
+def test_consumer_electronics_and_cloud_nodes_are_approved():
     import json
     from taxonomy_loader import SEED_DIR, load_seed_batches, select_approved_nodes
     b = json.load(open(SEED_DIR / "batch13_consumer_electronics_cloud_draft.json", encoding="utf-8"))
-    assert b["_meta"]["status"].startswith("DRAFT")
-    assert all(n["verified_flag"] is False for n in b["nodes"])
+    assert b["_meta"]["status"].startswith("APPROVED")
+    assert all(n["verified_flag"] is True and n["is_active"] is True for n in b["nodes"])
     ids = {n["node_id"] for n in b["nodes"]}
     approved = {n["node_id"] for n in select_approved_nodes(load_seed_batches())[0]}
-    assert not (ids & approved)                      # 承認されるまで master.tax_node には入らない
+    assert ids <= approved                           # taxonomy_loader が読み、master.tax_node へ入る
     parents = {n["parent_id"] for n in b["nodes"]}
-    assert parents <= ids | approved
+    assert parents <= approved
+
+
+def test_rules_hit_approved_batch13_nodes():
+    from taxonomy_loader import load_seed_batches, select_approved_nodes
+    approved = {n["node_id"] for n in select_approved_nodes(load_seed_batches())[0]}
+    rules = _rules()
+    for name, node in (("I Phone", "smartphone_device"), ("Mac", "pc_tablet_device"),
+                       ("Amazon Web Services", "cloud_infrastructure")):
+        assert um.classify_member(name, rules) == ("node", node)
+        assert node in approved
+    by_code, by_major = um.load_map()
+    assert um.node_for_sic("3571", by_code, by_major) in approved
 
 
 def test_devices_and_cloud_segments_map_to_new_nodes():
@@ -110,7 +117,7 @@ def test_devices_and_cloud_segments_map_to_new_nodes():
         assert f(n) == ("node", "cloud_infrastructure"), n
     assert f("Infrastructure As A Service") == ("node", "iaas_compute")
     assert f("Platform As A Service") == ("node", "paas_platform")
-    # 承認前（known に無い）は当たらない扱い、承認後（known にある）は売上の比率で付く
+    # known に無いノードは当たらない扱い、known にあれば売上の比率で付く
     segs = [{"axis": "ProductOrService", "member": "a:IPhoneMember", "val": 60.0},
             {"axis": "ProductOrService", "member": "a:MacMember", "val": 20.0},
             {"axis": "ProductOrService", "member": "a:WearablesHomeAndAccessoriesMember", "val": 20.0}]

@@ -37,7 +37,22 @@ def test_geo_undefined_direction_threshold():
     cfg = SimpleNamespace(GEO_UNDEFINED_DIR_RISK_MIN=40.0)
     assert geo._undefined_direction(41.0, cfg) == -0.5
     assert geo._undefined_direction(35.0, cfg) == 0.0
-    assert geo._undefined_direction(30.0, None) == -0.5     # 既定は 30
+    assert geo._undefined_direction(57.9, None) == 0.0      # 既定は 58（国別リスク上位約15%）
+    assert geo._undefined_direction(58.0, None) == -0.5
+    import config
+    assert config.GEO_UNDEFINED_DIR_RISK_MIN == geo.UNDEFINED_DIRECTION_RISK_MIN
+
+
+def test_geo_undefined_direction_penalty_in_breakdown(monkeypatch):
+    monkeypatch.setattr(geo, "_get_risk_scores_for_countries", lambda codes, *a, **k: {"RUS": 62.0, "VNM": 12.0})
+    cfg = SimpleNamespace(ENABLE_GEO_SIGNAL=True, GEO_IMPACT_SCALE=0.30, GEO_IMPACT_MAX=15.0,
+                          GEO_IMPACT_MIN=-15.0, GEO_UNDEFINED_DIR_RISK_MIN=58.0)
+    ex = [{"country_code": "RUS", "exposure_strength": 0.5, "commodity_code": None},
+          {"country_code": "VNM", "exposure_strength": 0.5, "commodity_code": None}]
+    b = geo.calc_geo_impact_bonus_jp("9999.T", "1009", cfg, prefetched_exposures=ex)
+    assert b == pytest.approx(-0.5 * 0.5 * 62 * 0.3)         # 高リスク国だけ減点（VNM は 0）
+    bd = geo.get_geo_breakdown("9999.T", "JP")
+    assert bd["undefined_dir"] == pytest.approx(b) and bd["direction_raw"] == 0.0 and bd["bonus"] == b
 
 
 def test_geo_sector_score_spreads():

@@ -20,7 +20,9 @@
 #
 # 【検知閾値】
 #   emerging_score >= EMERGING_SCORE_MIN かつ
-#   いずれか1信号がサージ（EMERGING_KEYWORD_SURGE_THRESHOLD超え）
+#   いずれか1信号がサージ（EMERGING_KEYWORD_SURGE_THRESHOLD超え）。上位 EMERGING_TOP_N 件まで。
+#   重みが固定（クラスター0.5・論文0.3・ニュース0.2）で、論文の信号は最大0.8（題名一致）。
+#   論文だけでは最大 0.24 なので、下限は 0.30 でなく 0.20（クラスターが加速しない週でも論文の強い群が出る）。
 #
 # 【依存】
 #   config.py (EMERGING_KEYWORD_SURGE_THRESHOLD / EMERGING_SCORE_MIN 等)
@@ -30,6 +32,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -39,7 +42,7 @@ from typing import Optional
 # BLOCK 0: モジュール定数
 # ==============================================================
 
-_MODULE_VERSION  = "1.1"
+_MODULE_VERSION  = "1.2"
 from config_sync import sync_module_constants
 
 _CFG_CONST_MAP = {
@@ -96,6 +99,16 @@ def _save_cache(cache_path: Path, data: dict) -> bool:
         )
         return False
 
+
+
+def _kw_in(text: str, kw: str) -> bool:
+    """text に kw が含まれるか。英字の語は単語の切れ目で照合する（'temp' が 'contemporaneous' に当たらないように）。
+    日本語など英字以外を含む語は部分一致のまま。複数形（s / es）は同じ語として扱う。"""
+    if not kw:
+        return False
+    if kw.isascii():
+        return re.search(r"(?<![a-z0-9])" + re.escape(kw) + r"(?:e?s)?(?![a-z0-9])", text) is not None
+    return kw in text
 
 # ==============================================================
 # BLOCK 2: ArXiv シグナル抽出
@@ -166,11 +179,11 @@ def _extract_arxiv_signals(
                 summary = str(paper.get("summary", "") or "").lower()
                 # arxiv_monitor の論文の点は investment_score（score というキーは無い）
                 paper_score = float(paper.get("investment_score", paper.get("score", 0)) or 0)
-                if kw_lower in title:
+                if _kw_in(title, kw_lower):
                     node_score += min(1.0, paper_score / 5.0) * 0.8
                     matched    += 1
                     break
-                elif kw_lower in summary:
+                elif _kw_in(summary, kw_lower):
                     node_score += min(1.0, paper_score / 5.0) * 0.4
                     matched    += 1
                     break
@@ -248,7 +261,7 @@ def _extract_news_signals(
             # articles タイトルへの部分一致（上位30件）
             for article in articles[:30]:
                 title = str(article.get("title", "") or "").lower()
-                if kw_lower in title:
+                if _kw_in(title, kw_lower):
                     art_score = float(article.get("score", 1) or 1)
                     node_score += min(1.0, art_score / 5.0) * 0.6
                     matched    += 1
@@ -382,7 +395,8 @@ def build_emerging_cache(
     from technology_mapper import _get_keyword_map
     tech_keyword_map  = _get_keyword_map(cfg)
     surge_threshold   = getattr(cfg, "EMERGING_KEYWORD_SURGE_THRESHOLD", 0.50)
-    emerging_min      = getattr(cfg, "EMERGING_SCORE_MIN",              0.30)
+    emerging_min      = getattr(cfg, "EMERGING_SCORE_MIN",              0.20)
+    top_n             = int(getattr(cfg, "EMERGING_TOP_N",              15) or 0)
 
     if not tech_keyword_map:
         return {
@@ -464,7 +478,9 @@ def build_emerging_cache(
         })
 
     # emerging_score 降順でソート + ランク付け
-    emerging_themes.sort(key=lambda x: -x["emerging_score"])
+    emerging_themes.sort(key=lambda x: (-x["emerging_score"], x["node_id"]))
+    if top_n > 0:
+        emerging_themes = emerging_themes[:top_n]     # 論文1本が複数ノードに同点で当たっても出しすぎない
     for rank, theme in enumerate(emerging_themes, start=1):
         theme["rank"] = rank
 

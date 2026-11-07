@@ -8,8 +8,10 @@
   "taxonomy_version": "v1.1",
   "generated_by": "claude（区分名の規則を足すための追加ノード案・2026-11-05）",
   "generated_at": "2026-11-05",
-  "status": "DRAFT_承認待ち",
-  "review": "米国の区分（iPhone・Mac・AWS・Azure・Google Cloud 等）が当たる先が無かったため、民生機器とクラウドを足す案。承認したら status を APPROVED_… に変え、各ノードの verified_flag を true にする。承認されるまで taxonomy_loader は読まず、規則（data/taxonomy_us_segment_rules.json・taxonomy_us_sic_map.json）がこれらのノードを指していても mapper は『当たらない』扱いにする",
+  "status": "APPROVED_承認済み",
+  "approved_by": "健太（2026-11-07 全件承認）",
+  "approved_at": "2026-11-07",
+  "review": "承認済み。全ノードに verified_flag=true / is_active=true 付与済み。米国の区分（iPhone・Mac・AWS・Azure・Google Cloud 等）が当たる先として、民生機器とクラウドを足した",
   "naming_rule": "lowercase snake_case。親の下に置く"
  },
  "nodes": [
@@ -27,7 +29,7 @@
     "US"
    ],
    "description": "スマートフォン・パソコン・タブレット・ウェアラブルなど、個人向けの電子機器メーカー（部品や販売店ではなく、機器そのものを作って売る業態）",
-   "verified_flag": false,
+   "verified_flag": true,
    "is_active": true
   },
   {
@@ -44,7 +46,7 @@
     "US"
    ],
    "description": "スマートフォン・iPhone・携帯端末の製造販売",
-   "verified_flag": false,
+   "verified_flag": true,
    "is_active": true
   },
   {
@@ -61,7 +63,7 @@
     "US"
    ],
    "description": "パソコン・Mac・ノートPC・デスクトップ・タブレット・iPad・ワークステーションの製造販売",
-   "verified_flag": false,
+   "verified_flag": true,
    "is_active": true
   },
   {
@@ -78,7 +80,7 @@
     "US"
    ],
    "description": "スマートウォッチ・イヤホン・ヘッドセット・スマートスピーカー・スマートホーム機器",
-   "verified_flag": false,
+   "verified_flag": true,
    "is_active": true
   },
   {
@@ -95,7 +97,7 @@
     "US"
    ],
    "description": "パブリッククラウドの計算・保存・ネットワークと開発基盤を貸す事業（AWS・Azure・Google Cloud など。アプリを月額で売る SaaS とは分ける）",
-   "verified_flag": false,
+   "verified_flag": true,
    "is_active": true
   },
   {
@@ -112,7 +114,7 @@
     "US"
    ],
    "description": "仮想サーバー・ストレージ・ネットワーク・GPUインスタンスの従量貸し",
-   "verified_flag": false,
+   "verified_flag": true,
    "is_active": true
   },
   {
@@ -129,7 +131,7 @@
     "US"
    ],
    "description": "アプリ開発基盤・データベース・データ分析基盤・コンテナ運用基盤のマネージドサービス",
-   "verified_flag": false,
+   "verified_flag": true,
    "is_active": true
   }
  ]
