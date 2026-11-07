@@ -39,6 +39,7 @@ TABLE_NOTES = {
     "edinet.ticker_subtheme_mapping": "銘柄×サブテーマ",
     "analytics.stock_snapshot": "スクリーナー対象銘柄の日次スナップショット（総合点・PER・PBR・ROE・配当利回り等）。1日1銘柄1行。ticker は '7203.T' 形式（JP）/ 'AAPL'（US）",
     "analytics.price_daily": "日足 OHLCV。trade_date×ticker。重複がありうるので QUALIFY ROW_NUMBER() で最新を採る",
+    "analytics.price_monthly": "月足 OHLCV。month_start×ticker。PRICE_DAILY_KEEP_MONTHS（24か月）より古い月の日足を畳んだもの（始値=月初・終値=月末・出来高=合計）。古い期間は表関数 analytics.price_history_mixed(start,end) で日足と合わせて読む",
     "geopolitics.country_risk_daily": "国別リスクの日次（ISO3 国コード）",
     "geopolitics.country_profile": "国別の静的プロファイル（59か国）",
     "geopolitics.company_country_exposure": "企業×国の権益・売上依存（ticker は '1605.T' 形式）",

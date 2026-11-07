@@ -497,6 +497,15 @@ jobs:
           BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
         run: python bq_compact.py price_dedupe
 
+      # 日足を残す期間（24か月）より古い月を月足（analytics.price_monthly）に畳んで日足を消す。重複除去の後に流す。
+      # 畳む月が無い週は境目の基準ずれの確認だけ（約30MB）。月が変わった週に1か月ぶん畳む。確かめが合わなければ日足は消さず止まる。
+      - name: 📅 Fold old price_daily into monthly (weekly)
+        if: always() && steps.set-mode.outputs.mode == 'weekly'
+        continue-on-error: true
+        env:
+          BQ_CREDENTIALS: ${{ secrets.BQ_CREDENTIALS }}
+        run: python bq_compact.py price_monthly
+
       # ── 5-B. 状態ファイル・キャッシュをリポジトリにコミット ───────
       # 2026-07-12 BUG-03対応: .iqy生成（Excel Webクエリ）は廃止（ENABLE_EXCEL_EXPORT=False）。
       # あわせて「ダッシュボードCSVが存在する時だけコミット」というゲートを撤去した。

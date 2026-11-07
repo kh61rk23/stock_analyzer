@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 
+from bq_compact import price_monthly_ddl
 from edinet_bq_client import EDINETBQClient
 
 # 同一テーブルへの連続 ALTER はレート制限に当たるため、待って再試行する
@@ -146,6 +147,8 @@ def _statements(project: str) -> list[str]:
         SELECT * EXCEPT(rn) FROM (
           SELECT *, ROW_NUMBER() OVER (PARTITION BY ticker, trade_date ORDER BY ingested_at DESC) AS rn
           FROM `{project}.analytics.price_daily`) WHERE rn = 1""",
+        # 古い日足を畳んだ月足と、日足＋月足を1本で読む表関数（bq_compact.py price_monthly が使う。ここでも同じ文を流す）
+        *price_monthly_ddl(project),
         # 財務三表の細目（売上原価・販管費・研究開発費・支払利息・棚卸資産・
         # のれん・支払配当金など154項目）。edinet.financials は約25項目だけなので、
         # EdinetDB /financials（1年度178項目）の残りをここに縦持ちで入れる。
