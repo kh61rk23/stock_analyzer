@@ -115,10 +115,16 @@ class TestRunEntrypointsSafeWithEmptyData(object):
         assert result.get("quadrants") == {}
 
     def test_us_sector_bridge_enhanced_returns_empty_without_earnings(self, tmp_cfg):
-        result = us_sector_bridge_enhanced.run_us_sector_bridge_enhanced(tmp_cfg, {})
+        results = {"us_8k": {"earnings_tickers": [], "screener_hits": []}}
+        result = us_sector_bridge_enhanced.run_us_sector_bridge_enhanced(tmp_cfg, results)
         assert isinstance(result, dict)
         assert result.get("cross_signals") == []
         assert result.get("mapping_updated") == 0
+
+    def test_us_sector_bridge_enhanced_skips_with_reason_without_us_8k(self, tmp_cfg):
+        result = us_sector_bridge_enhanced.run_us_sector_bridge_enhanced(tmp_cfg, {})
+        assert result.get("skipped") is True
+        assert "us_8k" in result.get("reason", "")
 
     def test_us_sector_bridge_enhanced_respects_enable_flag(self, tmp_cfg):
         tmp_cfg.ENABLE_US_SECTOR_BRIDGE = False

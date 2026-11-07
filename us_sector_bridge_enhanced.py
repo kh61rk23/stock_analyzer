@@ -36,8 +36,8 @@
 #
 # 【入力（実コード確認済み）】
 #   ・results["us_8k"]["earnings_tickers"] / results["us_8k"]["screener_hits"]
-#     （us_8k_monitor.py が当日実行済みであること前提。run_us_sector_bridge_enhanced()
-#     の引数 results から読む。無ければ target_tickers=[] で早期returnする）
+#     （業種の採点より前に us_8k_monitor.fetch_earnings_early が作る。screener_hits は
+#     その時点では空。results["us_8k"] が無いときは {"skipped": True, "reason": ...} を返す）
 #   ・DATA_DIR/us_cik_map.json（ticker→CIK。us_fundamental_rotator.py が書き込み維持）
 #   ・DATA_DIR/us_sector_mapping.json（本モジュール自身の出力兼キャッシュ。30日TTL）
 #   ・DATA_DIR/us_fundamentals_db/{ticker}.json の eps_history（決算beat/miss判定用）
@@ -55,7 +55,11 @@
 #     "timestamp":       str,
 #   }
 #   cross_signals は results["cross_sector_signals"] にも追記され、
-#   他モジュール共通の CROSS_SECTOR シグナル経路に合流する。
+#   他モジュール共通の CROSS_SECTOR シグナル経路に合流する。各シグナルの "signal" は
+#   {"tailwind": [業種コード], "headwind": [業種コード]}（業種の横断産業補正がこの形で読む）、
+#   向きの文字列は "direction"。
+#   呼び出しは2段: run_us_sector_bridge_earnings（業種の採点より前）と
+#   run_us_sector_bridge_ism（us_macro が出来た後）。
 #
 # 【消費者】
 #   ・screener_candidate_builder.py:140,186 _load_us_bridge_jp_reps() 等 —
@@ -451,7 +455,10 @@ def generate_8k_cross_sector_signals(
             "sectors_tailwind": jp_sectors if direction == "tailwind" else [],
             "sectors_headwind": jp_sectors if direction == "headwind" else [],
             "pts_adj":          pts,
-            "signal":           direction,
+            # 読み手（横断産業の補正）は {"tailwind": [...], "headwind": [...]} の形で読む
+            "signal":           {"tailwind": list(jp_sectors) if direction == "tailwind" else [],
+                                 "headwind": list(jp_sectors) if direction == "headwind" else []},
+            "direction":        direction,
             "filing_date":      date.today().strftime("%Y-%m-%d"),
         })
 
@@ -514,7 +521,8 @@ def enhance_ism_cross_sector_signal(
             "sectors_tailwind": ["1016", "1015", "1018", "1017"],
             "sectors_headwind": [],
             "pts_adj":          2.0,
-            "signal":           "tailwind",
+            "signal":           {"tailwind": ["1016", "1015", "1018", "1017"], "headwind": []},
+            "direction":        "tailwind",
         })
         print(f"    🔗 [US-5] ISM×IT beat強化シグナル: {it_beats[:3]}")
 
@@ -525,51 +533,43 @@ def enhance_ism_cross_sector_signal(
 # BLOCK 5: メインエントリポイント
 # ==============================================================
 
-def run_us_sector_bridge_enhanced(cfg, results: dict = None) -> dict:
-    """
-    US-5 SIC/CIK マッピング + JP業種連携強化を実行する。
+def _summarize(cross_signals: list) -> dict:
+    """シグナル一覧から beat/miss の銘柄と影響業種を集計する。"""
+    return {
+        "beat_tickers": [s["trigger_ticker"] for s in cross_signals
+                         if s.get("direction") == "tailwind" and s.get("trigger_ticker")],
+        "miss_tickers": [s["trigger_ticker"] for s in cross_signals
+                         if s.get("direction") == "headwind" and s.get("trigger_ticker")],
+        "jp_affected":  list(dict.fromkeys(
+            code for s in cross_signals
+            for code in (s.get("sectors_tailwind", []) + s.get("sectors_headwind", [])))),
+    }
 
-    stock_analyzer_main.py の jp_us_bridge ブロックの直後に呼び出す:
-        _usbe = _load_local_module("us_sector_bridge_enhanced", ...)
-        usbe_result = _usbe.run_us_sector_bridge_enhanced(cfg, results)
-        results["us_sector_bridge"] = usbe_result
-        # CROSS_SECTOR シグナルに追加
-        if usbe_result.get("cross_signals"):
-            existing = results.get("cross_sector_signals", [])
-            results["cross_sector_signals"] = existing + usbe_result["cross_signals"]
 
-    処理:
-      1. us_8k_monitor の earnings_tickers を取得
-      2. CIK → SIC マッピングを更新（30日キャッシュ）
-      3. SIC → JP業種変換
-      4. EPS beat/miss 判定
-      5. JP業種への CROSS_SECTOR シグナルを生成
-      6. ISM × IT beat の複合シグナルを生成
+def run_us_sector_bridge_earnings(cfg, results: dict = None) -> dict:
+    """8-K の決算 × SIC × EPS から JP業種への横断産業シグナルを作る（業種の採点より前に呼ぶ）。
 
-    Args:
-        cfg     : config
-        results : run_all_tasks() の results dict
+    入力は results["us_8k"]（us_8k_monitor.fetch_earnings_early が先に作る。screener 照合は無くてよい）。
+    ISM との複合シグナルは us_macro が後ろで作られるため run_us_sector_bridge_ism に分けてある。
 
     Returns:
-        {
-          "cross_signals":   [signal_dict, ...],
-          "mapping_updated": int,
-          "jp_affected":     [sector_code, ...],
-          "beat_tickers":    [ticker, ...],
-          "miss_tickers":    [ticker, ...],
-          "timestamp":       str,
-        }
+        {"cross_signals", "mapping_updated", "jp_affected", "beat_tickers", "miss_tickers", "timestamp"}
+        8-K が得られなかったとき（us_8k が無い・skipped）は {"skipped": True, "reason": ...}
     """
     sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
     if not getattr(cfg, "ENABLE_US_SECTOR_BRIDGE", True):
         return {"skipped": True}
 
-    print("\n  🌐 US-JP セクターブリッジ強化版 開始...")
+    print("\n  🌐 US-JP セクターブリッジ（8-K 決算）開始...")
     results = results or {}
     t0      = datetime.now()
 
-    # ── Step1: us_8k の決算銘柄と CIK マップを取得 ─────────
-    us_8k = results.get("us_8k", {})
+    us_8k = results.get("us_8k")
+    if not us_8k:
+        return {"skipped": True, "reason": "入力の us_8k が未生成"}
+    if us_8k.get("skipped"):
+        return {"skipped": True, "reason": f"us_8k がスキップ（{us_8k.get('reason', '')}）"}
+
     earnings_tickers = us_8k.get("earnings_tickers", [])
     screener_hits    = us_8k.get("screener_hits", [])
     # 決算 + screener対象を対象に
@@ -584,7 +584,7 @@ def run_us_sector_bridge_enhanced(cfg, results: dict = None) -> dict:
             "timestamp":       t0.strftime("%Y-%m-%d %H:%M:%S"),
         }
 
-    # ── Step2: CIK マップ読み込み ────────────────────────────
+    # ── CIK マップ読み込み ───────────────────────────────────
     cik_map_path = _data_dir(cfg) / "us_cik_map.json"
     cik_map      = {}
     if cik_map_path.exists():
@@ -600,45 +600,47 @@ def run_us_sector_bridge_enhanced(cfg, results: dict = None) -> dict:
         if cik_map.get(t.upper(), 0) > 0
     ]
 
-    # ── Step3: SIC マッピング更新 ────────────────────────────
+    # ── SIC マッピング更新 → 8-K × SIC × EPS → JP業種シグナル ──
     sector_mapping = update_sector_mapping(cfg, tickers_with_cik)
+    cross_signals  = generate_8k_cross_sector_signals(earnings_tickers, sector_mapping, cfg)
 
-    # ── Step4: 8-K × SIC × EPS → JP業種シグナル生成 ─────────
-    cross_signals = generate_8k_cross_sector_signals(
-        earnings_tickers, sector_mapping, cfg
-    )
-
-    # ── Step5: ISM × IT beat 複合シグナル ───────────────────
-    ism_signals = enhance_ism_cross_sector_signal(results, sector_mapping, cfg)
-    cross_signals.extend(ism_signals)
-
-    # 集計
-    beat_tickers = [
-        s["trigger_ticker"] for s in cross_signals
-        if s.get("signal") == "tailwind" and s.get("trigger_ticker")
-    ]
-    miss_tickers = [
-        s["trigger_ticker"] for s in cross_signals
-        if s.get("signal") == "headwind" and s.get("trigger_ticker")
-    ]
-    jp_affected  = list(dict.fromkeys(
-        code for s in cross_signals
-        for code in (s.get("sectors_tailwind", []) + s.get("sectors_headwind", []))
-    ))
-
+    summ    = _summarize(cross_signals)
     elapsed = (datetime.now() - t0).seconds
     print(
         f"    ✅ セクターブリッジ完了（{elapsed}秒）: "
         f"シグナル{len(cross_signals)}件 / "
-        f"JP影響業種{len(jp_affected)}業種 / "
-        f"beat{len(beat_tickers)} / miss{len(miss_tickers)}"
+        f"JP影響業種{len(summ['jp_affected'])}業種 / "
+        f"beat{len(summ['beat_tickers'])} / miss{len(summ['miss_tickers'])}"
     )
-
     return {
         "cross_signals":   cross_signals,
         "mapping_updated": len(tickers_with_cik),
-        "jp_affected":     jp_affected,
-        "beat_tickers":    beat_tickers,
-        "miss_tickers":    miss_tickers,
+        "jp_affected":     summ["jp_affected"],
+        "beat_tickers":    summ["beat_tickers"],
+        "miss_tickers":    summ["miss_tickers"],
         "timestamp":       t0.strftime("%Y-%m-%d %H:%M:%S"),
     }
+
+
+def run_us_sector_bridge_ism(cfg, results: dict = None) -> list:
+    """ISM × US IT/半導体 beat の複合シグナルを返す（us_macro の後ろで呼ぶ）。
+
+    SIC マッピングは run_us_sector_bridge_earnings が更新した保存済みのものを読む（SEC は呼ばない）。
+    """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
+    if not getattr(cfg, "ENABLE_US_SECTOR_BRIDGE", True):
+        return []
+    results = results or {}
+    if not (results.get("us_8k") or {}).get("earnings_tickers"):
+        return []
+    return enhance_ism_cross_sector_signal(results, load_sector_mapping(cfg), cfg)
+
+
+def run_us_sector_bridge_enhanced(cfg, results: dict = None) -> dict:
+    """決算シグナルと ISM 複合シグナルを1回で作る（単体実行・テスト用。本処理は2段に分けて呼ぶ）。"""
+    out = run_us_sector_bridge_earnings(cfg, results)
+    if out.get("skipped"):
+        return out
+    out["cross_signals"].extend(run_us_sector_bridge_ism(cfg, results))
+    out.update(_summarize(out["cross_signals"]))
+    return out

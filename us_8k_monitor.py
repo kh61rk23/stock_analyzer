@@ -370,6 +370,120 @@ def _notify_fundamental_rotator(cfg, priority_tickers: list) -> None:
 # BLOCK 8: メインエントリポイント
 # ==============================================================
 
+def _collect_events(cfg, filings: list, cik_to_ticker: dict, screener_tickers: set,
+                    watchlist: set, target_set: set) -> dict:
+    """提出一覧を ticker に直して Item で分類する。
+
+    Item の取得（索引ページの読み込み）は target_set の銘柄だけ・上限つき。target_set が空なら
+    EFTS の検索結果に載っている Item だけで分類し、SEC への追加の呼び出しは行わない。
+    """
+    events             = []
+    earnings_tickers   = []
+    ceo_change_tickers = []
+    ma_tickers         = []
+    screener_hits      = []
+    priority_for_rotator = []
+
+    max_item_fetch = getattr(cfg, "US_8K_MAX_ITEM_FETCH", 30)
+    item_fetched   = 0
+
+    for filing in filings:
+        cik    = filing["cik"]
+        ticker = cik_to_ticker.get(cik, "").upper()
+        if not ticker:
+            continue   # ticker が不明な場合はスキップ
+
+        # EFTS の検索結果に Item 番号（例 "2.02"）が入っているのでそれを使う。
+        #   無いときだけ対象銘柄の索引ページを読む。
+        items = list(filing.get("items") or [])
+        is_target = (ticker in target_set)
+        if not items and is_target and item_fetched < max_item_fetch:
+            items = _fetch_8k_items(cik, filing["accession_number"])
+            item_fetched += 1
+            time.sleep(FETCH_DELAY)
+
+        event_types, priority = _classify_event(items)
+
+        events.append({
+            "ticker":       ticker,
+            "cik":          cik,
+            "company_name": filing["company_name"],
+            "items":        items,
+            "event_types":  event_types,
+            "filing_date":  filing["filing_date"],
+            "doc_url":      filing["doc_url"],
+            "priority":     priority,
+            "in_screener":  ticker in screener_tickers,
+            "in_watchlist": ticker in watchlist,
+        })
+
+        if "earnings" in event_types:
+            earnings_tickers.append(ticker)
+        if "ceo_change" in event_types:
+            ceo_change_tickers.append(ticker)
+        if "ma_other" in event_types or "asset_acquisition" in event_types:
+            ma_tickers.append(ticker)
+        if is_target:
+            screener_hits.append(ticker)
+            priority_for_rotator.append(ticker)
+
+    return {
+        "events":               events,
+        "earnings_tickers":     list(dict.fromkeys(earnings_tickers)),
+        "ceo_change_tickers":   list(dict.fromkeys(ceo_change_tickers)),
+        "ma_tickers":           list(dict.fromkeys(ma_tickers)),
+        "screener_hits":        list(dict.fromkeys(screener_hits)),
+        "priority_for_rotator": priority_for_rotator,
+    }
+
+
+def _target_date(today: date | None = None) -> str:
+    """監視対象日（前営業日。月曜→金曜・日曜→金曜）。"""
+    today = today or date.today()
+    delta = {0: 3, 6: 2}.get(today.weekday(), 1)
+    return (today - timedelta(days=delta)).strftime("%Y-%m-%d")
+
+
+def fetch_earnings_early(cfg, results: dict = None) -> dict:
+    """screener に依存しない部分（提出一覧の取得と Item だけでの分類）を先に作る。
+
+    US 業種ブリッジは業種の採点より前に動く必要があるが、本処理（run_us_8k_monitor）は
+    後ろの米国スクリーナーの結果を使うため後ろで動く。ここで取った提出一覧は
+    {"partial": True, "_filings": [...]} として返し、run_us_8k_monitor が取り直さずに使う
+    （EDGAR の呼び出しは1日1回のまま）。キャッシュは書かない（書くと後ろの本処理が
+    screener 照合なしのキャッシュを返してしまう）。
+    """
+    sync_module_constants(globals(), cfg, _CFG_CONST_MAP)
+    if not getattr(cfg, "ENABLE_US_8K_MONITOR", True):
+        return {"skipped": True}
+
+    t0 = datetime.now()
+    target_date = _target_date()
+    cached = _load_cache(cfg, target_date)
+    if cached:
+        return {**cached, "cached": True}
+
+    cik_to_ticker = _load_cik_to_ticker_map(cfg)
+    if not cik_to_ticker:
+        return {"skipped": True, "reason": "cik_map not found"}
+
+    filings = _fetch_8k_filings(target_date)
+    col = _collect_events(cfg, filings, cik_to_ticker, set(), set(), set())
+    return {
+        "events":             col["events"],
+        "earnings_tickers":   col["earnings_tickers"],
+        "ceo_change_tickers": col["ceo_change_tickers"],
+        "ma_tickers":         col["ma_tickers"],
+        "screener_hits":      [],
+        "total":              len(col["events"]),
+        "target_date":        target_date,
+        "cached":             False,
+        "partial":            True,
+        "_filings":           filings,
+        "timestamp":          t0.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
 def run_us_8k_monitor(cfg, results: dict = None) -> dict:
     """
     SEC EDGAR 8-K リアルタイム監視を実行する。
@@ -394,16 +508,7 @@ def run_us_8k_monitor(cfg, results: dict = None) -> dict:
 
     results = results or {}
 
-    # 監視対象日（前営業日。土→金・日→金を考慮）
-    today     = date.today()
-    weekday   = today.weekday()
-    if weekday == 0:      # 月曜 → 金曜
-        delta = 3
-    elif weekday == 6:    # 日曜 → 金曜
-        delta = 2
-    else:
-        delta = 1
-    target_date = (today - timedelta(days=delta)).strftime("%Y-%m-%d")
+    target_date = _target_date()
 
     print(f"\n  📋 US 8-K モニター 開始（{target_date} 提出分）...")
     t0 = datetime.now()
@@ -428,9 +533,14 @@ def run_us_8k_monitor(cfg, results: dict = None) -> dict:
     target_set = screener_tickers | watchlist
 
     # ── Step4: EDGAR から 8-K 一覧を取得 ─────────────────────
-    print(f"    📥 EDGAR 8-K 取得中（{target_date}）...")
-    filings = _fetch_8k_filings(target_date)
-    print(f"    取得: {len(filings)}件")
+    pre = results.get("us_8k") or {}
+    if pre.get("partial") and pre.get("target_date") == target_date and "_filings" in pre:
+        filings = pre["_filings"]      # 業種ブリッジの前の先取りで取得済み（取り直さない）
+        print(f"    取得済みの提出一覧を使う: {len(filings)}件")
+    else:
+        print(f"    📥 EDGAR 8-K 取得中（{target_date}）...")
+        filings = _fetch_8k_filings(target_date)
+        print(f"    取得: {len(filings)}件")
 
     if not filings:
         print("    ⚠️  8-K が0件（市場休場 or 取得失敗）")
@@ -449,59 +559,13 @@ def run_us_8k_monitor(cfg, results: dict = None) -> dict:
         return result
 
     # ── Step5: CIK→ticker変換・Item検知・分類 ───────────────
-    events            = []
-    earnings_tickers  = []
-    ceo_change_tickers = []
-    ma_tickers        = []
-    screener_hits     = []
-    priority_for_rotator = []
-
-    # item 検知はウォッチリスト・screener 銘柄のみ行う（API負荷削減）
-    max_item_fetch = getattr(cfg, "US_8K_MAX_ITEM_FETCH", 30)
-    item_fetched   = 0
-
-    for filing in filings:
-        cik    = filing["cik"]
-        ticker = cik_to_ticker.get(cik, "").upper()
-        if not ticker:
-            continue   # ticker が不明な場合はスキップ
-
-        # Item 検知（対象銘柄のみ実行・上限あり）
-        # EFTS の検索結果に Item 番号（例 "2.02"）が入っているのでそれを使う。
-        #   無いときだけ対象銘柄の索引ページを読む。
-        items = list(filing.get("items") or [])
-        is_target = (ticker in target_set)
-        if not items and is_target and item_fetched < max_item_fetch:
-            items = _fetch_8k_items(cik, filing["accession_number"])
-            item_fetched += 1
-            time.sleep(FETCH_DELAY)
-
-        event_types, priority = _classify_event(items)
-
-        ev = {
-            "ticker":       ticker,
-            "cik":          cik,
-            "company_name": filing["company_name"],
-            "items":        items,
-            "event_types":  event_types,
-            "filing_date":  filing["filing_date"],
-            "doc_url":      filing["doc_url"],
-            "priority":     priority,
-            "in_screener":  ticker in screener_tickers,
-            "in_watchlist": ticker in watchlist,
-        }
-        events.append(ev)
-
-        # カテゴリ別リストへ追加
-        if "earnings" in event_types:
-            earnings_tickers.append(ticker)
-        if "ceo_change" in event_types:
-            ceo_change_tickers.append(ticker)
-        if "ma_other" in event_types or "asset_acquisition" in event_types:
-            ma_tickers.append(ticker)
-        if is_target:
-            screener_hits.append(ticker)
-            priority_for_rotator.append(ticker)
+    col = _collect_events(cfg, filings, cik_to_ticker, screener_tickers, watchlist, target_set)
+    events               = col["events"]
+    earnings_tickers     = col["earnings_tickers"]
+    ceo_change_tickers   = col["ceo_change_tickers"]
+    ma_tickers           = col["ma_tickers"]
+    screener_hits        = col["screener_hits"]
+    priority_for_rotator = col["priority_for_rotator"]
 
     # ── Step6: us_fundamental_rotator に優先再取得を通知 ──────
     if priority_for_rotator:

@@ -1737,6 +1737,59 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ マクロ分析: スキップ（config.ENABLE_MACRO=False / Step 2 で有効化）")
 
+    # ── [Phase US-5a] 米国 8-K の決算 → JP業種の横断産業シグナル（業種の採点より前）──
+    # 採点側（横断産業の補正・signal_dedup）がこのシグナルを読むので、業種の採点より前に作る。
+    # 8-K 本体（screener 照合つき）は後ろの米国スクリーナーの結果が要るため後段のまま。
+    # ここでは screener に依存しない提出一覧の取得だけ先に行い、後段が取り直さずに使う。
+    if getattr(cfg, "ENABLE_US_SECTOR_BRIDGE", True) and _in_mode("us_sector_bridge"):
+        try:
+            _k8e = None
+            if getattr(cfg, "ENABLE_US_8K_MONITOR", True) and _in_mode("us_8k"):
+                _k8e = _load_local_module(
+                    "us_8k_monitor",
+                    "/content/us_8k_monitor.py",
+                    cfg.DRIVE_BASE / "us_8k_monitor.py",
+                )
+            if _k8e:
+                results["us_8k"] = _k8e.fetch_earnings_early(cfg, results)
+            _usbe = _load_local_module(
+                "us_sector_bridge_enhanced",
+                "/content/us_sector_bridge_enhanced.py",
+                cfg.DRIVE_BASE / "us_sector_bridge_enhanced.py",
+            )
+            if _usbe:
+                usbe_result = _usbe.run_us_sector_bridge_earnings(cfg, results)
+                if usbe_result.get("skipped"):
+                    results["us_sector_bridge"] = usbe_result
+                    logger.add("us_sector_bridge", "skipped", str(usbe_result.get("reason", ""))[:80])
+                else:
+                    results["us_sector_bridge"] = usbe_result
+                    # CROSS_SECTOR シグナルに統合
+                    if usbe_result.get("cross_signals"):
+                        results["cross_sector_signals"] = (
+                            results.get("cross_sector_signals", []) + usbe_result["cross_signals"]
+                        )
+                    # 実行できた事実は件数に関わらず必ず台帳に記録する（0件の日も「記録なし」にしない）。
+                    logger.add(
+                        "us_sector_bridge", "success",
+                        f"決算{len((results.get('us_8k') or {}).get('earnings_tickers', []))} / "
+                        f"JP影響業種{len(usbe_result.get('jp_affected',[]))}業種 / "
+                        f"beat{len(usbe_result.get('beat_tickers',[]))} / "
+                        f"miss{len(usbe_result.get('miss_tickers',[]))} / "
+                        f"cross{len(usbe_result.get('cross_signals',[]))}",
+                    )
+            else:
+                print("  ⚠️  us_sector_bridge_enhanced.py が見つかりません")
+                logger.add("us_sector_bridge", "warn",
+                           "us_sector_bridge_enhanced.py not found")
+        except Exception as e:
+            logger.add("us_sector_bridge", "error", str(e)[:100])
+            print(f"  ⚠️  US-JP セクターブリッジエラー: {str(e)[:80]}")
+    else:
+        print("  ⏩ US-JP セクターブリッジ: スキップ")
+        logger.add("us_sector_bridge", "skipped",
+                   "ENABLE_US_SECTOR_BRIDGE=False または対象モード外")
+
 # ── 経済サイクルフェーズ判定（D-1 / ダリオ4象限）────────────
     if getattr(cfg, "ENABLE_ECONOMIC_CYCLE", True) and _in_mode("economic_cycle"):
         try:
@@ -2473,48 +2526,6 @@ def run_all_tasks(mode: str = "all") -> dict:
             print(f"  ⚠️  JP×US横断分析エラー: {str(e)[:80]}")
     else:
         print("  ⏩ JP×US横断分析: スキップ（週次以外）")
-    # ── [Phase US-5] US-JP セクターブリッジ強化版 ────────────────
-    if getattr(cfg, "ENABLE_US_SECTOR_BRIDGE", True) and _in_mode("us_sector_bridge"):
-        try:
-            _usbe = _load_local_module(
-                "us_sector_bridge_enhanced",
-                "/content/us_sector_bridge_enhanced.py",
-                cfg.DRIVE_BASE / "us_sector_bridge_enhanced.py",
-            )
-            if _usbe:
-                usbe_result = _usbe.run_us_sector_bridge_enhanced(cfg, results)
-                results["us_sector_bridge"] = usbe_result
-
-                # CROSS_SECTOR シグナルに統合
-                if usbe_result.get("cross_signals"):
-                    existing = results.get("cross_sector_signals", [])
-                    results["cross_sector_signals"] = (
-                        existing + usbe_result["cross_signals"]
-                    )
-                                # 実行できた事実は件数に関わらず必ず台帳に記録する（0件の日も「記録なし」にしない）。
-                if "us_8k" not in results:
-                    # 入力の results["us_8k"] はこの後ろの US 8-K 監視が作る。無い間は毎回空振りになるので、成功と書かない
-                    logger.add("us_sector_bridge", "skipped",
-                               "入力の us_8k が未生成（US 8-K 監視より前に実行されるため。実行順の問題）")
-                else:
-                    logger.add(
-                        "us_sector_bridge", "success",
-                        f"JP影響業種{len(usbe_result.get('jp_affected',[]))}業種 / "
-                        f"beat{len(usbe_result.get('beat_tickers',[]))} / "
-                        f"miss{len(usbe_result.get('miss_tickers',[]))} / "
-                        f"cross{len(usbe_result.get('cross_signals',[]))}",
-                    )
-            else:
-                print("  ⚠️  us_sector_bridge_enhanced.py が見つかりません")
-                logger.add("us_sector_bridge", "warn",
-                           "us_sector_bridge_enhanced.py not found")
-        except Exception as e:
-            logger.add("us_sector_bridge", "error", str(e)[:100])
-            print(f"  ⚠️  US-JP セクターブリッジエラー: {str(e)[:80]}")
-    else:
-        print("  ⏩ US-JP セクターブリッジ: スキップ")
-        logger.add("us_sector_bridge", "skipped",
-                   "ENABLE_US_SECTOR_BRIDGE=False または対象モード外")
     # ── [3-7] 市場幅指標（マーケットブレス / B-4） ─────────────────
     # 注: sector分析直後に実行してcomposite_scoreを補正する
     if getattr(cfg, "ENABLE_MARKET_BREADTH", True) and _in_mode("market_breadth"):
@@ -3079,6 +3090,26 @@ def run_all_tasks(mode: str = "all") -> dict:
             print(f"  ⚠️  US マクロパイプラインエラー: {str(e)[:80]}")
     else:
         print("  ⏩ US マクロ拡張: スキップ")
+    # ── [Phase US-5b] ISM × US IT/半導体 beat の複合シグナル（us_macro が出来た後）──
+    # 8-K の決算シグナル本体は業種の採点の前に作ってある。ISM は us_macro が要るのでここで足す
+    # （採点には間に合わないので、レポート・台帳向け）。
+    if getattr(cfg, "ENABLE_US_SECTOR_BRIDGE", True) and _in_mode("us_sector_bridge"):
+        try:
+            _usbe_l = _load_local_module(
+                "us_sector_bridge_enhanced",
+                "/content/us_sector_bridge_enhanced.py",
+                cfg.DRIVE_BASE / "us_sector_bridge_enhanced.py",
+            )
+            if _usbe_l and isinstance(results.get("us_sector_bridge"), dict):
+                _ism_sigs = _usbe_l.run_us_sector_bridge_ism(cfg, results)
+                if _ism_sigs:
+                    results["us_sector_bridge"].setdefault("cross_signals", []).extend(_ism_sigs)
+                    results["cross_sector_signals"] = (
+                        results.get("cross_sector_signals", []) + _ism_sigs
+                    )
+        except Exception as _ism_e:
+            logger.add("us_sector_bridge", "warn", f"ISM複合シグナルの生成に失敗: {str(_ism_e)[:80]}")
+            print(f"  ⚠️  US-JP セクターブリッジ（ISM）エラー: {str(_ism_e)[:80]}")
     # ── [F-1] イールドカーブ → セクタースコア反映 ───────────────────
     _bc_result     = results.get("bond_commodity", {})
     _sector_res_f1 = results.get("sectors", {})
@@ -4491,6 +4522,10 @@ def run_all_tasks(mode: str = "all") -> dict:
         except Exception as e:
             logger.add("us_8k", "error", str(e)[:100])
             print(f"  ⚠️  US 8-K モニターエラー: {str(e)[:80]}")
+        finally:
+            # 先取りの提出一覧は結果に残さない（本処理が失敗した日も）
+            if isinstance(results.get("us_8k"), dict):
+                results["us_8k"].pop("_filings", None)
     # ── Step E代替: 事業概要フェッチャー（BizSummary）──────────
     if getattr(cfg, "ENABLE_BIZ_SUMMARY", False) and _in_mode("biz_summary"):
         print("\n  📋 事業概要フェッチャー (Step E代替)...")
