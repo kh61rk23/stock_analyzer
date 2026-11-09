@@ -90,3 +90,15 @@ def test_no_paid_api_calls_when_bigquery_is_down(monkeypatch):
     assert called == []
     assert set(results) == set(fs.GROUPS["jp_filings"]) and all(v["skipped"] for v in results.values())
     assert log.rows[0][1] == "alert" and "API の枠は使っていない" in log.rows[0][2]
+
+
+def test_fetch_runner_summary_does_not_hide_warnings():
+    import fetch_runner as fr
+    ok = [{"module": "a", "status": "success", "note": ""}, {"module": "b", "status": "skipped", "note": "週1"}]
+    assert fr.summary_line("jp_filings", ok, "x.json").startswith("✅ jp_filings: 2モジュール")
+    mixed = ok + [{"module": "edinetdb_ingest", "status": "warn", "note": ""},
+                  {"module": "fudosan_ingest", "status": "alert", "note": ""}]
+    line = fr.summary_line("jp_filings", mixed, "x.json")
+    assert line.startswith("⚠️") and "警告1" in line and "失敗1" in line and "edinetdb_ingest、fudosan_ingest" in line
+    assert fr.entry_line({"module": "m", "status": "alert", "note": "n"}).lstrip().startswith("❌")
+    assert fr.entry_line({"module": "m", "status": "success", "note": "n"}).lstrip().startswith("✅")

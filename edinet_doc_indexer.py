@@ -231,6 +231,7 @@ def run_doc_indexer(days_back: int = 1, cfg=None) -> dict:
     since = (date.today() - timedelta(days=max(1, lookback))).isoformat()
     rows = []
     indexed_today = []
+    absent_today: list[str] = []
     # 0件のとき原因（API側が空か／型フィルタで落ちているか）をログから
     # 切り分けられるよう、内訳を数える。
     stats = {"empty": 0, "filtered": 0, "no_data": 0}
@@ -245,9 +246,14 @@ def run_doc_indexer(days_back: int = 1, cfg=None) -> dict:
             # 予算枯渇・レート制限・一時障害。取得済み扱いにせず次回に回す。
             # edinetdb_ingestor / fudosan_ingestor と同じく ("budget", "rate_limited")
             # の両方で打ち切る（429 のサーキットブレーカ作動時に残り全社を空振りしない）。
-            if getattr(client, "last_error", None) in ("budget", "rate_limited"):
+            err = getattr(client, "last_error", None)
+            if err in ("budget", "rate_limited"):
                 break
             stats["no_data"] += 1
+            if err == "not_found":
+                # EdinetDB に開示が無い会社（404）は恒久的な不在。巡回の記録に残さないと「未取得が先」の先頭に
+                # 居座り、毎日同じ会社に枠を使う
+                absent_today.append(code)
             continue
         items = _disclosure_items(data)
         built = build_doc_index_rows(data, by_code.get(code, {}),
@@ -267,10 +273,12 @@ def run_doc_indexer(days_back: int = 1, cfg=None) -> dict:
     # 巡回状況を記録して、次回は未取得の企業から見に行けるようにする。
     # 0件だった企業も「見に行った」ことは記録する（無限に同じ企業を
     # 叩き続けないため）。
-    if indexed_today:
+    if indexed_today or absent_today:
         today_str = date.today().isoformat()
         for code in indexed_today:
             doc_meta[code] = {"last_indexed": today_str}
+        for code in absent_today:
+            doc_meta[code] = {"last_indexed": today_str, "status": "no_data"}
         rotation["_doc_index"] = doc_meta
         try:
             (data_dir / getattr(cfg, "EDINETDB_ROTATION_META",
@@ -282,7 +290,7 @@ def run_doc_indexer(days_back: int = 1, cfg=None) -> dict:
 
     result = {"skipped": False, "inserted": len(rows),
               "targets": len(targets), "visited": len(indexed_today),
-              **stats}
+              "absent": len(absent_today), **stats}
     print(f"[doc_indexer] ✅ EdinetDB由来 {len(rows)}件 MERGE "
           f"（巡回{len(indexed_today)}/{len(targets)}社・窓{lookback}日）")
     if not rows and targets:

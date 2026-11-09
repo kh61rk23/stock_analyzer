@@ -105,6 +105,21 @@ def months_to_run(state: dict, today: date, recent: int, floor: date) -> list[da
     return out
 
 
+def new_settlement_dates(dates, prev_latest: str | None, prev_done_months, recent_from: date) -> list[str]:
+    """取り込んだ基準日のうち、今回初めて入ったもの（純関数）。
+
+    直近の月は毎回取り直す（訂正・遅れて出る分）ので、同じ基準日が毎日入り直す。それを「新しい基準日」と数えないよう、
+    前回までの最新の基準日より後のもの、または遡りで初めて入る月（recent_from より前で済み印が無い月）だけを返す。
+    prev_latest が None（記録が無い初回）は全部を新しいとする。"""
+    done = set(prev_done_months or [])
+    out = set()
+    for d in dates:
+        mon = d[:8] + "01"
+        if prev_latest is None or d > prev_latest or (mon < recent_from.isoformat() and mon not in done):
+            out.add(d)
+    return sorted(out)
+
+
 def weeks_to_run(state: dict, report: str, today: date, recent: int, floor: date) -> list[date]:
     """取り込む週（その週の月曜・新しい順）。"""
     w = today - timedelta(days=today.weekday())
@@ -201,7 +216,8 @@ def run(cfg, budget_min: float | None = None, force_cot: bool = False) -> dict:
     today = date.today()
     # ── FINRA の空売り残（月ごと） ──
     sfloor = date.fromisoformat(str(getattr(cfg, "SHORT_INTEREST_BACKFILL_FLOOR", "2022-01-01")))
-    done_m, dates = set(state.get("months") or []), []
+    prev_done_m, prev_latest = set(state.get("months") or []), state.get("short_latest")
+    done_m, dates = set(prev_done_m), []
     for mon in months_to_run(state, today, recent, sfloor):
         if time.monotonic() - t0 > budget:
             stat["budget_out"] = True
@@ -236,7 +252,15 @@ def run(cfg, budget_min: float | None = None, force_cot: bool = False) -> dict:
         stat["short_months"] += 1
         stat["short_rows"] += len(rows)
     state["months"] = sorted(done_m)
-    stat["short_range"] = [min(dates), max(dates)] if dates else None
+    # short_range は「この回に新しく入った基準日」。直近の月の取り直しだけの日は None（通知が空売り残の節を出さない）
+    recent_from = date(today.year, today.month, 1)
+    for _ in range(max(0, recent - 1)):
+        recent_from = (recent_from - timedelta(days=1)).replace(day=1)
+    fresh = new_settlement_dates(dates, prev_latest, prev_done_m, recent_from)
+    stat["short_range"] = [fresh[0], fresh[-1]] if fresh else None
+    stat["short_new_dates"] = len(fresh)
+    if dates:
+        state["short_latest"] = max([d for d in (prev_latest, max(dates)) if d])
     # ── CFTC の建玉明細（週ごと・2種類） ──
     cfloor = date.fromisoformat(str(getattr(cfg, "COT_BACKFILL_FLOOR", "2015-01-01")))
     cot_state = state.setdefault("cot", {})

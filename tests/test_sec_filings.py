@@ -66,3 +66,22 @@ def test_13d_issuer_cik_tag_spelling():
     rows = sf.parse_13dg(xml + "<reportingPersonInfo><reportingPersonName>X</reportingPersonName></reportingPersonInfo>",
                          {"filed_date": "2026-10-20", "accession": "a", "form": "SCHEDULE 13D", "cik": 1})
     assert rows and rows[0]["issuer_cik"] == 320193
+
+
+def test_index_outcome_does_not_mistake_a_block_for_a_holiday():
+    mon, sat = date(2026, 11, 9), date(2026, 11, 7)
+    assert s.index_outcome(mon, 200) == "ok"
+    assert s.index_outcome(mon, 404) == "absent"
+    assert s.index_outcome(sat, 403) == "absent"                       # 土日は一覧が無い
+    assert s.index_outcome(mon, 403, "<Error><Code>AccessDenied</Code>") == "absent"   # 平日の祝日
+    assert s.index_outcome(mon, 403, "Request Rate Threshold Exceeded") == "error"
+    assert s.index_outcome(mon, 403, "Your Request Originates from an Undeclared Automated Tool") == "error"
+    assert s.index_outcome(mon, 500) == "error"
+    assert s.index_outcome(mon, None) == "error"
+
+
+def test_too_many_misses_threshold():
+    assert not s.too_many_misses(100, 4)      # 少数の欠けは許す
+    assert not s.too_many_misses(100, 20)     # 2割ちょうどまでは許す
+    assert s.too_many_misses(100, 21)
+    assert not s.too_many_misses(3, 3)        # 件数が少ない日は判断しない

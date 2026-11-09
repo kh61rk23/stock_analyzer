@@ -894,7 +894,8 @@ def main(argv=None) -> int:
             status, note = info["status"], _note(info)
         except Exception as e:
             info, status, note = {}, "error", f"{type(e).__name__}: {str(e)[:150]}"
-        print(f"📒 {name}: {status} {note}")
+        # 印で始めると通知（actions_log）の要点に出る。取得率の下限割れ・打ち切りは success 以外になる
+        print(f"{'✅' if status == 'success' else '⚠️' if status == 'warn' else '❌'} {name}: {status} {note}")
         if info:
             print(json.dumps(info, ensure_ascii=False, default=str))
         if not args.dry_run and not args.limit:

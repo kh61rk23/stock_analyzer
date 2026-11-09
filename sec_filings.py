@@ -152,6 +152,30 @@ def parse_13dg(xml: str, meta: dict) -> list[dict]:
     return out
 
 
+_BLOCK_MARKS = ("threshold", "undeclared automated", "automated tool")
+
+
+def index_outcome(day: date, status: int | None, text: str = "") -> str:
+    """日次の一覧の応答の読み分け（純関数）。ok＝一覧あり／absent＝その日は一覧が無い（土日・祝日・未公開）／error＝取れていない。
+
+    SEC は存在しないファイルに 403 を返す（土日・祝日）が、レート超過・User-Agent 拒否も 403 で返る。後者を「一覧なし」と
+    取り違えると、取れていない日の区画を空で入れ替え、済みとして記録してしまう。平日の 403 は本文に遮断の文言があれば error。"""
+    if status == 200:
+        return "ok"
+    if status == 404:
+        return "absent"
+    if status == 403:
+        if day.weekday() >= 5:
+            return "absent"
+        return "error" if any(m in (text or "").lower() for m in _BLOCK_MARKS) else "absent"
+    return "error"
+
+
+def too_many_misses(asked: int, missed: int) -> bool:
+    """1日分の書類の中身（8-K の項目・13D/G の本文）の取りこぼしが多すぎるか（純関数）。"""
+    return missed >= 5 and missed * 5 > asked
+
+
 def dates_to_run(state: dict, today: date, recent_days: int, floor: date) -> tuple[list[date], list[date]]:
     import edinet_gov_docs
     return edinet_gov_docs.dates_to_run(state, today, recent_days, floor)
@@ -239,15 +263,22 @@ def run(cfg, budget_min: float | None = None, only_dates: list[date] | None = No
     stat = {"days": 0, "filings": 0, "items": 0, "dg_rows": 0, "errors": 0, "budget_out": False, "oldest": None,
             "storage_gb": m["total_gb"], "this_gb": round(mine, 3), "range": None}
     done_now: list[str] = []
+    err_streak = 0
     for day in recent + back:
         if time.monotonic() - t0 > budget:
             stat["budget_out"] = True
             break
         r = _get(index_url(day))
-        if r is None or r.status_code not in (200, 403, 404):
+        outcome = "error" if r is None else index_outcome(day, r.status_code, r.text[:2000])
+        if outcome == "error":
             stat["errors"] += 1
+            err_streak += 1
+            if err_streak >= 3:
+                print(f"    ⏹️ 一覧が3回続けて取れない（{day}・HTTP {getattr(r, 'status_code', '通信失敗')}）。SEC に止められている可能性があるので打ち切る")
+                break
             continue
-        if r.status_code != 200:   # 土日・祝日は一覧が無い（403/404）
+        if outcome == "absent":
+            err_streak = 0   # 土日・祝日は一覧が無い（403/404）
             _load(client, T_FILINGS, FILING_SCHEMA, [], day)
             state["dates"][day.isoformat()] = {"filings": 0}
             done_now.append(day.isoformat())
@@ -255,24 +286,40 @@ def run(cfg, budget_min: float | None = None, only_dates: list[date] | None = No
             continue
         rows, names = parse_master(r.text, day, keep_forms)
         dg_rows, cut = [], False
+        asked = missed = 0
         for row in rows:
             if time.monotonic() - t0 > budget:
                 cut = True
                 break
             if row["form"] in ITEM_FORMS:
                 ix = _get(filing_index_url(row["cik"], row["accession"]))
+                asked += 1
                 if ix is not None and ix.status_code == 200:
                     row["items"] = items_from_index(ix.text)
                     stat["items"] += 1
+                else:
+                    missed += 1
             elif row["form"].startswith("SCHEDULE 13"):
                 ix = _get(filing_index_url(row["cik"], row["accession"]))
                 doc = xml_doc_from_index(ix.text) if ix is not None and ix.status_code == 200 else None
                 x = _get("https://www.sec.gov" + doc) if doc else None
+                asked += 1
                 if x is not None and x.status_code == 200:
                     dg_rows += parse_13dg(x.text, row)
+                else:
+                    missed += 1
         if cut:
             stat["budget_out"] = True
             break   # その日は途中なので記録しない（次の回にやり直す）
+        if too_many_misses(asked, missed):
+            # 8-K の項目・13D/G の本文が多く取れていない（レート制限など）。済みにすると空欄のまま残るので、記録せず次の回にやり直す
+            stat["errors"] += 1
+            err_streak += 1
+            print(f"    ⚠️ {day}: 書類の中身 {asked}件中 {missed}件が取れない。この日は記録せず次の回にやり直す")
+            if err_streak >= 3:
+                break
+            continue
+        err_streak = 0
         _load(client, T_FILINGS, FILING_SCHEMA, rows, day)
         _load(client, T_13DG, DG_SCHEMA, dg_rows, day)
         new = [{"cik": c, "name": n, "first_seen": day.isoformat()} for c, n in names.items() if c not in known]
@@ -305,6 +352,9 @@ def main(argv=None) -> int:
     except Exception:
         pass
     st = run(cfg, a.budget_min, [date.fromisoformat(d) for d in a.dates] if a.dates else None)
+    if st.get("errors") and st.get("days"):
+        # 通知が読む ✅ の行の書式は変えないまま、取れなかった日があることを別の行で知らせる
+        print(f"⚠️ sec_filings: 取れなかった日・書類が{st['errors']}件ある（次の回にやり直す）")
     print(f"{'⏩' if st.get('skipped') else '✅'} sec_filings: {json.dumps(st, ensure_ascii=False)}")
     return 1 if st.get("errors") and not st.get("days") else 0
 

@@ -95,3 +95,45 @@ class TestSeenTypesAreCollected:
         )
         assert len(rows) == 1, "未知語彙で行が落ちている（2026-04-26以来の停止原因）"
         assert rows[0]["doc_id"] == "S1"
+
+
+# ── 巡回の記録（EdinetDB に開示が無い会社を毎日取り直さない）──────────────
+
+def test_not_found_company_is_recorded_so_rotation_moves_on(tmp_path, monkeypatch):
+    import json
+    import types
+
+    (tmp_path / "edinetdb_company_cache.json").write_text(
+        json.dumps({"companies": [{"edinet_code": "E1"}, {"edinet_code": "E2"}]}), encoding="utf-8")
+    (tmp_path / "edinetdb_rotation_meta.json").write_text(
+        json.dumps({"E1": {}, "E2": {}}), encoding="utf-8")
+
+    class FakeClient:
+        last_error = None
+
+        def __init__(self, *a, **k):
+            pass
+
+        def get(self, path, params=None):
+            if "/E1/" in path:
+                self.last_error = "not_found"
+                return None
+            self.last_error = None
+            return {"disclosures": []}
+
+    class FakeBQ:
+        dataset = "d"
+
+        def merge_rows(self, *a, **k):
+            return True
+
+    monkeypatch.setattr(module, "DBRestClient", FakeClient)
+    monkeypatch.setattr(module, "_load_doc_ids_from_financials", lambda bq, codes: {})
+    import edinet_bq_client
+    monkeypatch.setattr(edinet_bq_client, "EDINETBQClient", FakeBQ)
+    cfg = types.SimpleNamespace(EDINETDB_API_KEY="k", DATA_DIR=str(tmp_path))
+    res = module.run_doc_indexer(cfg=cfg)
+    meta = json.loads((tmp_path / "edinetdb_rotation_meta.json").read_text(encoding="utf-8"))
+    assert res["absent"] == 1 and res["visited"] == 1
+    assert meta["_doc_index"]["E1"]["status"] == "no_data"
+    assert meta["_doc_index"]["E1"]["last_indexed"]

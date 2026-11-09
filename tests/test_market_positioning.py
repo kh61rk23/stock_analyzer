@@ -28,3 +28,17 @@ def test_periods_recent_always_then_missing():
     assert ms == [date(2026, 10, 1), date(2026, 9, 1)]          # 直近2か月は毎回・8月7月は済み
     ws = mp.weeks_to_run(st, "legacy", date(2026, 10, 24), 1, date(2026, 10, 5))
     assert ws == [date(2026, 10, 19), date(2026, 10, 5)]         # 10/12 は済み
+
+
+def test_new_settlement_dates_ignores_the_daily_reload_of_recent_months():
+    from datetime import date as D
+    recent_from = D(2026, 10, 1)
+    # 前回までの最新が 10-15。直近の月の取り直しで 10-15 が入り直しても新しくない
+    assert mp.new_settlement_dates(["2026-10-15"], "2026-10-15", ["2026-09-01"], recent_from) == []
+    # 10-30 が公表されたら新しい
+    assert mp.new_settlement_dates(["2026-10-15", "2026-10-30"], "2026-10-15", [], recent_from) == ["2026-10-30"]
+    # 遡りで初めて入る月（直近の窓より前で、済み印が無い）は新しい
+    assert mp.new_settlement_dates(["2025-03-14"], "2026-10-15", ["2025-04-01"], recent_from) == ["2025-03-14"]
+    assert mp.new_settlement_dates(["2025-03-14"], "2026-10-15", ["2025-03-01"], recent_from) == []
+    # 記録の無い初回は全部が新しい
+    assert mp.new_settlement_dates(["2026-10-15"], None, [], recent_from) == ["2026-10-15"]
