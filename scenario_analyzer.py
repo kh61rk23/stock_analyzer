@@ -501,7 +501,7 @@ def format_scenario_report(result: dict) -> str:
             pnl_pct  = pnl_data["pnl_pct"]
             sign     = "+" if pnl_jpy >= 0 else ""
             lines.append(
-                f"| {color} {sc_label[:20]} | {_fmt_jpy(pnl_jpy)} | {sign}{pnl_pct:.2f}% |"
+                f"| {color} {sc_label} | {_fmt_jpy(pnl_jpy)} | {sign}{pnl_pct:.2f}% |"
             )
         lines.append("")
         lines.append(

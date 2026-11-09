@@ -5628,8 +5628,13 @@ ALERT_SECTION_TIER: dict = {
     "tdnet_activist_catalyst": 2, "activist_entry_detected": 2, "8k_screener_hit": 2, "8k_ceo_change": 2,
     "tdnet_buyback": 2, "foreign_investor_spike": 2, "politician_signal": 2, "insider_monitor": 2,
     "midterm_plan_announced": 2, "midterm_risk": 2, "large_holding_buyers": 2, "us_positioning": 2,
+    # 3: 市場の状況（既定と同じ段だが、未登録に見えて抜けと区別できないので明示する）
+    "rates": 3, "fed_calendar": 3, "cot_positioning": 3, "credit_data": 3, "crowding_alert": 3, "crowding_unwind": 3,
+    "dead_cross": 3, "golden_cross": 3, "etf_theme": 3, "macro_headwind": 3, "market_breadth_divergence": 3,
+    "market_breadth_weak": 3, "options_sentiment": 3, "policy_change": 3, "recession_watch": 3,
+    "sentiment_deteriorating": 3, "wave3_sector_reversal": 3,
     # 4: 参考
-    "tech_map": 4, "weekly_report": 4, "high_dividend": 4, "tdnet_div_up": 4, "dividend_calendar": 4,
+    "news_top": 4, "tech_map": 4, "weekly_report": 4, "high_dividend": 4, "tdnet_div_up": 4, "dividend_calendar": 4,
     "anomaly_season": 4, "midterm_overtrack": 4, "sentiment_improving": 4, "pick_outcomes_monthly": 4,
     "universe_factor_ic": 4, "cot_commodity_ic": 4,
     # 5: 運用の状態

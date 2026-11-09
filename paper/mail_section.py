@@ -38,7 +38,8 @@ def _reason_text(e: dict) -> str:
     r = e.get("reason")
     if isinstance(r, dict):
         r = r.get("text")
-    return str(r or e.get("tag") or "記録なし")[:160]
+    t = str(r or e.get("tag") or "記録なし")
+    return t if len(t) <= 160 else t[:160].rstrip() + "…"
 
 
 def _more(n_all: int, n_shown: int) -> list:

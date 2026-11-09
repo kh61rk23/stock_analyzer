@@ -627,9 +627,14 @@ def format_performance_section(result: dict) -> str:
     # スコア相関
     corr = stats.get("score_return_corr")
     if corr is not None:
-        if abs(corr) >= 0.5:
+        if corr <= -0.3:
+            # 負の相関は「スコアが高いほど成績が悪い」。絶対値で判定すると有効と誤読される
+            corr_label = "逆相関（高スコアほど成績が悪い・スコアは当てになっていない）"
+        elif corr <= -0.1:
+            corr_label = "弱い逆相関（スコアは当てになっていない）"
+        elif corr >= 0.5:
             corr_label = "強い相関あり（スコアが有効）"
-        elif abs(corr) >= 0.3:
+        elif corr >= 0.3:
             corr_label = "中程度の相関（スコアは概ね有効）"
         else:
             corr_label = "弱い相関（スコア改善の余地あり）"

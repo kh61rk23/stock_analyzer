@@ -32,13 +32,16 @@
 # 【呼出】from alert_notifier import run_alert_notifier
 # ==============================================================
 
+import html as html_lib
 import json
+import re
 import smtplib
 import time
 import urllib.parse
 import urllib.request
 import textwrap
 from datetime import date, datetime, timezone
+from email.utils import formatdate, make_msgid
 from pathlib import Path
 
 
@@ -2581,12 +2584,26 @@ def sort_alerts_by_tier(alerts: list, tiers: dict | None = None, default: int = 
                                          _SEVERITY_RANK.get(a.get("severity"), 3)))
 
 
+def _first_look_detail(a: dict) -> str:
+    """見出しだけでは何を見ればよいか分からない節（「発火3件」など）に、本文の最初の1行を添える。
+    機械可読の行（審議キューのマーカー）と、見出しと同じ内容の行は添えない。"""
+    title = str(a.get("title", ""))
+    for ln in str(a.get("body", "")).split("\n"):
+        t = ln.strip()
+        if not t or t.startswith(DELIBERATION_QUEUE_MARKER) or t in title or title in t:
+            continue
+        t = t if len(t) <= 70 else t[:70].rstrip() + "…"
+        return f'<br><span style="font-size:12px;color:#991b1b;">{html_lib.escape(t, quote=False)}</span>'
+    return ""
+
+
 def first_look_html(alerts: list, tiers: dict | None = None, default: int = 3) -> str:
     """段1（今日動くべきこと）の節の見出しだけを並べた冒頭の枠。該当が無ければ空文字。"""
     first = [a for a in sort_alerts_by_tier(alerts, tiers, default) if _section_tier(a, tiers, default) == 1]
     if not first:
         return ""
-    items = "".join(f'<li style="margin:2px 0;">{a["title"]}</li>' for a in first[:FIRST_LOOK_MAX])
+    items = "".join(f'<li style="margin:2px 0;">{html_lib.escape(str(a["title"]), quote=False)}{_first_look_detail(a)}</li>'
+                    for a in first[:FIRST_LOOK_MAX])
     more = (f'<div style="font-size:12px;color:#991b1b;margin-top:4px;">ほか {len(first) - FIRST_LOOK_MAX} 件は本文</div>'
             if len(first) > FIRST_LOOK_MAX else "")
     return f"""
@@ -2598,7 +2615,42 @@ def first_look_html(alerts: list, tiers: dict | None = None, default: int = 3) -
 """
 
 
+MAIL_MAX_BYTES = 98_000   # Gmail は 102KB を超える本文の末尾を隠す。余裕を見てこの値以下に収める
+# 容量を超えたとき、段の低い（数字の大きい）節から本文の行数を絞る。{段以上: 行数} を順に厳しくする
+_MAIL_LINE_CAPS = ({5: 6, 4: 10}, {5: 3, 4: 6, 3: 14}, {5: 1, 4: 3, 3: 8}, {5: 0, 4: 1, 3: 4, 2: 12}, {5: 0, 4: 0, 3: 2, 2: 6})
+
+
 def build_message(alerts: list, mode: str = "email", tiers: dict | None = None) -> str:
+    """build_message_once の結果が MAIL_MAX_BYTES を超えるときだけ、低い段の節の本文を絞って収め直す。
+    段1（今日動くべきこと）は絞らない。"""
+    out = build_message_once(alerts, mode, tiers)
+    for caps in _MAIL_LINE_CAPS:
+        if len(out.encode("utf-8")) <= MAIL_MAX_BYTES:
+            break
+        out = build_message_once(alerts, mode, tiers, caps)
+    return out
+
+
+def _cap_body(body: str, tier: int, caps: dict | None) -> str:
+    """tier 以上の段に決めた行数の上限があれば、本文を先頭の数行に絞り、省略したことを示す。"""
+    if not caps:
+        return body
+    limit = None
+    for t in sorted(caps, reverse=True):
+        if tier >= t:
+            limit = caps[t]
+            break
+    lines = body.split("\n")
+    if limit is None or len(lines) <= limit:
+        return body
+    kept = lines[:limit]
+    # 予定済みタスクが読む機械可読の行は絞っても残す
+    kept += [ln for ln in lines[limit:] if ln.strip().startswith(DELIBERATION_QUEUE_MARKER)]
+    note = f"  …ほか {len(lines) - limit} 行（メールの容量のため省略。全文は保存ファイル）"
+    return "\n".join(kept + [note])
+
+
+def build_message_once(alerts: list, mode: str = "email", tiers: dict | None = None, caps: dict | None = None) -> str:
     """
     アラートリストからメール本文（HTML）を生成する。節は重要度の段順に並べ替え、冒頭に段1の見出しを置く。
 
@@ -2639,14 +2691,16 @@ def build_message(alerts: list, mode: str = "email", tiers: dict | None = None) 
         color = severity_color.get(al["severity"], "#6b7280")
         label = severity_label.get(al["severity"], "")
         # body の改行を <br> に変換（pre タグより視認性が高い）
-        body_html = al["body"].replace("\n", "<br>").replace("    ", "&nbsp;&nbsp;&nbsp;&nbsp;")
+        _body = _cap_body(al["body"], _section_tier(al, tiers, default_tier), caps)
+        body_html = html_lib.escape(_body, quote=False).replace("\n", "<br>").replace("    ", "&nbsp;&nbsp;&nbsp;&nbsp;")
+        title_html = html_lib.escape(str(al["title"]), quote=False)
         rows += f"""
 <tr>
   <td style="padding:12px 8px;border-bottom:1px solid #e5e7eb;vertical-align:top;">
 <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
   <span style="background:{color};color:white;font-size:11px;
                padding:2px 6px;border-radius:3px;">{label}</span>
-  <span style="color:{color};font-weight:bold;font-size:14px;">{al['title']}</span>
+  <span style="color:{color};font-weight:bold;font-size:14px;">{title_html}</span>
 </div>
 <div style="font-size:13px;color:#374151;line-height:1.7;
             padding-left:8px;border-left:3px solid {color};">
@@ -2717,17 +2771,52 @@ def build_message(alerts: list, mode: str = "email", tiers: dict | None = None) 
 GMAIL_RETRY_WAITS = (5, 20)   # 一時的な切断のとき、この秒数だけ空けて再送する（最大 len+1 回）
 
 
-def _smtp_send_once(from_addr: str, app_password: str, to_addr: str, raw: str, attempt: int) -> None:
+GMAIL_CLIP_BYTES = 102 * 1024   # Gmail はこれを超える本文を「メッセージ全体を表示」の先に隠す
+GMAIL_REJECT_BYTES = 25 * 1024 * 1024   # これを超えると SMTP が拒否する
+
+
+def _split_addrs(to_addr: str) -> list:
+    """「a@x, b@y」「a@x;b@y」のように並べた宛先を1件ずつに分ける（sendmail に文字列のまま渡すと1件の宛先と見なされる）。"""
+    return [a.strip() for a in re.split(r"[,;\s]+", to_addr or "") if a.strip()]
+
+
+def _deliver(smtp, from_addr: str, rcpts: list, raw: str) -> dict:
+    """sendmail 相当。拒否された宛先と、DATA への最終応答（Gmail のキュー ID を含む）を返す。
+
+    smtplib.sendmail は「全員拒否」でしか例外にせず、一部拒否は戻り値の辞書に入れるだけで、DATA の応答も捨てる。
+    呼び元が後から届いたかを追えるよう、ここで両方を拾う。"""
+    smtp.ehlo_or_helo_if_needed()
+    code, resp = smtp.mail(from_addr)
+    if code != 250:
+        smtp.rset()
+        raise smtplib.SMTPSenderRefused(code, resp, from_addr)
+    refused = {}
+    for r in rcpts:
+        code, resp = smtp.rcpt(r)
+        if code not in (250, 251):
+            refused[r] = (code, resp)
+    if len(refused) == len(rcpts):
+        smtp.rset()
+        raise smtplib.SMTPRecipientsRefused(refused)
+    code, resp = smtp.data(raw.encode("utf-8"))
+    if code != 250:
+        smtp.rset()
+        raise smtplib.SMTPDataError(code, resp)
+    reply = resp.decode("utf-8", "replace") if isinstance(resp, bytes) else str(resp)
+    return {"refused": refused, "reply": reply.strip()}
+
+
+def _smtp_send_once(from_addr: str, app_password: str, to_addr: str, raw: str, attempt: int) -> dict:
     """1回の送信。1回目は 465（SSL）、再送は 587（STARTTLS）に切り替える（片方の入口だけ切られる事があるため）。"""
+    rcpts = _split_addrs(to_addr)
     if attempt % 2 == 0:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as smtp:
             smtp.login(from_addr, app_password)
-            smtp.sendmail(from_addr, to_addr, raw)
-    else:
-        with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as smtp:
-            smtp.starttls()
-            smtp.login(from_addr, app_password)
-            smtp.sendmail(from_addr, to_addr, raw)
+            return _deliver(smtp, from_addr, rcpts, raw)
+    with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as smtp:
+        smtp.starttls()
+        smtp.login(from_addr, app_password)
+        return _deliver(smtp, from_addr, rcpts, raw)
 
 
 def send_gmail(
@@ -2744,33 +2833,51 @@ def send_gmail(
     分析の全体がやり直しになり（gate が失敗の回を再実行する）、送れた場合にだけ残す節の保存も失われる。
     認証失敗は再送しても同じなのですぐ返す。
 
+    一部の宛先だけ拒否されたときは False を返す（受理された宛先へ再送しないよう再試行はしない）。
+    成功時は Message-ID・Gmail の受理応答・本文の大きさをログに出す。届かなかったと疑うときは
+    Gmail の検索で rfc822msgid:<Message-ID> を引く（受理されたのに受信側で振り分けられた場合もここで分かる）。
+
     Returns:
         (success: bool, error_msg: str)
     """
-    if not from_addr or not app_password or not to_addr:
+    if not from_addr or not app_password or not _split_addrs(to_addr):
         return False, "Gmail 設定未完了（FROM/PASSWORD/TO を確認）"
 
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
         msg["From"]    = from_addr
-        msg["To"]      = to_addr
+        msg["To"]      = ", ".join(_split_addrs(to_addr))
+        msg["Date"]    = formatdate(localtime=False)
+        msg["Message-ID"] = make_msgid(domain=from_addr.split("@")[-1] or "localhost")
         msg.attach(MIMEText(html_body, "html", "utf-8"))
         raw = msg.as_string()
     except Exception as e:
         return False, f"Gmail 送信エラー: {str(e)[:80]}"
+    size_kb = len(raw.encode("utf-8")) // 1024
+    if len(raw.encode("utf-8")) > GMAIL_REJECT_BYTES:
+        return False, f"Gmail 送信エラー: 本文 {size_kb}KB が上限 25MB を超える"
 
     err = ""
     for attempt in range(len(GMAIL_RETRY_WAITS) + 1):
         try:
-            _smtp_send_once(from_addr, app_password, to_addr, raw, attempt)
+            res = _smtp_send_once(from_addr, app_password, to_addr, raw, attempt)
+            res = res if isinstance(res, dict) else {}
+            refused = res.get("refused") or {}
+            if refused:
+                # Actions のログは公開なので、拒否された宛先のアドレスは出さず、件数と SMTP コードだけにする
+                codes = ",".join(sorted({str(c) for c, _ in refused.values()}))
+                return False, f"Gmail 一部の宛先を拒否: {len(refused)}件（SMTP {codes}）"
+            clip = "（102KB超: Gmail が末尾を隠す）" if len(raw.encode("utf-8")) > GMAIL_CLIP_BYTES else ""
+            print(f"    📨 Gmail 受理: {msg['Message-ID']} / 本文 {size_kb}KB{clip}"
+                  + (f" / 応答 {res['reply'][:60]}" if res.get("reply") else ""))
             return True, ""
         except smtplib.SMTPAuthenticationError:
             return False, "Gmail 認証失敗（App Password を確認してください）"
         except (smtplib.SMTPRecipientsRefused, smtplib.SMTPSenderRefused, smtplib.SMTPDataError) as e:
-            return False, f"Gmail 送信エラー: {str(e)[:80]}（本文 {len(raw) // 1024}KB）"
+            return False, f"Gmail 送信エラー: {str(e)[:80]}（本文 {size_kb}KB）"
         except Exception as e:
-            err = f"Gmail 送信エラー: {str(e)[:80]}（{attempt + 1}回試行・本文 {len(raw) // 1024}KB）"
+            err = f"Gmail 送信エラー: {str(e)[:80]}（{attempt + 1}回試行・本文 {size_kb}KB）"
             if attempt < len(GMAIL_RETRY_WAITS):
                 print(f"    ⚠️ Gmail 送信に失敗、{GMAIL_RETRY_WAITS[attempt]}秒後に再送: {str(e)[:60]}")
                 time.sleep(GMAIL_RETRY_WAITS[attempt])

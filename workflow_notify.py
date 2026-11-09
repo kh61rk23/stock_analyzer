@@ -70,7 +70,8 @@ def step_json(steps: list[dict], step: str) -> dict:
     """そのステップの要点の行「✅ <step>: {...}」の JSON（取り込みが返した結果）。無ければ {}。"""
     for s in steps:
         for h in s.get("highlights") or []:
-            if h.lstrip("✅⏩ ").startswith(f"{step}: {{"):
+            # 行頭の印は ✅ ⏩ ⚠️ ❌（⚠️ は異体字セレクタ U+FE0F が付く）。どれで始まる行も結果の JSON として読む
+            if h.lstrip("✅⏩⚠❌\ufe0f ").startswith(f"{step}: {{"):
                 try:
                     return json.loads(h.split(": ", 1)[1])
                 except ValueError:
@@ -241,6 +242,24 @@ DIGESTS = {"fetch_jp_filings": digest_jp, "edinet_gov_backfill": digest_jp, "sec
            "price_universe": digest_price, "market_positioning": digest_positioning, "us_company_facts": digest_us_facts}
 
 
+_KV_RE = re.compile(r"""["']?(\w+)["']?\s*:\s*(-?\d+(?:\.\d+)?|true|false|True|False|"[^"]*"|'[^']*')""")
+
+
+def humanize_highlight(h: str) -> str:
+    """要点の行が「✅ step: {辞書のダンプ}」のとき、数値・真偽・短い文字の項目だけを「キー 値・…」に直す。
+    ダンプは長いと途中で切れており（括弧が閉じない）、そのまま出すと読み手には壊れた文字列に見える。
+    辞書でない行はそのまま返す。"""
+    m = re.match(r"^(\S+\s+\S+?:)\s*(\{.*)$", h or "", re.S)
+    if not m:
+        return h
+    head, rest = m.group(1), m.group(2)
+    pairs = [f"{k} {v.strip(chr(34) + chr(39))}" for k, v in _KV_RE.findall(rest)[:10]]
+    if not pairs:
+        return f"{head}（詳細はログ）"
+    cut = rest.count("{") != rest.count("}") or rest.count("[") != rest.count("]")
+    return f"{head} " + "・".join(pairs) + ("（以降省略）" if cut or len(_KV_RE.findall(rest)) > 10 else "")
+
+
 def build_mail(title: str, workflow: str, steps: list[dict], counts: dict, delta: dict,
                storage: dict | None, run_url: str, now: datetime, digest: list | None = None) -> tuple[str, str]:
     """(件名, HTML 本文)（純関数）。"""
@@ -254,7 +273,7 @@ def build_mail(title: str, workflow: str, steps: list[dict], counts: dict, delta
     for s in steps:
         head = (f"{'✅' if not s.get('rc') else '❌'} <b>{html.escape(s['step'])}</b>"
                 f"（{s.get('seconds', 0)}秒・✅{s.get('ok', 0)} ⚠️{s.get('warn', 0)} ❌{s.get('err', 0)}）")
-        items = "".join(f"<li>{html.escape(h)}</li>" for h in s.get("highlights") or [])
+        items = "".join(f"<li>{html.escape(humanize_highlight(h))}</li>" for h in s.get("highlights") or [])
         parts.append(f"<div style='margin-top:8px'>{head}<ul style='margin:2px 0'>{items}</ul></div>")
     if digest:
         parts.append("<h4>今回取ったもの</h4>")

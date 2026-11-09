@@ -147,6 +147,21 @@ class _Ctx:
             return None
 
 
+def _risk_off_wait_condition(ctx) -> str:
+    """リスクオフの推奨文に添える「何が戻るまで待つか」。実際にリスクオフを引いた指標から作る
+    （市場幅が既に健全なのに「市場幅の回復まで」と書くと読み手に矛盾に見える）。"""
+    t = THRESHOLDS
+    waits = []
+    if ctx.vix and ctx.vix > t["vix_fear"]:
+        waits.append(f"VIX が {t['vix_fear']:.0f} を下回る")
+    if ctx.recession_score and ctx.recession_score > t["recession_risk"]:
+        waits.append(f"景気後退スコアが {t['recession_risk']} を下回る")
+    if ctx.breadth and ctx.breadth < t["breadth_weak"]:
+        waits.append("市場幅が 50 以上に回復する")
+    return "・".join(waits) if waits else "各指標がリスクオフの水準を外れる"
+
+
+
 # ==============================================================
 # BLOCK 2: 市場フェーズ判定（Layer 1）
 # ==============================================================
@@ -322,7 +337,7 @@ def _decide_primary_action(
             }
         return {
             "action": "現金・ディフェンシブ比率を高める。景気敏感株の新規エントリーは"
-                      "市場幅が50以上に回復するまで待機。",
+                      + _risk_off_wait_condition(ctx) + "まで待機。",
             "time_horizon": "様子見（2〜6週）",
             "confidence": 0.78,
             "key_metrics": {"recession_score": ctx.recession_score,

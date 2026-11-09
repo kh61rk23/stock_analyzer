@@ -132,7 +132,9 @@ def summarize_report(name: str, text: str) -> tuple[str, bool]:
     if name.startswith("tax_report_"):
         m = _first(r"相殺可能額: (¥[\d,]+) → 節税額の目安: (¥[\d,]+)", t)
         if m:
-            return (f"損出しの相殺可能額 {m.group(1)}（節税の目安 {m.group(2)}）", m.group(1) != "¥0")
+            if m.group(1) == "¥0":
+                return ("", False)   # 相殺できる額が 0 の月は「今月まず見るもの」に載せても読み手の行動が変わらない
+            return (f"損出しの相殺可能額 {m.group(1)}（節税の目安 {m.group(2)}）", True)
         if "当年実現益: 不明" in t:
             return ("当年の実現益が不明（実現損益のデータなし）で損出しの要否は出せない", False)
         return ("", False)
@@ -216,6 +218,50 @@ def _inline(s: str) -> str:
 _FILE_REF_RE = re.compile(r"`?[A-Za-z][A-Za-z0-9_]*\.md`?\s*[:：]?\s*")
 
 
+def _drop_block(md: str, heading_prefix: str) -> str:
+    """「## 見出し」で始まる節（次の同じ階層以上の見出しまで）を丸ごと落とす。"""
+    out, skip = [], False
+    for ln in md.split("\n"):
+        if ln.startswith("## "):
+            skip = ln.startswith(heading_prefix)
+        if not skip:
+            out.append(ln)
+    return "\n".join(out)
+
+
+def _cap_table(md: str, heading_prefix: str, max_rows: int) -> str:
+    """「## 見出し」配下の表を先頭 max_rows 行（見出し・区切り行を除く）に絞り、省いた行数を添える。"""
+    out, in_sec, n, dropped = [], False, 0, 0
+    for ln in md.split("\n"):
+        if ln.startswith("## "):
+            if dropped:
+                out.append(f"…ほか {dropped} 行（保存ファイルに全件）")
+            in_sec, n, dropped = ln.startswith(heading_prefix), 0, 0
+        if in_sec and ln.startswith("|"):
+            n += 1
+            if n > max_rows + 2:   # 見出し行と区切り行の2行は数えない
+                dropped += 1
+                continue
+        out.append(ln)
+    if dropped:
+        out.append(f"…ほか {dropped} 行（保存ファイルに全件）")
+    return "\n".join(out)
+
+
+def tidy_for_mail(name: str, md: str, with_paper: bool = True) -> str:
+    """メールに載せる前に、読み手に意味のない部分を落とす（元の md は変えない）。
+    - 月次戦略レビューの「S2戦略別成績」: 同じメールのペーパー月次成績と同じ表なので重複
+    - シグナル淘汰: 全カテゴリが判定不能のときの表（内部キー名の行がすべて N=0・判定不能で、読み手に何も伝えない）
+    - ペーパー月次成績の保有ポジション: 戦略ごとの全保有（50行超）は先頭だけ"""
+    if name.startswith("strategy_review_") and with_paper:
+        md = _drop_block(md, "## ⑤")
+    if name.startswith("signal_culling_") and "全カテゴリ判定不能" in md:
+        md = "\n".join(ln for ln in md.split("\n") if not ln.startswith("|"))
+    if name.startswith("paper_"):
+        md = _cap_table(md, "## 保有ポジション", 15)
+    return md
+
+
 def _drop_h1(md: str) -> str:
     """メール用に本文を整える: 冒頭の「# 題」（節カードの題と重複）と、見出しの内部記号（E4 等）、
     本文中の保存ファイル名（読み手には意味がない）を落とす。"""
@@ -265,6 +311,7 @@ def build(ym: str, insights: Path, tax_months: tuple = (1, 4, 7, 10, 11), late_n
         except OSError:
             continue
         key = section_key(p.name)
+        raw = tidy_for_mail(p.name, raw, with_paper=any(f.name.startswith("paper_") for _, f in files))
         texts.append((tier_of(key, raw, tiers, default), title, _drop_h1(raw)))
     extras = []   # (段, 題, html)
     if picks and picks.get("body"):

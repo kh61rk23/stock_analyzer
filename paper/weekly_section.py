@@ -55,9 +55,16 @@ def headline(accounts: dict, days: int = 7) -> str:
         return ""
     chg = [(sid, (eq - be) / be * 100 if be else 0.0, eq - be) for sid, _, be, eq, _ in rows]
     tot = sum(d for _, _, d in chg)
-    best, worst = max(chg, key=lambda x: x[1]), min(chg, key=lambda x: x[1])
-    return (f"{len(rows)}戦略の週の増減 合計 {tot:+,.0f}円・最良 {best[0]} {best[1]:+.1f}%・"
-            f"最悪 {worst[0]} {worst[1]:+.1f}%")
+    # 保有ゼロで増減もない戦略は比べる相手にしない（「最良 +0.0%」は読み手に何も伝えない）
+    active = [x for x, r in zip(chg, rows) if r[4] > 0 or abs(x[2]) > 0.5]
+    head = f"{len(rows)}戦略の週の増減 合計 {tot:+,.0f}円"
+    if not active:
+        return head + "・全戦略が無保有で増減なし"
+    best, worst = max(active, key=lambda x: x[1]), min(active, key=lambda x: x[1])
+    idle = len(rows) - len(active)
+    tail = f"（無保有 {idle}戦略は除く）" if idle else ""
+    best_s = f"最良 {best[0]} {best[1]:+.1f}%" if best[1] > 0 else "プラスの戦略なし"
+    return f"{head}・{best_s}・最悪 {worst[0]} {worst[1]:+.1f}%{tail}"
 
 
 def weekly_lines(accounts: dict, events: list, days: int = 7, top_n: int = 6) -> list:
@@ -77,7 +84,9 @@ def weekly_lines(accounts: dict, events: list, days: int = 7, top_n: int = 6) ->
     lines.append("")
     if fills:
         buys = sum(1 for e in fills if e.get("side") == "BUY")
-        lines.append(f"- 約定 {len(fills)}件（買 {buys}・売 {len(fills) - buys}）")
+        shown = min(len(fills), top_n)
+        lines.append(f"- 約定 {len(fills)}件（買 {buys}・売 {len(fills) - buys}）"
+                     + (f"・新しい順ではなく記録順の末尾 {shown}件を表示" if len(fills) > shown else ""))
         for e in fills[-top_n:]:
             lines.append(f"  - {str(e.get('date'))[5:]} {e.get('strategy')} {SIDE.get(e.get('side'), e.get('side'))} "
                          f"{e.get('ticker')} {float(e.get('qty') or 0):,.0f}株 @{float(e.get('price') or 0):,.1f}")

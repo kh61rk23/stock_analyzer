@@ -893,7 +893,7 @@ def format_stress_report(result: dict) -> str:
     for sc_name, sc_data in result.get("scenarios", {}).items():
         sc_def    = CRASH_SCENARIOS.get(sc_name, {})
         color     = sc_def.get("color", "⚪")
-        label     = sc_def.get("label", sc_name)[:18]
+        label     = sc_def.get("label", sc_name)
         mkt_dd    = f"{sc_def.get('nikkei_drawdown', 0)*100:.0f}%"
         loss_jpy  = _fmt_yen(sc_data["total_loss_jpy"])
         loss_pct  = f"{sc_data['total_loss_pct']:.1f}%"

@@ -42,6 +42,23 @@ def _pct(v, digits: int = 1) -> str:
     try:    return f"{float(v)*100:.{digits}f}%"
     except (TypeError, ValueError): return "N/A"
 
+def _sector_ja(code) -> str:
+    """東証33業種コード（1033 など）→ 業種名。分からなければ空文字。"""
+    if not code:
+        return ""
+    try:
+        from name_resolver import sector_name
+        return sector_name(code, default="")
+    except Exception:
+        return ""
+
+
+def _clip(text, n: int) -> str:
+    """n 文字を超えるときだけ「…」を付けて切る（途中で切れたことを読み手に示す）。"""
+    t = str(text or "")
+    return t if len(t) <= n else t[:n].rstrip() + "…"
+
+
 def _display_name(c: dict) -> str:
     """表に出す銘柄名。日本語名があればそれ、無ければ英語名をそのまま（切り詰めない）。"""
     tk = c.get("ticker", "")
@@ -738,7 +755,7 @@ def _section_deliberation_queue(results: dict, cfg) -> list:
         sc = c.get("composite_score")
         sc_s = f"{float(sc):.1f}" if sc is not None else "—"
         name = str(c.get("name") or c.get("ticker", ""))[:20]
-        sector = c.get("sector_name") or c.get("sector_code") or "—"
+        sector = c.get("sector_name") or _sector_ja(c.get("sector_code")) or "—"
         strat = c.get("strategy_label") or "—"
         lines.append(f"| {mark} | {name} | `{c.get('ticker','')}` | "
                      f"{sc_s} | {sector} | {strat} |")
@@ -974,6 +991,10 @@ def _section_earnings_watchlist(results: dict) -> list:
     lines.append("")
     return lines
 
+_OPTION_STRATEGY_JA = {"covered_call": "カバードコール", "cash_secured_put": "キャッシュ担保プット",
+                       "long_call": "買いコール", "protective_put": "保護プット"}
+
+
 def _section_options_advisor(results: dict) -> list:
     """[OPT-1] オプション戦略提案セクション"""
     oa = results.get("options_advisor", {})
@@ -985,9 +1006,9 @@ def _section_options_advisor(results: dict) -> list:
     lines.append("|---|---|---|---|---|")
     for s in sugg[:8]:
         lines.append(
-            f"| {s.get('ticker','')} | {s.get('strategy','')} "
+            f"| {s.get('ticker','')} | {_OPTION_STRATEGY_JA.get(s.get('strategy',''), s.get('strategy',''))} "
             f"| {s.get('expiry','')} | {s.get('expected_move_pct','?')}% "
-            f"| {str(s.get('rationale',''))[:40]} |")
+            f"| {str(s.get('rationale','')).replace('|', '／')} |")
     warns = {w for s in sugg for w in s.get("warnings", [])}
     for w in list(warns)[:3]:
         lines.append(f"- {w}")
@@ -1025,6 +1046,22 @@ def _section_midterm_tracker(results: dict) -> list:
 # BLOCK 6: 事業概要ハイライト（Step E代替）
 # ==============================================================
 
+def _english_blurb(core: str) -> str:
+    """翻訳されていない英語の事業概要は、途中で切れた「...」を残さず最初の1文だけにして「（英語原文）」と示す。
+    日本語を含む文はそのまま返す。"""
+    text = str(core or "").strip()
+    if re.search(r"[぀-ヿ一-鿿]", text):
+        return text
+    cut = text.endswith(("...", "…"))
+    text = text.rstrip(".… ").rstrip()
+    if cut:
+        text = text.rsplit(" ", 1)[0].rstrip(",;: ")   # 切れた最後の語を落とす
+    first = re.split(r"(?<=[a-z0-9\)])\.\s+(?=[A-Z])", text, maxsplit=1)[0].rstrip(".")
+    if cut and first == text:
+        return f"{first}…（英語原文・冒頭のみ）"
+    return f"{first}.（英語原文）"
+
+
 def _section_biz_summaries(results: dict) -> list:
     lines = ["## 📋 注目銘柄 事業概要", ""]
     biz = results.get("biz_summaries", {})
@@ -1048,7 +1085,7 @@ def _section_biz_summaries(results: dict) -> list:
             market_icon = "🇯🇵" if str(ticker).upper().endswith(".T") else "🇺🇸"
             trans_icon  = " 🌐" if translated else ""
             lines.append(f"**{name}** (`{ticker}`) {market_icon}{trans_icon}")
-            lines.append(f"> {core}")
+            lines.append(f"> {_english_blurb(core)}")
             lines.append("")
 
     return lines
@@ -1181,10 +1218,11 @@ def _section_news(results: dict) -> list:
 
     top_articles = news.get("top_articles", [])
     for a in top_articles[:5]:
-        title  = a.get("title", "")[:70]
+        title  = _clip(a.get("title", ""), 70)
         source = a.get("source", "")
-        date_s = a.get("published", "")[:10] if a.get("published") else ""
-        lines.append(f"- [{source}] {title} {date_s}")
+        # news_pipeline が入れるキーは pub_date（"YYYY-MM-DD HH:MM"）。日付が無い記事は古い可能性があるので空欄のまま出す
+        date_s = str(a.get("pub_date") or a.get("published") or "")[:10]
+        lines.append(f"- [{source}] {title}" + (f"（{date_s}）" if date_s else "（日付不明）"))
 
     lines.append("")
     return lines
@@ -1319,7 +1357,10 @@ def _section_dividend_calendar(results: dict) -> list:
     if not dc:
         return []
     text = dc.get("alert_text", "")
-    return text.split("\n") if text else []
+    # 30日以内に権利確定日が無い週は節ごと出さない（見出しが「0銘柄」で本文が「なし」だけになる）
+    if not text or re.search(r"30日以内[:：]\s*0銘柄", text.split("\n", 1)[0]):
+        return []
+    return text.split("\n")
 
 # [n-n] 季節アノマリーセクション
 def _section_anomaly_season(results: dict) -> list:
@@ -1358,10 +1399,13 @@ def _section_sr_vp(results: dict) -> list:
         for p in poc_cheap[:5]:
             lines.append(
                 f"  {p.get('ticker','?')}: POC乖離{p.get('poc_gap_pct',0):+.1f}% "
-                f"zone={p.get('current_zone','?')} {p.get('label','')}"
+                f"{_VP_ZONE_JA.get(p.get('current_zone'), p.get('current_zone','?'))} {p.get('label','')}"
             )
         lines.append("")
     return lines
+
+_VP_ZONE_JA = {"below_val": "価値圏の下", "above_vah": "価値圏の上", "in_va": "価値圏の中"}
+
 
 def _section_jp_us_bridge(results: dict) -> list:
     bridge = results.get("jp_us_bridge", {})
@@ -1465,6 +1509,9 @@ def _section_rule_optimizer_alert(results: dict, cfg=None) -> list:
                     for f in trig_flags
                 )
                 fired_icon = "🔴 発動" if fired else "🟢 正常"
+                if val is None and not fired:
+                    # 評価できなかった条件を「正常」と書くと、判定していないのに安全に見える
+                    val_str, fired_icon = "判定不能", "⚪ 未判定"
                 lines.append(f"| {cond_name}（閾値: {threshold_str}）| {val_str} | {fired_icon} |")
             lines.append("")
 
@@ -1603,7 +1650,7 @@ def _section_rule_optimizer_alert(results: dict, cfg=None) -> list:
                 # 直近7件のみ表示
                 _recent = _records[-7:]
                 if _recent:
-                    lines.append("### 📅 縮退状態履歴（直近7週）")
+                    lines.append("### 📅 縮退状態履歴（直近7回）")
                     lines.append("")
                     lines.append("| 日付 | モード | 発動数 | 係数 |")
                     lines.append("|---|---|---|---|")
@@ -1755,6 +1802,10 @@ def _section_inference(results: dict) -> list:
             ln = re.sub(r"(\s*/\s*)?top_scenario:\s*\S+", "", ln).replace("**根拠指標**:", "**根拠指標**:").rstrip(" :/")
             if ln.strip() in ("**根拠指標**", "**根拠指標**:"):
                 continue
+            ln = ln.replace("recession_score:", "景気後退スコア").replace("breadth:", "市場幅").replace("PCR:", "PCR")
+        elif "`[" in ln:
+            # 注目業種の行: `[1028 銀行業]` → 銀行業（業種コードは読み手に要らない）
+            ln = re.sub(r"`\[(?:\d{4}\s+)?([^\]]+)\]`", r"\1", ln)
         out.append(ln)
     return out
 
@@ -2299,10 +2350,10 @@ def _section_analyst_revision(results: dict, cfg=None) -> list:
                 if rv <= 0:
                     break
                 lines.append(
-                    f"- {c.get('name', c.get('ticker',''))[:14]}"
+                    f"- {_display_name(c)}"
                     f"（{c.get('ticker','')}）: "
-                    f"revision={rv:+.2f}pt "
-                    f"composite={c.get('composite_score', 0):.0f}点"
+                    f"修正スコア {rv:+.2f}pt・"
+                    f"総合 {c.get('composite_score', 0):.0f}点"
                 )
             lines.append("")
 
@@ -2313,9 +2364,9 @@ def _section_analyst_revision(results: dict, cfg=None) -> list:
                 for c in sorted(dn, key=lambda x: x.get("revision_score", 0))[:3]:
                     rv = c.get("revision_score", 0)
                     lines.append(
-                        f"- {c.get('name', c.get('ticker',''))[:14]}"
+                        f"- {_display_name(c)}"
                         f"（{c.get('ticker','')}）: "
-                        f"revision={rv:+.2f}pt"
+                        f"修正スコア {rv:+.2f}pt"
                     )
                 lines.append("")
 
@@ -3199,7 +3250,7 @@ def _section_action_guide(results: dict) -> list:
         lines.append("### 💡 エントリー検討候補")
         lines.append("")
         for c in top_passed:
-            name   = c.get("name", c.get("ticker", ""))[:16]
+            name   = _display_name(c)
             score  = c.get("composite_score", 0)
             reason_parts = []
             if c.get("per") and c["per"] < 20:        reason_parts.append(f"PER割安({c['per']:.1f}x)")
@@ -3219,7 +3270,7 @@ def _section_action_guide(results: dict) -> list:
         lines.append("### 🌱 長期保有候補（P-3: 財務堅牢×増益×高ROE）")
         lines.append("")
         for c in longterm_top[:5]:
-            name  = str(c.get("name", c.get("ticker", "")))[:16]
+            name  = _display_name(c)
             score = c.get("composite_score", 0) or 0
             lt_flags = c.get("longterm_flags", []) or []
             ev = " / ".join(str(f) for f in lt_flags[:3]) if lt_flags else "条件充足"
@@ -3459,9 +3510,6 @@ def _section_technology_cluster(results: dict, cfg=None) -> list:
             lines.append(
                 f"- JP対象業種: **{stats.get('total_sectors_jp', 0)}**業種 "
                 f"/ US対象セクター: **{stats.get('total_sectors_us', 0)}**セクター"
-            )
-            lines.append(
-                f"- BQ taxonomy 書込: **{bq_count}**行"
             )
             lines.append("")
 
