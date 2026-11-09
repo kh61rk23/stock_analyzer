@@ -136,6 +136,49 @@ def check_paper(accounts: dict, events: list[dict], today: date) -> None:
     for st in (accounts or {}):
         if not st.startswith("_") and n_act.get(st, 0) == 0:
             find("paper_idle", "MID", f"{st}: 開始から注文・約定が0件（戦略の入力が来ていない疑い）")
+    # オプションの仮想口座は opt_open で建てる。評価（opt_mark）が1週間分あるのに1本も建っていなければ、
+    # 提案の入力（ユニバース・総合点の条件）が届いていない疑い
+    opt_marks = sum(1 for ev in events if ev.get("type") == "opt_mark")
+    opt_opens = sum(1 for ev in events if ev.get("type") == "opt_open")
+    if opt_marks >= 7 and opt_opens == 0:
+        find("paper_options_idle", "MID", f"オプションの仮想口座: 評価が{opt_marks}回あるのに建玉が開始から0本（提案の入力が来ていない疑い）")
+
+
+def check_us_bridge_ledger(note: str) -> None:
+    """米国の決算ブリッジ（us_sector_bridge）の台帳の文面。決算があるのに EPS の判定がほぼ全件できていなければ入力不足。"""
+    m = re.search(r"決算(\d+).*?beat(\d+).*?miss(\d+)", note or "")
+    if not m:
+        return
+    n, beat, miss = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    u = re.search(r"EPS不明(\d+)", note)
+    if n >= 20 and beat + miss == 0 and u and int(u.group(1)) >= 0.8 * n:
+        find("us_bridge_input", "MID", f"米国の決算ブリッジ: 決算{n}件のうち EPS が取れず判定できないものが {u.group(1)}件"
+             "（beat/miss が0なのは入力不足。us.company_facts を引けているか確認）")
+
+
+def check_score_history(hist: dict, swing: float = 10.0, min_sectors: int = 4, n_days: int = 10) -> None:
+    """業種の総合点の履歴：範囲外・全業種同じ値・日替わりの大きな振れ。"""
+    days = sorted(hist or {})
+    if not days:
+        return
+    last = hist[days[-1]] or {}
+    vals = {c: (v or {}).get("score") for c, v in last.items()}
+    bad = {c: v for c, v in vals.items() if v is not None and not -30 <= float(v) <= 100}
+    if bad:
+        find("score_history_range", "HIGH", f"業種の総合点が範囲外（-30〜100）: {bad}")
+    present = [round(float(v), 1) for v in vals.values() if v is not None]
+    if len(present) >= 10 and len(set(present)) == 1:
+        find("score_history_flat", "HIGH", f"{days[-1]}: 全業種の総合点が同じ値 {present[0]}")
+    recent = days[-(n_days + 1):]
+    flips = []
+    for a, b in zip(recent, recent[1:]):
+        big = [c for c, v in (hist[b] or {}).items()
+               if c in (hist[a] or {}) and abs(float(v["score"]) - float(hist[a][c]["score"])) >= swing]
+        if len(big) >= min_sectors:
+            flips.append((b, len(big)))
+    if len(flips) >= 3:
+        find("score_swing", "MID", f"直近{n_days}日のうち {len(flips)}日で、{min_sectors}業種以上の総合点が前日比 {swing:g}pt 以上動いた"
+             f"（例 {flips[-1][0]} {flips[-1][1]}業種。日替わりで点が入れ替わる原因（補正を足すモジュールの日による有無）を確認）")
 
 
 WEEKLY_PATTERNS = [
@@ -195,6 +238,13 @@ def main(argv=None) -> int:
     ev_path = sd / "paper" / "events.jsonl"
     events = [json.loads(x) for x in ev_path.read_text(encoding="utf-8").splitlines() if x.strip()] if ev_path.exists() else []
     check_paper(_json(sd / "paper" / "accounts.json") or {}, events, today)
+    check_score_history(_json(sd / "data" / "score_history.json") or {})
+    led = _json(sd / "logs" / f"module_ledger_{d}.json")
+    if led is None:
+        ls = sorted((sd / "logs").glob("module_ledger_20??-??-??.json"))
+        led = _json(ls[-1]) if ls else None
+    if led:
+        check_us_bridge_ledger((((led.get("modules") or {}).get("us_sector_bridge")) or {}).get("note", ""))
     wk = sorted((sd / "insights" / "weekly").glob("weekly_*.md"))
     if wk:
         wdate = re.search(r"(\d{4}-\d{2}-\d{2})", wk[-1].name)

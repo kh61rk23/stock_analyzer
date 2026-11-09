@@ -365,44 +365,56 @@ def update_sector_mapping(cfg, tickers_with_cik: list[dict]) -> dict:
 # BLOCK 3: 8-K 決算シグナル生成
 # ==============================================================
 
-def _eval_earnings_strength(ticker: str, cfg) -> str:
+def _load_eps_history(ticker: str, cfg) -> list:
+    """決算銘柄の四半期 EPS（新しい順）。us.company_facts（SEC の XBRL 全社分）を先に引き、
+    無い銘柄だけローカル DB・us.fundamentals を見る。
+
+    8-K の決算銘柄は EDGAR の全提出者（小型株・ワラント・投信を含む）で、ローカル DB
+    （ローテーションで取る約900社）に載るのは一部だけ。ローカル DB だけを見ると大半が
+    「判定不能」になり beat/miss が常に 0 になる。company_facts 側はスクリーナーと同じ
+    1回の読み込みを共有する（プロセス内キャッシュ。追加のクエリは出ない）。
     """
-    us_fundamental_rotator の EPS データから
-    最新決算の強弱（beat/miss/neutral）を判定する。
+    try:
+        import us_fundamental_rotator as ufr
+        data = ufr.lookup_us_fundamentals_by_path(_data_dir(cfg), ticker.upper())
+    except Exception:
+        data = None
+    return list((data or {}).get("eps_history") or [])
+
+
+def _classify_eps(eps_history: list) -> str:
+    """直近四半期 EPS の前年同期比で beat / miss / neutral / unknown を返す（±10% が境）。"""
+    if len(eps_history) < 5:
+        return "unknown"
+    try:
+        latest = float(eps_history[0].get("val") or 0)
+        prev_yy = float(eps_history[4].get("val") or 0)
+    except (TypeError, ValueError, AttributeError):
+        return "unknown"
+    if abs(prev_yy) < 0.001:
+        return "neutral"
+    yoy_growth = (latest - prev_yy) / abs(prev_yy)
+    if yoy_growth >= 0.10:
+        return "beat"
+    if yoy_growth <= -0.10:
+        return "miss"
+    return "neutral"
+
+
+def _eval_earnings_strength(ticker: str, cfg) -> str:
+    """最新決算の強弱（beat/miss/neutral）。EPS が取れない・5四半期に満たないときは unknown。
 
     Returns:
         "beat" | "miss" | "neutral" | "unknown"
     """
-    try:
-        fund_path = _data_dir(cfg) / "us_fundamentals_db" / f"{ticker.replace('/', '_')}.json"
-        if not fund_path.exists():
-            return "unknown"
-        data = json.loads(fund_path.read_text(encoding="utf-8"))
-        eps_history = data.get("eps_history", [])
-        if len(eps_history) < 2:
-            return "unknown"
-
-        latest  = eps_history[0].get("val", 0) or 0
-        prev_yy = eps_history[4].get("val", 0) if len(eps_history) > 4 else None
-
-        if prev_yy is None or abs(prev_yy) < 0.001:
-            return "neutral"
-
-        yoy_growth = (latest - prev_yy) / abs(prev_yy)
-        if yoy_growth >= 0.10:   # YoY +10%超 = beat
-            return "beat"
-        elif yoy_growth <= -0.10:  # YoY -10%以下 = miss
-            return "miss"
-        return "neutral"
-
-    except Exception:
-        return "unknown"
+    return _classify_eps(_load_eps_history(ticker, cfg))
 
 
 def generate_8k_cross_sector_signals(
     earnings_tickers: list[str],
     sector_mapping:   dict,
     cfg,
+    stats: Optional[dict] = None,
 ) -> list[dict]:
     """
     8-K 決算発表 × SIC マッピングから JP業種への CROSS_SECTOR シグナルを生成する。
@@ -412,19 +424,24 @@ def generate_8k_cross_sector_signals(
       2. EPS beat/miss を判定
       3. JP業種への tailwind/headwind シグナルを生成
 
+    stats を渡すと、決算銘柄がシグナルにならなかった理由の内訳
+    （no_mapping=SIC→JP業種が無い / unknown=EPS が取れない / neutral=±10%以内）を書き込む。
+    「beat0 / miss0」が入力不足なのか本当に無風なのかを台帳から見分けるため。
+
     Returns:
         CROSS_SECTOR_RULES 形式のシグナルリスト
     """
+    stats = stats if stats is not None else {}
+    for k in ("no_mapping", "unknown", "neutral"):
+        stats.setdefault(k, 0)
     signals = []
     japan_sectors = getattr(cfg, "JAPAN_SECTORS", {})
 
     for ticker in earnings_tickers:
         mapping_entry = sector_mapping.get(ticker.upper())
-        if not mapping_entry:
-            continue
-
-        jp_sectors = mapping_entry.get("jp_sectors", [])
+        jp_sectors = (mapping_entry or {}).get("jp_sectors", [])
         if not jp_sectors:
+            stats["no_mapping"] += 1
             continue
 
         sic_desc  = mapping_entry.get("sic_desc", "")
@@ -432,6 +449,7 @@ def generate_8k_cross_sector_signals(
         strength  = _eval_earnings_strength(ticker, cfg)
 
         if strength == "unknown":
+            stats["unknown"] += 1
             continue
 
         if strength == "beat":
@@ -443,6 +461,7 @@ def generate_8k_cross_sector_signals(
             pts       = -3.0
             label     = f"US決算miss: {company}({sic_desc}) → JP{jp_sectors}"
         else:
+            stats["neutral"] += 1
             continue
 
         signals.append({
@@ -602,7 +621,8 @@ def run_us_sector_bridge_earnings(cfg, results: dict = None) -> dict:
 
     # ── SIC マッピング更新 → 8-K × SIC × EPS → JP業種シグナル ──
     sector_mapping = update_sector_mapping(cfg, tickers_with_cik)
-    cross_signals  = generate_8k_cross_sector_signals(earnings_tickers, sector_mapping, cfg)
+    eval_stats: dict = {}
+    cross_signals  = generate_8k_cross_sector_signals(earnings_tickers, sector_mapping, cfg, eval_stats)
 
     summ    = _summarize(cross_signals)
     elapsed = (datetime.now() - t0).seconds
@@ -610,7 +630,8 @@ def run_us_sector_bridge_earnings(cfg, results: dict = None) -> dict:
         f"    ✅ セクターブリッジ完了（{elapsed}秒）: "
         f"シグナル{len(cross_signals)}件 / "
         f"JP影響業種{len(summ['jp_affected'])}業種 / "
-        f"beat{len(summ['beat_tickers'])} / miss{len(summ['miss_tickers'])}"
+        f"beat{len(summ['beat_tickers'])} / miss{len(summ['miss_tickers'])} "
+        f"（業種対応なし{eval_stats['no_mapping']} / EPS不明{eval_stats['unknown']} / ±10%内{eval_stats['neutral']}）"
     )
     return {
         "cross_signals":   cross_signals,
@@ -618,6 +639,7 @@ def run_us_sector_bridge_earnings(cfg, results: dict = None) -> dict:
         "jp_affected":     summ["jp_affected"],
         "beat_tickers":    summ["beat_tickers"],
         "miss_tickers":    summ["miss_tickers"],
+        "eval_stats":      eval_stats,
         "timestamp":       t0.strftime("%Y-%m-%d %H:%M:%S"),
     }
 

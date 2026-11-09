@@ -79,3 +79,40 @@ def test_stale_dcf_cache_is_low_and_invalid_rows_are_skipped():
 def test_stale_weekly_output_is_low():
     ic.check_weekly_md("| 最大ドローダウン | -100.0% |", stale=True)
     assert ic.FINDINGS and all(f[1] == "LOW" for f in ic.FINDINGS)
+
+
+def test_us_bridge_ledger_flags_missing_eps_input():
+    ic.check_us_bridge_ledger("決算43 / JP影響業種0業種 / beat0 / miss0 / cross0 / EPS不明40")
+    assert [f[0] for f in ic.FINDINGS] == ["us_bridge_input"]
+    ic.FINDINGS.clear()
+    ic.check_us_bridge_ledger("決算43 / JP影響業種2業種 / beat3 / miss1 / cross4 / EPS不明10")
+    ic.check_us_bridge_ledger("決算43 / JP影響業種0業種 / beat0 / miss0 / cross0")      # 旧形式は判定しない
+    assert not ic.FINDINGS
+
+
+def _hist(days):
+    return {d: {c: {"score": s} for c, s in sc.items()} for d, sc in days.items()}
+
+
+def test_score_history_range_flat_and_swing():
+    ic.check_score_history(_hist({"2026-11-09": {f"10{i:02d}": 50.0 for i in range(12)}}))
+    assert [f[0] for f in ic.FINDINGS] == ["score_history_flat"]
+    ic.FINDINGS.clear()
+    ic.check_score_history(_hist({"2026-11-09": {"1001": 130.0, "1002": 40.0}}))
+    assert [f[0] for f in ic.FINDINGS] == ["score_history_range"]
+    ic.FINDINGS.clear()
+    days = {}
+    for i in range(8):                       # 4業種が毎日 ±12 入れ替わる
+        hi = i % 2 == 0
+        days[f"2026-11-{i + 1:02d}"] = {f"10{k:02d}": (80.0 if hi else 68.0) if k < 4 else 40.0 + k for k in range(8)}
+    ic.check_score_history(_hist(days))
+    assert [f[0] for f in ic.FINDINGS] == ["score_swing"]
+
+
+def test_paper_options_idle():
+    ev = [{"type": "opt_mark", "strategy": "options_s4", "date": f"2026-11-0{i}"} for i in range(1, 8)]
+    ic.check_paper({}, ev, date(2026, 11, 9))
+    assert "paper_options_idle" in {f[0] for f in ic.FINDINGS}
+    ic.FINDINGS.clear()
+    ic.check_paper({}, ev + [{"type": "opt_open", "strategy": "options_s4", "date": "2026-11-08"}], date(2026, 11, 9))
+    assert "paper_options_idle" not in {f[0] for f in ic.FINDINGS}

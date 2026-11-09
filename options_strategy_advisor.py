@@ -179,10 +179,28 @@ def suggest_strategies(m: dict, cfg=None) -> list[dict]:
 # ==============================================================
 
 def _build_universe(cfg, results: dict = None) -> list[dict]:
-    """{ticker, is_portfolio, composite_score} のユニバースを構築。"""
+    """{ticker, is_portfolio, composite_score} のユニバースを構築。
+
+    並びは 指数ETF → 米国スクリーナー上位（米国に上場していない銘柄は除く）→ 保有銘柄 の順で、
+    OPTIONS_MAX_UNIVERSE で切る。保有銘柄を先に並べると、保有が多いとき上限で切れて
+    スクリーナー上位が1本も入らず、コール買い・現金担保プット（総合点の条件）が一度も出ない。
+    保有銘柄でもスクリーナーの候補に載っていれば、その総合点を使う。
+    """
     uni: dict[str, dict] = {}
     for etf in getattr(cfg, "OPTIONS_INDEX_ETFS", ["SPY", "QQQ"]):
         uni[etf] = {"ticker": etf, "is_portfolio": False, "composite_score": 0}
+    us = (results or {}).get("us_screener", {}) or {}
+    scored = {str(c.get("ticker", "")): float(c.get("composite_score", 0) or 0)
+              for c in us.get("candidates", []) if isinstance(c, dict) and c.get("ticker")}
+    # 米国以外の取引所の銘柄（.KS・.T・.TO など。米国の種類株は BRK-B のように "-"）にはオプションの気配が無い
+    cands = sorted(
+        (c for c in us.get("candidates", [])
+         if isinstance(c, dict) and c.get("pass_filters") and "." not in str(c.get("ticker", ""))),
+        key=lambda c: -float(c.get("composite_score", 0) or 0))
+    for c in cands[:5]:
+        tk = str(c.get("ticker", ""))
+        if tk:
+            uni.setdefault(tk, {"ticker": tk, "is_portfolio": False, "composite_score": scored.get(tk, 0)})
     # 保有銘柄のUS分
     hp = Path(__file__).parent / "data" / "portfolio_holdings.csv"
     if hp.exists():
@@ -192,22 +210,11 @@ def _build_universe(cfg, results: dict = None) -> list[dict]:
                     for r in csv.DictReader(f):
                         tk = r.get("ticker", "")
                         if tk and not tk.endswith(".T"):
-                            uni[tk] = {"ticker": tk, "is_portfolio": True,
-                                       "composite_score": 0}
+                            e = uni.setdefault(tk, {"ticker": tk, "composite_score": scored.get(tk, 0)})
+                            e["is_portfolio"] = True
                 break
             except UnicodeDecodeError:
                 continue
-    # US screener 上位
-    us = (results or {}).get("us_screener", {}) or {}
-    cands = sorted(
-        (c for c in us.get("candidates", [])
-         if isinstance(c, dict) and c.get("pass_filters")),
-        key=lambda c: -float(c.get("composite_score", 0) or 0))
-    for c in cands[:5]:
-        tk = str(c.get("ticker", ""))
-        if tk:
-            e = uni.setdefault(tk, {"ticker": tk, "is_portfolio": False})
-            e["composite_score"] = float(c.get("composite_score", 0) or 0)
     cap = int(getattr(cfg, "OPTIONS_MAX_UNIVERSE", 10))
     return list(uni.values())[:cap]
 

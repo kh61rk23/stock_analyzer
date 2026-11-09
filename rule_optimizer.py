@@ -1205,13 +1205,20 @@ def evaluate_contraction_flag(results: dict, cfg) -> dict:
 
     # ── 条件 6: 上位業種スコア平均の週次急落 >= score_drop ───────
     try:
-        sig_res = results.get("signal_aggregator", {})
-        sector_signals = sig_res.get("sector_signals", {})
+        # 縮退判定は signal_aggregator より前に走る（その時点の results に無い）ので、業種の総合点を主に使う。
+        # 前週の値と同じ尺度で比べるため、毎回この尺度で state に残す。業種の総合点が無いときだけ集計側を見る
         scores_now = [
-            float(v.get("signal_score", 50))
-            for v in sector_signals.values()
-            if isinstance(v, dict)
+            float(v["composite_score"])
+            for v in (results.get("sectors") or {}).values()
+            if isinstance(v, dict) and v.get("composite_score") is not None
         ]
+        if not scores_now:
+            sector_signals = (results.get("signal_aggregator") or {}).get("sector_signals", {})
+            scores_now = [
+                float(v.get("signal_score", 50))
+                for v in sector_signals.values()
+                if isinstance(v, dict)
+            ]
         # score_history から前週の上位平均を取得（存在すれば）
         # results（実行中のメモリ）は翌週には残らないため、前週の値はファイルに残し
         # 6日以上前の値と比べる

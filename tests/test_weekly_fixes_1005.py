@@ -46,3 +46,16 @@ def test_holdings_concentration():
         {"ticker": "A", "sector_name": "卸売業", "market": "JP", "market_value_jpy": 600},
         {"ticker": "B", "sector_name": "銀行業", "market": "JP", "market_value_jpy": 400}])
     assert r["hhi_sector"] == 0.52 and r["top3_share"] == 1.0 and r["market_weights"]["JP"] == 1.0
+
+
+def test_contraction_score_drop_uses_sector_scores_before_aggregator(tmp_path):
+    """縮退判定は signal_aggregator より前に走る。業種の総合点だけでも state が残り、翌週に急落を判定できる。"""
+    import json
+    from datetime import datetime, timedelta
+    cfg = types.SimpleNamespace(DATA_DIR=str(tmp_path))
+    old = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+    (tmp_path / "contraction_state.json").write_text(json.dumps({"top_avg": {old: 70.0}}), encoding="utf-8")
+    res = {"sectors": {str(i): {"composite_score": 50.0} for i in range(10)}}
+    d = ro.evaluate_contraction_flag(res, cfg)["detail"]
+    assert d["score_drop"] == 20.0
+    assert len(json.loads((tmp_path / "contraction_state.json").read_text())["top_avg"]) == 2

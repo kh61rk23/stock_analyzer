@@ -1778,7 +1778,8 @@ def run_all_tasks(mode: str = "all") -> dict:
                         f"JP影響業種{len(usbe_result.get('jp_affected',[]))}業種 / "
                         f"beat{len(usbe_result.get('beat_tickers',[]))} / "
                         f"miss{len(usbe_result.get('miss_tickers',[]))} / "
-                        f"cross{len(usbe_result.get('cross_signals',[]))}",
+                        f"cross{len(usbe_result.get('cross_signals',[]))} / "
+                        f"EPS不明{(usbe_result.get('eval_stats') or {}).get('unknown', 0)}",
                     )
             else:
                 print("  ⚠️  us_sector_bridge_enhanced.py が見つかりません")

@@ -240,9 +240,11 @@ def fmt_val(v: Optional[float], digits: int = 2) -> str:
     return f"{v:.{digits}f}"
 
 def fmt_cap(v: Optional[float]) -> str:
+    """金額を兆円・億円に丸める。負の値（赤字の FCF など）も桁を丸める（絶対値で単位を選ぶ）。"""
     if v is None: return "N/A"
-    if v >= 1e12: return f"{v/1e12:.1f}兆円"
-    if v >= 1e8:  return f"{v/1e8:.0f}億円"
+    a = abs(v)
+    if a >= 1e12: return f"{v/1e12:.1f}兆円"
+    if a >= 1e8:  return f"{v/1e8:.0f}億円"
     return f"{v:.0f}円"
 
 def fmt_yen(v: Optional[float]) -> str:

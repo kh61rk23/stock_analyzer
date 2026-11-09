@@ -19,6 +19,14 @@ import us_sector_bridge_enhanced as bridge
 MAIN = Path(__file__).resolve().parent.parent / "stock_analyzer_main.py"
 
 
+@pytest.fixture(autouse=True)
+def _no_bq_facts(monkeypatch):
+    """EPS の引き先 us.company_facts（BQ）には触れない。無い銘柄はローカル DB にだけ落ちる。"""
+    import us_facts_quarterly
+    monkeypatch.setattr(us_facts_quarterly, "lookup", lambda cfg, t: None)
+    monkeypatch.setattr("us_fundamental_rotator._lookup_us_fundamentals_bq", lambda t, table_name="fundamentals": None)
+
+
 @pytest.fixture
 def cfg(tmp_path):
     return SimpleNamespace(DATA_DIR=tmp_path, US_WATCHLIST_TICKERS=[], ENABLE_US_8K_MONITOR=True,
@@ -136,3 +144,32 @@ def test_main_runs_bridge_before_sector_scoring_and_ism_after_us_macro():
     assert us_macro < ism
     assert early < us_8k_full                                       # 8-K 本体は米国スクリーナーの後
     assert len(re.findall(r"fetch_earnings_early\(", src)) == 1
+
+
+def test_eps_comes_from_company_facts_when_local_db_has_no_ticker(cfg, monkeypatch):
+    """決算銘柄の大半はローカル DB（ローテーションの約900社）に無い。company_facts から引けて判定できること。"""
+    import us_facts_quarterly
+    hist = [{"val": 3.0}, {"val": 1}, {"val": 1}, {"val": 1}, {"val": 1.0}]
+    monkeypatch.setattr(us_facts_quarterly, "lookup",
+                        lambda c, t: {"eps_history": hist} if t == "NOLOCAL" else None)
+    assert not (Path(cfg.DATA_DIR) / "us_fundamentals_db" / "NOLOCAL.json").exists()
+    assert bridge._eval_earnings_strength("NOLOCAL", cfg) == "beat"
+    assert bridge._eval_earnings_strength("NODATA", cfg) == "unknown"
+
+
+def test_classify_eps_boundaries():
+    h = lambda a, b: [{"val": a}, {"val": 0}, {"val": 0}, {"val": 0}, {"val": b}]
+    assert bridge._classify_eps(h(1.2, 1.0)) == "beat"
+    assert bridge._classify_eps(h(0.8, 1.0)) == "miss"
+    assert bridge._classify_eps(h(1.05, 1.0)) == "neutral"
+    assert bridge._classify_eps(h(1.0, 0.0)) == "neutral"          # 前年がほぼ0なら比率を作らない
+    assert bridge._classify_eps(h(-0.5, -1.0)) == "beat"           # 赤字縮小は改善
+    assert bridge._classify_eps([{"val": 1}] * 4) == "unknown"     # 5四半期に満たない
+
+
+def test_bridge_reports_why_no_signal(cfg, day):
+    results = {"us_8k": k8.fetch_earnings_early(cfg, {})}
+    out = bridge.run_us_sector_bridge_earnings(cfg, results)
+    st = out["eval_stats"]
+    assert st["no_mapping"] == 74 and st["unknown"] == 0 and st["neutral"] == 0
+    assert len(out["beat_tickers"]) + len(out["miss_tickers"]) == 2
