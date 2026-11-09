@@ -1966,75 +1966,75 @@ def run_all_tasks(mode: str = "all") -> dict:
                     )
                     res["cycle_phase_adjustment"] = _actual
 
-                    # ── [R-1] 横断産業シグナル補正 ─────────────────
-                    _cs_signals = results.get("cross_sector_signals", [])
-                                        # 集計と判定はループ内で1シグナルずつ行う（ループ外に出すと、シグナルが空のとき
-                                        #   _tw が未定義になり、値があっても最後の1件しか評価されない）。
-                    for _cs in _cs_signals:
-                        _tw = _cs.get("signal", {}).get("tailwind", [])
-                        _hw = _cs.get("signal", {}).get("headwind", [])
-                        _cross_cap = getattr(cfg, "SCORE_MAX_CROSS_ADJ", 10.0)
-                        _cross_total = sum(                          # 累積補正量を集計
-                            x["delta"] for x in
-                            res.get("cross_sector_adjustments", [])
-                        )
-                        if code in _tw:
-                            _raw_adj = 5.0
-                            # 累積上限チェック: 残余余地だけ適用
-                            _headroom = _cross_cap - _cross_total
-                            _adj = max(0.0, min(_raw_adj, _headroom))
-                            if _adj > 0:
-                                res["composite_score"] = round(
-                                    max(-30, min(100,
-                                        res.get("composite_score", 0) + _adj)), 1)
-                                res.setdefault("cross_sector_adjustments", []).append(
-                                    {"rule": _cs["rule_id"], "delta": +_adj})
-                        elif code in _hw:
-                            _raw_adj = -5.0
-                            _headroom = -_cross_cap - _cross_total  # 負方向の余地
-                            _adj = min(0.0, max(_raw_adj, _headroom))
-                            if _adj < 0:
-                                res["composite_score"] = round(
-                                    max(-30, min(100,
-                                        res.get("composite_score", 0) + _adj)), 1)
-                                res.setdefault("cross_sector_adjustments", []).append(
-                                    {"rule": _cs["rule_id"], "delta": _adj})
-                    # ── [R-2] 先行指標シグナル補正 ─────────────────
-                    _lead_signals = results.get("leading_indicator_signals", [])
-                    _lead_cross_cap = getattr(cfg, "SCORE_MAX_CROSS_ADJ", 10.0)
-                    for _ls in _lead_signals:
-                        _ltw = _ls.get("signal", {}).get("tailwind", [])
-                        _lhw = _ls.get("signal", {}).get("headwind", [])
-                        _lead_total = sum(
-                            x["delta"] for x in
-                            res.get("cross_sector_adjustments", [])
-                        )
-                        if code in _ltw:
-                            _lheadroom = _lead_cross_cap - _lead_total
-                            _ladj = max(0.0, min(3.0, _lheadroom))  # 先行指標は控えめに+3pt上限
-                            if _ladj > 0:
-                                res["composite_score"] = round(
-                                    max(-30, min(100,
-                                        res.get("composite_score", 0) + _ladj)), 1)
-                                res.setdefault("cross_sector_adjustments", []).append(
-                                    {"rule": _ls["rule_id"], "delta": +_ladj,
-                                    "type": "leading"})
-                        elif code in _lhw:
-                            _lheadroom = -_lead_cross_cap - _lead_total
-                            _ladj = min(0.0, max(-3.0, _lheadroom))
-                            if _ladj < 0:
-                                res["composite_score"] = round(
-                                    max(-30, min(100,
-                                        res.get("composite_score", 0) + _ladj)), 1)
-                                res.setdefault("cross_sector_adjustments", []).append(
-                                    {"rule": _ls["rule_id"], "delta": _ladj,
-                                    "type": "leading"})
-                    # ─────────────────────────────────────────────────
+            # ── [R-1] 横断産業シグナル補正 ─────────────────
+            _cs_signals = results.get("cross_sector_signals", [])
+            # 集計と判定はループ内で1シグナルずつ行う（ループ外に出すと、シグナルが空のとき
+            #   _tw が未定義になり、値があっても最後の1件しか評価されない）。
+            for _cs in _cs_signals:
+                _tw = _cs.get("signal", {}).get("tailwind", [])
+                _hw = _cs.get("signal", {}).get("headwind", [])
+                _cross_cap = getattr(cfg, "SCORE_MAX_CROSS_ADJ", 10.0)
+                _cross_total = sum(                          # 累積補正量を集計
+                    x["delta"] for x in
+                    res.get("cross_sector_adjustments", [])
+                )
+                if code in _tw:
+                    _raw_adj = 5.0
+                    # 累積上限チェック: 残余余地だけ適用
+                    _headroom = _cross_cap - _cross_total
+                    _adj = max(0.0, min(_raw_adj, _headroom))
+                    if _adj > 0:
+                        res["composite_score"] = round(
+                            max(-30, min(100,
+                                res.get("composite_score", 0) + _adj)), 1)
+                        res.setdefault("cross_sector_adjustments", []).append(
+                            {"rule": _cs["rule_id"], "delta": +_adj})
+                elif code in _hw:
+                    _raw_adj = -5.0
+                    _headroom = -_cross_cap - _cross_total  # 負方向の余地
+                    _adj = min(0.0, max(_raw_adj, _headroom))
+                    if _adj < 0:
+                        res["composite_score"] = round(
+                            max(-30, min(100,
+                                res.get("composite_score", 0) + _adj)), 1)
+                        res.setdefault("cross_sector_adjustments", []).append(
+                            {"rule": _cs["rule_id"], "delta": _adj})
+            # ── [R-2] 先行指標シグナル補正 ─────────────────
+            _lead_signals = results.get("leading_indicator_signals", [])
+            _lead_cross_cap = getattr(cfg, "SCORE_MAX_CROSS_ADJ", 10.0)
+            for _ls in _lead_signals:
+                _ltw = _ls.get("signal", {}).get("tailwind", [])
+                _lhw = _ls.get("signal", {}).get("headwind", [])
+                _lead_total = sum(
+                    x["delta"] for x in
+                    res.get("cross_sector_adjustments", [])
+                )
+                if code in _ltw:
+                    _lheadroom = _lead_cross_cap - _lead_total
+                    _ladj = max(0.0, min(3.0, _lheadroom))  # 先行指標は控えめに+3pt上限
+                    if _ladj > 0:
+                        res["composite_score"] = round(
+                            max(-30, min(100,
+                                res.get("composite_score", 0) + _ladj)), 1)
+                        res.setdefault("cross_sector_adjustments", []).append(
+                            {"rule": _ls["rule_id"], "delta": +_ladj,
+                            "type": "leading"})
+                elif code in _lhw:
+                    _lheadroom = -_lead_cross_cap - _lead_total
+                    _ladj = min(0.0, max(-3.0, _lheadroom))
+                    if _ladj < 0:
+                        res["composite_score"] = round(
+                            max(-30, min(100,
+                                res.get("composite_score", 0) + _ladj)), 1)
+                        res.setdefault("cross_sector_adjustments", []).append(
+                            {"rule": _ls["rule_id"], "delta": _ladj,
+                            "type": "leading"})
+            # ─────────────────────────────────────────────────
 
-                    logger.add("sector_agent", "success",
-                            f"[{code}]{res.get('sector_name_ja','')} "
-                            f"スコア:{res.get('composite_score','N/A')} "
-                            f"リスク:{res.get('risk_level','N/A')}")
+            logger.add("sector_agent", "success",
+                    f"[{code}]{res.get('sector_name_ja','')} "
+                    f"スコア:{res.get('composite_score','N/A')} "
+                    f"リスク:{res.get('risk_level','N/A')}")
         except Exception as e:
             logger.add("sector_agent", "error", f"[{code}] {str(e)[:80]}")
         results["sectors"] = sector_results
