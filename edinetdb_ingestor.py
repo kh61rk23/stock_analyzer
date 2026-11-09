@@ -448,7 +448,8 @@ def select_ingest_targets(
     """P0→P4順、重複排除、鮮度除外、予算上限で対象を返す純関数。
 
     new_filings（{EDINETコード: 有報の提出日}）は政府 EDINET の書類一覧で新しい有報が出たと分かった会社。
-    提出日の翌日より後に取っていなければ鮮度に関係なく先頭（P0）で取る（EdinetDB の反映は提出の翌日以降）。
+    提出日までにしか取っていなければ鮮度に関係なく先頭（P0）で取る（EdinetDB の反映は提出の翌日以降なので、翌日以降に取れていれば取り直さない）。
+    データ無しの会社（backing_off）だけは、提出の翌日の試行が「まだ反映されていない」の答えかもしれないので、翌々日に1回だけ聞き直す。
     """
     today = today or date.today()
     limit = max(0, int(budget)) // max(1, int(calls_per_company))
@@ -468,7 +469,9 @@ def select_ingest_targets(
         if code in new_filings:
             last = str(info.get("last_fetched") or "")[:10]
             try:
-                if date.fromisoformat(last) <= date.fromisoformat(str(new_filings[code])[:10]) + timedelta(days=1):
+                # 提出日（当日を含む）までに取った分だけが古い。提出の翌日に取れていれば反映後の取得なので、
+                # 翌日・翌々日と続けて取り直さない
+                if date.fromisoformat(last) <= date.fromisoformat(str(new_filings[code])[:10]):
                     return False
             except ValueError:
                 return False

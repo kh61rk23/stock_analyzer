@@ -128,7 +128,9 @@ class RunLogger:
             )
         except Exception:
             pass
-        icon = "✅" if status == "success" else ("⏩" if status == "skipped" else "❌")
+        # ❌ は失敗だけに付ける（Actions の要約が ❌ の行を失敗として数えるため。info・注意を数えさせない）
+        icon = {"success": "✅", "skipped": "⏩", "info": "ℹ️", "l3_override": "ℹ️",
+                "warn": "⚠️", "warning": "⚠️"}.get(status, "❌")
         print(f"  {icon} LOG [{status}] {module}: {note}")
 
     def tail(self, n: int = 5):

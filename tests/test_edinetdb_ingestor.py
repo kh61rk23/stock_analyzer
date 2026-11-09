@@ -544,6 +544,29 @@ class TestMissingRecheck:
                                        new_filings={"E1": "2026-11-02"}, missing_recheck_days=14) == []
 
 
+class TestNoRepeatOnConsecutiveDays:
+    def test_company_fetched_after_filing_is_not_taken_again(self):
+        import edinetdb_ingestor as m
+        nf = {"E1": "2026-11-05"}
+        kw = dict(budget=30, new_filings=nf, missing_recheck_days=14)
+        # 提出日（当日）までに取った分は古い → 提出の翌日に取る
+        meta = {"E1": {"last_fetched": "2026-11-05"}}
+        assert m.select_ingest_targets([], [], [], [], meta, today=date(2026, 11, 6), **kw) == ["E1"]
+        # 翌日に取れたら、翌々日・その後は取り直さない
+        meta = {"E1": {"last_fetched": "2026-11-06"}}
+        for day in (7, 8, 9):
+            assert m.select_ingest_targets([], [], [], [], meta, today=date(2026, 11, day), **kw) == []
+
+    def test_missing_company_is_not_called_while_waiting_on_consecutive_days(self):
+        import edinetdb_ingestor as m
+        meta = {"E1": {"last_attempt": "2026-11-07", "fail_count": 1, "missing_since": "2026-11-07"}}
+        for day in (8, 9, 10, 20):
+            assert m.select_ingest_targets([], [], [], ["E1"], meta, budget=30, today=date(2026, 11, day),
+                                           missing_recheck_days=14) == []
+        assert m.select_ingest_targets([], [], [], ["E1"], meta, budget=30, today=date(2026, 11, 21),
+                                       missing_recheck_days=14) == ["E1"]
+
+
 def test_no_targets_day_makes_no_api_call(tmp_path, monkeypatch):
     import json
     import edinetdb_ingestor as module
