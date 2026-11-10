@@ -28,7 +28,9 @@
 #     "positions":       {...},   # {cik: {ticker: position_dict}}
 #     "changes":         [...],   # ポジション変化リスト
 #     "scored":          [...],   # スコアリング済みリスト
-#     "sector_boosts":   {...},   # {sector_code: adj_pt}
+#     "sector_boosts":   {...},   # {sector_code: adj_pt}（日本の候補に当たった分＋米国銘柄の SIC 経由の小さい加点）
+#     "sector_boost_detail": {...},  # 業種ごとの内訳（screener_pt / us_13f_pt / us_items）
+#     "us_etf_boosts":   {...},   # {米国業種ETF: pt}（記録のみ）
 #     "new_tier1":       [...],   # Tier1新規取得（Buffettアラート用）
 #     "new_large":       [...],   # 10億ドル超新規取得（Gmailアラート用）
 #     "total_changes":   int,
@@ -595,19 +597,104 @@ def _score_changes(changes: list[dict], cfg) -> list[dict]:
     return scored
 
 
-def _build_sector_boosts(
-    scored:    list[dict],
-    results:   dict,
-    cfg,
-) -> dict[str, float]:
+def _sic_to_us_etf(sic: int) -> str:
+    """SIC → 米国の業種 ETF（SPDR 11業種）。合うものが無ければ ""。"""
+    sic = int(sic)
+    major = sic // 100
+    if sic in (7389, 6141, 6199, 6211, 6221, 6282):
+        return "XLF"
+    if sic == 6798:
+        return "XLRE"
+    if major in (12, 13, 29) or sic in (2990,):
+        return "XLE"
+    if major == 28:
+        return "XLV" if 2830 <= sic <= 2836 else "XLB"
+    if 3840 <= sic <= 3845 or sic == 8731 or major == 80:
+        return "XLV"
+    if major in (10, 14, 24, 26, 32, 33):
+        return "XLB"
+    if major in (35, 36, 38, 73) or sic in (3571, 3572, 3575, 3576, 3577, 3578, 3661, 3663, 3669, 3674):
+        if 3630 <= sic <= 3659:
+            return "XLY"
+        if sic in (3812,):
+            return "XLI"
+        if major == 73 and sic not in (7370, 7371, 7372, 7373, 7374, 7375):
+            return "XLI"
+        if major == 35 and not 3570 <= sic <= 3579:
+            return "XLI"
+        if major == 36 and sic == 3690:
+            return "XLI"
+        return "XLK"
+    if major == 37:
+        return "XLY" if 3710 <= sic <= 3716 else "XLI"
+    if major in (15, 16, 17, 30, 34, 39, 40, 42, 44, 45, 47, 50, 51):
+        return "XLI" if major not in (30, 39) else "XLY"
+    if major == 48 or sic in (2711, 7812, 7841):
+        return "XLC"
+    if major == 49:
+        return "XLU" if sic != 4953 else "XLI"
+    if major in (20, 21) or sic in (5331, 5411, 5412):
+        return "XLP"
+    if major in (22, 23, 25, 52, 53, 55, 56, 57, 58, 59, 70, 79):
+        return "XLY"
+    if major in (60, 61, 62, 63, 64, 67):
+        return "XLF"
+    if major == 65:
+        return "XLRE"
+    return ""
+
+
+def _us_buy_sic(tickers: list, cfg) -> dict:
+    """ticker → {"sic": int, "jp_sectors": [str]}。SIC は us_sector_mapping.json（8-K 側が育てる30日キャッシュ）から引く。
+
+    表に無い銘柄は、上限（I13F_US_BOOST_SIC_LOOKUP_MAX）の件数だけ us_cik_map.json の CIK から SEC に問い合わせて足す。
+    SEC への問い合わせは無料で BigQuery は使わない。失敗した銘柄は黙って外す。
     """
-    スコアリング結果を業種コードに集約する。
-    ticker → sector_code のマッピングは screener candidates から取得。
+    out: dict = {}
+    try:
+        import us_sector_bridge_enhanced as _br
+        mapping = _br.load_sector_mapping(cfg)
+        missing = [t for t in tickers if not (mapping.get(t) or {}).get("sic")]
+        limit = int(getattr(cfg, "I13F_US_BOOST_SIC_LOOKUP_MAX", 30))
+        if missing and limit > 0:
+            cik_map: dict = {}
+            try:
+                cik_path = Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / "us_cik_map.json"
+                cik_map = json.loads(cik_path.read_text(encoding="utf-8")) if cik_path.exists() else {}
+            except Exception:
+                cik_map = {}
+            todo = []
+            for t in missing:
+                v = cik_map.get(t)
+                cik = v.get("cik") if isinstance(v, dict) else v
+                if cik:
+                    todo.append({"ticker": t, "cik": int(cik)})
+                if len(todo) >= limit:
+                    break
+            if todo:
+                mapping = _br.update_sector_mapping(cfg, todo) or mapping
+        for t in tickers:
+            m = mapping.get(t) or {}
+            if m.get("sic"):
+                sic = int(m["sic"])
+                out[t] = {"sic": sic, "jp_sectors": list(m.get("jp_sectors") or _br._sic_to_jp_sectors(sic))}
+    except Exception as e:
+        print(f"    ⚠️  [13f] SIC の取得に失敗（米国銘柄の業種加点はスキップ）: {str(e)[:60]}")
+    return out
+
+
+def _build_sector_boost_detail(scored: list[dict], results: dict, cfg) -> tuple:
+    """
+    スコアリング結果を業種コードに集約する。内訳つき。
+
+    (1) 日本のスクリーナー候補（ticker→sector_code）に当たった銘柄の adj_pt をそのまま足す（従来の経路）。
+    (2) 米国銘柄（点のない記号）の「新規取得・買い増し」を SIC → 日本の業種で結び、
+        1件あたり adj_pt × I13F_US_BOOST_WEIGHT を足す。業種ごとの上限は I13F_US_BOOST_SECTOR_CAP。
+        米国の業種 ETF 側にも同じ集計を us_etf_boosts として記録する（記録のみ）。
 
     Returns:
-        {sector_code: total_adj_pt}
+        (boosts {sector_code: pt}, detail {sector_code: {...}}, us_etf_boosts {etf: pt})
     """
-    # ticker → sector_code マッピングを構築
     ticker_sector: dict[str, str] = {}
     screener = results.get("screener", {})
     for cand in (screener.get("candidates", [])
@@ -618,19 +705,61 @@ def _build_sector_boosts(
             ticker_sector[t] = sc
 
     max_adj = float(getattr(cfg, "SCORE_MAX_INSTITUTION_ADJ", 15.0))
+    weight  = float(getattr(cfg, "I13F_US_BOOST_WEIGHT", 0.05))
+    cap     = float(getattr(cfg, "I13F_US_BOOST_SECTOR_CAP", 3.0))
     boosts: dict[str, float] = {}
+    detail: dict[str, dict] = {}
+
+    def _d(sc: str) -> dict:
+        return detail.setdefault(sc, {"screener_pt": 0.0, "us_13f_pt": 0.0, "us_items": []})
 
     for s in scored:
-        ticker = s.get("ticker", "")
-        sc     = ticker_sector.get(ticker, "")
+        sc = ticker_sector.get(s.get("ticker", ""), "")
         if not sc:
             continue
         adj = s.get("adj_pt", 0.0)
-        boosts[sc] = round(
-            max(-max_adj, min(max_adj, boosts.get(sc, 0.0) + adj)), 2
-        )
+        boosts[sc] = round(max(-max_adj, min(max_adj, boosts.get(sc, 0.0) + adj)), 2)
+        _d(sc)["screener_pt"] = round(_d(sc)["screener_pt"] + adj, 2)
 
-    return boosts
+    # 米国銘柄の買い（新規・買い増し）
+    buys = [s for s in scored
+            if s.get("change_type") in ("new_position", "increased")
+            and s.get("ticker") and "." not in str(s["ticker"])
+            and float(s.get("adj_pt", 0.0)) > 0]
+    us_etf: dict[str, float] = {}
+    if buys and weight > 0:
+        sic_map = _us_buy_sic(sorted({s["ticker"] for s in buys}), cfg)
+        us_raw: dict[str, float] = {}
+        for s in buys:
+            m = sic_map.get(s["ticker"])
+            if not m:
+                continue
+            pt = float(s["adj_pt"]) * weight
+            sectors = m["jp_sectors"]
+            for sc in sectors:
+                share = pt / len(sectors)
+                us_raw[sc] = us_raw.get(sc, 0.0) + share
+                _d(sc)["us_items"].append({
+                    "ticker": s["ticker"], "sic": m["sic"], "institution": s.get("institution", ""),
+                    "change_type": s["change_type"], "pt": round(share, 3)})
+            etf = _sic_to_us_etf(m["sic"])
+            if etf:
+                us_etf[etf] = us_etf.get(etf, 0.0) + pt
+        for sc, raw in us_raw.items():
+            pt = round(min(cap, raw), 2)
+            _d(sc)["us_13f_pt"] = pt
+            boosts[sc] = round(max(-max_adj, min(max_adj, boosts.get(sc, 0.0) + pt)), 2)
+        us_etf = {k: round(min(cap, v), 2) for k, v in us_etf.items()}
+    return boosts, detail, us_etf
+
+
+def _build_sector_boosts(
+    scored:    list[dict],
+    results:   dict,
+    cfg,
+) -> dict[str, float]:
+    """業種コード → 加点の合計（内訳は _build_sector_boost_detail）。"""
+    return _build_sector_boost_detail(scored, results, cfg)[0]
 
 
 # ==============================================================
@@ -672,10 +801,10 @@ def run_institutional_13f_monitor(
                   f"{len(cached_changes)}件の変化")
             # キャッシュからも scored / boosts を再構築
             _scored = _score_changes(cached_changes, cfg)
-            _boosts = _build_sector_boosts(_scored, results, cfg)
+            _boosts, _detail, _etf = _build_sector_boost_detail(_scored, results, cfg)
             return _build_result(
                 quarter, cached_changes, _scored, _boosts,
-                {}, cached=True,
+                {}, cached=True, detail=_detail, us_etf_boosts=_etf,
             )
         print("    📋 [13f] キャッシュなし → 軽量スキャン実行")
 
@@ -758,7 +887,7 @@ def run_institutional_13f_monitor(
 
     # ── スコアリング ──────────────────────────────────────────
     scored  = _score_changes(all_changes, cfg)
-    boosts  = _build_sector_boosts(scored, results, cfg)
+    boosts, boost_detail, us_etf_boosts = _build_sector_boost_detail(scored, results, cfg)
 
     # ── Tier1 新規取得 / 10億ドル超検出（アラート用）─────────
     # 通知は今回取り直した（＝新しい提出があった）機関の分だけ。提出期間中に毎日同じ通知を出さない。
@@ -838,6 +967,7 @@ def run_institutional_13f_monitor(
     result = _build_result(
         quarter, all_changes, scored, boosts,
         curr_positions_all, cached=False,
+        detail=boost_detail, us_etf_boosts=us_etf_boosts,
     )
     result["new_tier1"] = new_tier1
     result["new_large"] = new_large
@@ -851,6 +981,8 @@ def _build_result(
     boosts:    dict,
     positions: dict,
     cached:    bool,
+    detail:    Optional[dict] = None,
+    us_etf_boosts: Optional[dict] = None,
 ) -> dict:
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return {
@@ -858,6 +990,10 @@ def _build_result(
         "changes":       changes,
         "scored":        scored[:20],   # UI表示用に上位20件
         "sector_boosts": boosts,
+        # 業種ごとの加点の内訳（screener_pt＝日本の候補に当たった分、us_13f_pt＝米国銘柄の SIC 経由の分、us_items＝その明細）
+        "sector_boost_detail": detail or {},
+        # 米国の業種 ETF 側の同じ集計（記録のみ。採点には使わない）
+        "us_etf_boosts": us_etf_boosts or {},
         "new_tier1":     [],
         "new_large":     [],
         "total_changes": len(changes),

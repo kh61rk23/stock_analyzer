@@ -30,6 +30,8 @@
 #       "pass_count":      int,
 #       "screened_count":  int,
 #       "top_picks":       [Candidate, ...],  # スコア上位N社
+#       "overseas_candidates" / "overseas_passed" / "overseas_top":
+#                          米国以外の銘柄（上の米国の区分には入れない。日本株 .T はそもそも読まない）
 #       "by_category":     {category: [...]}, # カテゴリ別通過銘柄
 #       "timestamp":       str,
 #       "skipped":         bool,
@@ -152,6 +154,28 @@ DEFAULT_FILTER = BUSINESS_MODEL_FILTERS["mixed"]
 # BLOCK 2: ユニバース読み込み
 # ==============================================================
 
+def is_japan_ticker(ticker) -> bool:
+    """東証の銘柄（.T）か。日本株は日本のスクリーナーが扱うので米国のスクリーナーには入れない。"""
+    return str(ticker or "").strip().upper().endswith(".T")
+
+
+def is_overseas_ticker(ticker) -> bool:
+    """米国以外の銘柄か。米国の記号は点を含まない（BRK-B のように '-' でつなぐ）ので、点があれば取引所の接尾辞。"""
+    return "." in str(ticker or "").strip()
+
+
+def split_overseas(entries: list) -> tuple:
+    """銘柄の辞書のリストを (米国, 海外株) に分ける。順序は保つ。海外株には region="overseas" を付ける。"""
+    us, overseas = [], []
+    for c in entries:
+        if is_overseas_ticker(c.get("ticker")):
+            c["region"] = "overseas"
+            overseas.append(c)
+        else:
+            us.append(c)
+    return us, overseas
+
+
 def load_universe(cfg) -> list:
     """
     config.US_SCREENER_CATEGORIES に従って
@@ -201,9 +225,13 @@ def load_universe(cfg) -> list:
             desc    = data.get("description", cat)
 
             added = 0
+            skipped_jp = 0
             for ticker in tickers:
                 t = str(ticker).strip().upper()
                 if not t or t in seen_tickers:
+                    continue
+                if is_japan_ticker(t):
+                    skipped_jp += 1
                     continue
                 seen_tickers.add(t)
                 all_entries.append({
@@ -215,7 +243,8 @@ def load_universe(cfg) -> list:
                 })
                 added += 1
 
-            print(f"    📂 {cat}: {added}社 読込（{model}）")
+            print(f"    📂 {cat}: {added}社 読込（{model}）"
+                  + (f"・日本株{skipped_jp}社は日本のスクリーナーへ" if skipped_jp else ""))
 
         except Exception as e:
             print(f"    ⚠️  {cat}.json 読込エラー: {str(e)[:60]}")
@@ -1448,7 +1477,12 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
                            key=lambda x: x.get("final_score", x.get("composite_score", 0)),
                            reverse=True)
     top_n  = getattr(cfg, "US_SCREENER_TOP_N", 10)
+    # 米国以外の銘柄（韓国・台湾・カナダ・中国など）は米国の上位・仮想トレード・オプションの対象にしない。
+    # 別の区分（overseas_*）に分け、日次メールの海外株の行だけがこれを読む
+    passed_sorted, overseas_passed = split_overseas(passed_sorted)
+    all_candidates, overseas_candidates = split_overseas(all_candidates)
     top_picks = passed_sorted[:top_n]
+    overseas_top = overseas_passed[:top_n]
 
     # カテゴリ別通過銘柄
     by_category: dict = {}
@@ -1478,7 +1512,7 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
     )
     print("\n  🏁 米国株スクリーニング完了")
     print(f"     スクリーニング: {len(all_candidates):,}社")
-    print(f"     通過: {len(passed_sorted)}社")
+    print(f"     通過: {len(passed_sorted)}社（海外株は別枠 {len(overseas_passed)}社）")
     print(f"     所要時間: {elapsed/60:.1f}分")
     print(f"     {_c_icon_log} 縮退モード: {_c_mode_log}")
     print(f"     TOP3: "
@@ -1509,6 +1543,11 @@ def run_us_stock_screener(cfg, results: dict = None) -> dict:
         "pass_count":                len(passed_sorted),
         "screened_count":            len(all_candidates),
         "top_picks":                 top_picks,
+        # 米国以外の銘柄（米国の上位・仮想トレード・オプションには使わない）
+        "overseas_candidates":       overseas_candidates,
+        "overseas_passed":           overseas_passed,
+        "overseas_top":              overseas_top,
+        "overseas_count":            len(overseas_candidates),
         "by_category":               by_category,
         "report_path":               str(report_path) if report_path else "",
         "elapsed_min":               round(elapsed / 60, 1),
