@@ -444,8 +444,13 @@ def select_ingest_targets(
     new_filings: dict | None = None,
     missing_recheck_days: int = 0,
     missing_max_days: int = 60,
+    filed_annual: set | None = None,
 ) -> list[str]:
     """P0→P4順、重複排除、鮮度除外、予算上限で対象を返す純関数。
+
+    filed_annual は政府 EDINET の書類一覧に有報が1件でもある会社の集合。EdinetDB の財務は有報が元なので、
+    まだ一度も取れていない会社のうち有報が無い会社（新規上場の直後など）は必ず404になる。聞かずに飛ばす
+    （None＝一覧が読めない日は従来どおり絞らない）。有報が出れば次の回から対象に戻る。
 
     new_filings（{EDINETコード: 有報の提出日}）は政府 EDINET の書類一覧で新しい有報が出たと分かった会社。
     提出日までにしか取っていなければ鮮度に関係なく先頭（P0）で取る（EdinetDB の反映は提出の翌日以降なので、翌日以降に取れていれば取り直さない）。
@@ -535,6 +540,9 @@ def select_ingest_targets(
             if not code or code in seen:
                 continue
             seen.add(code)
+            if filed_annual is not None and code not in filed_annual \
+                    and not (meta.get(code) or {}).get("last_fetched"):
+                continue
             if fresh(code) or backing_off(code):
                 continue
             selected.append(code)
@@ -886,41 +894,87 @@ def _plan_targets(companies: list[dict], cfg, meta: dict, budget: int) -> list[s
         refresh_days=int(getattr(cfg, "EDINETDB_REFRESH_DAYS", 180)),
         web_annual=bool(getattr(cfg, "EDINETDB_ANNUAL_FROM_WEB", False)),
         new_filings=recent_annual_filings(cfg),
+        filed_annual=filed_annual_codes(cfg),
         missing_recheck_days=int(getattr(cfg, "EDINETDB_MISSING_RECHECK_DAYS", 0)),
         missing_max_days=int(getattr(cfg, "EDINETDB_MISSING_MAX_DAYS", 60)),
     )
 
 
-NEW_FILINGS_SQL = """
+ANNUAL_FILING_DATES_SQL = """
 SELECT edinet_code, MAX(submit_date) d FROM `{p}.edinet.gov_documents`
 WHERE doc_type_code IN ('120', '130') AND ordinance_code = '010' AND fund_code IS NULL
-  AND withdrawal_status = '0' AND submit_date >= DATE_SUB(CURRENT_DATE('Asia/Tokyo'), INTERVAL @days DAY)
+  AND withdrawal_status = '0' AND edinet_code IS NOT NULL
   AND submit_date < CURRENT_DATE('Asia/Tokyo')
 GROUP BY edinet_code
 """
 
 
-def recent_annual_filings(cfg) -> dict:
-    """政府 EDINET の書類一覧（edinet.gov_documents）で、直近 EDINETDB_NEW_FILING_DAYS 日に有報（訂正を含む）を出した会社
-    {EDINETコード: 提出日}。1クエリ（日分割の表なので読む量は小さい）。読めなければ {}（従来の推測 report_due だけで選ぶ）。"""
-    days = int(getattr(cfg, "EDINETDB_NEW_FILING_DAYS", 30))
-    if days <= 0:
-        return {}
-    _memo = getattr(recent_annual_filings, "_memo", None)
-    if _memo is not None:
+def annual_filing_dates(cfg) -> dict | None:
+    """政府 EDINET の書類一覧（edinet.gov_documents）で、有報（訂正を含む）を出した会社の最新の提出日
+    {EDINETコード: 提出日}。全期間を1クエリ（列は2つだけ・約11MB）で読み、同じ実行の中では使い回す。
+    読めない（または空の）ときは None（有報の有無で絞らず、従来の推測だけで選ぶ）。"""
+    if not getattr(cfg, "EDINETDB_REQUIRE_FILING", True):
+        return None
+    _memo = getattr(annual_filing_dates, "_memo", False)
+    if _memo is not False:
         return _memo
     try:
-        from google.cloud import bigquery
         import state_store
         client = state_store.make_client(cfg)
-        jc = bigquery.QueryJobConfig(query_parameters=[bigquery.ScalarQueryParameter("days", "INT64", days)])
         out = {r.edinet_code: r.d.isoformat() for r in
-               client.query(NEW_FILINGS_SQL.format(p=client.project), job_config=jc, location="asia-northeast1").result()}
+               client.query(ANNUAL_FILING_DATES_SQL.format(p=client.project), location="asia-northeast1").result()}
     except Exception as e:
-        print(f"  ⚠️ 新しい有報の一覧（gov_documents）を読めない: {type(e).__name__}")
-        out = {}
-    recent_annual_filings._memo = out
+        print(f"  ⚠️ 有報の提出一覧（gov_documents）を読めない: {type(e).__name__}")
+        out = None
+    out = out or None
+    annual_filing_dates._memo = out
     return out
+
+
+def filed_annual_codes(cfg) -> set | None:
+    """有報を1件でも出したことがある会社の集合。一覧が読めなければ None。"""
+    dates = annual_filing_dates(cfg)
+    return None if dates is None else set(dates)
+
+
+def recent_annual_filings(cfg) -> dict:
+    """直近 EDINETDB_NEW_FILING_DAYS 日に有報（訂正を含む）を出した会社 {EDINETコード: 提出日}。
+    読めなければ {}（従来の推測 report_due だけで選ぶ）。"""
+    days = int(getattr(cfg, "EDINETDB_NEW_FILING_DAYS", 30))
+    dates = annual_filing_dates(cfg) if days > 0 else None
+    if not dates:
+        return {}
+    since = (date.today() - timedelta(days=days)).isoformat()
+    return {c: d for c, d in dates.items() if d >= since}
+
+
+def mark_unfiled(meta: dict, companies: list[dict], filed: set | None) -> tuple[int, int]:
+    """有報が無くてまだ取れていない上場会社を meta["_no_filing"]（{EDINETコード: 気づいた日}）に残す。
+
+    有報が出た会社は印を外し、404 の履歴（待ち日数）も消して次の回で取る。
+    Returns: (有報未提出の社数, この回で有報が出て対象に戻った社数)。filed が None なら何もしない。
+    """
+    if filed is None:
+        return 0, 0
+    today = date.today().isoformat()
+    prev = meta.get("_no_filing") if isinstance(meta.get("_no_filing"), dict) else {}
+    now: dict = {}
+    for c in companies:
+        code = str(c.get("edinet_code") or "")
+        if not code or c.get("is_delisted") or code in filed:
+            continue
+        if not (meta.get(code) or {}).get("last_fetched"):
+            now[code] = prev.get(code) or today
+    released = 0
+    for code in set(prev) - set(now):
+        if code in filed:
+            released += 1
+            info = meta.get(code)
+            if isinstance(info, dict):
+                for k in ("last_attempt", "fail_count", "missing_since"):
+                    info.pop(k, None)
+    meta["_no_filing"] = now
+    return len(now), released
 
 
 def _company_cache_fresh(cfg, company_cache) -> bool:
@@ -1012,6 +1066,13 @@ def run_edinetdb_ingest(
             if not dry_run:
                 _save_json(meta_path, meta)
 
+    # 有報が無い会社は EdinetDB に聞かない（必ず404）。印を台帳に残し、有報が出た会社は待ちを解いて次の回に取る
+    no_filing, released = mark_unfiled(meta, cached_companies, filed_annual_codes(cfg)) if cached_companies else (0, 0)
+    if no_filing or released:
+        print(f"  📭 有報未提出で聞かない会社{no_filing}社 / 有報が出て対象に戻った{released}社")
+        if not dry_run:
+            _save_json(meta_path, meta)
+
     if dry_run:
         if not cached_companies:
             holdings, screener, representatives = _priority_tickers(cfg)
@@ -1046,6 +1107,7 @@ def run_edinetdb_ingest(
             "targets": [], "budget": daily_budget, "api_calls": 0, "items_rows": 0,
             "items_companies": 0, "items_backfilled": 0, "quarterly_companies": 0,
             "quarterly_rows": 0, "budget_caps": {}, "usage": {}, "no_new_targets": True,
+            "no_filing": no_filing, "filing_released": released,
         }
     client = DBRestClient(
         getattr(cfg, "EDINETDB_BASE_URL", "https://edinetdb.jp/v1"), api_key,
@@ -1437,7 +1499,7 @@ def run_edinetdb_ingest(
         "reasons": reasons,
         "targets": targets, "budget": daily_budget, "api_calls": client.calls,
         "items_rows": items_merged, "items_companies": len(items_done),
-        "items_backfilled": backfilled,
+        "items_backfilled": backfilled, "no_filing": no_filing, "filing_released": released,
         "quarterly_companies": len(q_done), "quarterly_rows": len(q_rows),
         "budget_caps": budget_caps, "usage": usage,
     }

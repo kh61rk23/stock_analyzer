@@ -23,13 +23,16 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 ENDPOINTS = {"earnings": 30, "cross-shareholdings": 180, "subsidiaries": 180, "main-customers": 180}
+# 有報が元の窓口。有報を一度も出していない会社には必ずデータが無いので聞かない（earnings は決算短信なので対象外）
+ANNUAL_BASED = frozenset({"cross-shareholdings", "subsidiaries", "main-customers"})
 DATASET, TABLE, LOCATION = "edinet", "edinetdb_extras", "asia-northeast1"
 SCHEMA = [("endpoint", "STRING"), ("edinet_code", "STRING"), ("fetched_at", "TIMESTAMP"), ("payload", "JSON")]
 
 
 def plan(companies_by_tier: list[list[str]], state: dict, today: date, limit: int,
-         endpoints: dict = ENDPOINTS) -> list[tuple[str, str]]:
-    """[(窓口, EDINETコード)] を取る順に limit 件（純関数）。未取得・期限切れだけ。"""
+         endpoints: dict = ENDPOINTS, filed: set | None = None) -> list[tuple[str, str]]:
+    """[(窓口, EDINETコード)] を取る順に limit 件（純関数）。未取得・期限切れだけ。
+    filed（有報を出したことがある会社）を渡すと、有報が元の窓口は有報の無い会社を飛ばす（None なら絞らない）。"""
     out, seen = [], set()
     for tier in companies_by_tier:
         for code in tier:
@@ -37,6 +40,8 @@ def plan(companies_by_tier: list[list[str]], state: dict, today: date, limit: in
                 continue
             seen.add(code)
             for ep, days in endpoints.items():
+                if filed is not None and ep in ANNUAL_BASED and code not in filed:
+                    continue
                 rec = (state.get(ep) or {}).get(code) or {}
                 try:
                     age = (today - date.fromisoformat(rec["at"])).days
@@ -110,7 +115,8 @@ def run(cfg) -> dict:
     api = DBRestClient.edinetdb(cfg)
     # 本体の取り込みが使い残した日次枠もここで使う（本体は対象が尽きた日に API を呼ばない）
     limit = max(limit, int(api.daily_budget) - int(api.calls))
-    todo = plan(_tiers(cfg, companies), state, today, limit)
+    import edinetdb_ingestor as ing
+    todo = plan(_tiers(cfg, companies), state, today, limit, filed=ing.filed_annual_codes(cfg))
     rows, stat = [], {"planned": len(todo), "ok": 0, "no_data": 0, "stopped": None, "by_endpoint": {}}
     now = datetime.now(timezone.utc).isoformat()
     for ep, code in todo:

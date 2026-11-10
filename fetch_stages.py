@@ -120,7 +120,7 @@ def run_jp_filings(cfg, results: dict, logger, in_mode=lambda key: True, probe=N
                     "edinetdb_ingest", _st,
                     f"取込{value.get('success', 0)}社 / データ無し{value.get('missing', 0)}社 / "
                     f"失敗{value.get('failure', 0)}社 / 書類{value.get('doc_index_rows', 0)}件 / "
-                    f"API{value.get('api_calls', 0)}回 | 取込: {_names}",
+                    f"API{value.get('api_calls', 0)}回 / 有報未提出{value.get('no_filing', 0)}社(聞かない) | 取込: {_names}",
                 )
         except Exception as exc:
             logger.add("edinetdb_ingest", "error", str(exc)[:100])

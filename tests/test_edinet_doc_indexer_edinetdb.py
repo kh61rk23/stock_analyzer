@@ -4,6 +4,16 @@ from conftest import load_module
 module = load_module("edinet_doc_indexer")
 
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_bq_filing_list(monkeypatch):
+    # 有報の提出一覧は BQ を読むので、テストでは読まない（None＝絞らない）
+    import edinetdb_ingestor
+    monkeypatch.setattr(edinetdb_ingestor, "annual_filing_dates", lambda cfg: None)
+
+
 def test_build_doc_index_rows_maps_yuho_contract():
     rows = module.build_doc_index_rows(
         {"disclosures": [{
@@ -137,3 +147,39 @@ def test_not_found_company_is_recorded_so_rotation_moves_on(tmp_path, monkeypatc
     assert res["absent"] == 1 and res["visited"] == 1
     assert meta["_doc_index"]["E1"]["status"] == "no_data"
     assert meta["_doc_index"]["E1"]["last_indexed"]
+
+
+def test_company_without_annual_filing_is_not_asked(tmp_path, monkeypatch):
+    """有報を1件も出していない会社（新規上場の直後など）には開示を聞かない。有報があれば聞く。"""
+    import json
+    import types
+    import edinetdb_ingestor
+
+    (tmp_path / "edinetdb_company_cache.json").write_text(
+        json.dumps({"companies": [{"edinet_code": "E1"}, {"edinet_code": "E2"}]}), encoding="utf-8")
+    (tmp_path / "edinetdb_rotation_meta.json").write_text(json.dumps({"E1": {}, "E2": {}}), encoding="utf-8")
+    asked = []
+
+    class FakeClient:
+        last_error = None
+
+        def __init__(self, *a, **k):
+            pass
+
+        def get(self, path, params=None):
+            asked.append(path)
+            return {"disclosures": []}
+
+    class FakeBQ:
+        dataset = "d"
+
+        def merge_rows(self, *a, **k):
+            return True
+
+    monkeypatch.setattr(module, "DBRestClient", FakeClient)
+    monkeypatch.setattr(module, "_load_doc_ids_from_financials", lambda bq, codes: {})
+    import edinet_bq_client
+    monkeypatch.setattr(edinet_bq_client, "EDINETBQClient", FakeBQ)
+    monkeypatch.setattr(edinetdb_ingestor, "annual_filing_dates", lambda cfg: {"E2": "2026-06-20"})
+    res = module.run_doc_indexer(cfg=types.SimpleNamespace(EDINETDB_API_KEY="k", DATA_DIR=str(tmp_path)))
+    assert asked == ["/companies/E2/disclosures"] and res["targets"] == 1

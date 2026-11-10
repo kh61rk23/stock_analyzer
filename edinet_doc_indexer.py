@@ -201,8 +201,14 @@ def run_doc_indexer(days_back: int = 1, cfg=None) -> dict:
     doc_meta = rotation.get("_doc_index", {})
     if not isinstance(doc_meta, dict):
         doc_meta = {}
+    # 有報を1件も出していない会社（新規上場の直後など）は EdinetDB に開示が無く必ず404になるので聞かない
+    try:
+        import edinetdb_ingestor as _ing
+        filed = _ing.filed_annual_codes(cfg)
+    except Exception:
+        filed = None
     targets = sorted(
-        (c for c in rotation if not str(c).startswith("_")),
+        (c for c in rotation if not str(c).startswith("_") and (filed is None or c in filed)),
         key=lambda code: (
             str((doc_meta.get(code) or {}).get("last_indexed") or ""),  # 未取得が先
             str(code),

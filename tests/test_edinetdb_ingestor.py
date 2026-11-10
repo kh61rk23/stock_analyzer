@@ -1,12 +1,22 @@
 """EdinetDBの優先選定と既存BQスキーマ写像を検証する。"""
 
-from datetime import date
+from datetime import date, timedelta
 from types import SimpleNamespace
 
 from conftest import load_module
 
 
 module = load_module("edinetdb_ingestor")
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_bq_filing_list(monkeypatch):
+    # 有報の提出一覧は BQ を読むので、テストでは読まない（None＝絞らない）
+    import edinetdb_ingestor
+    monkeypatch.setattr(edinetdb_ingestor, "annual_filing_dates", lambda cfg: None)
 
 
 def test_select_ingest_targets_prioritizes_and_deduplicates_with_budget():
@@ -588,3 +598,56 @@ def test_no_targets_day_makes_no_api_call(tmp_path, monkeypatch):
         EDINETDB_QUARTERLY_DAILY_CALLS=0, SECTOR_REPRESENTATIVE_TICKERS={})
     r = module.run_edinetdb_ingest(cfg)
     assert r["api_calls"] == 0 and r["targets"] == [] and not r["failure"] and not r["skipped"]
+
+
+class TestUnfiledCompaniesAreNotAsked:
+    """有報を1件も出していない会社は必ず404なので、初回の問い合わせもしない。有報が出れば聞く。"""
+
+    def test_never_fetched_company_without_filing_is_skipped(self):
+        import edinetdb_ingestor as m
+        got = m.select_ingest_targets([], [], [], ["E_NEW", "E_OLD"], {}, budget=30,
+                                      today=date(2026, 11, 10), filed_annual={"E_OLD"})
+        assert got == ["E_OLD"]
+
+    def test_unknown_filing_list_does_not_filter(self):
+        import edinetdb_ingestor as m
+        assert m.select_ingest_targets([], [], [], ["E_NEW"], {}, budget=30,
+                                       today=date(2026, 11, 10), filed_annual=None) == ["E_NEW"]
+
+    def test_company_is_asked_once_a_filing_appears(self):
+        import edinetdb_ingestor as m
+        meta = {"E1": {"last_attempt": "2026-11-09", "fail_count": 3, "missing_since": "2026-10-20"}}
+        assert m.select_ingest_targets([], [], [], ["E1"], meta, budget=30, today=date(2026, 11, 10),
+                                       missing_recheck_days=14, filed_annual=set()) == []
+        # 有報が出た → 印と待ちを解く。提出の翌日以降なので取る
+        meta["_no_filing"] = {"E1": "2026-10-20"}
+        n, released = m.mark_unfiled(meta, [{"edinet_code": "E1"}], {"E1"})
+        assert (n, released) == (0, 1) and meta["_no_filing"] == {}
+        assert "missing_since" not in meta["E1"]
+        assert m.select_ingest_targets([], [], [], ["E1"], meta, budget=30, today=date(2026, 11, 10),
+                                       missing_recheck_days=14, filed_annual={"E1"}) == ["E1"]
+
+    def test_fetched_company_is_not_affected_by_filing_list(self):
+        import edinetdb_ingestor as m
+        meta = {"E1": {"last_fetched": "2020-01-01"}}
+        assert m.select_ingest_targets([], [], [], ["E1"], meta, budget=30, today=date(2026, 11, 10),
+                                       filed_annual=set()) == ["E1"]
+
+    def test_mark_unfiled_records_only_unfetched_listed_companies(self):
+        import edinetdb_ingestor as m
+        meta = {"E2": {"last_fetched": "2026-11-01"}}
+        companies = [{"edinet_code": "E1"}, {"edinet_code": "E2"}, {"edinet_code": "E3", "is_delisted": True},
+                     {"edinet_code": "E4"}]
+        n, released = m.mark_unfiled(meta, companies, {"E4"})
+        assert n == 1 and released == 0 and list(meta["_no_filing"]) == ["E1"]
+        assert m.mark_unfiled({}, companies, None) == (0, 0)
+
+    def test_recent_filings_are_derived_from_the_same_query(self, monkeypatch):
+        import edinetdb_ingestor as m
+        recent = (date.today() - timedelta(days=3)).isoformat()
+        monkeypatch.setattr(m, "annual_filing_dates", lambda cfg: {"E1": recent, "E2": "2020-06-20"})
+        cfg = SimpleNamespace(EDINETDB_NEW_FILING_DAYS=30)
+        assert m.recent_annual_filings(cfg) == {"E1": recent}
+        assert m.filed_annual_codes(cfg) == {"E1", "E2"}
+        monkeypatch.setattr(m, "annual_filing_dates", lambda cfg: None)
+        assert m.recent_annual_filings(cfg) == {} and m.filed_annual_codes(cfg) is None
