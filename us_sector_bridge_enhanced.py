@@ -20,7 +20,8 @@
 #   1. us_8k_monitor の events から earnings_tickers を受け取る
 #   2. CIK → SIC を SEC submissions API から取得
 #   3. SIC → JP業種コードに変換
-#   4. 決算の強弱（beat/miss）を us_fundamental_rotator の EPS データで判定
+#   4. 決算の強弱（beat/miss）を yfinance の EPS 予想比サプライズで判定（予想が無い・古いときは
+#      us_fundamental_rotator / company_facts の EPS 前年同期比。どちらで判定したかは basis に残す）
 #   5. CROSS_SECTOR_RULES 形式のシグナルとして results に追加
 #
 # 【us_sector_mapping.json の構造】
@@ -43,7 +44,8 @@
 #   ・DATA_DIR/us_fundamentals_db/{ticker}.json の eps_history（決算beat/miss判定用）
 #   ・SEC submissions API（sec_client.submissions() 経由。CIK→SICコード取得）
 #   ・results["us_macro"] / results["macro_snapshot"]（enhance_ism_cross_sector_signal 用。
-#     ISM製造業指数が52未満または無ければこの補強シグナルはスキップされる）
+#     macro_snapshot の us_mfg_survey（地区連銀の製造業調査の平均＝ISM の無料代替）が
+#     config.US_MFG_SURVEY_UP 未満または無ければこの補強シグナルはスキップされる）
 #
 # 【出力（results["us_sector_bridge"]、実コード確認済み）】
 #   {
@@ -110,8 +112,14 @@ SIC_TO_JP_SECTORS: dict[int | str, list[str]] = {
     3672: ["1016"],          # プリント回路基板
     3678: ["1016"],          # 電子コネクタ
     3669: ["1016"],          # 通信機器
-    3661: ["1025"],          # 固定電話システム → 情報通信業
-    3663: ["1025"],          # 無線通信機器
+    3661: ["1016"],          # 固定電話システム（通信機器の製造）→ 電気機器
+    3663: ["1016"],          # 無線通信機器（製造）→ 電気機器
+    3570: ["1016"],          # コンピュータ・事務機械（2桁の 35 は機械になるため個別に電気機器へ）
+    3572: ["1016"],          # コンピュータ記憶装置
+    3575: ["1016"],          # コンピュータ端末
+    3576: ["1016"],          # コンピュータ通信機器
+    3578: ["1016"],          # 計算機器
+    3690: ["1016"],          # 電池・その他電気機器
     7372: ["1025"],          # パッケージソフトウェア
     7371: ["1025"],          # コンピュータサービス
     7374: ["1025"],          # データ処理サービス
@@ -126,7 +134,7 @@ SIC_TO_JP_SECTORS: dict[int | str, list[str]] = {
     3728: ["1017"],          # 航空機部品
     3812: ["1017", "1015"],  # 防衛電子・通信機器 → 輸送用+機械
     # ── 機械・産業機械 ────────────────────────────────────────
-    3559: ["1015"],          # 特殊産業機械 → 機械
+    3559: ["1016", "1015"],  # 特殊産業機械（半導体製造装置を含む。日本では電気機器が主）→ 電気機器+機械
     3560: ["1015"],          # 一般産業機械
     3562: ["1015"],          # ボールベアリング・ローラーベアリング
     3569: ["1015"],          # 産業機械一般
@@ -138,7 +146,9 @@ SIC_TO_JP_SECTORS: dict[int | str, list[str]] = {
     3827: ["1018"],          # 光学機器
     3825: ["1018"],          # 測定・制御機器
     # ── 医薬品・バイオ ────────────────────────────────────────
-    2836: ["1008"],          # 医薬品製剤 → 医薬品
+    2834: ["1008"],          # 医薬品製剤（2桁の 28 は化学になるため個別に医薬品へ）
+    2830: ["1008"],          # 医薬品
+    2836: ["1008"],          # 生物学的製剤 → 医薬品
     2833: ["1008"],          # 製薬原料
     2835: ["1008"],          # 診断用試薬
     8731: ["1008"],          # 商業医薬研究
@@ -147,12 +157,22 @@ SIC_TO_JP_SECTORS: dict[int | str, list[str]] = {
     2821: ["1007"],          # プラスチック材料
     2860: ["1007"],          # 工業薬品
     2911: ["1009"],          # 石油精製 → 石油・石炭製品
-    1311: ["1009"],          # 原油・天然ガス採掘
+    1311: ["1002"],          # 原油・天然ガス採掘 → 鉱業（日本の鉱業は INPEX・石油資源開発など）
+    1381: ["1002"],          # 石油・ガス掘削
+    1382: ["1002"],          # 石油・ガス探査サービス
+    1389: ["1002"],          # 石油・ガス田サービス
+    1221: ["1002"],          # 石炭採掘
+    1040: ["1013"],          # 金・銀鉱採掘 → 非鉄金属
+    1000: ["1013"],          # 金属鉱採掘
+    2990: ["1009"],          # その他石油製品
     # ── 鉄鋼・非鉄 ───────────────────────────────────────────
     3312: ["1012"],          # 鉄鋼製造 → 鉄鋼
     3316: ["1012"],          # 冷間圧延鋼板
     3334: ["1013"],          # 一次アルミニウム精錬 → 非鉄金属
     3350: ["1013"],          # ローリングされた非鉄金属
+    3330: ["1013"],          # 非鉄金属の一次精錬（2桁の 33 は鉄鋼になるため個別に非鉄へ）
+    3331: ["1013"],          # 銅の一次精錬
+    3357: ["1013"],          # 絶縁電線・ケーブル → 非鉄金属
     # ── 金融 ──────────────────────────────────────────────────
     6022: ["1028"],          # 州認定商業銀行 → 銀行業
     6020: ["1028"],          # 連邦認定商業銀行
@@ -160,13 +180,24 @@ SIC_TO_JP_SECTORS: dict[int | str, list[str]] = {
     6282: ["1029"],          # 投資顧問 → 証券・商品先物
     6211: ["1029"],          # 証券ディーラー
     6311: ["1030"],          # 生命保険 → 保険業
-    6321: ["1030"],          # 損害保険
+    6321: ["1030"],          # 傷害・健康保険
+    6331: ["1030"],          # 損害保険（火災・海上・賠償）
+    6021: ["1028"],          # 国法銀行
+    6035: ["1028"],          # 貯蓄金融機関
+    6141: ["1031"],          # 個人向け信用（クレジットカード等）→ その他金融
+    6199: ["1031"],          # その他の金融サービス
+    6221: ["1029"],          # 商品先物取引業
+    6798: ["1032"],          # REIT → 不動産業
     # ── 小売・サービス ────────────────────────────────────────
     5945: ["1027"],          # 趣味・玩具店 → 小売業
     5411: ["1027"],          # 食料品スーパー
     5651: ["1027"],          # アパレル専門店
     7011: ["1033"],          # ホテル → サービス業
-    7812: ["1033"],          # 映画制作・配給
+    7812: ["1025"],          # 映画制作・配給（日本では東宝・東映が情報・通信業）
+    7389: ["1033"],          # 事業サービス（決済ネットワークなど）→ サービス業
+    7363: ["1033"],          # 人材派遣
+    7311: ["1033"],          # 広告
+    4953: ["1033"],          # 廃棄物処理（電気・ガス業ではなくサービス業）
     7990: ["1033"],          # エンターテインメント
     # ── 不動産 ────────────────────────────────────────────────
     6552: ["1032"],          # 不動産デベロッパー → 不動産業
@@ -189,6 +220,37 @@ SIC_2DIGIT_TO_JP: dict[str, list[str]] = {
     "38": ["1018"],   # 測定機器・光学
     "28": ["1007"],   # 化学
     "29": ["1009"],   # 石油
+    "10": ["1013"],   # 金属鉱採掘
+    "12": ["1002"],   # 石炭採掘
+    "13": ["1002"],   # 石油・ガス採掘
+    "15": ["1003"],   # 建設
+    "16": ["1003"],   # 重電・土木建設
+    "17": ["1003"],   # 職別工事
+    "20": ["1004"],   # 食料品
+    "21": ["1004"],   # たばこ（食料品に含める）
+    "22": ["1005"],   # 繊維
+    "23": ["1005"],   # 衣服
+    "26": ["1006"],   # 紙・パルプ
+    "32": ["1011"],   # ガラス・土石
+    "34": ["1014"],   # 金属製品
+    "39": ["1019"],   # その他製品
+    "40": ["1021"],   # 鉄道
+    "42": ["1021"],   # 陸運
+    "44": ["1022"],   # 水運
+    "45": ["1023"],   # 航空
+    "48": ["1025"],   # 通信・放送
+    "50": ["1026"],   # 卸売（耐久財）
+    "51": ["1026"],   # 卸売（非耐久財）
+    "52": ["1027"],   # 小売
+    "53": ["1027"],   # 百貨店・量販
+    "55": ["1027"],   # 自動車販売・給油所
+    "56": ["1027"],   # 衣料品小売
+    "57": ["1027"],   # 家具・家電小売
+    "58": ["1027"],   # 飲食（日本では小売業に分類）
+    "59": ["1027"],   # その他小売
+    "61": ["1031"],   # 非預金信用機関
+    "64": ["1030"],   # 保険代理店
+    "65": ["1032"],   # 不動産
     "33": ["1012"],   # 一次金属（鉄鋼寄り）
     "73": ["1025"],   # コンピュータ関連サービス
     "62": ["1029"],   # 証券・投資
@@ -401,13 +463,83 @@ def _classify_eps(eps_history: list) -> str:
     return "neutral"
 
 
+# 決算銘柄の「予想比サプライズの最新1四半期」（ticker → 履歴の先頭 or None）。プロセス内のみ。
+# generate_8k_cross_sector_signals が先にまとめて埋め、判定と ISM 複合シグナルが同じ値を読む。
+_SURPRISE_CACHE: dict = {}
+
+
+def _fetch_estimate_surprises(tickers: list, cfg) -> int:
+    """決算銘柄の EPS 予想比サプライズ（yfinance）を取り _SURPRISE_CACHE に入れる。取得できた銘柄数を返す。
+
+    earnings_surprise の取得関数を再利用する（yfinance にまとめ取得の口が無いため銘柄ごと）。
+    対象は呼び出し側が JP業種に対応づく決算銘柄だけに絞って渡す。上限件数・時間枠を超えた分と
+    失敗した銘柄は触らない（判定側が前年同期比に落とす）。日次を止めないよう例外は握りつぶす。
+    """
+    if not getattr(cfg, "US_8K_SURPRISE_ENABLED", True):
+        return 0
+    try:
+        import earnings_surprise as es
+    except Exception:
+        return 0
+    cap    = int(getattr(cfg, "US_8K_SURPRISE_MAX_TICKERS", 60))
+    budget = float(getattr(cfg, "US_8K_SURPRISE_TIME_BUDGET_SEC", 90))
+    todo   = [t.upper() for t in dict.fromkeys(tickers) if t.upper() not in _SURPRISE_CACHE][:cap]
+    t0, got = time.monotonic(), 0
+    for t in todo:
+        if time.monotonic() - t0 > budget:
+            break
+        try:
+            hist = es._fetch_earnings_history(t)
+        except Exception:
+            hist = []
+        _SURPRISE_CACHE[t] = hist[0] if hist else None
+        got += 1 if hist else 0
+        time.sleep(getattr(es, "FETCH_DELAY", 0.3))
+    return got
+
+
+def _classify_surprise(rec: Optional[dict], cfg, today: Optional[date] = None) -> tuple:
+    """予想比サプライズ1件から (beat|miss|neutral, surprise_pct) を返す。使えなければ (None, None)。
+
+    使えない条件: 予想が無い・予想がほぼ0で率が作れない・最新四半期末が古い
+    （今回の決算が yfinance にまだ反映されておらず1つ前の四半期を見ている）。
+    """
+    if not rec or rec.get("surprise_pct") is None:
+        return None, None
+    today = today or date.today()
+    try:
+        qend = datetime.strptime(str(rec.get("quarter", ""))[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None, None
+    if (today - qend).days > int(getattr(cfg, "US_8K_SURPRISE_MAX_QUARTER_AGE_DAYS", 100)):
+        return None, None
+    sp = float(rec["surprise_pct"])
+    if sp >= float(getattr(cfg, "US_8K_SURPRISE_BEAT_PCT", 10.0)):
+        return "beat", sp
+    if sp <= float(getattr(cfg, "US_8K_SURPRISE_MISS_PCT", -2.0)):
+        return "miss", sp
+    return "neutral", sp
+
+
+def _eval_earnings_detail(ticker: str, cfg) -> dict:
+    """決算の強弱とその判定根拠。
+
+    予想比サプライズが使えるときはそれ（basis="estimate"）、使えないときは company_facts の
+    EPS 前年同期比（basis="yoy"）。どちらも判定不能なら strength="unknown"。
+    """
+    strength, sp = _classify_surprise(_SURPRISE_CACHE.get(ticker.upper()), cfg)
+    if strength:
+        return {"strength": strength, "basis": "estimate", "surprise_pct": sp}
+    return {"strength": _classify_eps(_load_eps_history(ticker, cfg)), "basis": "yoy", "surprise_pct": None}
+
+
 def _eval_earnings_strength(ticker: str, cfg) -> str:
-    """最新決算の強弱（beat/miss/neutral）。EPS が取れない・5四半期に満たないときは unknown。
+    """最新決算の強弱（beat/miss/neutral）。判定不能は unknown。
 
     Returns:
         "beat" | "miss" | "neutral" | "unknown"
     """
-    return _classify_eps(_load_eps_history(ticker, cfg))
+    return _eval_earnings_detail(ticker, cfg)["strength"]
 
 
 def generate_8k_cross_sector_signals(
@@ -425,17 +557,22 @@ def generate_8k_cross_sector_signals(
       3. JP業種への tailwind/headwind シグナルを生成
 
     stats を渡すと、決算銘柄がシグナルにならなかった理由の内訳
-    （no_mapping=SIC→JP業種が無い / unknown=EPS が取れない / neutral=±10%以内）を書き込む。
+    （no_mapping=SIC→JP業種が無い / unknown=EPS が取れない / neutral=閾値の内側）と、
+    判定の根拠の内訳（basis_estimate=予想比 / basis_yoy=前年同期比）を書き込む。
     「beat0 / miss0」が入力不足なのか本当に無風なのかを台帳から見分けるため。
 
     Returns:
         CROSS_SECTOR_RULES 形式のシグナルリスト
     """
     stats = stats if stats is not None else {}
-    for k in ("no_mapping", "unknown", "neutral"):
+    for k in ("no_mapping", "unknown", "neutral", "basis_estimate", "basis_yoy"):
         stats.setdefault(k, 0)
     signals = []
     japan_sectors = getattr(cfg, "JAPAN_SECTORS", {})
+
+    # 予想比サプライズはシグナルになりうる銘柄（JP業種に対応づくもの）だけ、先にまとめて取る
+    stats["surprise_fetched"] = _fetch_estimate_surprises(
+        [t for t in earnings_tickers if (sector_mapping.get(t.upper()) or {}).get("jp_sectors")], cfg)
 
     for ticker in earnings_tickers:
         mapping_entry = sector_mapping.get(ticker.upper())
@@ -446,20 +583,24 @@ def generate_8k_cross_sector_signals(
 
         sic_desc  = mapping_entry.get("sic_desc", "")
         company   = mapping_entry.get("company_name", ticker)
-        strength  = _eval_earnings_strength(ticker, cfg)
+        detail    = _eval_earnings_detail(ticker, cfg)
+        strength  = detail["strength"]
 
         if strength == "unknown":
             stats["unknown"] += 1
             continue
+        stats["basis_estimate" if detail["basis"] == "estimate" else "basis_yoy"] += 1
+        how = (f"予想比{detail['surprise_pct']:+.1f}%" if detail["basis"] == "estimate"
+               else "前年同期比")
 
         if strength == "beat":
             direction = "tailwind"
             pts       = 3.0
-            label     = f"US決算beat: {company}({sic_desc}) → JP{jp_sectors}"
+            label     = f"US決算beat（{how}）: {company}({sic_desc}) → JP{jp_sectors}"
         elif strength == "miss":
             direction = "headwind"
             pts       = -3.0
-            label     = f"US決算miss: {company}({sic_desc}) → JP{jp_sectors}"
+            label     = f"US決算miss（{how}）: {company}({sic_desc}) → JP{jp_sectors}"
         else:
             stats["neutral"] += 1
             continue
@@ -469,6 +610,8 @@ def generate_8k_cross_sector_signals(
             "label":            label,
             "source":           "us_8k_sic_bridge",
             "trigger_ticker":   ticker,
+            "basis":            detail["basis"],
+            "surprise_pct":     detail["surprise_pct"],
             "sic":              mapping_entry.get("sic"),
             "sic_desc":         sic_desc,
             "sectors_tailwind": jp_sectors if direction == "tailwind" else [],
@@ -497,7 +640,7 @@ def enhance_ism_cross_sector_signal(
     CROSS_SECTOR_RULES の "us_ism_manufacturing_up" を
     US企業の実際の受注データ（8-K / XBRL）で補強する。
 
-    us_ism_manufacturing_up は macro_snapshot の us_ism 値で発動するが、
+    us_ism_manufacturing_up は macro_snapshot の us_mfg_survey（ISM の無料代替）で発動するが、
     実際の米国IT・半導体企業の業績 beat が重なる場合は信頼度を上げる。
 
     Returns:
@@ -510,10 +653,11 @@ def enhance_ism_cross_sector_signal(
     if not us_macro or not us_8k:
         return signals
 
-    # ISM が拡大局面（>52）かつ 8-K 決算beat あり
+    # 製造業の景況（地区連銀調査の平均）が拡大局面かつ 8-K 決算beat あり
     macro_snap = results.get("macro_snapshot", {})
-    us_ism     = macro_snap.get("us_ism")
-    if not us_ism or us_ism < 52.0:
+    mfg        = macro_snap.get("us_mfg_survey")
+    up_th      = float(getattr(cfg, "US_MFG_SURVEY_UP", 8.0))
+    if mfg is None or mfg < up_th:
         return signals
 
     earnings_tickers = us_8k.get("earnings_tickers", [])
@@ -535,7 +679,7 @@ def enhance_ism_cross_sector_signal(
     if it_beats:
         signals.append({
             "rule_id":          "US_ISM_IT_BEAT_ENHANCE",
-            "label":            f"ISM拡大×US IT/半導体beat（{it_beats[:3]}）→ JP輸出強化",
+            "label":            f"米製造業景況拡大×US IT/半導体beat（{it_beats[:3]}）→ JP輸出強化",
             "source":           "us_sector_bridge_enhanced",
             "sectors_tailwind": ["1016", "1015", "1018", "1017"],
             "sectors_headwind": [],
@@ -631,7 +775,8 @@ def run_us_sector_bridge_earnings(cfg, results: dict = None) -> dict:
         f"シグナル{len(cross_signals)}件 / "
         f"JP影響業種{len(summ['jp_affected'])}業種 / "
         f"beat{len(summ['beat_tickers'])} / miss{len(summ['miss_tickers'])} "
-        f"（業種対応なし{eval_stats['no_mapping']} / EPS不明{eval_stats['unknown']} / ±10%内{eval_stats['neutral']}）"
+        f"（業種対応なし{eval_stats['no_mapping']} / EPS不明{eval_stats['unknown']} / 閾値内{eval_stats['neutral']} / "
+        f"根拠 予想比{eval_stats['basis_estimate']}・前年同期比{eval_stats['basis_yoy']}）"
     )
     return {
         "cross_signals":   cross_signals,

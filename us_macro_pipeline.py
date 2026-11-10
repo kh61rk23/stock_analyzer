@@ -53,6 +53,75 @@ def latest(series: list) -> float | None:
     return vals[-1] if vals else None
 
 
+def mfg_survey_composite(series: dict, today=None, max_age_days: int = 75) -> dict:
+    """地区連銀の製造業調査（0 中心の拡散指数）から製造業の景況を作る。
+
+    series は {キー: [{"date": "YYYY-MM-DD", "value": float}, ...]}。最新の観測が
+    max_age_days より古い系列は使わない（止まった系列を最新として混ぜない）。
+    使える系列の最新値の平均を us_mfg_survey とし、1系列も使えなければ空の dict。
+    """
+    from datetime import date as _date, datetime as _dt
+    today = today or _date.today()
+    out = {}
+    for key, obs in (series or {}).items():
+        pts = [o for o in (obs or []) if o.get("value") is not None and o.get("date")]
+        if not pts:
+            continue
+        last = max(pts, key=lambda o: o["date"])
+        try:
+            age = (today - _dt.strptime(last["date"][:10], "%Y-%m-%d").date()).days
+        except ValueError:
+            continue
+        if age > max_age_days:
+            continue
+        out[key] = float(last["value"])
+    if out:
+        out["us_mfg_survey"] = round(sum(out.values()) / len(out), 2)
+    return out
+
+
+def fetch_mfg_survey(cfg) -> dict:
+    """FRED から地区連銀の製造業調査を取り、macro_snapshot に足すキーを返す（失敗しても空）。
+
+    横断産業ルール（us_ism_manufacturing_up/down）は macro 段の評価時点で値が要るため、
+    us_macro 段（後ろ）ではなく macro 段から呼ぶ。月次データなので結果は20時間キャッシュする
+    （日次の実行で FRED を 2 本叩くのは初回だけ）。
+    """
+    if not getattr(cfg, "ENABLE_US_MFG_SURVEY", True):
+        return {}
+    fred_key = getattr(cfg, "POLICY_FRED_API_KEY", "") or ""
+    series_def = getattr(cfg, "US_MFG_SURVEY_SERIES", {}) or {}
+    if not series_def:
+        return {}
+    cache_p = _cache_path(cfg).with_name("us_mfg_survey_cache.json")
+    try:
+        cache = json.loads(cache_p.read_text(encoding="utf-8")) if cache_p.exists() else {}
+    except Exception:
+        cache = {}
+    if _is_fresh(cache):
+        return {k: v for k, v in cache.items() if not k.startswith("_")}
+    if not fred_key:
+        return {}
+    try:
+        from policy_tracker import fetch_fred_data
+    except Exception:
+        return {}
+    raw = {}
+    for key, sid in series_def.items():
+        try:
+            raw[key] = fetch_fred_data(fred_key, sid, days=120)
+        except Exception:
+            raw[key] = []
+    out = mfg_survey_composite(raw, max_age_days=int(getattr(cfg, "US_MFG_SURVEY_MAX_AGE_DAYS", 75)))
+    if out:
+        try:
+            cache_p.write_text(json.dumps({**out, "_fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
+                                          ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+    return out
+
+
 def build_leading_signals(snapshot: dict, cfg=None) -> list[dict]:
     """
     拡張マクロのスナップショットから先行シグナルを生成する。

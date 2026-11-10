@@ -1122,6 +1122,7 @@ def _apply_capped_adjustment(
 
         new_score = round(
             max(score_min, min(score_max, old_score + capped_delta)), 1)
+        _sbd.note_cut(res, adj_key, delta - capped_delta)
         res["composite_score"]         = new_score
         res[adj_key]                   = round(capped_delta, 2)
         res["_total_adj_so_far"]       = round(existing_total + capped_delta, 2)
@@ -1267,6 +1268,7 @@ def _load_prev_macro_snapshot(cfg) -> dict:
 # GAP-7 の急変閾値（指標ごとに設定）
 
 from config_sync import sync_module_constants
+import sector_score_breakdown as _sbd
 
 _CFG_CONST_MAP = {
     'SAM_DELTA_THRESHOLDS': '_DELTA_THRESHOLDS',
@@ -1597,6 +1599,17 @@ def run_all_tasks(mode: str = "all") -> dict:
     if cfg.ENABLE_MACRO and _in_mode("macro"):
         print("\n  📈 マクロ分析を実行中...")
         snapshot      = fetch_macro_snapshot()
+        # ISM の無料代替（地区連銀の製造業調査）。横断産業ルールの評価がこの直後なのでここで足す。
+        try:
+            _um_mfg = _load_local_module(
+                "us_macro_pipeline",
+                "/content/us_macro_pipeline.py",
+                cfg.DRIVE_BASE / "us_macro_pipeline.py",
+            )
+            if _um_mfg:
+                snapshot.update(_um_mfg.fetch_mfg_survey(cfg))
+        except Exception as _mfg_e:
+            print(f"    ⚠️  製造業景況（地区連銀）の取得に失敗（スキップ）: {str(_mfg_e)[:60]}")
         # ── [GAP-7] 前回スナップショットとの差分を計算 ─────────
         prev_snapshot = _load_prev_macro_snapshot(cfg)
         snapshot_with_delta = _add_macro_deltas(snapshot, prev_snapshot)
@@ -1941,6 +1954,7 @@ def run_all_tasks(mode: str = "all") -> dict:
             if isinstance(res, BaseException):
                 raise res
             sector_results[code] = res
+            _sbd.begin(res)
             # ── [D-2] 債務サイクル一律補正 ──────────────────
             _dc_adj = macro_snapshot_for_sector.get("_debt_cycle_adj", 0.0)
             _dc_actual = 0.0
@@ -1952,6 +1966,8 @@ def run_all_tasks(mode: str = "all") -> dict:
                 max(-30, min(100, res.get("composite_score", 0) + _dc_actual)), 1
             )
             res["debt_cycle_adjustment"] = _dc_actual
+            _sbd.note_cut(res, "debt_cycle_adjustment", _dc_adj - _dc_actual)
+            _sbd.mark_one(res, "debt_cycle_adjustment")
             # ─────────────────────────────────────────────────
             # ── [D-1] 経済サイクル象限補正を適用 ──────────────
             ec_adj = results.get("economic_cycle", {}).get(
@@ -1966,6 +1982,8 @@ def run_all_tasks(mode: str = "all") -> dict:
                         max(-30, min(100, _old_s + _actual)), 1
                     )
                     res["cycle_phase_adjustment"] = _actual
+                    _sbd.note_cut(res, "cycle_phase_adjustment", _delta - _actual)
+                    _sbd.mark_one(res, "cycle_phase_adjustment")
 
             # ── [R-1] 横断産業シグナル補正 ─────────────────
             _cs_signals = results.get("cross_sector_signals", [])
@@ -1984,6 +2002,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                     # 累積上限チェック: 残余余地だけ適用
                     _headroom = _cross_cap - _cross_total
                     _adj = max(0.0, min(_raw_adj, _headroom))
+                    _sbd.note_cut(res, "cross_sector_adjustment", _raw_adj - _adj)
                     if _adj > 0:
                         res["composite_score"] = round(
                             max(-30, min(100,
@@ -1994,12 +2013,14 @@ def run_all_tasks(mode: str = "all") -> dict:
                     _raw_adj = -5.0
                     _headroom = -_cross_cap - _cross_total  # 負方向の余地
                     _adj = min(0.0, max(_raw_adj, _headroom))
+                    _sbd.note_cut(res, "cross_sector_adjustment", _raw_adj - _adj)
                     if _adj < 0:
                         res["composite_score"] = round(
                             max(-30, min(100,
                                 res.get("composite_score", 0) + _adj)), 1)
                         res.setdefault("cross_sector_adjustments", []).append(
                             {"rule": _cs["rule_id"], "delta": _adj})
+            _sbd.mark_one(res, "cross_sector_adjustment")
             # ── [R-2] 先行指標シグナル補正 ─────────────────
             _lead_signals = results.get("leading_indicator_signals", [])
             _lead_cross_cap = getattr(cfg, "SCORE_MAX_CROSS_ADJ", 10.0)
@@ -2013,6 +2034,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                 if code in _ltw:
                     _lheadroom = _lead_cross_cap - _lead_total
                     _ladj = max(0.0, min(3.0, _lheadroom))  # 先行指標は控えめに+3pt上限
+                    _sbd.note_cut(res, "leading_adjustment", 3.0 - _ladj)
                     if _ladj > 0:
                         res["composite_score"] = round(
                             max(-30, min(100,
@@ -2023,6 +2045,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                 elif code in _lhw:
                     _lheadroom = -_lead_cross_cap - _lead_total
                     _ladj = min(0.0, max(-3.0, _lheadroom))
+                    _sbd.note_cut(res, "leading_adjustment", -3.0 - _ladj)
                     if _ladj < 0:
                         res["composite_score"] = round(
                             max(-30, min(100,
@@ -2030,6 +2053,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                         res.setdefault("cross_sector_adjustments", []).append(
                             {"rule": _ls["rule_id"], "delta": _ladj,
                             "type": "leading"})
+            _sbd.mark_one(res, "leading_adjustment")
             # ─────────────────────────────────────────────────
 
             logger.add("sector_agent", "success",
@@ -2056,6 +2080,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                 top_n          = 5,
             )
             results["momentum"] = _mom_result
+            _sbd.mark(sector_results, "momentum_adjustment")
         except Exception as _e:
             print(f"  ⚠️  momentum_factor エラー（スキップ）: {_e}")
             results["momentum"] = {}
@@ -2288,6 +2313,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                         sector_results, results, cfg
                     )
                     results["signal_dedup"] = dedup_info
+                    _sbd.mark(sector_results, "signal_dedup_adj")
                     if dedup_info.get("total_rejected", 0) > 0:
                         logger.add("signal_dedup", "success",
                                    f"除外{dedup_info['total_rejected']}件 / "
@@ -2314,6 +2340,10 @@ def run_all_tasks(mode: str = "all") -> dict:
                 )
                 results["sectors"] = _updated
                 results["drift_events"] = _drifts
+                # 以降の補正は results["sectors"] と同じ辞書に積む（別の辞書に積むと、
+                # 補正を積んだ日と積まなかった日で最終点が丸ごと入れ替わる）
+                sector_results = _updated
+                _sbd.mark(sector_results, "bayesian_update")
 
                 if _drifts:
                     print(f"    ⚡ [GAP-1] ドリフト検出: {len(_drifts)}業種")
@@ -2349,6 +2379,8 @@ def run_all_tasks(mode: str = "all") -> dict:
                                 alpha          = _alpha,
                             )
                             results["sectors"] = _updated
+                            sector_results = _updated
+                            _sbd.mark(sector_results, "score_prior")
 
                             # drift_detector を続けて実行
                             _ddt_mod = _load_local_module(
@@ -2516,6 +2548,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                     cap_config_key = "SCORE_MAX_CROSS_ADJ",
                     label          = "jp_us_bridge",
                 )
+                _sbd.mark(sector_results, "us_lead_adjustment")
                 if bridge_result.get("lead_adjustments"):
                     results["sectors"] = sector_results
 
@@ -2555,6 +2588,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                     cap_config_key = "SCORE_MAX_MACRO_ADJ",
                     label          = "market_breadth",
                 )
+                _sbd.mark(sector_results, "breadth_adjustment")
                 # （_apply_capped_adjustment が各業種へ breadth_adjustment を
                 #   設定済み。旧コードにあった
                 #   sector_results[_code]["breadth_adjustment"] = _delta は
@@ -2597,6 +2631,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                     cap_config_key = "SCORE_MAX_MACRO_ADJ",
                     label          = "ANOMALY_SEASON",
                 )
+                _sbd.mark(sector_results, "season_adjustment")
                 if as_result.get("adjustments"):
                     results["sectors"] = sector_results
 
@@ -2634,6 +2669,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                     cap_config_key = "SCORE_MAX_MACRO_ADJ",
                     label          = "OPTIONS_MONITOR",
                 )
+                _sbd.mark(sector_results, "options_adjustment")
                 if om_result.get("adjustments"):
                     results["sectors"] = sector_results
 
@@ -2730,6 +2766,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                     cap_config_key = "SCORE_MAX_CROSS_ADJ",
                     label          = "MULTI_CURRENCY",
                 )
+                _sbd.mark(sector_results, "currency_adjustment")
                 # （同上: _apply_capped_adjustment が currency_adjustment を設定済み。
                 #   _sr[_code]["currency_adjustment"] = _delta は stale 変数による
                 #   誤書き冗長行のため削除。）
@@ -2754,6 +2791,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                 cap_config_key = "COT_COMMODITY_SECTOR_MAX_PT",
                 label          = "COT_COMMODITY",
             )
+            _sbd.mark(sector_results, "cot_commodity_adjustment")
             for c in _cc_jp:
                 sector_results[c]["cot_commodity_detail"] = _cc["jp"][c]["detail"]
             results["sectors"] = sector_results
@@ -3077,6 +3115,7 @@ def run_all_tasks(mode: str = "all") -> dict:
                             cap_config_key = "US_MACRO_MAX_SECTOR_ADJ",
                             label          = "US_MACRO",
                         )
+                        _sbd.mark(sector_results, "us_macro_adjustment")
                         print(f"  🇺🇸 US マクロ補正: 全業種 {_um_adj:+.2f}pt"
                               f"（スコア{score:.0f}/上限±{_um_cap:.0f}pt）")
                 except Exception as _ume:
@@ -3129,12 +3168,28 @@ def run_all_tasks(mode: str = "all") -> dict:
                     curve_analysis  = _bc_result.get("curve_analysis", {}),
                     sector_results  = _sector_res_f1,
                 )
+                _sbd.mark(_sector_res_f1, "recession_adjustment")
                 results["sectors"] = _sector_res_f1
                 logger.add("bond_commodity", "success",
                            f"[F-1] リセッション補正適用: "
                            f"recession_score={_bc_result.get('recession_score',0)}/100")
         except Exception as _e:
             print(f"  ⚠️  [F-1] リセッション補正エラー（スキップ）: {_e}")
+    # ── 業種の総合点の内訳（素点→補正ごとの点→最終）を残す ─────────────────
+    try:
+        _sbd_all = _sbd.finalize(results.get("sectors") or {})
+        if _sbd_all:
+            results["sector_score_breakdown"] = _sbd_all
+            _sbd_dir = Path(cfg.DATA_DIR) / "sector_score_breakdown"
+            _sbd_dir.mkdir(parents=True, exist_ok=True)
+            (_sbd_dir / f"{datetime.now().strftime('%Y-%m-%d')}.json").write_text(
+                json.dumps(_sbd_all, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+            _sbd_rc = _sbd.rank_corr(_sbd_all)
+            logger.add("sector_score_breakdown", "success",
+                       f"{len(_sbd_all)}業種 / 素点と最終の順位相関 "
+                       f"{'-' if _sbd_rc is None else format(_sbd_rc, '.2f')}")
+    except Exception as _sbd_e:
+        logger.add("sector_score_breakdown", "error", str(_sbd_e)[:100])
     # ── [問題D] 動的スクリーニング候補ビルダー ───────────────────
     if getattr(cfg, "ENABLE_DYNAMIC_SCREENER", True):
         try:

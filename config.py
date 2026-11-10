@@ -431,6 +431,25 @@ MACRO_RULES = {
 }
 
 # ==============================================================
+# 米国製造業の景況（ISM の無料代替）
+# ==============================================================
+# ISM 製造業は有償のため使わない。FRED の地区連銀の製造業調査（無料・月次・0 中心の拡散指数）
+# のうち Philadelphia Fed（GACDFSA066MSFRBPHI）と Empire State（GACDISA066MSFRBNY）の
+# 平均を us_mfg_survey として macro_snapshot に入れ、CROSS_SECTOR_RULES の
+# us_ism_manufacturing_up/down と ISM 複合シグナルの判定に使う。
+# 閾値は ISM の 52（明確な拡大）/ 48（明確な収縮）に相当する水準。両調査の標準偏差は約 14、
+# ISM との相関は約 0.7（ISM ≒ 49.8 + 0.22 × 調査）から、ISM 52 ≒ +10・ISM 48 ≒ -8 を丸めた。
+# 実データでの検証は未了のため、us_mfg_survey の蓄積が溜まったら見直す。
+ENABLE_US_MFG_SURVEY: bool = True
+US_MFG_SURVEY_SERIES: dict = {
+    "us_phil_fed_mfg": "GACDFSA066MSFRBPHI",   # Philadelphia Fed 製造業 現況（SA）
+    "us_empire_mfg":   "GACDISA066MSFRBNY",    # Empire State 製造業 景況感（SA）
+}
+US_MFG_SURVEY_UP:   float = 8.0    # 平均 +8 以上 → 製造業の拡大（ISM 52 相当）
+US_MFG_SURVEY_DOWN: float = -8.0   # 平均 -8 以下 → 製造業の収縮（ISM 48 相当）
+US_MFG_SURVEY_MAX_AGE_DAYS: int = 75   # 最新の観測がこれより古い系列は使わない（月次＋公表遅れ）
+
+# ==============================================================
 # BLOCK R-1: 横断産業シグナルルール（CROSS_SECTOR_RULES）
 # ==============================================================
 # 【設計思想】
@@ -549,14 +568,15 @@ CROSS_SECTOR_RULES = {
         },
     },
 
-    # ── 米国ISM製造業↑ → JP輸出業種（即時〜2週）─────────────────
+    # ── 米国製造業の景況↑ → JP輸出業種（即時〜2週）──────────────
+    # rule_id は発動履歴・ルール重みの継続のため旧名（ISM）のまま。判定は地区連銀の調査平均。
     "us_ism_manufacturing_up": {
-        "label": "米国ISM製造業↑（JP輸出業種の受注先行）",
+        "label": "米国製造業景況↑（地区連銀調査・JP輸出業種の受注先行）",
         "trigger": {
             "source": "macro",
-            "key":    "us_ism",   # macro_snapshot に ISM を追加した場合
+            "key":    "us_mfg_survey",   # Philly Fed と Empire State の平均（macro 段で作る）
             "op":     ">=",
-            "val":    52.0,       # 50超=拡大、52以上=明確な拡大
+            "val":    US_MFG_SURVEY_UP,
         },
         "lag_weeks": 1,
         "signal": {
@@ -571,14 +591,14 @@ CROSS_SECTOR_RULES = {
         },
     },
 
-    # ── 米国ISM製造業↓ → JP輸出業種に逆風 ──────────────────────
+    # ── 米国製造業の景況↓ → JP輸出業種に逆風 ────────────────────
     "us_ism_manufacturing_down": {
-        "label": "米国ISM製造業↓（JP輸出業種の受注減速警戒）",
+        "label": "米国製造業景況↓（地区連銀調査・JP輸出業種の受注減速警戒）",
         "trigger": {
             "source": "macro",
-            "key":    "us_ism",
+            "key":    "us_mfg_survey",
             "op":     "<=",
-            "val":    48.0,       # 48以下=明確な収縮
+            "val":    US_MFG_SURVEY_DOWN,
         },
         "lag_weeks": 1,
         "signal": {
@@ -1311,6 +1331,9 @@ EDINETDB_ITEMS_MERGE_CHUNK: int = 4000
 EDINETDB_REFRESH_DAYS: int = 180
 # 政府 EDINET の書類一覧で直近この日数に有報を出した会社を、取り込みの先頭（P0）で取る（鮮度に関係なく・提出の翌日以降に1回）
 EDINETDB_NEW_FILING_DAYS: int = 30
+# EdinetDB の財務・開示・有報由来の追加窓口は有報が元。政府 EDINET の書類一覧に有報が1件も無い会社（新規上場の直後など）は
+# 必ず404になるので、取り込み・書類一覧・追加窓口とも聞かない（有報が出たら次の回から対象に戻る）。False なら従来どおり全社に聞く
+EDINETDB_REQUIRE_FILING: bool = True
 # EdinetDB に財務がまだ無い会社（API が 404＝上場直後で初回の有報が未反映など）を取り直すまでの最短日数。
 # 連続して無ければ2倍ずつ延ばし EDINETDB_MISSING_MAX_DAYS で止める。
 # 政府 EDINET に新しい有報の提出が見えた会社は、この待ちを飛ばして次の回に取る。
@@ -2328,6 +2351,18 @@ ENABLE_TREASURY_DATA: bool = True
 # ==============================================================
 ENABLE_US_8K_MONITOR:   bool = True
 US_8K_MAX_ITEM_FETCH:   int  = 30    # Item検知を行う最大銘柄数（API負荷対策）
+# 決算の beat/miss は yfinance の EPS 予想比サプライズで判定し、予想が無い・古いときだけ
+# company_facts の EPS 前年同期比（±10%）に落とす。外部の呼び出しは決算銘柄のうち
+# JP業種に対応づく分だけ（上限・時間枠つき）。
+US_8K_SURPRISE_ENABLED:  bool  = True
+# 米国企業は約75%が予想を上回り平均サプライズが +5〜7% 程度のため、beat は平均より明確に
+# 上の +10% 以上、miss は少数派なので -2% 以下で見る（公表統計に基づく初期値。蓄積後に見直す）。
+US_8K_SURPRISE_BEAT_PCT: float = 10.0
+US_8K_SURPRISE_MISS_PCT: float = -2.0
+US_8K_SURPRISE_MAX_TICKERS: int = 60     # 1回に取る最大銘柄数
+US_8K_SURPRISE_TIME_BUDGET_SEC: int = 90 # 取得に使う最大秒数（超えたら残りは前年同期比）
+# 予想データの最新四半期末がこの日数より古ければ、今回の決算がまだ反映されていないとみなす
+US_8K_SURPRISE_MAX_QUARTER_AGE_DAYS: int = 100
 
 # ==============================================================
 # BLOCK signal_dedup: シグナル重複排除設定
@@ -3127,6 +3162,12 @@ SCORE_MAX_INSTITUTION_ADJ         = 15.0
 INSTITUTION_HISTORY_TTL_DAYS      = 180
 POLICY_MEDIUM_CACHE_TTL_DAYS      = 90
 INSTITUTION_MIN_NEW_POSITION_USD  = 1_000_000_000   # 10億ドル
+# 米国銘柄の13F買い（新規・買い増し）を SIC 経由で日本の業種に結ぶ加点（institutional_13f_monitor）。
+#   1件の加点 = その変化の adj_pt × WEIGHT。業種ごとの合計は SECTOR_CAP まで。SIC_LOOKUP_MAX は
+#   us_sector_mapping.json に無い銘柄を1回の実行で SEC に問い合わせる上限（無料・BigQuery は使わない）。
+I13F_US_BOOST_WEIGHT: float = 0.05
+I13F_US_BOOST_SECTOR_CAP: float = 3.0
+I13F_US_BOOST_SIC_LOOKUP_MAX: int = 30
 # Tier1/2（Buffett・アクティビスト）の新規取得の通知・L3発動の下限。
 #   Berkshire の13Fには子会社運用分の数十万ドルの保有も載るため足切りする。
 INSTITUTION_MIN_NEW_POSITION_USD_ACTIVE = 100_000_000   # 1億ドル

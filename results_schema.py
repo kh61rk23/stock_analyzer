@@ -151,6 +151,7 @@ SCHEMA: dict[str, list[str]] = {
     "sector_alloc": ["stock_analyzer_main"],
     "sector_rotation": ["stock_analyzer_main"],
     "sector_tier": ["stock_analyzer_main"],
+    "sector_score_breakdown": ["stock_analyzer_main"],
     "sectors": ["stock_analyzer_main"],
     "self_evaluator": ["stock_analyzer_main"],
     "sentiment": ["stock_analyzer_main"],

@@ -408,6 +408,10 @@ def schemas():
                                  F("composite_score", "FLOAT64"), F("base_score", "FLOAT64"), F("score_path", "STRING"),
                                  F("reasons", "STRING")] + [F(k, "FLOAT64") for k in ("kpi_pbr", "kpi_per", "kpi_fcf_yield",
                                  "kpi_ev_ebitda", "kpi_roic", "kpi_net_cash_ratio", "kpi_irr")] + ts,
+        "sector_score_breakdown_daily": [F("report_date", "DATE", "REQUIRED"), F("sector_code", "STRING"),
+                                         F("sector_name", "STRING"), F("raw_score", "FLOAT64"), F("final_score", "FLOAT64"),
+                                         F("total_adj", "FLOAT64"), F("cut_total", "FLOAT64"), F("steps_json", "STRING"),
+                                         F("cuts_json", "STRING")] + ts,
         "gov_stats": [F("report_date", "DATE", "REQUIRED"), F("stat_name", "STRING"), F("value", "FLOAT64"), F("unit", "STRING"),
                       F("period", "STRING"), F("mom_pct", "FLOAT64"), F("yoy_pct", "FLOAT64"), F("signal", "STRING")] + ts,
     }
@@ -457,6 +461,26 @@ def write(client, built: dict, tmp_dir: Path) -> dict:
 
 
 STATE_NAME = "report_store_state.json"
+BREAKDOWN_DIR = "sector_score_breakdown"
+
+
+def pending_breakdowns(data_dir: Path, state: dict) -> list:
+    """業種の総合点の内訳（data/sector_score_breakdown/{日付}.json）のうち、未取り込み・内容が変わったもの。"""
+    d = data_dir / BREAKDOWN_DIR
+    if not d.is_dir():
+        return []
+    return [p for p in sorted(d.glob("*.json")) if state.get(f"{BREAKDOWN_DIR}/{p.name}") != file_sha(p)]
+
+
+def breakdown_rows(paths: list, fetched_at: str) -> list:
+    import sector_score_breakdown as sbd
+    rows = []
+    for p in paths:
+        try:
+            rows += sbd.bq_rows(json.loads(p.read_text(encoding="utf-8")), p.stem, fetched_at)
+        except (OSError, ValueError):
+            continue
+    return rows
 
 
 def collect(insight_dir: Path, subdirs: tuple | None = None) -> list:
@@ -491,11 +515,13 @@ def run(cfg, subdirs: tuple | None = None, init_state: bool = False) -> dict:
     except (OSError, ValueError):
         state = {}
     todo = pending(collect(insight, subdirs), insight, state)
+    bd_files = [] if subdirs else pending_breakdowns(data_dir, state)
     if init_state:
         # 既に BigQuery に入っているファイルを「取り込み済み」として記録だけする（初回の切り替え用）
         counts: dict = {}
     else:
         built = build_all(todo, datetime.now(timezone.utc).isoformat(), data_dir)
+        built["sector_score_breakdown_daily"] = breakdown_rows(bd_files, datetime.now(timezone.utc).isoformat())
         from edinet_bq_client import EDINETBQClient
         client = EDINETBQClient().client
         counts = {}
@@ -507,6 +533,8 @@ def run(cfg, subdirs: tuple | None = None, init_state: bool = False) -> dict:
                 counts[t] = counts.get(t, 0) + n
     for p in todo:
         state[p.relative_to(insight).as_posix()] = file_sha(p)
+    for p in bd_files:
+        state[f"{BREAKDOWN_DIR}/{p.name}"] = file_sha(p)
     state_p.parent.mkdir(parents=True, exist_ok=True)
     state_p.write_text(json.dumps(state, ensure_ascii=False, indent=0, sort_keys=True), encoding="utf-8")
     print(f"📚 report_store: 新規・変更 {len(todo)}ファイル → " + (" / ".join(f"{t} {n}行" for t, n in counts.items() if n) or "（記録のみ）"))

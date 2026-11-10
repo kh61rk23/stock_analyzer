@@ -437,6 +437,10 @@ def extract_alerts(cfg, results: dict) -> list:
             score  = r.get("composite_score", 0)
             reason = r.get("reason_text", "")
             line   = f"  {name}: {score:.0f}点"
+            _bd = (results.get("sector_score_breakdown") or {}).get(str(code))
+            if _bd:
+                import sector_score_breakdown as _sbd_mod
+                line += f"\n    🧮 {_sbd_mod.summary_line(_bd)}"
             if reason:
                 line += f"\n    💬 {reason}"
 
@@ -545,8 +549,12 @@ def extract_alerts(cfg, results: dict) -> list:
                 _all_picks = [c for c in (_us_scr.get("top_picks") or _us_scr.get("passed") or [])
                               if isinstance(c, dict)]
                 _picks = [c for c in _all_picks if country_of(c.get("ticker")) == "米国"]
+                # 米国以外は米国スクリーナーが overseas_top に分けて持つ（古いキャッシュの結果は top_picks 内の非米国も拾う）
+                _intl_src = [c for c in (_us_scr.get("overseas_top") or []) if isinstance(c, dict)]
+                _intl_src += [c for c in _all_picks if country_of(c.get("ticker")) != "米国"
+                              and c not in _intl_src]
                 _intl_lines = build_intl_pick_lines(
-                    [c for c in _all_picks if country_of(c.get("ticker")) != "米国"],
+                    _intl_src,
                     int(getattr(cfg, "ALERT_INTL_TOP_PICKS_PER_COUNTRY", 3)))
                 if _picks:
                     _pn = int(getattr(cfg, "ALERT_US_TOP_PICKS", 10))
@@ -2246,8 +2254,9 @@ def collect_high_dividend(cfg, results: dict, sector_results: dict | None = None
     for c in ((results.get("screener") or {}).get("candidates") or []):
         _add(c.get("ticker"), _jname(c), c.get("dividend_yield"), c.get("payout_ratio"),
              c.get("sector_name"), "JP", per=c.get("per"))
-    for c in ((results.get("us_screener") or {}).get("candidates") or []):
-        # 米国株スクリーナーのテーマ別リストには米国以外も入る。国で分け、日本株は日本側に入れる
+    _us_scr_d = results.get("us_screener") or {}
+    for c in (_us_scr_d.get("candidates") or []) + (_us_scr_d.get("overseas_candidates") or []):
+        # 米国以外の銘柄は overseas_candidates に分けてある。国で分け、日本株は日本側に入れる
         _cty = country_of(c.get("ticker"))
         _add(c.get("ticker"), _jname(c), c.get("div_yield"), c.get("payout_ratio"),
              c.get("sector"), "US" if _cty == "米国" else "JP" if _cty == "日本" else "INTL",
