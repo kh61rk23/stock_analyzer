@@ -263,18 +263,25 @@ def humanize_highlight(h: str) -> str:
 def build_mail(title: str, workflow: str, steps: list[dict], counts: dict, delta: dict,
                storage: dict | None, run_url: str, now: datetime, digest: list | None = None) -> tuple[str, str]:
     """(件名, HTML 本文)（純関数）。"""
-    failed = [s for s in steps if s.get("rc")]
-    mark = "❌" if failed else ("⚠️" if any(s.get("err") for s in steps) else "✅")
+    import notify_text
+    explained = [(s, notify_text.explain_step(s)) for s in steps]
+    failed = [s for s, _ in explained if s.get("rc")]
+    mark = "❌" if failed else ("⚠️" if any(e["mark"] != "✅" for _, e in explained) else "✅")
     # 件名の頭の【取得】で Gmail のフィルタが振り分ける（日次メールは【投資AIエージェント】）
     subject = f"【取得】{mark} {title} {now:%m/%d %H:%M}"
     parts = [f"<h3>{html.escape(title)}（{html.escape(workflow)}）{mark}</h3>"]
     if not steps:
         parts.append("<div>ステップの記録が無い（取り込みの前に止まった可能性。実行ページを見る）</div>")
-    for s in steps:
-        head = (f"{'✅' if not s.get('rc') else '❌'} <b>{html.escape(s['step'])}</b>"
-                f"（{s.get('seconds', 0)}秒・✅{s.get('ok', 0)} ⚠️{s.get('warn', 0)} ❌{s.get('err', 0)}）")
-        items = "".join(f"<li>{html.escape(humanize_highlight(h))}</li>" for h in s.get("highlights") or [])
-        parts.append(f"<div style='margin-top:8px'>{head}<ul style='margin:2px 0'>{items}</ul></div>")
+    for s, e in explained:
+        head = (f"{e['mark']} <b>{html.escape(e['title'])}</b>（{s.get('seconds', 0)}秒・"
+                f"{'失敗' if s.get('rc') else '警告あり' if e['mark'] != '✅' else '成功'}）")
+        what = f"<div style='color:#666;font-size:12px'>何をする段：{html.escape(e['desc'])}</div>" if e["desc"] else ""
+        items = "".join(f"<li>{m} {html.escape(t)}</li>" for m, t in e["lines"])
+        mods = ""
+        if e["modules"]:
+            mods = ("<div style='color:#666;font-size:12px'>中身：" + "／".join(
+                f"{html.escape(a)}＝{html.escape(b)}" for a, b in e["modules"]) + "</div>")
+        parts.append(f"<div style='margin-top:8px'>{head}{what}{mods}<ul style='margin:2px 0'>{items}</ul></div>")
     if digest:
         parts.append("<h4>今回取ったもの</h4>")
         for head, lines in digest:

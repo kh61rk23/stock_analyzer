@@ -80,7 +80,7 @@ def results_path(base: Path, workflow: str, run_id: str | None = None) -> Path:
 
 def step_record(lines: list, rc: int, seconds: float, step: str) -> dict:
     """ステップの結果（通知用）。要点は ✅❌⏩⚠️ で始まる行の末尾 MAX_HIGHLIGHTS 本。"""
-    hl = [l.strip()[:300] for l in lines if _HIGHLIGHT.match(l)][-MAX_HIGHLIGHTS:]
+    hl = [l.strip()[:800] for l in lines if _HIGHLIGHT.match(l)][-MAX_HIGHLIGHTS:]
     return {"step": step, "rc": rc, "seconds": round(seconds), "lines": len(lines),
             "ok": sum(1 for l in lines if "✅" in l), "warn": sum(1 for l in lines if "⚠" in l),
             "err": sum(1 for l in lines if "❌" in l), "highlights": hl,

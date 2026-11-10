@@ -13,7 +13,7 @@
 # 【進め方】
 #   直近 EDINET_GOV_RECENT_DAYS 日は毎回一覧を取り直す（取り下げ・訂正・遅れて出る書類）。中身は、その日の
 #   対象書類の顔ぶれが前回と違う時だけ取り直す。過去分は、済んだ最も古い日の前日から EDINET_GOV_BACKFILL_FLOOR
-#   まで遡る。1回の実行は時間の予算（--budget-min）で区切り、途中の日は記録しない（次の回にその日をやり直す）。
+#   （と今日の10年前の新しい方。API は10年より古い日に 404 を返す）まで遡る。1回の実行は時間の予算（--budget-min）で区切り、途中の日は記録しない（次の回にその日をやり直す）。
 #   進み具合は stock_data/data/edinet_gov_docs_state.json（日付ごとの件数と、中身を取った書類の顔ぶれのハッシュ）。
 #   大量保有（350/360/370）は1書類が約100行になるが、large_holdings view が引くのは十数個の要素だけ。
 #   EDINET_GOV_LVH_ELEMENTS_ONLY の間は、その要素だけを入れる（180/190 は全要素）。
@@ -155,6 +155,14 @@ def facts_from_csv_zip(blob: bytes, meta: dict, day: date, text_max: int,
                          "member": member or None, "unit": unit or None,
                          "value_num": num, "value_text": None if num is not None else val[:text_max]})
     return rows, labels
+
+
+def api_horizon(today: date, years: int = 10) -> date:
+    """書類一覧 API が答える最も古い日。EDINET API v2 は提出から10年分だけ持ち、それより古い日は 404 を返す。"""
+    try:
+        return today.replace(year=today.year - years)
+    except ValueError:      # 2/29 の10年前が平年
+        return today.replace(year=today.year - years, day=28)
 
 
 def dates_to_run(state: dict, today: date, recent_days: int, floor: date) -> tuple[list[date], list[date]]:
@@ -334,14 +342,16 @@ def run(cfg, budget_min: float | None = None, only_dates: list[date] | None = No
     state.setdefault("dates", {})
     known_labels = set(state.get("labels") or [])
     today = date.today()
+    floor = max(floor, api_horizon(today))   # 10年より古い日を叩いても 404 になるだけ
     if only_dates:
         recent, back = list(only_dates), []
     else:
         recent, back = dates_to_run(state, today, int(getattr(cfg, "EDINET_GOV_RECENT_DAYS", 7)), floor)
     stat = {"days": 0, "docs": 0, "fact_docs": 0, "facts": 0, "errors": 0, "storage_gb": round(total_gb, 2),
             "facts_gb": round(facts_gb, 3), "facts_paused": not facts_ok, "oldest": None, "budget_out": False,
-            "range": None}
+            "range": None, "backfill_end": None}
     done_now: list[str] = []
+    back_days = {d for d in back}
     import edinet_gov_api as ega
     streak = ega.Streak()
     for day in recent + back:
@@ -357,6 +367,10 @@ def run(cfg, budget_min: float | None = None, only_dates: list[date] | None = No
             continue
         # 失敗も HTTP 200 で返る。その日の書類0件と取り違えて空の区画を書かないよう、metadata.status まで見る
         results, code, why = ega.check_list(r)
+        if results is None and code == "404" and day in back_days:
+            # 過去分の端：API が持つ範囲より古い日は 404。取れなかったのではなく、遡りがここで終わり
+            stat["backfill_end"] = day.isoformat()
+            break
         if results is None:
             stat["errors"] += 1
             print(f"    ❌ 一覧 {day}: {why}")

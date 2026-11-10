@@ -200,3 +200,17 @@ def test_edinet_gov_probe_classifies_http_and_body_status(monkeypatch):
     class _Cfg:
         EDINET_GOV_API_KEY = ""
     assert kh.run_key_health(_Cfg())["entries"]["EDINET_GOV_API_KEY"]["state"] == kh.STATE_UNSET
+
+
+def test_seisakudb_probe_skipped_when_ingest_used_key_today(tmp_path, monkeypatch):
+    import json
+    from datetime import date
+
+    (tmp_path / "seisakudb_usage.json").write_text(json.dumps({"date": date.today().isoformat(), "calls": 5}))
+
+    class _Cfg:
+        DATA_DIR = str(tmp_path)
+        SEISAKUDB_API_KEY = "x"
+
+    monkeypatch.setattr(kh, "_probe_seisakudb", lambda k: (_ for _ in ()).throw(AssertionError("呼んではいけない")))
+    assert kh.run_key_health(_Cfg())["entries"]["SEISAKUDB_API_KEY"]["state"] == kh.STATE_ALIVE

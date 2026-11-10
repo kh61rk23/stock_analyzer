@@ -124,3 +124,35 @@ def test_features_sql_excludes_passthrough_and_via_from_subsidy():
     assert "NOT LIKE '%via%'" in q
     assert "IFNULL(amount_yen, 0) >= 10000000000.0" in q
     assert "total_oku - via_subsidiary_oku" in q
+
+
+class _Resp:
+    def __init__(self, status, headers=None):
+        self.status_code, self.headers = status, headers or {}
+
+    def json(self):
+        return {"results": []}
+
+
+def _client(tmp_path, monkeypatch, statuses, retries=2):
+    import requests
+    import seisakudb_ingestor as sk
+    seq = iter(statuses)
+    monkeypatch.setattr(requests, "get", lambda *a, **k: next(seq))
+    sleeps = []
+    c = sk.SeisakuClient("k", tmp_path / "u.json", 100, 0.0, 60.0, retries, sleep=sleeps.append)
+    monkeypatch.setattr(c, "_note", lambda *a, **k: None)
+    return c, sleeps
+
+
+def test_429_waits_with_retry_after_then_succeeds(tmp_path, monkeypatch):
+    c, sleeps = _client(tmp_path, monkeypatch, [_Resp(429, {"Retry-After": "7"}), _Resp(200)])
+    assert c.get("/v1/x") == {"results": []}
+    assert 7.0 in sleeps and c.used == 1 and c.waited_429 == 1 and not c.stopped
+
+
+def test_429_stops_after_retries_and_does_not_count(tmp_path, monkeypatch):
+    c, sleeps = _client(tmp_path, monkeypatch, [_Resp(429)] * 3)
+    assert c.get("/v1/x") is None
+    assert "429" in c.stopped and c.used == 0 and sleeps.count(60.0) == 2
+    assert c.get("/v1/y") is None   # 止まった後は呼ばない

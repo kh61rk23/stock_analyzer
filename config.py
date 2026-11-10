@@ -1398,11 +1398,13 @@ FUDOSANDB_DAILY_BUDGET: int = FUDOSAN_DAILY_BUDGET  # 後方互換
 # 政策DB（seisakudb.jp）。1日1000回まで（成功したリクエストだけ数える）。データは月次更新。
 SEISAKUDB_API_KEY: str = os.getenv("SEISAKUDB_API_KEY", "")   # GitHub Secrets
 ENABLE_SEISAKUDB: bool = True
-SEISAKUDB_DAILY_BUDGET: int = 950        # 1日に使う回数（API の上限は1000・50回は手動確認用に残す）。個社（約3,800社）は約4日で1周。1回約0.6秒で約10分かかるので、日次の分析ではなく朝の取得 workflow（fetch_stages.jp_filings）で取る
+SEISAKUDB_DAILY_BUDGET: int = 950        # 1日に使う回数（API の上限は1000・50回は手動確認用に残す）。個社（約3,800社）は約4日で1周。間隔1秒で約16分かかるので、日次の分析ではなく朝の取得 workflow（fetch_stages.jp_filings）だけで取る（日次は写すだけ）
 SEISAKUDB_RESERVE: int = 0               # 手動確認用に残す回数
 SEISAKUDB_RECENT_LIMIT: int = 500        # 直近イベントの取得件数
 SEISAKUDB_TOP_LIMIT: int = 500          # 公的支出ランキングの取得件数
-SEISAKUDB_MIN_INTERVAL_SEC: float = 0.5  # 送信間隔の下限（300回で約3分。連打すると429を誘発する）
+SEISAKUDB_MIN_INTERVAL_SEC: float = 1.0  # 送信間隔の下限（毎分60回まで）。0.5秒（毎分120回）では約5分後に429が出る日があった
+SEISAKUDB_429_WAIT_SEC: float = 60.0     # 429 のあと待つ秒数（応答に Retry-After があればそれを使う）
+SEISAKUDB_429_RETRIES: int = 2           # 429 で待ってやり直す回数。それでも続けばその回は止め、残りは次の回へ
 # 公的支出の特徴量（銘柄ごとの受給額・経済安保認定）。スコア加点は承認後に True にする。
 ENABLE_PUBLIC_FUNDING_FEATURES: bool = True
 ENABLE_PUBLIC_FUNDING_BONUS: bool = False
@@ -5481,7 +5483,7 @@ STATE_STORE_PRUNE_MAX_BYTES: int = 1024 ** 3
 # 書類一覧（documents.json）は全書類（投信を含む）を日ごとに edinet.gov_documents へ入れる（1日1回の呼び出し）。
 # 中身（CSV＝XBRL の事実）は EDINET_GOV_FACT_DOC_TYPES の書類だけ edinet.gov_doc_facts へ入れる。
 #   350 大量保有報告書 / 360 変更報告書 / 370 訂正報告書（大量保有）/ 180 臨時報告書 / 190 訂正臨時報告書
-# 過去分は新しい日から古い日へ遡る。下限は EDINET_GOV_BACKFILL_FLOOR（API が出す範囲より古い日は空で返る）。
+# 過去分は新しい日から古い日へ遡る。下限は EDINET_GOV_BACKFILL_FLOOR と「今日の10年前」の新しい方（EDINET API は提出から10年分だけ持ち、古い日は 404）。
 # BigQuery の保存が BQ_STORAGE_STOP_GB（全体・BLOCK 66）か EDINET_GOV_FACTS_MAX_GB（この表）を超えたら中身の取り込みを止める。
 EDINET_GOV_FACT_DOC_TYPES: tuple = ("350", "360", "370", "180", "190")
 EDINET_GOV_BACKFILL_FLOOR: str = "2016-01-01"

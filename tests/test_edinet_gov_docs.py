@@ -75,3 +75,18 @@ def test_element_id_fits_int64_and_view_uses_ids():
     assert -2**63 <= eid < 2**63 and eid == g.element_id("jplvh_cor:HoldingRatioOfShareCertificatesEtc")
     sql = g.large_holdings_view_sql("p")
     assert f"element_id={eid}" in sql and "holding_ratio" in sql and "filer_name" in sql
+
+
+def test_api_horizon_is_ten_years_back_and_handles_leap_day():
+    assert g.api_horizon(date(2026, 11, 10)) == date(2016, 11, 10)
+    assert g.api_horizon(date(2028, 2, 29)) == date(2018, 2, 28)
+
+
+def test_backfill_never_goes_past_api_horizon():
+    today = date(2026, 11, 10)
+    floor = max(date(2016, 1, 1), g.api_horizon(today))
+    state = {"dates": {"2016-11-11": {}}}
+    _, back = g.dates_to_run(state, today, 7, floor)
+    assert back == [date(2016, 11, 10)]
+    state = {"dates": {"2016-11-10": {}}}
+    assert g.dates_to_run(state, today, 7, floor)[1] == []

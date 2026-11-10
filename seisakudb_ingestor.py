@@ -76,10 +76,15 @@ def adjusted_total_oku(rec: dict, via_min_oku: float = PASSTHROUGH_RANK_VIA_OKU)
 
 
 class SeisakuClient:
-    """政策DB REST の薄いラッパー。1日の使用回数を記録し、上限・401・429 で止まる。"""
+    """政策DB REST の薄いラッパー。1日の使用回数を記録し、上限・401 で止まる。
+    429（レート上限）は相手が「少し待て」と言っているだけなので、待って同じ呼び出しをやり直す。
+    待っても続くときだけ止め、残りの会社は次の回（最終取得日が古い順）に回す。"""
 
-    def __init__(self, api_key: str, ledger: Path, daily_budget: int = 1000, interval: float = 1.0):
+    def __init__(self, api_key: str, ledger: Path, daily_budget: int = 1000, interval: float = 1.0,
+                 wait_429: float = 60.0, retries_429: int = 2, sleep=time.sleep):
         self.api_key, self.ledger, self.daily_budget, self.interval = api_key, ledger, daily_budget, interval
+        self.wait_429, self.retries_429, self._sleep = wait_429, retries_429, sleep
+        self.waited_429 = 0          # 429 で待った回数（結果に出す）
         self._last = 0.0
         self.stopped = ""
         try:
@@ -107,24 +112,41 @@ class SeisakuClient:
         except Exception:
             pass
 
+    def _wait_seconds(self, resp) -> float:
+        """429 のあと待つ秒数。Retry-After（秒）があればそれ（上限 300 秒）、無ければ wait_429。"""
+        try:
+            ra = float(resp.headers.get("Retry-After", ""))
+        except (AttributeError, TypeError, ValueError):
+            ra = 0.0
+        return min(300.0, ra) if ra > 0 else self.wait_429
+
     def get(self, path: str, params: dict | None = None):
         if self.stopped or self.used >= self.daily_budget:
             self.stopped = self.stopped or "budget"
             return None
         import requests
-        wait = self.interval - (time.time() - self._last)
-        if wait > 0:
-            time.sleep(wait)          # 連打すると429を誘発する
-        self._last = time.time()
-        try:
-            r = requests.get(BASE + path, params=params or {}, timeout=30,
-                             headers={"Authorization": f"Bearer {self.api_key}", "Accept": "application/json",
-                                      "User-Agent": "stock_analyzer/1.0 (seisakudb_ingestor)"})
-        except Exception as exc:
-            print(f"    ⚠️ [seisakudb] {path}: 通信失敗 {type(exc).__name__}")
-            self._note(path, "error")
-            return None
-        self._note(path, r.status_code)
+        r = None
+        for attempt in range(self.retries_429 + 1):
+            wait = self.interval - (time.time() - self._last)
+            if wait > 0:
+                self._sleep(wait)          # 連打すると429を誘発する
+            self._last = time.time()
+            try:
+                r = requests.get(BASE + path, params=params or {}, timeout=30,
+                                 headers={"Authorization": f"Bearer {self.api_key}", "Accept": "application/json",
+                                          "User-Agent": "stock_analyzer/1.0 (seisakudb_ingestor)"})
+            except Exception as exc:
+                print(f"    ⚠️ [seisakudb] {path}: 通信失敗 {type(exc).__name__}")
+                self._note(path, "error")
+                return None
+            self._note(path, r.status_code)
+            if r.status_code != 429:
+                break
+            if attempt < self.retries_429:
+                w = self._wait_seconds(r)
+                print(f"    ⏳ [seisakudb] 429（レート上限）→ {w:.0f}秒待ってやり直す（{attempt + 1}/{self.retries_429}）")
+                self.waited_429 += 1
+                self._sleep(w)
         if r.status_code < 400:
             self.used += 1            # 成功だけが1 unit（4xx/5xx は課金されない）
             self._save()
@@ -350,7 +372,9 @@ def run(cfg, tickers: list[str], today: date | None = None) -> dict:
     data_dir = Path(getattr(cfg, "DATA_DIR", "stock_data/data"))
     budget = max(0, int(getattr(cfg, "SEISAKUDB_DAILY_BUDGET", 1000)) - int(getattr(cfg, "SEISAKUDB_RESERVE", 0)))
     client = SeisakuClient(key, data_dir / "seisakudb_usage.json", budget,
-                           float(getattr(cfg, "SEISAKUDB_MIN_INTERVAL_SEC", 0.5)))
+                           float(getattr(cfg, "SEISAKUDB_MIN_INTERVAL_SEC", 1.0)),
+                           float(getattr(cfg, "SEISAKUDB_429_WAIT_SEC", 60.0)),
+                           int(getattr(cfg, "SEISAKUDB_429_RETRIES", 2)))
     meta_path = data_dir / "seisakudb_meta.json"
     meta = _load(meta_path, {})
     now = datetime.now(timezone.utc).isoformat()
@@ -427,7 +451,7 @@ def run(cfg, tickers: list[str], today: date | None = None) -> dict:
         stats["errors"] += 1
     summary = {
         "date": today.isoformat(), "calls": client.used, "budget": client.daily_budget,
-        "stopped": client.stopped, **stats, "rows": len(rows),
+        "stopped": client.stopped, "waited_429": client.waited_429, **stats, "rows": len(rows),
         "company_hits": sorted(hits, key=lambda h: -(h["amount_yen"] or 0))[:20],
         "recent_sample": [{k: r[k] for k in ("company_code", "company_name", "event_date", "amount_yen",
                                               "kind", "ministry", "title")} for r in rows
@@ -447,6 +471,7 @@ def run(cfg, tickers: list[str], today: date | None = None) -> dict:
     print(f"    🏛️ [seisakudb] 直近イベント{stats['recent']}件 / ランキング{stats['top_count']}社 / "
           f"個社{stats['companies_ok']}社（受給なし{stats['companies_empty']}・件数上限で切れ{stats['companies_truncated']}）/ "
           f"経済安保{stats['certs']}件（コード対応{stats['certs_mapped']}）/ API {client.used}/{client.daily_budget}回"
+          + (f" / 429で待った{client.waited_429}回" if client.waited_429 else "")
           + (f" / 停止: {client.stopped}" if client.stopped and client.stopped != "budget" else ""))
     return summary
 

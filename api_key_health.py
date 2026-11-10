@@ -423,6 +423,18 @@ def _probe_gmail_smtp(from_addr: str, password: str) -> dict:
         return _entry(STATE_LIMITED, "判定不能（通信エラー・タイムアウト）")
 
 
+def seisakudb_used_today(cfg) -> int:
+    """今日、政策DB の取り込みが成功させた呼び出し数（seisakudb_usage.json）。読めなければ 0。"""
+    import json
+    from datetime import date
+    from pathlib import Path
+    try:
+        d = json.loads((Path(getattr(cfg, "DATA_DIR", "stock_data/data")) / "seisakudb_usage.json").read_text(encoding="utf-8"))
+        return int(d.get("calls", 0)) if d.get("date") == date.today().isoformat() else 0
+    except (OSError, ValueError, TypeError):
+        return 0
+
+
 def _probe_seisakudb(key: str) -> dict:
     """政策DB の認証必須 API（取り込みと同じ /v1/funding/recent）を limit=1 で1コール判定する。
     日次の使用は SEISAKUDB_DAILY_BUDGET（契約1,000回/日のうち300回）なので1回は無視できる。"""
@@ -554,7 +566,12 @@ def run_key_health(cfg) -> dict:
     _run("ESTAT_API_KEY",        _probe_estat,    g("ESTAT_API_KEY"))
     _run("POLICY_FRED_API_KEY",  _probe_fred,     g("POLICY_FRED_API_KEY"))
     _run("DEEPL_API_KEY",        _probe_deepl,    g("DEEPL_API_KEY"))
-    _run("SEISAKUDB_API_KEY",    _probe_seisakudb, g("SEISAKUDB_API_KEY"))
+    # 取り込みが今日すでに認証を通っていれば、確認のための呼び出しを足さない
+    # （取り込みの直後は相手が 429 を返していることがあり、確認が「レート制限」と出て紛らわしい）
+    if not is_unset(g("SEISAKUDB_API_KEY")) and seisakudb_used_today(cfg) > 0:
+        entries["SEISAKUDB_API_KEY"] = _entry(STATE_ALIVE, "今日の取り込みで認証済み（確認の呼び出しは省略）")
+    else:
+        _run("SEISAKUDB_API_KEY", _probe_seisakudb, g("SEISAKUDB_API_KEY"))
     _run("NOTION_API_KEY",       _probe_notion,   g("NOTION_API_KEY"))
 
     # ── GOOGLE_CSE: quota保護。既定 disabled → ⏭️。明示有効時のみ実クエリ ──
