@@ -6,7 +6,8 @@
                                invest.deliberations に登録し、キューを done に、実行記録を更新する
   release [--case ID] [--older-than-hours H] [--error 理由]
                                claimed を pending に戻す（失敗時の後始末。--error で実行記録に失敗を残す）
-  due     [--interval-days N]  前回の成功した実行から N 日（既定 config.DELIBERATION_INTERVAL_DAYS）以上か判定する
+  due     [--interval-days N] [--force]  前回の成功した実行から N 日（既定 config.DELIBERATION_INTERVAL_DAYS）以上か判定する。
+                               --force は手動起動用で、間隔を見ずに due=true を返す
   ledger  [--limit N]          直近の審議一覧（判断台帳の代わり。デビル・ベアが過去の判断を読む用）
 
 認証: edinet_bq_client と同じ。BQ_CREDENTIALS（JSON文字列）または BQ_CREDENTIALS_PATH。
@@ -240,6 +241,32 @@ def _arr(name, vals):
     return bigquery.ArrayQueryParameter(name, "STRING", vals)
 
 
+def japanese_names(client, tickers: list) -> dict:
+    """ticker → 日本語の会社名。日本株は edinet.company_master（sec_code=4桁+0）、米国株は us.company_profile。
+    引けない銘柄は辞書に入れない（呼び出し側が元の名前を使う）。失敗しても審議は止めない。"""
+    out: dict = {}
+    jp = [t for t in tickers if str(t).endswith(".T")]
+    us = [t for t in tickers if not str(t).endswith(".T")]
+    try:
+        if jp:
+            codes = [t.split(".")[0] + "0" for t in jp] + [t.split(".")[0] for t in jp]
+            for r in _q(client, "SELECT sec_code, name FROM `{p}.edinet.company_master` "
+                                "WHERE sec_code IN UNNEST(@c)".format(p=client.project),
+                        [_arr("c", codes)]).result():
+                out[str(r["sec_code"])[:4] + ".T"] = r["name"]
+        if us:
+            from google.cloud import bigquery
+            job = client.query("SELECT ticker, name FROM `{p}.us.company_profile` WHERE ticker IN UNNEST(@t)"
+                               .format(p=client.project),
+                               job_config=bigquery.QueryJobConfig(query_parameters=[_arr("t", us)]),
+                               location="US")           # us データセットは US ロケーション（edinet は asia-northeast1）
+            for r in job.result():
+                out[r["ticker"]] = r["name"]
+    except Exception:
+        pass
+    return {k: v for k, v in out.items() if v}
+
+
 def claim(client, limit: int, today: date | None = None, run_env: str = "cloud_routine") -> dict:
     today = today or datetime.now(JST).date()
     rows = list(_q(client, f"""
@@ -267,9 +294,12 @@ def claim(client, limit: int, today: date | None = None, run_env: str = "cloud_r
         FROM {_fq(client, DELIB_TABLE)}
         WHERE ticker IN UNNEST(@t) AND holding_intent IS NOT NULL GROUP BY ticker""",
         [_arr("t", tickers)]).result()}
+    names = japanese_names(client, tickers)
     for r in rows:
         cid = case_id_for(r["ticker"], today)
-        claimed.append({"case_id": cid, "ticker": r["ticker"], "company_name": r["company_name"],
+        claimed.append({"case_id": cid, "ticker": r["ticker"],
+                        "company_name": names.get(r["ticker"]) or r["company_name"],
+                        "company_name_queue": r["company_name"],
                         "sector_code": r["sector_code"], "source": r["source"], "reason": r["reason"],
                         "priority_rank": r["priority_rank"], "packet_md": r["packet_md"],
                         "holding_intent": intents.get(r["ticker"])})
@@ -291,6 +321,9 @@ def complete(client, case_id: str, work_dir: Path, run_id: str | None = None,
     qrow = dict(qrows[0].items()) if qrows else {"case_id": case_id}
     qrow["case_id"] = case_id
     row = parse_deliberation(files, qrow, run_env=run_env, overrides=ov)
+    ja = japanese_names(client, [row.get("ticker")]).get(row.get("ticker")) if row.get("ticker") else None
+    if ja:
+        row["company_name"] = ja
     # 保有意図は審議で変わらない人間の記述なので、直近の値を新しい行へ引き継ぐ
     prev = list(_q(client, f"""
         SELECT holding_intent FROM {_fq(client, DELIB_TABLE)}
@@ -386,7 +419,10 @@ def release(client, case_id: str | None = None, older_than_hours: float | None =
     return {"released": n, "error_recorded": bool(error)}
 
 
-def due(client, interval_days: int = 14, now: datetime | None = None) -> dict:
+def due(client, interval_days: int = 14, now: datetime | None = None, force: bool = False) -> dict:
+    """前回の成功から interval_days 日以上か。force=True（手動起動）は間隔に関係なく due=True を返す。"""
+    if force:
+        return {"due": True, "reason": "手動起動のため間隔を見ない（--force）", "last_success": None, "forced": True}
     rows = list(_q(client, f"""
         SELECT started_at FROM {_fq(client, RUNS_TABLE)}
         WHERE status = 'ok' AND completed_count > 0 ORDER BY started_at DESC LIMIT 1""").result())
@@ -425,6 +461,7 @@ def main(argv=None) -> int:
     r.add_argument("--run-id")
     d = sub.add_parser("due")
     d.add_argument("--interval-days", type=int, default=_cfg_int("DELIBERATION_INTERVAL_DAYS", 6))
+    d.add_argument("--force", action="store_true", help="手動起動：前回からの間隔を見ずに due=true を返す")
     lg = sub.add_parser("ledger")
     lg.add_argument("--limit", type=int, default=30)
     args = ap.parse_args(argv)
@@ -440,7 +477,7 @@ def main(argv=None) -> int:
         elif args.cmd == "ledger":
             out = ledger(client, args.limit)
         else:
-            out = due(client, args.interval_days)
+            out = due(client, args.interval_days, force=args.force)
     except Exception as e:
         print(json.dumps({"error": str(e)[:500]}, ensure_ascii=False))
         return 1

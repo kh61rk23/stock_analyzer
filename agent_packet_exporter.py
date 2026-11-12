@@ -481,6 +481,16 @@ def collect_valuation(cfg, ticker: str) -> list[str]:
     return out
 
 
+def _company_name(ticker: str) -> str:
+    """会社名（日本語）。DB（edinet.company_master／us.company_profile）から引く。引けなければ空文字（見出しはコードだけ）。"""
+    try:
+        from edinet_bq_client import EDINETBQClient
+        from tools.invest_queue import japanese_names
+        return japanese_names(EDINETBQClient().client, [ticker]).get(ticker, "")
+    except Exception:
+        return ""
+
+
 def build_packet(cfg, ticker: str) -> str:
     now = datetime.now()
     case_id = f"{now.strftime('%Y-%m-%d')}_{ticker.replace('.', '')}"
@@ -502,17 +512,19 @@ def build_packet(cfg, ticker: str) -> str:
         except Exception:
             pass
 
+    company = _company_name(ticker)
     lines = [
         "---",
         f"case_id: {case_id}",
         f"ticker: {ticker}",
+        *([f"company: \"{company}\""] if company else []),
         f"sector_code: \"{sector_code}\"",
         f"generated_at: {now.strftime('%Y-%m-%d %H:%M:%S')}",
         "type: 審議パケット",
         "source: agent_packet_exporter.py (stock_analyzer)",
         "---",
         "",
-        f"# 審議パケット: {ticker}",
+        f"# 審議パケット: {company}（{ticker}）" if company else f"# 審議パケット: {ticker}",
         "",
         "> **本ファイルがこの審議における数値・事実の唯一の正本である。**",
         "> 各アナリストのメモは本ファイルへの参照（wikilink）で論拠を示し、",
