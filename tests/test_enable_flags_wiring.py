@@ -21,6 +21,7 @@ sys.path.insert(0, str(REPO))
 
 # (フラグ名, そのフラグを読むべきファイル)
 WIRED_FLAGS = [
+    ("ENABLE_QUANT_LAB",               "stock_analyzer_main.py"),
     ("ENABLE_PERFORMANCE_TRACKER",     "stock_analyzer_main.py"),
     ("ENABLE_ACTIVIST_FILTER",         "tdnet_monitor.py"),
     ("ENABLE_CONVICTION_SIZING",       "position_sizer.py"),

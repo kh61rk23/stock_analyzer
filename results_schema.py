@@ -119,6 +119,7 @@ SCHEMA: dict[str, list[str]] = {
     "notion_obsidian": ["stock_analyzer_main"],
     "ontology_export": ["stock_analyzer_main"],
     "paper_summary": ["stock_analyzer_main"],
+    "quant_lab": ["stock_analyzer_main"],
     "options_monitor": ["run_headless", "stock_analyzer_main"],
     "pead": ["stock_analyzer_main"],
     "performance": ["weekly_report_generator"],

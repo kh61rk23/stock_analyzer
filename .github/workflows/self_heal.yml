@@ -1,0 +1,111 @@
+name: 自己修復
+
+# 定時の workflow の失敗を分類して自動で対処する（tools/self_heal.py）。
+#   workflow_run（completed）… 失敗なら分類 → 一時的な失敗は失敗したジョブだけ再実行 / それ以外は Issue（ラベル「自己修復」）。
+#                              成功の回が来たら Issue を閉じる。
+#   schedule（毎時）          … 予定を過ぎても動いていない workflow を workflow_dispatch で起こす（watchdog）。
+# 見張る対象は tools/self_heal.py の WATCH の表。自分自身は対象に入れない（無限ループを避ける）。
+# CI は workflow_run の対象に載せるが、handle ジョブは見ない。載せているのは下の autofix ジョブのため。
+# github.event の値は env 経由で渡す（run: に直接展開するとスクリプト注入になる）。
+on:
+  workflow_run:
+    workflows:
+      - "全上場株価の日次取得"
+      - "日本企業の開示データ取得"
+      - "📊 Stock Analyzer 自律実行"
+      - "需給のデータ（FINRA の空売り残・CFTC の建玉明細）"
+      - "検証ラボの週次検証"
+      - "米国株の財務・企業情報の更新"
+      - "SEC EDGAR の提出一覧・8-K 項目・13D/13G"
+      - "CI"
+    types: [completed]
+  schedule:
+    - cron: "37 * * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  issues: write
+  contents: read
+
+concurrency:
+  group: self-heal-${{ github.event.workflow_run.id || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  handle:
+    name: 🩹 失敗の対処
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.name != 'CI'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: tools
+      - name: Handle run
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: python3 tools/self_heal.py handle --run-id "$RUN_ID"
+
+  watchdog:
+    name: 🐕 動いていない workflow を起こす
+    if: github.event_name != 'workflow_run'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: tools
+      - name: Watchdog
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 tools/self_heal.py watchdog
+
+  # 任意。リポジトリ変数 SELF_HEAL_AUTOFIX が 'true' のときだけ動く。main の CI が失敗したら、直す PR を作る（main へは直接 push しない）。
+  # PR 上の CI の失敗（head_branch が main 以外）は対象外にして、PR が PR を生む繰り返しを避ける。
+  autofix:
+    name: 🛠️ CI の失敗を直す PR
+    if: >-
+      github.event_name == 'workflow_run' && vars.SELF_HEAL_AUTOFIX == 'true'
+      && github.event.workflow_run.name == 'CI'
+      && github.event.workflow_run.conclusion == 'failure'
+      && github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - name: Create fix branch
+        env:
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: git switch -c "autofix/ci-${RUN_ID}"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-invest.txt
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-invest.txt
+          pip install pytest schedule openpyxl
+      - name: Fix failing CI
+        uses: anthropics/claude-code-action@v1
+        env:
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            main の CI が失敗した。失敗した実行は環境変数 RUN_URL にある。
+            python3 -m pytest tests/ -q と config_audit.py・pipeline_registry_gen.py --audit・results_schema.py --audit を手元で流して原因を特定し、
+            最小の修正だけを現在のブランチ（autofix/ci-<実行ID>）に commit して push し、main 宛ての PR を作る。
+            main へは直接 push しない。テストを消す・緩める修正はしない。Secrets・認証情報・データには触れない。
+          claude_args: "--allowedTools Bash,Edit,Read,Write,Glob,Grep"

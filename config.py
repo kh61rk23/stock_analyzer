@@ -1648,6 +1648,7 @@ DAILY_MODULES = [
         # size_decay_manager / cross_size_signal は stock_analyzer_main が _in_mode("size_tier") でゲートする。
         #   ここに "size_tier" が無いと日次・週次では永久に実行されない。
     "size_tier",                   # 規模別減衰管理 + 規模帯横断シグナル
+    "quant_lab",                   # 検証ラボ：採用済みの戦略の提案と実績の見張り（検証そのものは quant_research.yml・週1回）
 ]
 
 # ── ウィークリーサイクル（月曜朝に追加実行）───────────────────
@@ -5455,6 +5456,7 @@ STATE_STORE_PATHS: tuple = (
 STATE_STORE_EXCLUDE: tuple = (
     "stock_data/models/",
     "stock_data/data/us_fundamentals_db/",
+    "stock_data/cache/quant/",
     "__pycache__/",
     ".DS_Store",
 )
@@ -5661,7 +5663,7 @@ ALERT_SECTION_TIER: dict = {
     "recession_warning": 1, "anomaly_detection": 1, "score_jump": 1, "bayesian_drift": 1, "macro_delta": 1,
     "risk_text_deterioration": 1, "correlation_risk": 1, "portfolio_rebalance": 1, "negative_surprise_risk": 1,
     # 2: 今日の候補と判断材料
-    "daily_changes": 2, "deliberation_followup": 2, "deliberation_queue": 2, "paper_trading": 2,
+    "daily_changes": 2, "deliberation_followup": 2, "deliberation_queue": 2, "paper_trading": 2, "quant_lab": 2,
     "high_score_idea": 2, "analyst_strong_buy": 2, "high_prob_surprise": 2, "earnings_surprise": 2,
     "breakout_signal": 2, "screener_surge": 2, "top_sectors": 2, "us_summary": 2, "intl_summary": 2,
     "financial_risk": 2, "signal_agg_bullish": 2, "wave2_revision_ignition": 2, "wave3_diversity_warning": 2,
@@ -5829,3 +5831,160 @@ WEEKLY_TIER_LABELS: dict = {1: "今週の結論", 2: "来週の候補", 3: "業�
 WEEKLY_FIRST_LOOK_MAX: int = 5          # 冒頭「今週まず見るもの」の行数の上限
 WEEKLY_EMAIL_FULL_MAX_TIER: int = 2     # メールで全文を載せる段の上限（これより下の段は、容量が余れば全文・足りなければ要約）
 WEEKLY_PAPER_DAYS: int = 7              # 仮想トレードの「週の成績」を測る暦日数
+
+# ==============================================================
+# BLOCK 82: 検証ラボ（quant/・FX・コモディティ・指数・信用取引・オプションの戦略の検証と採用の門）
+# ==============================================================
+# quant/ は設定を quant/settings.py の get(cfg, 名前) で読む。各値の意味と単位は settings.py の DEFAULTS のコメントにある
+# （率は小数・bps は 1/10000・日数は営業日・金利とコストは年率）。ここが正本で、DEFAULTS は cfg が無いとき用の写し。
+# 2つがずれると tests/test_quant_settings.py が落ちる。採用の門（QUANT_GATE_*）を緩めると、検証を通っていない戦略が提案に出る
+ENABLE_QUANT_LAB: bool = True
+ALERT_ON_QUANT_LAB: bool = True
+QUANT_HISTORY_START: str = '2006-01-01'
+QUANT_FFILL_LIMIT_DAYS: int = 3
+QUANT_MIN_HISTORY_DAYS: int = 756
+QUANT_CACHE_MAX_AGE_HOURS: int = 18
+QUANT_UNIVERSE: dict = {'fx': [{'symbol': 'USDJPY=X', 'name': '米ドル/円', 'base': 'USD', 'quote': 'JPY', 'cost_bps': 1.0},
+        {'symbol': 'EURJPY=X', 'name': 'ユーロ/円', 'base': 'EUR', 'quote': 'JPY', 'cost_bps': 1.5},
+        {'symbol': 'GBPJPY=X', 'name': '英ポンド/円', 'base': 'GBP', 'quote': 'JPY', 'cost_bps': 2.0},
+        {'symbol': 'AUDJPY=X', 'name': '豪ドル/円', 'base': 'AUD', 'quote': 'JPY', 'cost_bps': 1.5},
+        {'symbol': 'NZDJPY=X', 'name': 'NZドル/円', 'base': 'NZD', 'quote': 'JPY', 'cost_bps': 2.0},
+        {'symbol': 'CADJPY=X', 'name': 'カナダドル/円', 'base': 'CAD', 'quote': 'JPY', 'cost_bps': 2.0},
+        {'symbol': 'CHFJPY=X', 'name': 'スイスフラン/円', 'base': 'CHF', 'quote': 'JPY', 'cost_bps': 2.0},
+        {'symbol': 'EURUSD=X', 'name': 'ユーロ/米ドル', 'base': 'EUR', 'quote': 'USD', 'cost_bps': 1.0},
+        {'symbol': 'GBPUSD=X', 'name': '英ポンド/米ドル', 'base': 'GBP', 'quote': 'USD', 'cost_bps': 1.5},
+        {'symbol': 'AUDUSD=X', 'name': '豪ドル/米ドル', 'base': 'AUD', 'quote': 'USD', 'cost_bps': 1.5}],
+ 'commodity': [{'symbol': 'GLD', 'name': '金', 'exec': '金先物・金CFD（GC）', 'cost_bps': 4.0},
+               {'symbol': 'SLV', 'name': '銀', 'exec': '銀先物・銀CFD（SI）', 'cost_bps': 6.0},
+               {'symbol': 'PPLT', 'name': 'プラチナ', 'exec': '白金先物（PL）', 'cost_bps': 8.0},
+               {'symbol': 'CPER', 'name': '銅', 'exec': '銅先物・銅CFD（HG）', 'cost_bps': 8.0},
+               {'symbol': 'USO', 'name': '原油（WTI）', 'exec': '原油先物・原油CFD（CL）', 'cost_bps': 6.0},
+               {'symbol': 'UNG', 'name': '天然ガス', 'exec': '天然ガス先物・CFD（NG）', 'cost_bps': 8.0},
+               {'symbol': 'DBA', 'name': '農産物（総合）', 'exec': '穀物・ソフトの先物の束', 'cost_bps': 8.0},
+               {'symbol': 'CORN', 'name': 'とうもろこし', 'exec': 'とうもろこし先物・CFD（ZC）', 'cost_bps': 10.0},
+               {'symbol': 'WEAT', 'name': '小麦', 'exec': '小麦先物（ZW）', 'cost_bps': 10.0},
+               {'symbol': 'SOYB', 'name': '大豆', 'exec': '大豆先物・CFD（ZS）', 'cost_bps': 10.0},
+               {'symbol': 'DBB', 'name': '非鉄金属（総合）', 'exec': '銅・アルミ・亜鉛の先物の束', 'cost_bps': 8.0},
+               {'symbol': 'DBC', 'name': '商品（総合）', 'exec': '商品指数の先物・ETF', 'cost_bps': 6.0}],
+ 'index': [{'symbol': '1321.T',
+            'name': '日経225',
+            'exec': '日経225先物ミニ・マイクロ／ETF 1321',
+            'cost_bps': 3.0,
+            'currency': 'JPY'},
+           {'symbol': '1306.T', 'name': 'TOPIX', 'exec': 'TOPIX先物ミニ／ETF 1306', 'cost_bps': 3.0, 'currency': 'JPY'},
+           {'symbol': 'SPY', 'name': 'S&P500', 'exec': 'S&P500 先物・CFD／ETF', 'cost_bps': 2.0},
+           {'symbol': 'QQQ', 'name': 'NASDAQ100', 'exec': 'NASDAQ100 先物・CFD／ETF', 'cost_bps': 2.0},
+           {'symbol': 'EFA', 'name': '先進国株（除く米国）', 'exec': 'ETF', 'cost_bps': 4.0},
+           {'symbol': 'EEM', 'name': '新興国株', 'exec': 'ETF', 'cost_bps': 4.0},
+           {'symbol': 'TLT', 'name': '米国長期国債', 'exec': '米国債先物／ETF', 'cost_bps': 3.0},
+           {'symbol': 'IEF', 'name': '米国中期国債', 'exec': '米国債先物／ETF', 'cost_bps': 3.0}],
+ 'jp_margin': [{'symbol': '1617.T', 'name': '食品', 'exec': '信用取引（ETF 1617・貸借銘柄かは発注前に確認）', 'cost_bps': 15.0},
+               {'symbol': '1618.T', 'name': 'エネルギー資源', 'exec': '信用取引（ETF 1618・貸借銘柄かは発注前に確認）', 'cost_bps': 15.0},
+               {'symbol': '1619.T', 'name': '建設・資材', 'exec': '信用取引（ETF 1619・貸借銘柄かは発注前に確認）', 'cost_bps': 15.0},
+               {'symbol': '1620.T', 'name': '素材・化学', 'exec': '信用取引（ETF 1620・貸借銘柄かは発注前に確認）', 'cost_bps': 15.0},
+               {'symbol': '1621.T', 'name': '医薬品', 'exec': '信用取引（ETF 1621・貸借銘柄かは発注前に確認）', 'cost_bps': 15.0},
+               {'symbol': '1622.T', 'name': '自動車・輸送機', 'exec': '信用取引（ETF 1622・貸借銘柄かは発注前に確認）', 'cost_bps': 15.0},
+               {'symbol': '1623.T', 'name': '鉄鋼・非鉄', 'exec': '信用取引（ETF 1623・貸借銘柄かは発注前に確認）', 'cost_bps': 15.0},
+               {'symbol': '1624.T', 'name': '機械', 'exec': '信用取引（ETF 1624・貸借銘柄かは発注前に確認）', 'cost_bps': 15.0},
+               {'symbol': '1625.T', 'name': '電機・精密', 'exec': '信用取引（ETF 1625・貸借銘柄かは発注前に確認）', 'cost_bps': 15.0},
+               {'symbol': '1626.T', 'name': '情報通信・サービス', 'exec': '信用取引（ETF 1626・貸借銘柄かは発注前に確認）', 'cost_bps': 15.0},
+               {'symbol': '1627.T', 'name': '電力・ガス', 'exec': '信用取引（ETF 1627・貸借銘柄かは発注前に確認）', 'cost_bps': 15.0},
+               {'symbol': '1628.T', 'name': '運輸・物流', 'exec': '信用取引（ETF 1628・貸借銘柄かは発注前に確認）', 'cost_bps': 15.0},
+               {'symbol': '1629.T', 'name': '商社・卸売', 'exec': '信用取引（ETF 1629・貸借銘柄かは発注前に確認）', 'cost_bps': 15.0},
+               {'symbol': '1630.T', 'name': '小売', 'exec': '信用取引（ETF 1630・貸借銘柄かは発注前に確認）', 'cost_bps': 15.0},
+               {'symbol': '1631.T', 'name': '銀行', 'exec': '信用取引（ETF 1631・貸借銘柄かは発注前に確認）', 'cost_bps': 15.0},
+               {'symbol': '1632.T', 'name': '金融（除く銀行）', 'exec': '信用取引（ETF 1632・貸借銘柄かは発注前に確認）', 'cost_bps': 15.0},
+               {'symbol': '1633.T', 'name': '不動産', 'exec': '信用取引（ETF 1633・貸借銘柄かは発注前に確認）', 'cost_bps': 15.0}],
+ 'us_margin': [{'symbol': 'XLB', 'name': '素材', 'exec': '米国株信用（ETF XLB）', 'cost_bps': 3.0},
+               {'symbol': 'XLE', 'name': 'エネルギー', 'exec': '米国株信用（ETF XLE）', 'cost_bps': 3.0},
+               {'symbol': 'XLF', 'name': '金融', 'exec': '米国株信用（ETF XLF）', 'cost_bps': 3.0},
+               {'symbol': 'XLI', 'name': '資本財', 'exec': '米国株信用（ETF XLI）', 'cost_bps': 3.0},
+               {'symbol': 'XLK', 'name': '情報技術', 'exec': '米国株信用（ETF XLK）', 'cost_bps': 3.0},
+               {'symbol': 'XLP', 'name': '生活必需品', 'exec': '米国株信用（ETF XLP）', 'cost_bps': 3.0},
+               {'symbol': 'XLU', 'name': '公益', 'exec': '米国株信用（ETF XLU）', 'cost_bps': 3.0},
+               {'symbol': 'XLV', 'name': 'ヘルスケア', 'exec': '米国株信用（ETF XLV）', 'cost_bps': 3.0},
+               {'symbol': 'XLY', 'name': '一般消費財', 'exec': '米国株信用（ETF XLY）', 'cost_bps': 3.0}],
+ 'options': [{'symbol': 'SPY', 'name': 'S&P500', 'iv_symbol': '^VIX', 'exec': 'SPY・SPX のオプション', 'cost_bps': 0.0},
+             {'symbol': 'QQQ', 'name': 'NASDAQ100', 'iv_symbol': '^VXN', 'exec': 'QQQ・NDX のオプション', 'cost_bps': 0.0},
+             {'symbol': '1321.T',
+              'name': '日経225',
+              'iv_symbol': None,
+              'exec': '日経225オプション（ミニ）',
+              'cost_bps': 0.0,
+              'currency': 'JPY'}]}
+QUANT_ASSET_CLASS_FUNDING: dict = {'fx': 'fx',
+ 'commodity': 'futures',
+ 'index': 'futures',
+ 'jp_margin': 'margin_jp',
+ 'us_margin': 'margin_us',
+ 'options': 'cash'}
+QUANT_ASSET_CLASS_LABEL: dict = {'fx': 'FX',
+ 'commodity': 'コモディティ',
+ 'index': '株価指数・債券',
+ 'jp_margin': '信用取引（日本）',
+ 'us_margin': '信用取引（米国）',
+ 'options': 'オプション',
+ 'equity': '現物株（既存の仮想トレード）',
+ 'ensemble': '組み合わせ'}
+QUANT_RATE_BIS_URL: str = 'https://data.bis.org/static/bulk/WS_CBPOL_csv_flat.zip'
+QUANT_RATE_BIS_AREAS: dict = {'USD': 'US', 'JPY': 'JP', 'EUR': 'XM', 'GBP': 'GB', 'AUD': 'AU', 'NZD': 'NZ', 'CAD': 'CA', 'CHF': 'CH'}
+QUANT_RATE_FALLBACK: dict = {'USD': 0.03875, 'JPY': 0.0125, 'EUR': 0.025, 'GBP': 0.04, 'AUD': 0.046, 'NZD': 0.0275, 'CAD': 0.025, 'CHF': 0.0}
+QUANT_FX_SWAP_MARKUP: float = 0.0075
+QUANT_MARGIN_JP_LONG_RATE: float = 0.028
+QUANT_MARGIN_JP_SHORT_RATE: float = 0.0115
+QUANT_MARGIN_JP_SHORT_PREMIUM: float = 0.01
+QUANT_MARGIN_US_LONG_RATE_SPREAD: float = 0.025
+QUANT_MARGIN_US_SHORT_RATE: float = 0.01
+QUANT_MAX_LEVERAGE: dict = {'fx': 3.0, 'commodity': 1.5, 'index': 1.5, 'jp_margin': 2.0, 'us_margin': 1.5, 'options': 1.0, 'equity': 1.0}
+QUANT_VOL_LOOKBACK: int = 60
+QUANT_STRATEGY_TARGET_VOL: float = 0.1
+QUANT_REBALANCE_BAND: float = 0.1
+QUANT_OPT_IV_INDEX_RATIO: float = 0.88
+QUANT_OPT_IV_HV_RATIO: float = 1.1
+QUANT_OPT_SKEW_PER_10PCT: float = 0.25
+QUANT_OPT_CALL_SKEW_PER_10PCT: float = 0.4
+QUANT_OPT_SPREAD_PCT: float = 0.06
+QUANT_OPT_MIN_COST_PER_SHARE: float = 0.01
+QUANT_OPT_DTE: int = 30
+QUANT_OPT_MODEL_HAIRCUT: float = 0.7
+QUANT_WFO_FOLDS: int = 6
+QUANT_WFO_MIN_TRAIN_DAYS: int = 756
+QUANT_WFO_EMBARGO_DAYS: int = 21
+QUANT_BOOT_N: int = 2000
+QUANT_BOOT_MEAN_BLOCK: int = 20
+QUANT_BOOT_SEED: int = 20260101
+QUANT_PBO_BLOCKS: int = 10
+QUANT_COST_STRESS_MULT: float = 2.0
+QUANT_ENSEMBLES: dict = {'ens_all': {'label': '全戦略の組み合わせ', 'members': ('*',)},
+ 'ens_trend': {'label': '順張りの組み合わせ（FX・コモディティ・指数）', 'members': ('fx_tsmom', 'cmd_tsmom', 'idx_trend', 'multi_tsmom')},
+ 'ens_premium': {'label': 'オプションの売りの組み合わせ', 'members': ('opt_*',)},
+ 'ens_margin': {'label': '信用取引の組み合わせ（日本・米国）', 'members': ('jpm_*', 'usm_*')},
+ 'ens_fx': {'label': 'FX の組み合わせ（順張り・金利差）', 'members': ('fx_*',)}}
+QUANT_ENSEMBLE_VOL_LOOKBACK: int = 126
+QUANT_ENSEMBLE_MIN_MEMBERS: int = 2
+QUANT_GATE_MIN_OOS_DAYS: int = 750
+QUANT_GATE_MIN_OOS_SHARPE: float = 0.5
+QUANT_GATE_MIN_DSR: float = 0.95
+QUANT_GATE_MAX_PBO: float = 0.25
+QUANT_GATE_MAX_ADJ_P: float = 0.05
+QUANT_GATE_MIN_P_PROFIT_12M: float = 0.7
+QUANT_GATE_MIN_STRESS_SHARPE: float = 0.2
+QUANT_GATE_MAX_DRAWDOWN: float = 0.25
+QUANT_GATE_MIN_FOLD_POSITIVE: float = 0.6
+QUANT_GATE_WATCH_MAX_FAILS: int = 2
+QUANT_PROBATION_DAYS: int = 60
+QUANT_GATE_CRITICAL: tuple = ('oos_days', 'oos_sharpe', 'stress_sharpe')
+QUANT_PORT_TARGET_VOL: float = 0.08
+QUANT_PORT_MAX_STRATEGY_WEIGHT: float = 0.35
+QUANT_PORT_MAX_CLASS_WEIGHT: float = 0.5
+QUANT_PORT_KELLY_FRACTION: float = 0.25
+QUANT_PORT_MAX_SCALE: float = 1.5
+QUANT_PORT_DD_BRAKES: tuple = ((0.08, 0.5), (0.12, 0.0))
+QUANT_PORT_HORIZONS: tuple = (63, 126, 252)
+QUANT_MONITOR_MIN_DAYS: int = 40
+QUANT_MONITOR_Q: float = 0.05
+QUANT_MONITOR_DD_MULT: float = 1.5
+QUANT_REGISTRY_MAX_AGE_DAYS: int = 21
+QUANT_DIR: str = 'quant'
+QUANT_CACHE_DIR: str = 'cache/quant'
+QUANT_INSIGHT_DIR: str = 'insights/quant'

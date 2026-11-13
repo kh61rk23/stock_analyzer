@@ -4258,6 +4258,25 @@ def run_all_tasks(mode: str = "all") -> dict:
     else:
         print("  ⏩ ペーパートレード: スキップ（ENABLE_PAPER_TRADING=False）")
 
+        # ── 検証ラボ（FX・コモディティ・指数・信用取引・オプション）───────────────
+        # 週1回の検証（quant_research.yml）で採用の門を通った戦略だけについて、今日の建玉の提案を作り、
+        # 採用後の実績を1日ぶん足して見張る。発注はしない。検証の結果がまだ無い・古い日は理由つきで見送る。
+        # 日次メールの節（alert_notifier）が results["quant_lab"] を読むので、通知より前に実行する。
+    if getattr(cfg, "ENABLE_QUANT_LAB", False) and _in_mode("quant_lab"):
+        try:
+            from quant import runner as _quant_runner
+            _ql = _quant_runner.run_daily(cfg, results)
+            results["quant_lab"] = _ql
+            if _ql.get("skipped"):
+                logger.add("quant_lab", "skipped", str(_ql.get("reason", ""))[:100])
+            else:
+                logger.add("quant_lab", "success",
+                           f"採用:{len(_ql.get('adopted') or [])}本 観察:{len(_ql.get('watch') or [])}本 "
+                           f"提案:{len(_ql.get('proposals') or [])}件")
+        except Exception as e:
+            logger.add("quant_lab", "error", str(e)[:100])
+            print(f"  ⚠️  検証ラボエラー: {str(e)[:80]}")
+
 # ── IMF グローバルマクロ（デイリー）───────────────────────
     if getattr(cfg, "ENABLE_IMF", False) and _in_mode("imf"):
         print("\n  🌍 IMFグローバルマクロパイプラインを実行中...")

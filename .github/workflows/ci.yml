@@ -1,0 +1,51 @@
+name: CI
+
+# push（main）・pull_request・手動で、テストと3つの監査を回す。Secrets は使わない（fork の PR でも動く）。
+#   pytest tests/ -q                       … 全テスト（ネットワーク・BigQuery を使わない合成データ）
+#   python3 config_audit.py                … config.py の監査（CRITICAL で exit 1）
+#   python3 pipeline_registry_gen.py --audit … pipeline_registry.json と現コードの差分
+#   python3 results_schema.py --audit      … results のキーとスキーマの乖離
+# 依存はテストの import に要るものだけ。requirements.txt は torch などで重いので使わない。
+#   requirements-invest.txt（pandas・numpy・pyarrow・bigquery・yfinance・requests・PyYAML）に、
+#   テストが直接 import する pytest と、stock_analyzer_main が import する schedule、pandas の Excel 読みの openpyxl を足す。
+# 失敗した段の名前（pytest / 各 audit）を tools/self_heal.py が「コードの失敗」と分類するので、段の名前を変えるときは合わせる。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: 🧪 テストと監査
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TZ: Asia/Tokyo
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-invest.txt
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-invest.txt
+          pip install pytest schedule openpyxl
+      - name: pytest
+        run: python3 -m pytest tests/ -q
+      - name: config_audit
+        run: python3 config_audit.py
+      - name: pipeline_registry_gen audit
+        run: python3 pipeline_registry_gen.py --audit
+      - name: results_schema audit
+        run: python3 results_schema.py --audit

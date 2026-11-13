@@ -2180,6 +2180,16 @@ def extract_alerts(cfg, results: dict) -> list:
         except Exception as _pae:
             print(f"    ⚠️ 仮想トレード節の生成失敗: {str(_pae)[:80]}")
 
+    # 検証ラボ（採用の門を通った戦略の提案）。見送りの日（検証の結果がまだ無い等）も、理由を1行で出す
+    if getattr(cfg, "ALERT_ON_QUANT_LAB", True):
+        try:
+            from quant import mail as _qmail
+            _qa = _qmail.build_alert(results.get("quant_lab"))
+            if _qa:
+                alerts.append(_qa)
+        except Exception as _qae:
+            print(f"    ⚠️ 検証ラボ節の生成失敗: {str(_qae)[:80]}")
+
     # ── 運用の監視（Actions 枠・Mac 同期・週次ループ・保有銘柄・審議 routine）──
     # どれも run_all_tasks の外で止まり、Actions は緑・台帳は成功のままになるため、ここで見る。
     if getattr(cfg, "ALERT_ON_OPS_HEALTH", True):
