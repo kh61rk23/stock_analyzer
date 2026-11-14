@@ -178,6 +178,10 @@ def suggest_strategies(m: dict, cfg=None) -> list[dict]:
 # BLOCK 2: データ取得（yfinance・best-effort）
 # ==============================================================
 
+# 保有銘柄の一覧（git に置かない個人のファイル。無い環境では保有なしとして動く）。テストはここを作り物のファイルに差し替える
+HOLDINGS_PATH = Path(__file__).parent / "data" / "portfolio_holdings.csv"
+
+
 def _build_universe(cfg, results: dict = None) -> list[dict]:
     """{ticker, is_portfolio, composite_score} のユニバースを構築。
 
@@ -202,7 +206,7 @@ def _build_universe(cfg, results: dict = None) -> list[dict]:
         if tk:
             uni.setdefault(tk, {"ticker": tk, "is_portfolio": False, "composite_score": scored.get(tk, 0)})
     # 保有銘柄のUS分
-    hp = Path(__file__).parent / "data" / "portfolio_holdings.csv"
+    hp = HOLDINGS_PATH
     if hp.exists():
         for enc in ("utf-8", "cp932"):
             try:

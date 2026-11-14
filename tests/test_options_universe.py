@@ -1,7 +1,19 @@
 """オプション提案のユニバース：保有銘柄が多くても米国スクリーナー上位が入り、米国外の銘柄は入らないこと。"""
 from types import SimpleNamespace
 
+import pytest
+
 import options_strategy_advisor as oa
+
+
+@pytest.fixture(autouse=True)
+def holdings(tmp_path, monkeypatch):
+    """保有銘柄は作り物のファイルで固定する（実物は git に無く、ある環境と無い環境で結果が変わるため）。
+    米国株 6 本（1本は米国スクリーナーにもある NVDA）と日本株 1 本。"""
+    p = tmp_path / "portfolio_holdings.csv"
+    p.write_text("ticker,qty\n" + "".join(f"{t},1\n" for t in ("H1", "H2", "H3", "H4", "H5", "NVDA", "7203.T")),
+                 encoding="utf-8")
+    monkeypatch.setattr(oa, "HOLDINGS_PATH", p)
 
 
 def _us(n=8):
